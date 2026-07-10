@@ -262,3 +262,39 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: paired-host dual-browser tests prove exactly one claim, zero standby commands, denied standby attach, safe takeover, and explicit Edge selection. Two real simultaneous-browser suites proved `connectedBrowsers:["chrome","edge"]`, one session owner, 25/25 steps, real files, screenshots, sensitive-field blocks, and clean teardown in both explicit-Edge and default-auto modes.
 - Fix commit: `2faf97a`.
 - Status: closed.
+
+## BB-030 — Extension reload created a duplicate owned tab
+
+- Minimal repro: reload the selected Edge unpacked extension while a command is in flight, then let the new service worker reconcile the still-live host session.
+- Root cause: owned binding records lived in `chrome.storage.session`, which survives worker suspension but is cleared by a full developer/update reload.
+- Fix: persist the non-secret session/tab/group/origin binding in extension-local storage, reclaim a valid prior tab, and clean stale records/tabs after the host grace window.
+- Regression: controller/extension tests plus real mid-command Edge reload reclaimed tab `159963340` exactly and completed a follow-up observation.
+- Fix commit: `305bd51`.
+- Status: closed.
+
+## BB-031 — An allowed URL could redirect outside the origin grant
+
+- Minimal repro: navigate to an allowed same-origin endpoint that returns a cross-origin redirect.
+- Root cause: the controller checked the live origin before dispatch but not after the driver completed navigation.
+- Fix: re-read the live tab origin after every action; return `origin_not_granted`, finalize, and stop the owned session if it escaped.
+- Regression: controller redirect test and real `/redirect-cross` fixture session.
+- Fix commit: `305bd51`.
+- Status: closed.
+
+## BB-032 — Ambiguous targets silently selected the first element
+
+- Minimal repro: expose two file inputs with the same accessible name or two DOM nodes matching one selector.
+- Root cause: target resolvers used `find`/`querySelector`, turning ambiguity into an implicit first-match action.
+- Fix: enumerate and reject multiple AX, selector, label, placeholder, test-id, and visible-text matches with typed `ambiguous`.
+- Regression: driver ambiguity tests and two real `Ambiguous asset` file inputs.
+- Fix commit: `305bd51`.
+- Status: closed.
+
+## BB-033 — A target could move after pointer entry but before press
+
+- Minimal repro: move a button in its `mousemove` handler after the driver completed its stable-box check.
+- Root cause: the driver hit-tested during actionability but did not revalidate the exact press point after dispatching pointer movement.
+- Fix: perform a second containment hit-test after `mouseMoved` and return `stale_target` / `target_moved` without pressing when the target vacates the point.
+- Regression: focused driver test and real Chrome/Edge moving-target phase.
+- Fix commit: `305bd51`.
+- Status: closed.
