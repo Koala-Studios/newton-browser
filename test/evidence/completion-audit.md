@@ -76,7 +76,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 
 ## B6 — Release proof gate
 
-All required command names exist. On implementation commit `305bd51`, the unshortened `pnpm release:check` completed all 11 stages in 378.2 seconds with 84/84 tests, a five-minute 2,945,834-operation interleave, zero cross-session results/deadlocks, bounded RSS growth, and zero orphan ports.
+All required command names exist. The unshortened `pnpm release:check` passed three consecutive times on implementation `305bd51` and evidence tree `8ace479`: 378.2s, 379.2s, and 378.2s. Every run completed all 11 stages and 84/84 tests; each five-minute interleave exceeded 2.94 million operations with zero cross-session results/deadlocks, bounded RSS growth, and zero orphan ports.
 
 | evidence class | status | authoritative evidence / remaining proof |
 | --- | --- | --- |
@@ -100,4 +100,4 @@ Optional live advertising workflow proof is `not-approved` and is not a release 
 
 ## Current release conclusion
 
-B0 contracts and repository implementation through B6 are implemented, and the exhaustive release gate is green on `305bd51`. Chrome, Edge, current-tab focus escape, three-session isolation, subagent inheritance, actual clients, packed distribution, cold start, lifecycle chaos, and cleanup are proved. Two environmental acceptance rows remain unproven: a full workspace run with the extraction source literally unavailable, and an actual second Windows account/machine. Both still require Frank's explicit approval before B0-B6 can be called fully closed and before severance work begins.
+B0 contracts and repository implementation through B6 are implemented, and three consecutive exhaustive release gates are green on `305bd51`. Chrome, Edge, current-tab focus escape, three-session isolation, subagent inheritance, actual clients, packed distribution, cold start, lifecycle chaos, and cleanup are proved. Two environmental acceptance rows remain unproven: a full workspace run with the extraction source literally unavailable, and an actual second Windows account/machine. Both still require Frank's explicit approval before B0-B6 can be called fully closed and before severance work begins.
