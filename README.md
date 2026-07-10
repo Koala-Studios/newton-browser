@@ -258,6 +258,6 @@ Bug reports and focused feature requests are welcome through the repository's is
 
 For code contributions, read [CONTRIBUTING.md](CONTRIBUTING.md). Security issues should follow the private-reporting guidance in [docs/SECURITY.md](docs/SECURITY.md), not a public issue.
 
-## License status
+## License
 
-No public license has been added yet. Do not assume permission to copy, modify, or redistribute the project beyond what applicable law allows. Choosing and publishing a license is a separate maintainer approval.
+Newton Browser is licensed under the [MIT License](LICENSE).

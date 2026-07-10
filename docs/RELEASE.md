@@ -1,6 +1,6 @@
 # Release
 
-Newton Browser 0.3.0 is developed in a public repository and currently distributed from source or locally built artifacts. npm publication, browser-store submission, GitHub release publication, and adding a public license remain separate approval gates.
+Newton Browser 0.3.0 is developed in a public repository and currently distributed from source or locally built artifacts. npm publication, browser-store submission, and GitHub release publication remain separate approval gates.
 
 Run from a clean checkout with Node 24 or newer:
 

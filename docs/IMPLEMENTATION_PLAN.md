@@ -138,7 +138,7 @@ Browser"; `newton-browser --doctor` works from the packed tarball.
 
 ## WS1 — MIT license
 
-**Status: in progress 2026-07-10.**
+**Status: completed 2026-07-10.**
 
 **Goal:** the repository is legally adoptable and publishable.
 

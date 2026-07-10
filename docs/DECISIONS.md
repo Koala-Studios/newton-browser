@@ -156,7 +156,7 @@ Public package exports point to compiled JavaScript under `dist/`; no package bi
 - `newton-browser-extension-0.3.0.zip`
 - `newton-browser-extension-0.3.0.zip.sha256`
 
-The repository is public as of 2026-07-10. npm publication, browser-store submission, and adding a license remain separate approval gates; no license file is added until the public-license posture is explicitly approved.
+The repository is public as of 2026-07-10. The owner explicitly approved the MIT License on 2026-07-10 and confirmed the copyright holder as `Koala Studios`; the repository's `LICENSE` is therefore `Copyright (c) 2026 Koala Studios`. npm publication and browser-store submission remain separate approval gates.
 
 ## 10. Boundary and stale concepts
 
