@@ -12,11 +12,13 @@ test("standalone extension source has no forbidden product coupling", () => {
     "manifest.json",
     "package.json",
     "panel.html",
+    "icons/icon.svg",
     "src/config.js",
     "src/local-transport.js",
     "src/panel.css",
     "src/panel.js",
     "src/service-worker.js",
+    "src/toolbar-icon.js",
   ];
   for (const file of files) {
     const text = fs.readFileSync(path.join(appRoot, file), "utf8");
@@ -29,6 +31,16 @@ test("standalone extension root manifest points at generated runtime", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(appRoot, "manifest.json"), "utf8"));
   assert.equal(manifest.action.default_popup, "dist/panel.html");
   assert.equal(manifest.background.service_worker, "dist/src/service-worker.js");
+  assert.deepEqual(manifest.icons, {
+    16: "icons/icon-16.png",
+    32: "icons/icon-32.png",
+    48: "icons/icon-48.png",
+    128: "icons/icon-128.png",
+  });
+  assert.deepEqual(manifest.action.default_icon, {
+    16: "icons/action-disconnected-16.png",
+    32: "icons/action-disconnected-32.png",
+  });
   assert.deepEqual(
     manifest.web_accessible_resources[0].resources,
     ["dist/src/overlay.js", "dist/src/overlay.css"],
@@ -71,8 +83,41 @@ test("standalone extension build materializes package runtime into dist", () => 
   assert.match(serviceWorker, /chrome\.storage\.local\.set\(\{ \[SESSION_BINDINGS_KEY\]/);
   assert.match(serviceWorker, /ensureForActiveSessions\(activeTab\?\.id, bindings\)/);
   assert.match(serviceWorker, /cleanupOrphanBindings/);
+  assert.match(serviceWorker, /createToolbarIconController/);
   const localTransport = fs.readFileSync(path.join(distRoot, "src/local-transport.js"), "utf8");
   assert.doesNotMatch(localTransport, /enqueueCommand|postEscalation|no_live_session|command_timeout|sessions = new Map/);
+});
+
+test("icon renderer creates manifest and toolbar assets that are packed", () => {
+  let result = spawnSync(process.execPath, ["scripts/render-icons.mjs"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  for (const file of ["icon-16.png", "icon-32.png", "icon-48.png", "icon-128.png", "action-connected-16.png", "action-connected-32.png", "action-disconnected-16.png", "action-disconnected-32.png"]) {
+    assert.ok(fs.existsSync(path.join(appRoot, "icons", file)), file);
+  }
+  result = spawnSync(process.execPath, ["scripts/build-extension-artifact.mjs"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("toolbar icon state is debounced and follows host connection state", async () => {
+  const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/toolbar-icon.js")).href;
+  const { createToolbarIconController } = await import(`${moduleUrl}?icons=${Date.now()}`);
+  const timers: Array<() => void> = [];
+  const cleared: number[] = [];
+  const calls: any[] = [];
+  let connected = false;
+  const controller = createToolbarIconController({
+    action: { setIcon: async (input: any) => { calls.push(input); } },
+    getConnected: () => connected,
+    setTimer: (callback: () => void) => { timers.push(callback); return timers.length; },
+    clearTimer: (id: number) => { cleared.push(id); },
+  });
+  controller.schedule();
+  connected = true;
+  controller.schedule();
+  assert.deepEqual(cleared, [1]);
+  timers.at(-1)?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [{ path: { 16: "icons/action-connected-16.png", 32: "icons/action-connected-32.png" } }]);
 });
 
 test("standalone extension polls host health without opening a WebSocket when unavailable", async () => {

@@ -4,15 +4,20 @@ import { createNewtonBrowserDriver } from "./vendor/newton-browser-driver/driver
 import { createChromeTabsPort } from "./vendor/newton-browser-driver/chrome-tabs-port.js";
 import { createLocalPanelTransport } from "./local-transport.js";
 import { OWNER_LABEL } from "./config.js";
+import { createToolbarIconController } from "./toolbar-icon.js";
 
 const transport = createLocalPanelTransport({
   notify: notifyPanels,
-  onHostSessionsChanged: () => ensureForHostSessions().catch(() => {}),
+  onHostSessionsChanged,
   getClientIdentity,
   getPairingSecret: async () => {
     const stored = await chrome.storage.local.get("pairingSecret");
     return typeof stored?.pairingSecret === "string" ? stored.pairingSecret : null;
   },
+});
+const toolbarIcon = createToolbarIconController({
+  action: chrome.action,
+  getConnected: () => transport.isHostConnected(),
 });
 let clientIdentityPromise;
 let bindingRecordsPromise;
@@ -84,12 +89,18 @@ async function ensureForHostSessions() {
 
 async function syncHost() {
   const host = await transport.connectHost();
+  toolbarIcon.schedule();
   if (host.connected) {
     await ensureForHostSessions().catch(() => {});
   }
   scheduleOrphanCleanup();
   await notifyPanels({ type: "state", state: runtime.snapshot() });
   return host.connected;
+}
+
+function onHostSessionsChanged() {
+  toolbarIcon.schedule();
+  void ensureForHostSessions().catch(() => {});
 }
 
 function evaluateFloorLocally(input) {

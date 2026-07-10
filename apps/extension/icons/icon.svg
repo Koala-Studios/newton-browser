@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Newton Browser">
+  <defs>
+    <linearGradient id="bridge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="31" width="34" height="66" rx="15" fill="#1D4ED8"/>
+  <rect x="82" y="31" width="34" height="66" rx="15" fill="#0F766E"/>
+  <path d="M40 54h48c7 0 12 5 12 12s-5 12-12 12H40c-7 0-12-5-12-12s5-12 12-12Z" fill="url(#bridge)"/>
+  <path d="M45 62h38a4 4 0 1 1 0 8H45a4 4 0 1 1 0-8Z" fill="#F8FAFC" opacity=".94"/>
+</svg>

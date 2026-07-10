@@ -7,8 +7,12 @@ const artifactDirectory = path.resolve("artifacts");
 const output = path.join(artifactDirectory, `newton-browser-extension-${version}.zip`);
 const checksum = `${output}.sha256`;
 const sourceRoot = path.resolve("apps/extension");
-const files = ["manifest.json", ...walk(path.join(sourceRoot, "dist")).map((file) => path.relative(sourceRoot, file).replaceAll("\\", "/"))].sort();
+const iconFiles = walk(path.join(sourceRoot, "icons")).map((file) => path.relative(sourceRoot, file).replaceAll("\\", "/"));
+const files = ["manifest.json", ...iconFiles, ...walk(path.join(sourceRoot, "dist")).map((file) => path.relative(sourceRoot, file).replaceAll("\\", "/"))].sort();
 if (!files.includes("dist/src/service-worker.js")) throw new Error("extension build output is incomplete");
+for (const file of ["icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png", "icons/action-connected-16.png", "icons/action-disconnected-16.png"]) {
+  if (!files.includes(file)) throw new Error(`extension icon is missing: ${file}`);
+}
 
 fs.mkdirSync(artifactDirectory, { recursive: true });
 const zip = createStoredZip(files.map((name) => ({ name, data: fs.readFileSync(path.join(sourceRoot, name)) })));

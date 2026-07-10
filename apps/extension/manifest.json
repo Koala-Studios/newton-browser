@@ -6,7 +6,17 @@
   "description": "Local browser control bridge for agents.",
   "action": {
     "default_title": "Newton Browser",
-    "default_popup": "dist/panel.html"
+    "default_popup": "dist/panel.html",
+    "default_icon": {
+      "16": "icons/action-disconnected-16.png",
+      "32": "icons/action-disconnected-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
   "background": {
     "service_worker": "dist/src/service-worker.js",

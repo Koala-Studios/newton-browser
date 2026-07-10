@@ -160,6 +160,8 @@ project is unlicensed; `pnpm release:check` green.
 
 ## WS2 — Icon and visual identity
 
+**Status: in progress 2026-07-10.**
+
 **Goal:** the extension has real icons everywhere Chrome shows one, with connection
 state visible from the toolbar. The 128 px icon is a hard prerequisite for the store
 listing (WS5).
