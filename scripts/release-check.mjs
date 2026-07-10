@@ -11,7 +11,7 @@ for (const command of ["lint", "typecheck", "test", "build", "extension:artifact
 }
 const occupied = [];
 for (let port = 17321; port <= 17340; port += 1) if (await canConnect(port)) occupied.push(port);
-if (occupied.length) throw new Error(`orphan Browser Bridge host ports remain: ${occupied.join(", ")}`);
+if (occupied.length) throw new Error(`orphan Newton Browser host ports remain: ${occupied.join(", ")}`);
 process.stdout.write(`${JSON.stringify({ ok: true, stages: 11, orphanHostPorts: 0 })}\n`);
 
 function canConnect(port) {

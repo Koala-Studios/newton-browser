@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { BROWSER_CONTROL_TRANSPORTS, type BrowserControlTransportMode, type BrowserFloorDecision } from "@browser-bridge/core";
+import { BROWSER_CONTROL_TRANSPORTS, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
 
-import { BROWSER_BRIDGE_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
-import type { BrowserBridgeHost } from "./bridge.ts";
-import { createBrowserBridgeHost } from "./bridge.ts";
+import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
+import type { NewtonBrowserHost } from "./bridge.ts";
+import { createNewtonBrowserHost } from "./bridge.ts";
 import { evaluateHostFloor } from "./floor-gate.ts";
 
 type JsonRpcId = string | number | null;
@@ -21,9 +21,9 @@ const CURRENT_PROTOCOL = SUPPORTED_MCP_PROTOCOLS.at(-1)!;
 const INLINE_SCREENSHOT_CAP = 1_000_000;
 const SCREENSHOT_BYTES_CAP = 16 * 1024 * 1024;
 
-export async function startBrowserBridgeMcpServer(input: { bridge?: BrowserBridgeHost; port?: number; host?: string } = {}): Promise<void> {
-  const readinessTimeoutMs = Number(process.env.BROWSER_BRIDGE_READINESS_TIMEOUT_MS);
-  const bridge = input.bridge ?? createBrowserBridgeHost({
+export async function startNewtonBrowserMcpServer(input: { bridge?: NewtonBrowserHost; port?: number; host?: string } = {}): Promise<void> {
+  const readinessTimeoutMs = Number(process.env.NEWTON_BROWSER_READINESS_TIMEOUT_MS);
+  const bridge = input.bridge ?? createNewtonBrowserHost({
     ...(Number.isFinite(readinessTimeoutMs) ? { limits: { readinessTimeoutMs: Math.max(50, readinessTimeoutMs) } } : {}),
   });
   let startupErrorCode: string | undefined;
@@ -53,7 +53,7 @@ export async function startBrowserBridgeMcpServer(input: { bridge?: BrowserBridg
   });
 }
 
-export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonRpcRequest, input: { startupErrorCode?: string } = {}): Promise<JsonRpcResponse | null> {
+export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonRpcRequest, input: { startupErrorCode?: string } = {}): Promise<JsonRpcResponse | null> {
   if (message.id === undefined && message.method?.startsWith("notifications/")) return null;
   const id = message.id ?? null;
   if (message.method === "initialize") {
@@ -68,7 +68,7 @@ export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonR
     return response(id, {
       protocolVersion: selected,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "browser-bridge", version: BROWSER_BRIDGE_VERSION },
+      serverInfo: { name: "newton-browser", version: NEWTON_BROWSER_VERSION },
     });
   }
   if (message.method === "ping") return response(id, {});
@@ -86,12 +86,12 @@ export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonR
   return errorResponse(id, -32601, `Unsupported MCP method: ${message.method ?? "unknown"}.`);
 }
 
-async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<string, unknown>, input: { startupErrorCode?: string } = {}): Promise<ToolCallResult> {
+async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<string, unknown>, input: { startupErrorCode?: string } = {}): Promise<ToolCallResult> {
   const transport = resolveTransport(args.transport);
-  if (!LOCAL_TRANSPORTS.has(transport)) return toolError("unsupported_transport", "Only local Browser Bridge transports are supported.");
+  if (!LOCAL_TRANSPORTS.has(transport)) return toolError("unsupported_transport", "Only local Newton Browser transports are supported.");
   if (input.startupErrorCode) {
-    return toolError(input.startupErrorCode, "No loopback port is available in the configured Browser Bridge range.", {
-      nextAction: "stop_stale_browser_bridge_hosts_or_free_a_configured_port",
+    return toolError(input.startupErrorCode, "No loopback port is available in the configured Newton Browser range.", {
+      nextAction: "stop_stale_newton_browser_hosts_or_free_a_configured_port",
     });
   }
 
@@ -99,7 +99,7 @@ async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<st
     const status = bridge.getStatus();
     return toolJson({
       ready: status.extensionConnected,
-      version: BROWSER_BRIDGE_VERSION,
+      version: NEWTON_BROWSER_VERSION,
       protocolVersions: SUPPORTED_MCP_PROTOCOLS,
       ...status,
       paired: status.authMode === "paired" && status.extensionConnected,
@@ -274,7 +274,7 @@ function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, 
   const requested = typeof args.filename === "string" ? path.basename(args.filename.trim()) : "";
   const base = requested && /^[A-Za-z0-9._-]+\.png$/i.test(requested)
     ? requested
-    : `browser-bridge-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+    : `newton-browser-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   let output = path.join(directory, base);
   if (path.dirname(output) !== directory) throw new Error("invalid_output_filename");
   if (fs.existsSync(output)) output = path.join(directory, `${path.parse(base).name}-${Date.now()}.png`);

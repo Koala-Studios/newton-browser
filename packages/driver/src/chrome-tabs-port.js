@@ -7,7 +7,7 @@ export function createChromeTabsPort(chromeApi = globalThis.chrome) {
       let groupId = null;
       try {
         groupId = await chromeApi.tabs.group({ tabIds: [tab.id] });
-        await chromeApi.tabGroups.update(groupId, { title: title || "Bridge", color: color ?? "blue" }).catch(() => {});
+        await chromeApi.tabGroups.update(groupId, { title: title || "Newton", color: color ?? "blue" }).catch(() => {});
       } catch {
         groupId = null;
       }

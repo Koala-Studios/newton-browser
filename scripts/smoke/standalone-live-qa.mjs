@@ -2,14 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createBrowserBridgeHost } from "../../apps/mcp-server/src/bridge.ts";
+import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 
-const fixturePort = Number(process.env.BROWSER_BRIDGE_QA_FIXTURE_PORT ?? 18231);
-const hostPort = Number(process.env.BROWSER_BRIDGE_PORT ?? 17321);
-const requiredBrowsers = String(process.env.BROWSER_BRIDGE_QA_REQUIRE_BROWSERS ?? "").split(",").map((value) => value.trim()).filter(Boolean).sort();
-const expectedOwner = String(process.env.BROWSER_BRIDGE_QA_EXPECT_OWNER ?? "").trim();
+const fixturePort = Number(process.env.NEWTON_BROWSER_QA_FIXTURE_PORT ?? 18231);
+const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const requiredBrowsers = String(process.env.NEWTON_BROWSER_QA_REQUIRE_BROWSERS ?? "").split(",").map((value) => value.trim()).filter(Boolean).sort();
+const expectedOwner = String(process.env.NEWTON_BROWSER_QA_EXPECT_OWNER ?? "").trim();
 const results = [];
 const failures = [];
 
@@ -21,7 +21,7 @@ let uploadRoot = "";
 try {
   await startFixture();
   uploadRoot = materializeUploadFixtures();
-  bridge = createBrowserBridgeHost();
+  bridge = createNewtonBrowserHost();
   await bridge.listen(hostPort, "127.0.0.1");
   log("servers_started", { fixture: page(), hostPort });
 
@@ -379,7 +379,7 @@ function log(step, detail = {}) {
 }
 
 function materializeUploadFixtures() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-live-files-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-live-files-"));
   const fixtures = {
     "asset.png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     "asset.jpg": Buffer.from([0xff, 0xd8, 0xff, 0xe0]),

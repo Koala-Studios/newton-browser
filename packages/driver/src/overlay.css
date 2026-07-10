@@ -1,11 +1,11 @@
-/* Browser Bridge driving overlay.
-   All layers pointer-events:none and tagged data-browser-bridge-ui="1". The cursor is
+/* Newton Browser driving overlay.
+   All layers pointer-events:none and tagged data-newton-browser-ui="1". The cursor is
    cosmetic only — it never blocks an action. Accent is driven by a single custom
    property (--nb-accent, an "r, g, b" triplet) so the rim glow, cursor halo,
    ripple, and field ring stay consistent and are trivially re-themeable; a
    per-session tab-group color can override it via BB_DRIVE_BEGIN. */
 
-#browser-bridge-drive-overlay {
+#newton-browser-drive-overlay {
   --nb-accent: 31, 111, 235;
   position: fixed;
   inset: 0;
@@ -15,7 +15,7 @@
 
 /* WHEN — an edge gradient vignette instead of a hard border: strongest at the
    rim, fully transparent through the center so the page stays readable. */
-#browser-bridge-drive-overlay.nb-driving::before {
+#newton-browser-drive-overlay.nb-driving::before {
   content: "";
   position: fixed;
   inset: 0;
@@ -30,8 +30,8 @@
   animation: nb-breathe 3.4s ease-in-out infinite;
 }
 
-#browser-bridge-drive-overlay.nb-driving::after {
-  content: "● Browser Bridge is driving";
+#newton-browser-drive-overlay.nb-driving::after {
+  content: "● Newton Browser is driving";
   position: fixed;
   top: 12px;
   left: 50%;
@@ -52,7 +52,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #browser-bridge-drive-overlay.nb-driving::before { animation: none; opacity: 1; }
+  #newton-browser-drive-overlay.nb-driving::before { animation: none; opacity: 1; }
 }
 
 /* WHERE — the cursor, seated on a soft radial glow that fades outward so it

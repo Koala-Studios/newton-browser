@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import { WebSocket } from "ws";
 
-import { createBrowserBridgeHost } from "../src/bridge.ts";
+import { createNewtonBrowserHost } from "../src/bridge.ts";
 import { doctorToken } from "../src/config.ts";
 import { evaluateHostFloor } from "../src/floor-gate.ts";
 import { handleMcpMessage } from "../src/mcp-server.ts";
@@ -39,7 +39,7 @@ test("session start requires an exact origin and waits for authenticated extensi
   const extension = await connectExtension(address.port, bridge.hostInstanceId);
   autoBind(extension, "https://example.com");
   try {
-    const doctor = await fetch(`http://127.0.0.1:${address.port}/doctor-status`, { headers: { "X-Browser-Bridge-Doctor": doctorToken(PAIRING_SECRET) } });
+    const doctor = await fetch(`http://127.0.0.1:${address.port}/doctor-status`, { headers: { "X-Newton-Browser-Doctor": doctorToken(PAIRING_SECRET) } });
     assert.equal(doctor.status, 200);
     assert.equal((await doctor.json() as any).extensionConnected, true);
     const missing = await toolCall(bridge, "browser.session.start", {});
@@ -139,7 +139,7 @@ test("pairing rejects normal webpage origins and invalid proofs", async () => {
 });
 
 test("zero-touch local trust accepts an extension without a pairing key and still rejects webpages", async () => {
-  const bridge = createBrowserBridgeHost({ authMode: "local_trust", pairingSecret: PAIRING_SECRET });
+  const bridge = createNewtonBrowserHost({ authMode: "local_trust", pairingSecret: PAIRING_SECRET });
   const address = await bridge.listen(0);
   try {
     await assert.rejects(openSocket(address.port, "https://evil.example"), /403/);
@@ -345,10 +345,10 @@ test("command timeout and session stop resolve pending work with typed outcomes"
 });
 
 test("stdio process emits MCP only and exits after stdin closes", async () => {
-  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-test-"));
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-test-"));
   const child = spawn(process.execPath, ["apps/mcp-server/src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BROWSER_BRIDGE_PORT: "0", BROWSER_BRIDGE_CONFIG_DIR: configDir },
+    env: { ...process.env, NEWTON_BROWSER_PORT: "0", NEWTON_BROWSER_CONFIG_DIR: configDir },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const events = new EventEmitter();
@@ -403,10 +403,10 @@ test("stdio process stays alive and returns typed host_collision when its port i
   await new Promise<void>((resolve, reject) => { blocker.once("error", reject); blocker.listen(0, "127.0.0.1", resolve); });
   const address = blocker.address();
   assert.ok(address && typeof address === "object");
-  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-collision-"));
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-collision-"));
   const child = spawn(process.execPath, ["apps/mcp-server/src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BROWSER_BRIDGE_PORT: String(address.port), BROWSER_BRIDGE_CONFIG_DIR: configDir },
+    env: { ...process.env, NEWTON_BROWSER_PORT: String(address.port), NEWTON_BROWSER_CONFIG_DIR: configDir },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const client = jsonLineClient(child);
@@ -419,7 +419,7 @@ test("stdio process stays alive and returns typed host_collision when its port i
     assert.equal(status.result.isError, true);
     const detail = JSON.parse(status.result.content[0].text);
     assert.equal(detail.errorCode, "host_collision");
-    assert.equal(detail.nextAction, "stop_stale_browser_bridge_hosts_or_free_a_configured_port");
+    assert.equal(detail.nextAction, "stop_stale_newton_browser_hosts_or_free_a_configured_port");
     child.stdin.end();
     const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
     assert.equal(exitCode, 0, client.stderr());
@@ -431,7 +431,7 @@ test("stdio process stays alive and returns typed host_collision when its port i
 });
 
 function testBridge(options: Record<string, any> = {}) {
-  return createBrowserBridgeHost({ pairingSecret: PAIRING_SECRET, ...options });
+  return createNewtonBrowserHost({ pairingSecret: PAIRING_SECRET, ...options });
 }
 
 function jsonLineClient(child: ReturnType<typeof spawn>) {
@@ -472,7 +472,7 @@ function jsonLineClient(child: ReturnType<typeof spawn>) {
   };
 }
 
-async function toolCall(bridge: ReturnType<typeof createBrowserBridgeHost>, name: string, args: Record<string, unknown>) {
+async function toolCall(bridge: ReturnType<typeof createNewtonBrowserHost>, name: string, args: Record<string, unknown>) {
   const response = await handleMcpMessage(bridge, { jsonrpc: "2.0", id: Math.random(), method: "tools/call", params: { name, arguments: args } });
   const result = response?.result as any;
   return { isError: result?.isError === true, json: JSON.parse(result.content[0].text) };
@@ -485,7 +485,7 @@ async function connectExtension(port: number, hostInstanceId: string, identity =
   const challenge = await challengePromise;
   assert.equal(challenge.hostInstanceId, hostInstanceId);
   const proof = createHmac("sha256", PAIRING_SECRET)
-    .update(`browser-bridge-auth-v1:${challenge.hostInstanceId}:${challenge.nonce}`)
+    .update(`newton-browser-auth-v1:${challenge.hostInstanceId}:${challenge.nonce}`)
     .digest("base64url");
   const readyPromise = waitForMessage(socket, (message) => message.type === "ready");
   socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: challenge.hostInstanceId, proof }));

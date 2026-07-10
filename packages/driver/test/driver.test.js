@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createBrowserBridgeDriver } from "../src/driver.js";
+import { createNewtonBrowserDriver } from "../src/driver.js";
 
 test("driver emulates focus for an inactive owned tab and restores it on detach", async () => {
   const originalChrome = globalThis.chrome;
@@ -14,7 +14,7 @@ test("driver emulates focus for an inactive owned tab and restores it on detach"
     runtime: { lastError: null },
   };
   try {
-    const driver = createBrowserBridgeDriver();
+    const driver = createNewtonBrowserDriver();
     const commands = [];
     driver.cdp = async (method, params) => { commands.push({ method, params }); return {}; };
     driver.calibrate = async () => {};
@@ -38,7 +38,7 @@ test("driver emulates focus for an inactive owned tab and restores it on detach"
 });
 
 test("driver observation emits stable refs and excludes bridge overlay nodes", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   let boxCalls = 0;
   driver.evalString = async (expression) => {
     if (expression === "location.href") return "https://example.com/page";
@@ -76,7 +76,7 @@ test("driver observation emits stable refs and excludes bridge overlay nodes", a
 });
 
 test("driver full-page screenshot bounds clip size and marks truncation", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const cdpCalls = [];
   driver.evalString = async (expression) => {
     if (expression === "location.href") return "https://example.com/long";
@@ -107,7 +107,7 @@ test("driver full-page screenshot bounds clip size and marks truncation", async 
 });
 
 test("driver resolveEvidence uses AX accessible name and commit signals", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   driver.refIndex.set("e7", 7);
   driver.evalString = async (expression) => (expression === "location.origin" ? "https://example.com" : "");
   driver.objectIdFor = async (backendNodeId) => (backendNodeId === 7 ? "object-7" : null);
@@ -147,7 +147,7 @@ test("driver resolveEvidence uses AX accessible name and commit signals", async 
 });
 
 test("driver actionablePoint scrolls offscreen targets and verifies candidate hit tests", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   let scrolled = 0;
   let hitTests = 0;
   driver.evalNumber = async (expression) => {
@@ -172,7 +172,7 @@ test("driver actionablePoint scrolls offscreen targets and verifies candidate hi
 });
 
 test("driver rejects ambiguous accessible-name and selector targets", async () => {
-  const accessible = createBrowserBridgeDriver();
+  const accessible = createNewtonBrowserDriver();
   accessible.observe = async () => ({
     nodes: [
       { ref: "e1", role: "button", name: "Duplicate target" },
@@ -184,7 +184,7 @@ test("driver rejects ambiguous accessible-name and selector targets", async () =
     /ambiguous/,
   );
 
-  const selector = createBrowserBridgeDriver();
+  const selector = createNewtonBrowserDriver();
   selector.cdp = async (method) => {
     if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
     if (method === "DOM.querySelectorAll") return { nodeIds: [2, 3] };
@@ -194,7 +194,7 @@ test("driver rejects ambiguous accessible-name and selector targets", async () =
 });
 
 test("driver reports target_moved when an attached target never stabilizes", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   driver.resolveTarget = async () => ({ backendNodeId: 7 });
   driver.actionablePoint = async () => null;
   driver.cdp = async () => ({});
@@ -206,7 +206,7 @@ test("driver reports target_moved when an attached target never stabilizes", asy
 });
 
 test("driver observes same-origin iframe AX trees and excludes cross-origin frames", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const requestedFrames = [];
   driver.evalString = async (expression) => {
     if (expression === "location.href") return "https://example.com/page";
@@ -242,7 +242,7 @@ test("driver observes same-origin iframe AX trees and excludes cross-origin fram
 });
 
 test("driver uses CDP page coordinates for iframe candidates and hit testing", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const calls = [];
   driver.cdp = async (method, params) => {
     calls.push({ method, params });
@@ -263,7 +263,7 @@ test("driver uses CDP page coordinates for iframe candidates and hit testing", a
 });
 
 test("driver falls back to the proven DOM hit test when the page-coordinate hit differs", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const functions = [];
   driver.objectIdFor = async (backendNodeId) => `object-${backendNodeId}`;
   driver.cdp = async (method, params) => {
@@ -282,7 +282,7 @@ test("driver falls back to the proven DOM hit test when the page-coordinate hit 
 });
 
 test("driver verifies scroll state when Chrome drops the wheel acknowledgement", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const calls = [];
   const positions = [0, 900];
   driver.evalNumber = async (expression) => expression === "window.scrollY" ? positions.shift() ?? 900 : 0;
@@ -302,7 +302,7 @@ test("driver verifies scroll state when Chrome drops the wheel acknowledgement",
 });
 
 test("driver resolves top-level action target shorthands from observations", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   driver.refIndex.set("e2", 2);
   driver.refIndex.set("e7", 7);
   driver.observe = async () => ({
@@ -324,7 +324,7 @@ test("driver resolves top-level action target shorthands from observations", asy
 });
 
 test("driver wait_for text normalizes layout whitespace", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   let expression = "";
   driver.evalBool = async (input) => {
     expression = input;
@@ -336,7 +336,7 @@ test("driver wait_for text normalizes layout whitespace", async () => {
 });
 
 test("driver click dispatches complete CDP mouse button state", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const mouseEvents = [];
   const commandOrder = [];
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
@@ -373,7 +373,7 @@ test("driver click dispatches complete CDP mouse button state", async () => {
 });
 
 test("driver rejects a target that moves after pointer entry before pressing", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   let pressed = false;
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
@@ -393,7 +393,7 @@ test("driver rejects a target that moves after pointer entry before pressing", a
 });
 
 test("driver reconciles post-action network writes after an allowed click", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
   driver.hitTestTarget = async () => true;
@@ -426,7 +426,7 @@ test("driver reconciles post-action network writes after an allowed click", asyn
 });
 
 test("driver ignores read-only network traffic during post-action reconciliation", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
   driver.hitTestTarget = async () => true;
@@ -454,7 +454,7 @@ test("driver ignores read-only network traffic during post-action reconciliation
 });
 
 test("driver sets exact files through DOM.setFileInputFiles and returns sanitized acceptance", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const commands = [];
   driver.resolveTarget = async () => ({ backendNodeId: 7 });
   driver.fileInputFacts = async () => ({ isFileInput: true, multiple: true, visible: true });
@@ -482,7 +482,7 @@ test("driver sets exact files through DOM.setFileInputFiles and returns sanitize
 });
 
 test("driver requires a fresh ref for hidden inputs, enforces multiple, and supports cancellation without submit", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const commands = [];
   driver.resolveTarget = async () => ({ backendNodeId: 9 });
   driver.fileInputFacts = async () => ({ isFileInput: true, multiple: false, visible: false });
@@ -508,7 +508,7 @@ test("driver requires a fresh ref for hidden inputs, enforces multiple, and supp
 });
 
 test("driver observation emits a fresh ref for a hidden file input", async () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   driver.cdp = async (method) => {
     if (method === "Runtime.evaluate") return { result: { value: method.includes?.("scrollY") ? "0" : "https://example.com/upload" } };
     if (method === "Accessibility.getFullAXTree") return { nodes: [] };
@@ -526,7 +526,7 @@ test("driver observation emits a fresh ref for a hidden file input", async () =>
 });
 
 test("driver records dialog, download, new-target, navigation, and network-write signals", () => {
-  const driver = createBrowserBridgeDriver();
+  const driver = createNewtonBrowserDriver();
   const window = driver.beginActionSignals();
   driver.recordDebuggerEvent("Page.javascriptDialogOpening", { type: "confirm" });
   driver.recordDebuggerEvent("Page.downloadWillBegin", { url: "https://example.com/file" });

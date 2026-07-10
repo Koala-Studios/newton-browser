@@ -1,6 +1,6 @@
-# Browser Bridge Driver
+# Newton Browser Driver
 
-Browser-side runtime and Chrome DevTools Protocol driver for Browser Bridge.
+Browser-side runtime and Chrome DevTools Protocol driver for Newton Browser.
 
 ## Exports
 

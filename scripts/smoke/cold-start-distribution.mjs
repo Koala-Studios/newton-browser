@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-const attempts = Math.max(1, Number(process.env.BROWSER_BRIDGE_COLD_START_ATTEMPTS ?? 10));
+const attempts = Math.max(1, Number(process.env.NEWTON_BROWSER_COLD_START_ATTEMPTS ?? 10));
 const samples = [];
 
 for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -27,7 +27,7 @@ function runReadinessProbe() {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["scripts/smoke/extension-readiness.mjs"], {
       cwd: process.cwd(),
-      env: { ...process.env, BROWSER_BRIDGE_EXTENSION_PROBE_MS: "35000" },
+      env: { ...process.env, NEWTON_BROWSER_EXTENSION_PROBE_MS: "35000" },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -1,16 +1,16 @@
 import fs from "node:fs";
 
-import { createBrowserBridgeHost } from "../../apps/mcp-server/src/bridge.ts";
+import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 
-const browserTarget = process.env.BROWSER_BRIDGE_QA_OWNER === "chrome" ? "chrome" : "edge";
-const fixturePort = Number(process.env.BROWSER_BRIDGE_QA_FIXTURE_PORT ?? 18231);
-const hostPort = Number(process.env.BROWSER_BRIDGE_PORT ?? 17321);
-const statePath = process.env.BROWSER_BRIDGE_QA_STATE_FILE;
-if (!statePath) throw new Error("BROWSER_BRIDGE_QA_STATE_FILE is required");
+const browserTarget = process.env.NEWTON_BROWSER_QA_OWNER === "chrome" ? "chrome" : "edge";
+const fixturePort = Number(process.env.NEWTON_BROWSER_QA_FIXTURE_PORT ?? 18231);
+const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const statePath = process.env.NEWTON_BROWSER_QA_STATE_FILE;
+if (!statePath) throw new Error("NEWTON_BROWSER_QA_STATE_FILE is required");
 
 const fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
-const bridge = createBrowserBridgeHost({ authMode: "local_trust", browserTarget });
+const bridge = createNewtonBrowserHost({ authMode: "local_trust", browserTarget });
 let sessionId = "";
 
 try {

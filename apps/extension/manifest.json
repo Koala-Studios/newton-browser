@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Browser Bridge",
-  "short_name": "Bridge",
+  "name": "Newton Browser",
+  "short_name": "Newton",
   "version": "0.3.0",
   "description": "Local browser control bridge for agents.",
   "action": {
-    "default_title": "Browser Bridge",
+    "default_title": "Newton Browser",
     "default_popup": "dist/panel.html"
   },
   "background": {

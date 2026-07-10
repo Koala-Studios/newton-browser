@@ -1,14 +1,14 @@
-# Browser Bridge Host
+# Newton Browser Host
 
-Local MCP host for the Browser Bridge extension.
+Local MCP host for the Newton Browser extension.
 
 ## Run
 
 ```powershell
-browser-bridge-mcp
+newton-browser
 ```
 
-The host listens on `127.0.0.1:17321`, exposes an MCP server over stdio, and relays commands to the loaded unpacked Browser Bridge extension over localhost WebSocket. It has no database and no platform dependency.
+The host listens on `127.0.0.1:17321`, exposes an MCP server over stdio, and relays commands to the loaded unpacked Newton Browser extension over localhost WebSocket. It has no database and no platform dependency.
 
 ## Extension Pairing
 
@@ -37,8 +37,8 @@ Use the host as a stdio MCP server. Keep normal network access disabled for the 
 ```json
 {
   "mcpServers": {
-    "browser-bridge": {
-      "command": "browser-bridge-mcp"
+    "newton-browser": {
+      "command": "newton-browser"
     }
   }
 }
@@ -52,4 +52,4 @@ The host and extension run on the user's machine. Browser control traffic stays 
 
 ## Safety
 
-The host runs the Browser Bridge safety floor before relaying mutating actions. Blocked actions return a blocked result. Commit-like actions are relayed without a human approval prompt; Browser Bridge is a local hands-and-eyes tool for the worker, not a moderation layer.
+The host runs the Newton Browser safety floor before relaying mutating actions. Blocked actions return a blocked result. Commit-like actions are relayed without a human approval prompt; Newton Browser is a local hands-and-eyes tool for the worker, not a moderation layer.

@@ -4,7 +4,7 @@ import path from "node:path";
 
 const version = JSON.parse(fs.readFileSync("apps/extension/package.json", "utf8")).version;
 const artifactDirectory = path.resolve("artifacts");
-const output = path.join(artifactDirectory, `browser-bridge-extension-${version}.zip`);
+const output = path.join(artifactDirectory, `newton-browser-extension-${version}.zip`);
 const checksum = `${output}.sha256`;
 const sourceRoot = path.resolve("apps/extension");
 const files = ["manifest.json", ...walk(path.join(sourceRoot, "dist")).map((file) => path.relative(sourceRoot, file).replaceAll("\\", "/"))].sort();

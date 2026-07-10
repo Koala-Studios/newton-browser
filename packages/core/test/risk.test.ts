@@ -18,7 +18,7 @@ test("read-only browser actions stay read-only on granted origins", () => {
     policy: { allowedOrigins: ["https://mail.google.com"] },
   });
   assert.equal(decision.class, "read_only");
-  assert.equal(decision.permissionRequired, "browser_bridge.observe");
+  assert.equal(decision.permissionRequired, "newton_browser.observe");
   assert.equal(decision.blocked, false);
 });
 

@@ -1,6 +1,6 @@
-# Browser Bridge Extension
+# Newton Browser Extension
 
-Standalone MV3 extension source for Browser Bridge.
+Standalone MV3 extension source for Newton Browser.
 
 Build the unpacked extension:
 

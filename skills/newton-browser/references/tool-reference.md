@@ -1,4 +1,4 @@
-# Browser Bridge Tool Reference
+# Newton Browser Tool Reference
 
 All tools use the local transport and explicit session IDs.
 

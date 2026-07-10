@@ -1,5 +1,5 @@
 {
-  "name": "@browser-bridge/core",
+  "name": "@newton-browser/core",
   "version": "0.3.0",
   "type": "module",
   "description": "Local-first browser-control contracts, action schema, redaction, host policy, and deterministic safety floor.",

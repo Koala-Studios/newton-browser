@@ -1,6 +1,6 @@
 # MCP clients
 
-Every configured client starts an independent `browser-bridge-mcp` process over stdio. Each process binds one free loopback port, so multiple clients can run concurrently without a shared daemon.
+Every configured client starts an independent `newton-browser` process over stdio. Each process binds one free loopback port, so multiple clients can run concurrently without a shared daemon.
 
 ## Source checkout
 
@@ -9,9 +9,9 @@ After `pnpm build`, point the client directly at the compiled entry point.
 Codex:
 
 ```toml
-[mcp_servers.browser-bridge]
+[mcp_servers.newton-browser]
 command = "node"
-args = ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+args = ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -21,9 +21,9 @@ Claude Desktop or Claude Code:
 ```json
 {
   "mcpServers": {
-    "browser-bridge": {
+    "newton-browser": {
       "command": "node",
-      "args": ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+      "args": ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
     }
   }
 }
@@ -34,7 +34,7 @@ Generic stdio client:
 ```json
 {
   "command": "node",
-  "args": ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+  "args": ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
 }
 ```
 
@@ -47,10 +47,10 @@ The files under `examples/mcp` contain the version-pinned tarball form used for 
 The generated artifact config command is:
 
 ```text
-browser-bridge-mcp --print-config codex|claude-desktop|claude-code|generic
+newton-browser --print-config codex|claude-desktop|claude-code|generic
 ```
 
-Set `BROWSER_BRIDGE_PACKAGE_SPEC` to the absolute tarball before generating a config. The default registry-package form is reserved for a future npm publication and is not currently installable.
+Set `NEWTON_BROWSER_PACKAGE_SPEC` to the absolute tarball before generating a config. The default registry-package form is reserved for a future npm publication and is not currently installable.
 
 ## Client notes
 

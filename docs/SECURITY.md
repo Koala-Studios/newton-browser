@@ -1,6 +1,6 @@
 # Security
 
-The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). Browser Bridge is loopback-only, origin-scoped, and local-user trusted, with optional hardened pairing. It does not inspect cookies, storage, profile files, saved passwords, or authentication tokens.
+The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). Newton Browser is loopback-only, origin-scoped, and local-user trusted, with optional hardened pairing. It does not inspect cookies, storage, profile files, saved passwords, or authentication tokens.
 
 ## Reporting a vulnerability
 
@@ -32,4 +32,4 @@ File input actions accept only exact local image/video paths, validate signature
 
 Owned tabs start inactive. Finalize `close` closes only an owned tab; `deliverable` retains a passive review tab; `handoff` ungroups and activates it. Current-tab sessions never close the user's tab. If a host disappears, only its unfinalized sessions are cleaned after the grace period; finalized tabs and other hosts remain unaffected.
 
-While a debugger session is attached, Browser Bridge enables CDP focus emulation for that target so trusted pointer and key events remain reliable without activating the visible tab or following the user's focus. The override is disabled before detach. It does not change which tab/session is authorized: the exact origin and bound tab are still reconciled for every command.
+While a debugger session is attached, Newton Browser enables CDP focus emulation for that target so trusted pointer and key events remain reliable without activating the visible tab or following the user's focus. The override is disabled before detach. It does not change which tab/session is authorized: the exact origin and bound tab are still reconciled for every command.

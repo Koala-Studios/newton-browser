@@ -1,15 +1,15 @@
 {
-  "name": "browser-bridge-workspace",
+  "name": "newton-browser-workspace",
   "version": "0.3.0",
   "private": true,
   "description": "Local-only browser control for MCP clients using an existing Chrome or Edge profile.",
-  "homepage": "https://github.com/Koala-Studios/browser-bridge#readme",
+  "homepage": "https://github.com/Koala-Studios/newton-browser#readme",
   "bugs": {
-    "url": "https://github.com/Koala-Studios/browser-bridge/issues"
+    "url": "https://github.com/Koala-Studios/newton-browser/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Koala-Studios/browser-bridge.git"
+    "url": "git+https://github.com/Koala-Studios/newton-browser.git"
   },
   "type": "module",
   "packageManager": "pnpm@10.8.0",
@@ -18,9 +18,9 @@
   },
   "scripts": {
     "boundary:check": "node scripts/verify-boundary.mjs",
-    "build:core": "pnpm --filter @browser-bridge/core build",
-    "build:driver": "pnpm --filter @browser-bridge/driver build",
-    "build:mcp": "pnpm --filter browser-bridge-mcp build",
+    "build:core": "pnpm --filter @newton-browser/core build",
+    "build:driver": "pnpm --filter @newton-browser/driver build",
+    "build:mcp": "pnpm --filter newton-browser build",
     "extension:build": "node scripts/build-extension.mjs",
     "extension:artifact": "pnpm extension:build && node scripts/build-extension-artifact.mjs",
     "build": "pnpm build:core && pnpm build:driver && pnpm build:mcp && pnpm extension:build",

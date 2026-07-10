@@ -3,9 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
-const tarball = path.resolve(`artifacts/browser-bridge-mcp-${version}.tgz`);
+const tarball = path.resolve(`artifacts/newton-browser-${version}.tgz`);
 const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");
-const child = spawn(process.execPath, [npxCli, "--yes", "--package", tarball, "browser-bridge-mcp"], {
+const child = spawn(process.execPath, [npxCli, "--yes", "--package", tarball, "newton-browser"], {
   cwd: process.cwd(),
   env: cleanEnvironment(),
   windowsHide: true,
@@ -35,7 +35,7 @@ child.stdout.on("data", (chunk) => {
 });
 child.stderr.on("data", (chunk) => { stderr += chunk; });
 
-const timeoutMs = Math.max(1_000, Number(process.env.BROWSER_BRIDGE_EXTENSION_PROBE_MS ?? 35_000));
+const timeoutMs = Math.max(1_000, Number(process.env.NEWTON_BROWSER_EXTENSION_PROBE_MS ?? 35_000));
 const startedAt = Date.now();
 let last = { ready: false, errorCode: "extension_disconnected" };
 try {

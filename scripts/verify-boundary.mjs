@@ -13,7 +13,7 @@ const requiredFiles = [
   "apps/mcp-server/package.json",
   "apps/mcp-server/src/index.ts",
   "scripts/build-extension.mjs",
-  "skills/browser-bridge/SKILL.md",
+  "skills/newton-browser/SKILL.md",
   "docs/DECISIONS.md",
 ];
 
@@ -22,10 +22,10 @@ for (const file of requiredFiles) {
 }
 
 const packageChecks = [
-  ["packages/core/package.json", "@browser-bridge/core"],
-  ["packages/driver/package.json", "@browser-bridge/driver"],
-  ["apps/extension/package.json", "@browser-bridge/extension"],
-  ["apps/mcp-server/package.json", "browser-bridge-mcp"],
+  ["packages/core/package.json", "@newton-browser/core"],
+  ["packages/driver/package.json", "@newton-browser/driver"],
+  ["apps/extension/package.json", "@newton-browser/extension"],
+  ["apps/mcp-server/package.json", "newton-browser"],
 ];
 for (const [file, name] of packageChecks) {
   const value = readJson(file);
@@ -40,31 +40,30 @@ if (corePackage?.exports?.["."]?.import !== "./dist/index.js") {
   failures.push("packages/core/package.json: public import must point at compiled dist/index.js");
 }
 const hostPackage = readJson("apps/mcp-server/package.json");
-if (hostPackage?.bin?.["browser-bridge-mcp"] !== "./dist/index.js") {
+if (hostPackage?.bin?.["newton-browser"] !== "./dist/index.js") {
   failures.push("apps/mcp-server/package.json: bin must point at compiled dist/index.js");
 }
-if (!hostPackage?.devDependencies?.["@browser-bridge/core"]) {
-  failures.push("apps/mcp-server/package.json: missing @browser-bridge/core build dependency");
+if (!hostPackage?.devDependencies?.["@newton-browser/core"]) {
+  failures.push("apps/mcp-server/package.json: missing @newton-browser/core build dependency");
 }
-if (hostPackage?.dependencies?.["@browser-bridge/core"]) {
+if (hostPackage?.dependencies?.["@newton-browser/core"]) {
   failures.push("apps/mcp-server/package.json: packed executable must bundle core instead of depending on the workspace package");
 }
 
 const hostSources = ["apps/mcp-server/src/mcp-server.ts", "apps/mcp-server/src/bridge.ts", "apps/mcp-server/src/floor-gate.ts"]
   .map(readText).join("\n");
-if (!hostSources.includes('from "@browser-bridge/core"')) {
-  failures.push("MCP server must import @browser-bridge/core by package name");
+if (!hostSources.includes('from "@newton-browser/core"')) {
+  failures.push("MCP server must import @newton-browser/core by package name");
 }
 if (/\.\.\/\.\.\/\.\.\/packages\//.test(hostSources)) {
   failures.push("MCP server contains a cross-package relative source escape");
 }
 const compiledHost = readText("apps/mcp-server/dist/index.js");
-if (compiledHost.includes("@browser-bridge/core")) {
+if (compiledHost.includes("@newton-browser/core")) {
   failures.push("compiled MCP bin still imports the workspace core package");
 }
 
 const blockedTerms = [
-  ["new", "ton"],
   ["shi", "re"],
   ["her", "mes"],
   ["com", "panion"],
@@ -77,11 +76,10 @@ const identitySpecificTerms = [
   ["face", "book"],
   ["ads ", "manager"],
   ["meta ", "ads"],
-  ["koala ", "studios"],
   ["standalone ", "browser bridge"],
   ["oper", "ator"],
 ].map((parts) => parts.join(""));
-const blockedExact = ["shared" + ".mjs", "browser_bridge_host_" + "policies"];
+const blockedExact = ["shared" + ".mjs", "newton_browser_host_" + "policies", "browser_" + "bridge_host_policies"];
 const retiredTransport = ["re", "mote"].join("");
 const oldPathFragments = [
   ["packages/browser-", "bridge"].join(""),
@@ -120,7 +118,7 @@ if (failures.length) {
   console.error([...new Set(failures)].join("\n"));
   process.exit(1);
 }
-console.log("browser bridge standalone boundary ok");
+console.log("newton browser standalone boundary ok");
 
 function readJson(relative) {
   try {

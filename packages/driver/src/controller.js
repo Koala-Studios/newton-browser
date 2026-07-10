@@ -453,7 +453,7 @@ function groupTitle({ goal, instanceLabel, origin } = {}) {
   } catch {
     // Ignore non-URL origins.
   }
-  return "Bridge";
+  return "Newton";
 }
 
 function dedupeOrigins(origins, origin) {

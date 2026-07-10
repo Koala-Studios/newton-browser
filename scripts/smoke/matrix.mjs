@@ -7,33 +7,33 @@ import path from "node:path";
 const root = process.cwd();
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
 const entry = path.resolve("apps/mcp-server/dist/index.js");
-const zip = path.resolve(`artifacts/browser-bridge-extension-${version}.zip`);
+const zip = path.resolve(`artifacts/newton-browser-extension-${version}.zip`);
 const checksumFile = `${zip}.sha256`;
-const tarball = path.resolve(`artifacts/browser-bridge-mcp-${version}.tgz`);
+const tarball = path.resolve(`artifacts/newton-browser-${version}.tgz`);
 if (!fs.existsSync(entry) || !fs.existsSync(zip) || !fs.existsSync(checksumFile) || !fs.existsSync(tarball)) throw new Error("build and extension artifacts are required before matrix smoke");
 
 const currentVersion = run(process.execPath, ["--version"]).stdout.trim();
 const node24Version = run("npx", ["--yes", "node@24", "--version"]).stdout.trim();
 if (!/^v24\./.test(node24Version)) throw new Error(`Node 24 probe failed: ${node24Version}`);
 if (run("npx", ["--yes", "node@24", entry, "--version"]).stdout.trim() !== version) throw new Error("packed executable is not Node 24 compatible");
-if (run("npx", ["--yes", "--package", tarball, "browser-bridge-mcp", "--version"]).stdout.trim() !== version) throw new Error("private tarball config command failed");
+if (run("npx", ["--yes", "--package", tarball, "newton-browser", "--version"]).stdout.trim() !== version) throw new Error("private tarball config command failed");
 
 for (const target of ["codex", "claude-desktop", "claude-code", "generic"]) {
   const output = run(process.execPath, [entry, "--print-config", target]).stdout;
-  if (!output.includes(`browser-bridge-mcp@${version}`)) throw new Error(`${target} config is not version-pinned`);
-  if (target === "codex" && !output.includes("[mcp_servers.browser-bridge]")) throw new Error("Codex output must be TOML");
+  if (!output.includes(`newton-browser@${version}`)) throw new Error(`${target} config is not version-pinned`);
+  if (target === "codex" && !output.includes("[mcp_servers.newton-browser]")) throw new Error("Codex output must be TOML");
   if (target !== "codex") JSON.parse(output);
 }
 
-const doctorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-doctor-"));
+const doctorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-doctor-"));
 try {
-  const output = run(process.execPath, [entry, "--doctor"], { env: { ...process.env, BROWSER_BRIDGE_CONFIG_DIR: doctorRoot } }).stdout;
+  const output = run(process.execPath, [entry, "--doctor"], { env: { ...process.env, NEWTON_BROWSER_CONFIG_DIR: doctorRoot } }).stdout;
   const doctor = JSON.parse(output);
   if (!doctor.ok || doctor.ready !== false || doctor.authMode !== "local_trust" || doctor.pairingState !== "not_required" || "pairingSecret" in doctor) throw new Error("zero-touch doctor output is incomplete");
   if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.transportAuth?.mode !== "local_trust") throw new Error("doctor checks are incomplete");
   if (doctor.checks?.extension?.state !== "no_running_host" || doctor.nextAction !== "start_or_restart_mcp_client_then_check_browser_status") throw new Error("doctor setup guidance is not actionable");
   fs.writeFileSync(path.join(doctorRoot, "config.json"), '{"transportAuth":"paired"}\n');
-  const hardened = JSON.parse(run(process.execPath, [entry, "--doctor"], { env: { ...process.env, BROWSER_BRIDGE_CONFIG_DIR: doctorRoot } }).stdout);
+  const hardened = JSON.parse(run(process.execPath, [entry, "--doctor"], { env: { ...process.env, NEWTON_BROWSER_CONFIG_DIR: doctorRoot } }).stdout);
   if (hardened.authMode !== "paired" || hardened.pairingState !== "configured" || typeof hardened.pairingSecret !== "string" || hardened.pairingSecret.length !== 43) throw new Error("hardened pairing doctor output is incomplete");
 } finally {
   fs.rmSync(doctorRoot, { recursive: true, force: true });
@@ -46,9 +46,9 @@ run(process.execPath, ["scripts/build-extension-artifact.mjs"]);
 const rebuilt = createHash("sha256").update(fs.readFileSync(zip)).digest("hex");
 if (rebuilt !== actual) throw new Error("extension artifact is not deterministic");
 const archive = run("tar", ["-tf", zip]).stdout;
-for (const file of ["manifest.json", "dist/src/service-worker.js", "dist/src/vendor/browser-bridge-driver/driver.js"]) if (!archive.includes(file)) throw new Error(`extension archive missing ${file}`);
+for (const file of ["manifest.json", "dist/src/service-worker.js", "dist/src/vendor/newton-browser-driver/driver.js"]) if (!archive.includes(file)) throw new Error(`extension archive missing ${file}`);
 for (const example of ["codex.toml", "claude-desktop.json", "claude-code.json", "generic.json"]) {
-  if (!fs.readFileSync(path.join("examples", "mcp", example), "utf8").includes(`browser-bridge-mcp-${version}.tgz`)) throw new Error(`${example} is not artifact-version-pinned`);
+  if (!fs.readFileSync(path.join("examples", "mcp", example), "utf8").includes(`newton-browser-${version}.tgz`)) throw new Error(`${example} is not artifact-version-pinned`);
 }
 
 const browsers = process.platform === "win32" ? {

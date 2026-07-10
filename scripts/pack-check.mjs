@@ -6,7 +6,7 @@ import path from "node:path";
 const root = process.cwd();
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
 const artifacts = path.join(root, "artifacts");
-const tarball = path.join(artifacts, `browser-bridge-mcp-${version}.tgz`);
+const tarball = path.join(artifacts, `newton-browser-${version}.tgz`);
 fs.mkdirSync(artifacts, { recursive: true });
 fs.rmSync(tarball, { force: true });
 
@@ -21,15 +21,15 @@ for (const file of listing) {
   if (/\.(?:ts|map\.ts)$/.test(file) || /node_modules|packages\/core|src\//.test(file)) throw new Error(`packed artifact leaks workspace source: ${file}`);
 }
 
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge pack check with spaces "));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser pack check with spaces "));
 try {
   fs.writeFileSync(path.join(temp, "package.json"), '{"name":"packed-check","private":true}');
   run("npm", ["install", "--ignore-scripts", tarball], { cwd: temp });
-  const entry = path.join(temp, "node_modules", "browser-bridge-mcp", "dist", "index.js");
+  const entry = path.join(temp, "node_modules", "newton-browser", "dist", "index.js");
   const versionResult = run(process.execPath, [entry, "--version"], { cwd: temp, capture: true }).stdout.trim();
   if (versionResult !== version) throw new Error(`packed version mismatch: ${versionResult}`);
   const config = run(process.execPath, [entry, "--print-config", "codex"], { cwd: temp, capture: true }).stdout;
-  if (!config.includes("[mcp_servers.browser-bridge]") || !config.includes(`browser-bridge-mcp@${version}`)) throw new Error("packed Codex config is not version-pinned");
+  if (!config.includes("[mcp_servers.newton-browser]") || !config.includes(`newton-browser@${version}`)) throw new Error("packed Codex config is not version-pinned");
   run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", path.join(temp, "config"), "--port", "18631"], { cwd: root });
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-# Browser Bridge 0.1 Contract Decisions
+# Newton Browser 0.1 Contract Decisions
 
 Status: locked for implementation on 2026-07-10. Changes require an explicit decision entry and matching contract tests.
 
@@ -14,9 +14,9 @@ Discovery is bounded to 20 loopback ports. A host that cannot bind within the ra
 
 Revised by explicit user decision on 2026-07-10: `local_trust` is the default. Installing the extension and configuring the MCP package is sufficient; no key paste or popup action is required. Every host still binds only to `127.0.0.1`, accepts only Chromium extension WebSocket origins, keeps the bounded port range, and applies all session-origin and action-floor controls.
 
-The optional hardened mode is enabled with `{"transportAuth":"paired"}` in the per-user `config.json`, or `BROWSER_BRIDGE_AUTH_MODE=paired`. In that mode the MCP package creates/reads a random 256-bit base64url secret in the per-user config directory, `--doctor` prints it for deliberate one-time entry in the extension popup, and the extension stores it in `chrome.storage.local`. Normal MCP mode never emits it.
+The optional hardened mode is enabled with `{"transportAuth":"paired"}` in the per-user `config.json`, or `NEWTON_BROWSER_AUTH_MODE=paired`. In that mode the MCP package creates/reads a random 256-bit base64url secret in the per-user config directory, `--doctor` prints it for deliberate one-time entry in the extension popup, and the extension stores it in `chrome.storage.local`. Normal MCP mode never emits it.
 
-Hardened mode sends `{type:"auth_challenge",protocol:"browser-bridge-auth-v1",hostInstanceId,nonce}`. The extension answers with `{type:"auth_response",hostInstanceId,proof}` where `proof = base64url(HMAC-SHA-256(secret, "browser-bridge-auth-v1:" + hostInstanceId + ":" + nonce))`. Until verification, that socket may send no bridge requests and is closed after 3 seconds. Nonces are random, single-use, and process-local; comparison is constant-time.
+Hardened mode sends `{type:"auth_challenge",protocol:"newton-browser-auth-v1",hostInstanceId,nonce}`. The extension answers with `{type:"auth_response",hostInstanceId,proof}` where `proof = base64url(HMAC-SHA-256(secret, "newton-browser-auth-v1:" + hostInstanceId + ":" + nonce))`. Until verification, that socket may send no bridge requests and is closed after 3 seconds. Nonces are random, single-use, and process-local; comparison is constant-time.
 
 Tradeoff: local trust allows another process running as the same OS user to imitate an extension-origin client on loopback. Pairing raises that bar for ordinary local processes, but it does not defend against same-user malware able to read the config file or extension storage. Native Messaging could provide a stronger OS registration boundary but would require a platform installer, contrary to the zero-touch artifact goal for 0.3.0.
 
@@ -39,7 +39,7 @@ Tradeoff: local trust allows another process running as the same OS user to imit
 `delivery` defaults to `image`.
 
 - `image`: the MCP tool result contains one JSON metadata text block and one `{type:"image", data, mimeType:"image/png"}` content block. Base64 is never placed in the JSON text block.
-- `file`: the host decodes the PNG and writes it only inside the caller-designated absolute output directory. It returns `{delivery:"file",path,filename,bytes,sha256,width,height,fullPage,truncated}`. The default filename is `browser-bridge-<UTC timestamp>.png`; caller names are sanitized to a basename.
+- `file`: the host decodes the PNG and writes it only inside the caller-designated absolute output directory. It returns `{delivery:"file",path,filename,bytes,sha256,width,height,fullPage,truncated}`. The default filename is `newton-browser-<UTC timestamp>.png`; caller names are sanitized to a basename.
 - `inline`: compatibility fallback returning `dataUrl` inside JSON text, capped at 1,000,000 characters. Larger output returns typed `result_too_large` with `recommendedDelivery:"image"` or `"file"`.
 
 Relay messages are capped at 24 MiB encoded and screenshot bytes at 16 MiB decoded. A result above either bound returns `result_too_large`; it is never truncated silently. Sensitive-zone masking occurs in the extension before bytes cross the relay.
@@ -61,7 +61,7 @@ Every `browser.act` response, successful or blocked, carries:
 }
 ```
 
-`decision` is the strongest of the host preflight and extension pre-dispatch decisions. The caller may raise risk but never lower it. Browser Bridge exposes classification; it is not an approval system.
+`decision` is the strongest of the host preflight and extension pre-dispatch decisions. The caller may raise risk but never lower it. Newton Browser exposes classification; it is not an approval system.
 
 ## 5. Mandatory session origin
 
@@ -73,7 +73,7 @@ The tool does not return success until the extension has created/selected the ta
 
 Chosen: wire the machinery.
 
-Browser Bridge ships without vendor-specific host-policy manifests. An optional per-user `config.json` may define `hostPolicies`; the schema is validated at startup and by `--doctor`. The host selects a matching manifest from the command's reconciled live origin and passes it into both preflight and extension-side floor evaluation. Screenshot `sensitiveZones` from a selected manifest are passed into capture. The generic structural safety floor remains active when no manifest matches. Invalid configuration produces typed `invalid_config`; inert manifests are forbidden by tests.
+Newton Browser ships without vendor-specific host-policy manifests. An optional per-user `config.json` may define `hostPolicies`; the schema is validated at startup and by `--doctor`. The host selects a matching manifest from the command's reconciled live origin and passes it into both preflight and extension-side floor evaluation. Screenshot `sensitiveZones` from a selected manifest are passed into capture. The generic structural safety floor remains active when no manifest matches. Invalid configuration produces typed `invalid_config`; inert manifests are forbidden by tests.
 
 ## 7. New lifecycle contracts
 
@@ -110,7 +110,7 @@ Input: `{sessionId, disposition:"close | deliverable | handoff"}`.
 
 - `close`: detach and close the owned tab.
 - `deliverable`: detach, remove the driving overlay, keep the tab and its group for passive review, then end the session.
-- `handoff`: detach, remove overlay and Browser Bridge group ownership, activate the tab, then end the session.
+- `handoff`: detach, remove overlay and Newton Browser group ownership, activate the tab, then end the session.
 
 The result is `{finalized:true,disposition,tabId,tabKept}`. Current-tab sessions never close the user's tab. On normal host exit, unfinalized owned sessions are closed by the extension after a 15-second disconnect grace; finalized deliverable/handoff tabs remain. One host's death affects only sessions stamped with its `hostInstanceId`.
 
@@ -145,16 +145,16 @@ Supported runtime baseline is Node `>=24.0.0`, selected from the source's existi
 
 Locked package names:
 
-- `@browser-bridge/core`
-- `@browser-bridge/driver`
-- `@browser-bridge/extension`
-- `browser-bridge-mcp` with executable `browser-bridge-mcp`
+- `@newton-browser/core`
+- `@newton-browser/driver`
+- `@newton-browser/extension`
+- `newton-browser` with executable `newton-browser`
 
 Public package exports point to compiled JavaScript under `dist/`; no package bin or export points at TypeScript. Release artifact names are:
 
-- `browser-bridge-mcp-0.3.0.tgz`
-- `browser-bridge-extension-0.3.0.zip`
-- `browser-bridge-extension-0.3.0.zip.sha256`
+- `newton-browser-0.3.0.tgz`
+- `newton-browser-extension-0.3.0.zip`
+- `newton-browser-extension-0.3.0.zip.sha256`
 
 The repository is public as of 2026-07-10. npm publication, browser-store submission, and adding a license remain separate approval gates; no license file is added until the public-license posture is explicitly approved.
 
@@ -170,4 +170,25 @@ Chrome and Edge may keep the same unpacked extension enabled at the same time. E
 
 Only the owner may attach a tab, subscribe, stop the session, or return command results. Commands are sent only to that owner's socket. A non-owner receives typed `session_not_owned` and cannot race or duplicate an action. If the owner disconnects, the host releases the claim, clears browser-specific tab identifiers, and lets one standby reclaim and bind a fresh tab; an in-flight command fails closed as `extension_disconnected` rather than being replayed.
 
-The default `browserTarget` is `auto`, so installation remains zero-touch and the first atomic claimant owns each new session. A user who wants deterministic browser selection may set `{"browserTarget":"chrome"}` or `{"browserTarget":"edge"}` in the per-user `config.json`, or set `BROWSER_BRIDGE_BROWSER=chrome|edge` for that MCP process. Non-selected browsers stay connected as standby and never receive session control. `browser.status` reports the target, connected browser families, eligible-client count, and aggregate claimed-session counts without exposing profile identity values.
+The default `browserTarget` is `auto`, so installation remains zero-touch and the first atomic claimant owns each new session. A user who wants deterministic browser selection may set `{"browserTarget":"chrome"}` or `{"browserTarget":"edge"}` in the per-user `config.json`, or set `NEWTON_BROWSER_BROWSER=chrome|edge` for that MCP process. Non-selected browsers stay connected as standby and never receive session control. `browser.status` reports the target, connected browser families, eligible-client count, and aggregate claimed-session counts without exposing profile identity values.
+
+## 12. Rename to Newton Browser (2026-07-10)
+
+The project, formerly "Browser Bridge", is renamed to **Newton Browser** (`newton-browser`) by owner decision. `browser-bridge` and `browser-bridge-mcp` were already occupied on npm by unrelated projects, and the owner selected the new brand before first publication. The rename is a single pre-1.0 breaking change covering:
+
+- npm package and CLI bin: `newton-browser` (formerly workspace `browser-bridge-mcp`)
+- Internal workspace packages: `@newton-browser/core`, `@newton-browser/driver`
+- Extension manifest name/short name: "Newton Browser" / "Newton"
+- Environment variables: `NEWTON_BROWSER_*` (formerly `BROWSER_BRIDGE_*`)
+- Transport auth protocol id: `newton-browser-auth-v1` (formerly `browser-bridge-auth-v1`)
+- Doctor probe header: `X-Newton-Browser-Doctor`
+- Per-user config directory: `newton-browser`
+- Extension-internal message types: `NB_*` (formerly `BB_*`)
+- Default owner/tab-group label: "Newton" (formerly "Bridge")
+- Skill: `skills/newton-browser`
+- Release artifacts: `newton-browser-<version>.tgz`, `newton-browser-extension-<version>.zip`
+- GitHub repository: `Koala-Studios/newton-browser`
+
+The standalone-boundary guards that previously blocked the terms "newton" (a legacy internal codename, guarded in `scripts/verify-boundary.mjs` and the extension coupling test) and "koala studios" (now the public GitHub org and MIT copyright holder) are lifted by this decision; both strings are now sanctioned public branding. All other boundary and identity guards remain in force.
+
+MCP tool names (`browser.*`) are deliberately unchanged: they are generic, describe the capability rather than the brand, and renaming them would invalidate recorded client transcripts for no benefit. Historical evidence under `test/evidence/` and recorded artifacts keep the old name as accurate records of what was tested. No compatibility shims are provided for old env vars, config directories, or the old auth protocol id; 0.3.0 installs must be reconfigured.

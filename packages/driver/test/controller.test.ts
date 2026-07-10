@@ -82,7 +82,7 @@ test("BridgeRuntime drives a click command through a fake transport", async () =
   const runtime = createBridgeRuntime({
     transport,
     evaluateFloor() {
-      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" };
     },
     tabs,
     driverFactory: () => driver,
@@ -109,7 +109,7 @@ test("BridgeRuntime drives a click command through a fake transport", async () =
       approvalRequired: false,
       reasons: [],
       class: "agentic",
-      permissionRequired: "browser_bridge.act",
+      permissionRequired: "newton_browser.act",
       commitBoundary: "none",
     },
     result: {
@@ -185,7 +185,7 @@ test("BridgeRuntime treats approval-required floor decisions as non-blocking met
         approvalRequired: true,
         reasons: ["structural_commit"],
         class: "approval_required",
-        permissionRequired: "browser_bridge.act",
+        permissionRequired: "newton_browser.act",
         commitBoundary: "commit",
       };
     },
@@ -218,7 +218,7 @@ test("BridgeRuntime treats approval-required floor decisions as non-blocking met
       approvalRequired: true,
       reasons: ["structural_commit"],
       class: "approval_required",
-      permissionRequired: "browser_bridge.act",
+      permissionRequired: "newton_browser.act",
       commitBoundary: "commit",
     },
   }]);
@@ -264,7 +264,7 @@ test("BridgeRuntime forwards debugger events into the active driver", async () =
   const runtime = createBridgeRuntime({
     transport,
     evaluateFloor() {
-      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" };
     },
     tabs: {
       async createOwnedTab() {
@@ -312,7 +312,7 @@ test("BridgeRuntime binds host sessions once when ensure runs concurrently", asy
   const runtime = createBridgeRuntime({
     transport,
     evaluateFloor() {
-      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" };
     },
     tabs: {
       async createOwnedTab() {
@@ -391,7 +391,7 @@ test("BridgeRuntime accepts the granted pending URL while an owned tab is loadin
       async stopAll() {},
     },
     evaluateFloor() {
-      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" };
     },
     tabs: {
       async createOwnedTab() { return { tabId: 101, groupId: 201 }; },
@@ -435,7 +435,7 @@ test("BridgeRuntime reuses a persisted owned tab after an extension worker resta
       async stopAll() {},
     },
     evaluateFloor() {
-      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" };
     },
     tabs: {
       async createOwnedTab() { createOwnedTabCalls += 1; return { tabId: 999, groupId: 998 }; },
@@ -486,7 +486,7 @@ test("BridgeRuntime rejects and closes an owned session after a redirect escapes
       async stopSession(sessionId: string) { stopped.push(sessionId); },
       async stopAll() {},
     },
-    evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" }; },
+    evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" }; },
     tabs: {
       async createOwnedTab() { return { tabId: 101, groupId: 201 }; },
       async removeTab(tabId: number) { removed.push(tabId); },
@@ -527,7 +527,7 @@ test("BridgeRuntime refuses a current-tab session when focus moved outside the o
       async stopAll() {},
     },
     evaluateFloor() {
-      return { blocked: false, approvalRequired: false, reasons: [], class: "read_only", permissionRequired: "browser_bridge.observe", commitBoundary: "none" };
+      return { blocked: false, approvalRequired: false, reasons: [], class: "read_only", permissionRequired: "newton_browser.observe", commitBoundary: "none" };
     },
     tabs: {
       async createOwnedTab() { throw new Error("must not create an owned tab"); },
@@ -576,7 +576,7 @@ test("BridgeRuntime finalizes owned and current tabs with explicit close, delive
         async stopSession(sessionId: string) { stopped.push(sessionId); },
         async stopAll() {},
       },
-      evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" }; },
+      evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" }; },
       tabs: {
         async createOwnedTab() { return { tabId, groupId: 301 }; },
         async removeTab(id: number) { removed.push(id); },
@@ -621,7 +621,7 @@ test("BridgeRuntime host reconciliation closes only sessions missing from the ag
       async stopSession(sessionId: string) { stopped.push(sessionId); },
       async stopAll() {},
     },
-    evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" }; },
+    evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" }; },
     tabs: {
       async createOwnedTab() { throw new Error("existing owned tabs must be reused"); },
       async removeTab(tabId: number) { removed.push(tabId); },

@@ -1,6 +1,6 @@
 import { BROWSER_ACTION_FIELDS, BROWSER_ACTION_FIELD_SPECS, parseBrowserAction } from "./action-schema.ts";
 import { redactJson, redactText } from "./text-redaction.ts";
-import type { BrowserAction, BrowserActionResultStatus, BrowserBridgeResult, BrowserTarget, BrowserWaitFor } from "./protocol.ts";
+import type { BrowserAction, BrowserActionResultStatus, NewtonBrowserResult, BrowserTarget, BrowserWaitFor } from "./protocol.ts";
 
 const TEXT_CAP = 240;
 const URL_CAP = 500;
@@ -59,7 +59,7 @@ export function redactBrowserAction(action: BrowserAction): BrowserAction {
   return output;
 }
 
-export function summarizeBrowserResult(result: BrowserBridgeResult | null): Record<string, unknown> {
+export function summarizeBrowserResult(result: NewtonBrowserResult | null): Record<string, unknown> {
   if (!result) return { kind: null, hasContent: false };
   if (result.kind === "observation") {
     return {
@@ -109,7 +109,7 @@ export function summarizeBrowserResult(result: BrowserBridgeResult | null): Reco
   return { kind: result.kind, message: redactText(result.message).slice(0, TEXT_CAP) };
 }
 
-export function redactBrowserResult(value: unknown): BrowserBridgeResult | null {
+export function redactBrowserResult(value: unknown): NewtonBrowserResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   // Pull the image out before generic JSON redaction so a multi-MB base64 string

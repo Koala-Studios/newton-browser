@@ -5,21 +5,21 @@ import path from "node:path";
 
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 
-const fixturePort = Number(process.env.BROWSER_BRIDGE_QA_FIXTURE_PORT ?? 18231);
-const hostPort = Number(process.env.BROWSER_BRIDGE_PORT ?? 17321);
-const statePath = process.env.BROWSER_BRIDGE_QA_STATE_FILE;
-if (!statePath) throw new Error("BROWSER_BRIDGE_QA_STATE_FILE is required");
+const fixturePort = Number(process.env.NEWTON_BROWSER_QA_FIXTURE_PORT ?? 18231);
+const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const statePath = process.env.NEWTON_BROWSER_QA_STATE_FILE;
+if (!statePath) throw new Error("NEWTON_BROWSER_QA_STATE_FILE is required");
 
 const fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
-const configDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-host-kill-"));
+const configDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-host-kill-"));
 const child = spawn(process.execPath, ["apps/mcp-server/src/index.ts"], {
   cwd: process.cwd(),
   env: {
     ...process.env,
-    BROWSER_BRIDGE_PORT: String(hostPort),
-    BROWSER_BRIDGE_CONFIG_DIR: configDirectory,
-    BROWSER_BRIDGE_AUTH_MODE: "local_trust",
-    BROWSER_BRIDGE_BROWSER: process.env.BROWSER_BRIDGE_QA_OWNER === "chrome" ? "chrome" : "edge",
+    NEWTON_BROWSER_PORT: String(hostPort),
+    NEWTON_BROWSER_CONFIG_DIR: configDirectory,
+    NEWTON_BROWSER_AUTH_MODE: "local_trust",
+    NEWTON_BROWSER_BROWSER: process.env.NEWTON_BROWSER_QA_OWNER === "chrome" ? "chrome" : "edge",
   },
   stdio: ["pipe", "pipe", "pipe"],
   windowsHide: true,

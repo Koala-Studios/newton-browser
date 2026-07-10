@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Browser Bridge</title>
+    <title>Newton Browser</title>
     <link rel="stylesheet" href="src/panel.css">
   </head>
   <body>
     <main>
       <header>
-        <h1>Browser Bridge</h1>
+        <h1>Newton Browser</h1>
         <span id="status" class="status" data-connected="false">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="status-text">Disconnected</span>
@@ -21,7 +21,7 @@
           <input id="pairing-secret" type="password" autocomplete="off" spellcheck="false" required>
           <button id="pairing-save" type="submit">Pair</button>
         </div>
-        <p id="pairing-message">Run <code>browser-bridge-mcp --doctor</code>, then paste the one-time secret.</p>
+        <p id="pairing-message">Run <code>newton-browser --doctor</code>, then paste the one-time secret.</p>
       </form>
     </main>
     <script type="module" src="src/panel.js"></script>

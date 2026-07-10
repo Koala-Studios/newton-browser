@@ -69,14 +69,14 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
 
   if (READ_ONLY_ACTIONS.has(input.action.kind)) {
     return withRequestedUpgrade(
-      { class: "read_only", permissionRequired: "browser_bridge.observe", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
+      { class: "read_only", permissionRequired: "newton_browser.observe", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
       input.requestedClass,
     );
   }
 
   if (AGENTIC_ACTIONS.has(input.action.kind)) {
     return withRequestedUpgrade(
-      { class: "agentic", permissionRequired: "browser_bridge.agentic_session", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
+      { class: "agentic", permissionRequired: "newton_browser.agentic_session", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
       input.requestedClass,
     );
   }
@@ -95,7 +95,7 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
   if (["navigate", "back", "forward", "reload"].includes(input.action.kind)) {
     // Navigation within granted origins is non-committing (§7).
     return withRequestedUpgrade(
-      { class: "agentic", permissionRequired: "browser_bridge.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
+      { class: "agentic", permissionRequired: "newton_browser.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
       input.requestedClass,
     );
   }
@@ -107,7 +107,7 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
     }
     // Draft edits are always agentic (§7) — value is redacted in artifacts.
     return withRequestedUpgrade(
-      { class: "agentic", permissionRequired: "browser_bridge.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "draft" },
+      { class: "agentic", permissionRequired: "newton_browser.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "draft" },
       input.requestedClass,
     );
   }
@@ -117,7 +117,7 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
   if (boundary.effect === "external_effect" || boundary.effect === "commit") {
     return {
       class: "approval_required",
-      permissionRequired: "browser_bridge.act",
+      permissionRequired: "newton_browser.act",
       approvalRequired: true,
       blocked: false,
       reasons: [...reasons, boundary.reason],
@@ -130,7 +130,7 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
   // reconciliation (the driver halts the run if an observed nav/network write
   // reveals a commit after the fact).
   return withRequestedUpgrade(
-    { class: "agentic", permissionRequired: "browser_bridge.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
+    { class: "agentic", permissionRequired: "newton_browser.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
     input.requestedClass,
   );
 }
@@ -225,10 +225,10 @@ function withRequestedUpgrade(decision: BrowserFloorDecision, requested: Browser
     class: requested,
     permissionRequired:
       requested === "read_only"
-        ? "browser_bridge.observe"
+        ? "newton_browser.observe"
         : requested === "agentic"
-          ? "browser_bridge.agentic_session"
-          : "browser_bridge.act",
+          ? "newton_browser.agentic_session"
+          : "newton_browser.act",
     approvalRequired: requested === "approval_required" || decision.approvalRequired,
     blocked: requested === "blocked",
     reasons: [...decision.reasons, "risk_class_raised_by_caller"],
@@ -242,7 +242,7 @@ function blocked(
 ): BrowserFloorDecision {
   return {
     class: "blocked",
-    permissionRequired: "browser_bridge.act",
+    permissionRequired: "newton_browser.act",
     approvalRequired: false,
     blocked: true,
     reasons,

@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import { WebSocket } from "../../apps/mcp-server/node_modules/ws/wrapper.mjs";
 
-import { createBrowserBridgeHost } from "../../apps/mcp-server/src/bridge.ts";
+import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 
-const durationMs = Number(process.env.BROWSER_BRIDGE_STRESS_MS ?? 300_000);
-const rssLimitBytes = Number(process.env.BROWSER_BRIDGE_STRESS_RSS_LIMIT_MB ?? 96) * 1024 * 1024;
-const bridge = createBrowserBridgeHost({ authMode: "local_trust", browserTarget: "auto" });
+const durationMs = Number(process.env.NEWTON_BROWSER_STRESS_MS ?? 300_000);
+const rssLimitBytes = Number(process.env.NEWTON_BROWSER_STRESS_RSS_LIMIT_MB ?? 96) * 1024 * 1024;
+const bridge = createNewtonBrowserHost({ authMode: "local_trust", browserTarget: "auto" });
 let socket;
 
 try {

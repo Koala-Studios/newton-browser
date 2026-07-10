@@ -1,4 +1,4 @@
-export const BROWSER_BRIDGE_MODULE_ID = "browser-bridge";
+export const NEWTON_BROWSER_MODULE_ID = "newton-browser";
 
 export const BROWSER_ACTION_KINDS = [
   "observe",
@@ -131,7 +131,7 @@ export type BrowserTabRef = {
 // What the floor concluded about how far the action commits. `none` = a pure
 // read or in-page move; `draft` = edits a draft field; `commit` = a recorded
 // save/submit-like action; `external_effect` = an irreversible outward action
-// (publish/pay/budget/account). Browser Bridge treats these as risk
+// (publish/pay/budget/account). Newton Browser treats these as risk
 // metadata, not a human approval layer.
 export const BROWSER_COMMIT_BOUNDARIES = ["none", "draft", "commit", "external_effect"] as const;
 
@@ -155,7 +155,7 @@ export type BrowserFloorEvidence = { kind: string; value: string | boolean };
 
 export type BrowserFloorDecision = {
   class: BrowserRiskClass;
-  permissionRequired: "browser_bridge.observe" | "browser_bridge.act" | "browser_bridge.agentic_session";
+  permissionRequired: "newton_browser.observe" | "newton_browser.act" | "newton_browser.agentic_session";
   approvalRequired: boolean;
   blocked: boolean;
   reasons: string[];
@@ -227,7 +227,7 @@ export type BrowserObservationDelta = {
   changed?: Record<string, unknown>;
 };
 
-export type BrowserBridgeResult = BrowserObservationResult | BrowserObservationDelta | BrowserScreenshotResult | { kind: "ack"; message: string };
+export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserScreenshotResult | { kind: "ack"; message: string };
 
 export type BrowserControlStatus = {
   ok: boolean;

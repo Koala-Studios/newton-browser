@@ -1,6 +1,6 @@
-# Browser Bridge Core
+# Newton Browser Core
 
-Shared contracts, action schema, redaction helpers, host policy, and safety floor for Browser Bridge.
+Shared contracts, action schema, redaction helpers, host policy, and safety floor for Newton Browser.
 
 This package is intentionally platform-neutral. It does not know how commands are transported or which browser extension loads the runtime.
 

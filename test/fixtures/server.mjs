@@ -38,6 +38,6 @@ function close(server) {
 }
 
 if (import.meta.url === `file:///${process.argv[1]?.replaceAll("\\", "/")}`) {
-  const running = await startFixtureServers({ port: Number(process.env.BROWSER_BRIDGE_FIXTURE_PORT ?? 18231) });
+  const running = await startFixtureServers({ port: Number(process.env.NEWTON_BROWSER_FIXTURE_PORT ?? 18231) });
   process.stdout.write(`${JSON.stringify(running)}\n`);
 }

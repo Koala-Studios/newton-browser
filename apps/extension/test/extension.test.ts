@@ -20,7 +20,7 @@ test("standalone extension source has no forbidden product coupling", () => {
   ];
   for (const file of files) {
     const text = fs.readFileSync(path.join(appRoot, file), "utf8");
-    const forbidden = new RegExp(["@" + "new" + "ton/", "new" + "ton", "shi" + "re", "her" + "mes", "com" + "panion", "shared" + "\\.mjs"].join("|"), "i");
+    const forbidden = new RegExp(["shi" + "re", "her" + "mes", "com" + "panion", "shared" + "\\.mjs"].join("|"), "i");
     assert.doesNotMatch(text, forbidden, file);
   }
 });
@@ -44,19 +44,19 @@ test("standalone extension build materializes package runtime into dist", () => 
   for (const file of [
     "panel.html",
     "src/service-worker.js",
-    "src/vendor/browser-bridge-core/risk.js",
-    "src/vendor/browser-bridge-driver/controller.js",
-    "src/vendor/browser-bridge-driver/chrome-tabs-port.js",
-    "src/vendor/browser-bridge-driver/driver.js",
+    "src/vendor/newton-browser-core/risk.js",
+    "src/vendor/newton-browser-driver/controller.js",
+    "src/vendor/newton-browser-driver/chrome-tabs-port.js",
+    "src/vendor/newton-browser-driver/driver.js",
     "src/overlay.js",
     "src/overlay.css",
   ]) {
     assert.ok(fs.existsSync(path.join(distRoot, file)), file);
   }
-  const risk = fs.readFileSync(path.join(distRoot, "src/vendor/browser-bridge-core/risk.js"), "utf8");
+  const risk = fs.readFileSync(path.join(distRoot, "src/vendor/newton-browser-core/risk.js"), "utf8");
   assert.doesNotMatch(risk, /import type|export type|\.ts["']/);
   assert.match(risk, /export function evaluateBrowserFloor/);
-  const driver = fs.readFileSync(path.join(distRoot, "src/vendor/browser-bridge-driver/driver.js"), "utf8");
+  const driver = fs.readFileSync(path.join(distRoot, "src/vendor/newton-browser-driver/driver.js"), "utf8");
   assert.match(driver, /"dist\/src\/overlay\.css"/);
   assert.match(driver, /"dist\/src\/overlay\.js"/);
   const panel = fs.readFileSync(path.join(distRoot, "panel.html"), "utf8");
@@ -64,7 +64,7 @@ test("standalone extension build materializes package runtime into dist", () => 
   assert.doesNotMatch(panel, /approval|id="host"|id="start"|id="observe"|id="screenshot"/i);
   const serviceWorker = fs.readFileSync(path.join(distRoot, "src/service-worker.js"), "utf8");
   assert.doesNotMatch(serviceWorker, /void maybeConnectHost|function maybeConnectHost/);
-  assert.doesNotMatch(serviceWorker, /BB_PANEL_HOST_CONNECT|BB_PANEL_START|BB_PANEL_COMMAND|BB_PANEL_STOP_ALL|BB_PANEL_APPROVAL|ApprovalSink|PanelApproval|approvalSink/);
+  assert.doesNotMatch(serviceWorker, /NB_PANEL_HOST_CONNECT|NB_PANEL_START|NB_PANEL_COMMAND|NB_PANEL_STOP_ALL|NB_PANEL_APPROVAL|ApprovalSink|PanelApproval|approvalSink/);
   assert.match(serviceWorker, /void syncHost\(\)/);
   assert.match(serviceWorker, /runtime\.renewLeases\(\)/);
   assert.match(serviceWorker, /chrome\.storage\.local\.get\(SESSION_BINDINGS_KEY\)/);

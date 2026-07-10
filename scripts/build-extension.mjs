@@ -18,7 +18,7 @@ prepareDistRoot();
 copyFile(path.join(appRoot, "panel.html"), path.join(distRoot, "panel.html"));
 copyTree(sourceRoot, path.join(distRoot, "src"));
 
-const distDriverRoot = path.join(distRoot, "src", "vendor", "browser-bridge-driver");
+const distDriverRoot = path.join(distRoot, "src", "vendor", "newton-browser-driver");
 for (const file of ["controller.js", "chrome-tabs-port.js"]) {
   copyFile(path.join(driverRoot, file), path.join(distDriverRoot, file));
 }
@@ -29,7 +29,7 @@ writeFile(path.join(distDriverRoot, "driver.js"), driverSource);
 copyFile(path.join(driverRoot, "overlay.js"), path.join(distRoot, "src", "overlay.js"));
 copyFile(path.join(driverRoot, "overlay.css"), path.join(distRoot, "src", "overlay.css"));
 
-const distCoreRoot = path.join(distRoot, "src", "vendor", "browser-bridge-core");
+const distCoreRoot = path.join(distRoot, "src", "vendor", "newton-browser-core");
 for (const file of ["protocol.ts", "transport.ts", "action-schema.ts", "text-redaction.ts", "redaction.ts", "host-policy.ts", "risk.ts"]) {
   const source = fs.readFileSync(path.join(coreRoot, file), "utf8");
   const transformed = stripTypeScriptTypes(source, { mode: "transform" })
@@ -47,7 +47,7 @@ writeFile(path.join(distRoot, "BUILD_INFO.txt"), [
   "",
 ].join("\n"));
 
-console.log(`browser bridge extension build ok: ${path.relative(repoRoot, distRoot).replaceAll("\\", "/")}`);
+console.log(`newton browser extension build ok: ${path.relative(repoRoot, distRoot).replaceAll("\\", "/")}`);
 process.emitWarning = originalEmitWarning;
 
 function prepareDistRoot() {

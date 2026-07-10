@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { prepareActionForRelay } from "../src/mcp-server.ts";
 
 test("set_files validates image/video signatures, exact paths, and cancellation", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-files-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-files-"));
   try {
     const fixtures = [
       write(root, "asset.png", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { DEFAULT_BROWSER_HOST_POLICIES, type BrowserHostPolicyManifest, normalizeOrigin } from "@browser-bridge/core";
+import { DEFAULT_BROWSER_HOST_POLICIES, type BrowserHostPolicyManifest, normalizeOrigin } from "@newton-browser/core";
 
 export type PairingConfig = {
   version: 1;
@@ -14,10 +14,10 @@ export type TransportAuthMode = "local_trust" | "paired";
 export type BrowserTarget = "auto" | "chrome" | "edge";
 
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.BROWSER_BRIDGE_CONFIG_DIR) return path.resolve(env.BROWSER_BRIDGE_CONFIG_DIR);
-  if (process.platform === "win32" && env.LOCALAPPDATA) return path.join(env.LOCALAPPDATA, "BrowserBridge");
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "BrowserBridge");
-  return path.join(env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "browser-bridge");
+  if (env.NEWTON_BROWSER_CONFIG_DIR) return path.resolve(env.NEWTON_BROWSER_CONFIG_DIR);
+  if (process.platform === "win32" && env.LOCALAPPDATA) return path.join(env.LOCALAPPDATA, "NewtonBrowser");
+  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "NewtonBrowser");
+  return path.join(env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "newton-browser");
 }
 
 export function loadOrCreatePairingConfig(input: { directory?: string } = {}): PairingConfig {
@@ -39,7 +39,7 @@ export function loadOrCreatePairingConfig(input: { directory?: string } = {}): P
 }
 
 export function doctorToken(secret: string): string {
-  return createHmac("sha256", secret).update("browser-bridge-doctor-v1").digest("base64url");
+  return createHmac("sha256", secret).update("newton-browser-doctor-v1").digest("base64url");
 }
 
 export function validDoctorToken(secret: string, value: unknown): boolean {
@@ -51,8 +51,8 @@ export function validDoctorToken(secret: string, value: unknown): boolean {
 
 export function loadTransportAuthMode(input: { directory?: string; env?: NodeJS.ProcessEnv } = {}): TransportAuthMode {
   const env = input.env ?? process.env;
-  const override = env.BROWSER_BRIDGE_AUTH_MODE;
-  if (override !== undefined) return parseTransportAuthMode(override, "BROWSER_BRIDGE_AUTH_MODE");
+  const override = env.NEWTON_BROWSER_AUTH_MODE;
+  if (override !== undefined) return parseTransportAuthMode(override, "NEWTON_BROWSER_AUTH_MODE");
   const directory = path.resolve(input.directory ?? configDirectory(env));
   const file = path.join(directory, "config.json");
   if (!fs.existsSync(file)) return "local_trust";
@@ -68,8 +68,8 @@ export function loadTransportAuthMode(input: { directory?: string; env?: NodeJS.
 
 export function loadBrowserTarget(input: { directory?: string; env?: NodeJS.ProcessEnv } = {}): BrowserTarget {
   const env = input.env ?? process.env;
-  const override = env.BROWSER_BRIDGE_BROWSER;
-  if (override !== undefined) return parseBrowserTarget(override, "BROWSER_BRIDGE_BROWSER");
+  const override = env.NEWTON_BROWSER_BROWSER;
+  if (override !== undefined) return parseBrowserTarget(override, "NEWTON_BROWSER_BROWSER");
   const directory = path.resolve(input.directory ?? configDirectory(env));
   const file = path.join(directory, "config.json");
   if (!fs.existsSync(file)) return "auto";

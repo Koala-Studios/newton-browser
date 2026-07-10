@@ -1,8 +1,8 @@
-# Browser Bridge Agent Guide
+# Newton Browser Agent Guide
 
 ## Product Boundary
 
-Browser Bridge is an independent, local-only Chromium browser-control product. It consists of one MV3 extension and one stdio MCP package. It has no hosted service, daemon, database, model-provider call, telemetry, or dependency on another product repository.
+Newton Browser is an independent, local-only Chromium browser-control product. It consists of one MV3 extension and one stdio MCP package. It has no hosted service, daemon, database, model-provider call, telemetry, or dependency on another product repository.
 
 ## Engineering Rules
 

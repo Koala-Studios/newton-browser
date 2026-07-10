@@ -1,8 +1,8 @@
 {
-  "name": "@browser-bridge/driver",
+  "name": "@newton-browser/driver",
   "version": "0.3.0",
   "type": "module",
-  "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Browser Bridge.",
+  "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Newton Browser.",
   "engines": {
     "node": ">=24.0.0"
   },

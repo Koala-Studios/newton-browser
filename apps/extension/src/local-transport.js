@@ -6,7 +6,7 @@ export function createLocalPanelTransport({
   hostUrls = DEFAULT_HOST_URLS,
   healthCheck = defaultHealthCheck,
   getPairingSecret = async () => null,
-  getClientIdentity = async () => ({ clientId: "browser_bridge_extension", browserFamily: "chromium" }),
+  getClientIdentity = async () => ({ clientId: "newton_browser_extension", browserFamily: "chromium" }),
   signChallenge = defaultSignChallenge,
   hostCleanupDelayMs = 15_000,
 } = {}) {
@@ -321,7 +321,7 @@ async function defaultHealthCheck(hostUrl) {
 async function defaultSignChallenge(secret, hostInstanceId, nonce) {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`browser-bridge-auth-v1:${hostInstanceId}:${nonce}`)));
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`newton-browser-auth-v1:${hostInstanceId}:${nonce}`)));
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");

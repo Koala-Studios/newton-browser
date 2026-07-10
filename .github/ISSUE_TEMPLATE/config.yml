@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security reporting guidance
-    url: https://github.com/Koala-Studios/browser-bridge/blob/main/docs/SECURITY.md
+    url: https://github.com/Koala-Studios/newton-browser/blob/main/docs/SECURITY.md
     about: Do not disclose vulnerability details in a public issue.
   - name: Troubleshooting
-    url: https://github.com/Koala-Studios/browser-bridge/blob/main/docs/TROUBLESHOOTING.md
+    url: https://github.com/Koala-Studios/newton-browser/blob/main/docs/TROUBLESHOOTING.md
     about: Check common typed failures and recovery steps before opening an issue.

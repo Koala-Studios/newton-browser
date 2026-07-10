@@ -5,9 +5,9 @@ import path from "node:path";
 
 const root = process.cwd();
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
-const tarball = path.resolve(`artifacts/browser-bridge-mcp-${version}.tgz`);
+const tarball = path.resolve(`artifacts/newton-browser-${version}.tgz`);
 if (!fs.existsSync(tarball)) throw new Error("run pnpm pack:check first");
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-multi-client with spaces "));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-multi-client with spaces "));
 
 try {
   const installs = await Promise.all(["codex", "claude"].map(async (client) => {
@@ -15,7 +15,7 @@ try {
     fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: `${client}-packed-check`, private: true }));
     await run(process.execPath, [npmCli(), "install", "--ignore-scripts", tarball], directory, cleanPackageManagerEnv());
-    return { client, directory, entry: path.join(directory, "node_modules", "browser-bridge-mcp", "dist", "index.js") };
+    return { client, directory, entry: path.join(directory, "node_modules", "newton-browser", "dist", "index.js") };
   }));
   const results = await Promise.all(installs.map((install, index) => run(process.execPath, [
     path.join(root, "scripts", "smoke", "packed-stdio.mjs"),

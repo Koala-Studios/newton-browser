@@ -1,6 +1,6 @@
 import http from "node:http";
 
-import { createBrowserBridgeHost } from "../../apps/mcp-server/src/bridge.ts";
+import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 
@@ -15,7 +15,7 @@ let sessionId = "";
 
 try {
   fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
-  bridge = createBrowserBridgeHost();
+  bridge = createNewtonBrowserHost();
   await bridge.listen(hostPort, "127.0.0.1");
   control = await startControlServer();
   await waitFor(() => bridge.getStatus().extensionConnected, "extension connection", 45_000);

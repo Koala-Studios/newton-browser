@@ -5,5 +5,5 @@ artifacts/
 *.tgz
 *.zip
 *.sha256
-.browser-bridge/
+.newton-browser/
 test/evidence/runs/

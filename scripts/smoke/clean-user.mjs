@@ -5,9 +5,9 @@ import path from "node:path";
 
 const root = process.cwd();
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
-const tarball = path.resolve(`artifacts/browser-bridge-mcp-${version}.tgz`);
-const extensionZip = path.resolve(`artifacts/browser-bridge-extension-${version}.zip`);
-const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-clean-user-"));
+const tarball = path.resolve(`artifacts/newton-browser-${version}.tgz`);
+const extensionZip = path.resolve(`artifacts/newton-browser-extension-${version}.zip`);
+const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-clean-user-"));
 const install = path.join(isolated, "Local App", "mcp");
 const env = {
   ...process.env,
@@ -17,23 +17,23 @@ const env = {
   APPDATA: path.join(isolated, "roaming"),
   XDG_CONFIG_HOME: path.join(isolated, "config"),
   npm_config_cache: path.join(isolated, "npm-cache"),
-  BROWSER_BRIDGE_CONFIG_DIR: path.join(isolated, "bridge-config"),
+  NEWTON_BROWSER_CONFIG_DIR: path.join(isolated, "bridge-config"),
 };
 
 try {
   fs.mkdirSync(install, { recursive: true });
   fs.writeFileSync(path.join(install, "package.json"), '{"name":"clean-user-proof","private":true}');
   run(process.execPath, [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "install", "--ignore-scripts", tarball], install, cleanPackageManagerEnv(env), false);
-  const entry = path.join(install, "node_modules", "browser-bridge-mcp", "dist", "index.js");
+  const entry = path.join(install, "node_modules", "newton-browser", "dist", "index.js");
   if (run(process.execPath, [entry, "--version"], isolated, env, true).stdout.trim() !== version) throw new Error("clean-user version mismatch");
   const doctor = JSON.parse(run(process.execPath, [entry, "--doctor"], isolated, env, true).stdout);
   if (!doctor.ok || doctor.ready !== false || doctor.authMode !== "local_trust" || doctor.pairingState !== "not_required" || "pairingSecret" in doctor) throw new Error("clean-user zero-touch doctor failed");
   if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.transportAuth?.mode !== "local_trust" || doctor.checks?.extension?.state !== "no_running_host") throw new Error("clean-user doctor checks are incomplete");
-  if (!fs.existsSync(path.join(env.BROWSER_BRIDGE_CONFIG_DIR, "pairing.json"))) throw new Error("clean-user diagnostic credential missing");
+  if (!fs.existsSync(path.join(env.NEWTON_BROWSER_CONFIG_DIR, "pairing.json"))) throw new Error("clean-user diagnostic credential missing");
   const extract = path.join(isolated, "extension");
   run("tar", ["-xf", extensionZip, "-C", mkdir(extract)], isolated, env, false);
   if (!fs.existsSync(path.join(extract, "manifest.json"))) throw new Error("clean-user extension extraction failed");
-  run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", env.BROWSER_BRIDGE_CONFIG_DIR, "--port", "18651"], isolated, env, false);
+  run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", env.NEWTON_BROWSER_CONFIG_DIR, "--port", "18651"], isolated, env, false);
   process.stdout.write(`${JSON.stringify({ ok: true, isolatedProfile: true, sourceCheckoutCwd: false, globalInstall: false, zeroTouch: true, artifacts: 2 })}\n`);
 } finally {
   fs.rmSync(isolated, { recursive: true, force: true });

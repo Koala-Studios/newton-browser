@@ -3,13 +3,13 @@
 ## First-time setup
 
 1. Load the unpacked or release extension in the normal Chrome or Edge profile.
-2. Add the version-pinned `browser-bridge-mcp` stdio entry to the MCP client.
+2. Add the version-pinned `newton-browser` stdio entry to the MCP client.
 3. Restart the client.
 4. Call `browser.status` and confirm `ready: true`. Default `local_trust` needs no pairing key or popup action.
 
-Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers hosts on the bounded loopback range. If the user explicitly enables `paired` mode, run `browser-bridge-mcp --doctor` and enter its key in the popup once.
+Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers hosts on the bounded loopback range. If the user explicitly enables `paired` mode, run `newton-browser --doctor` and enter its key in the popup once.
 
-Chrome and Edge can remain enabled together. The host atomically assigns a session to one browser, and standbys receive no commands. Default `auto` mode needs no choice; set per-user `browserTarget` or `BROWSER_BRIDGE_BROWSER=chrome|edge` only when a specific browser is required.
+Chrome and Edge can remain enabled together. The host atomically assigns a session to one browser, and standbys receive no commands. Default `auto` mode needs no choice; set per-user `browserTarget` or `NEWTON_BROWSER_BROWSER=chrome|edge` only when a specific browser is required.
 
 ## Common typed failures
 
@@ -33,4 +33,4 @@ Chrome and Edge can remain enabled together. The host atomically assigns a sessi
 
 ## Process and tab cleanup
 
-After each scenario, verify `browser.tabs.list` has no unintended sessions, finalize every tab explicitly, and confirm no orphan `browser-bridge-mcp` process remains. One host's exit must affect only sessions stamped with that host instance.
+After each scenario, verify `browser.tabs.list` has no unintended sessions, finalize every tab explicitly, and confirm no orphan `newton-browser` process remains. One host's exit must affect only sessions stamped with that host instance.

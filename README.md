@@ -1,17 +1,17 @@
-# Browser Bridge
+# Newton Browser
 
 Local browser control for MCP clients using your existing Chrome or Edge profile.
 
-Browser Bridge connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, daemon, database, telemetry pipeline, or cloud relay.
+Newton Browser connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, daemon, database, telemetry pipeline, or cloud relay.
 
 ## Purpose
 
-Browser Bridge was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
+Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
 
 > [!IMPORTANT]
-> Browser Bridge 0.3.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
+> Newton Browser 0.3.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
 
-## Why Browser Bridge?
+## Why Newton Browser?
 
 - **Use your real browser profile.** Work with the sessions you are already signed into instead of a separate automation profile.
 - **Keep control traffic local.** The MCP host communicates over stdio, and the extension relay binds only to `127.0.0.1`.
@@ -26,9 +26,9 @@ Browser Bridge was created to give agents a browser-control tool that is **agent
 ```text
 MCP client
     ↕ stdio
-browser-bridge-mcp
+newton-browser
     ↕ WebSocket on 127.0.0.1:17321-17340
-Browser Bridge MV3 extension
+Newton Browser MV3 extension
     ↕ Chrome DevTools Protocol
 Owned tab or explicitly selected current tab
 ```
@@ -50,8 +50,8 @@ The repository is designed to work on Windows, macOS, and Linux. The current rel
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/Koala-Studios/browser-bridge.git
-cd browser-bridge
+git clone https://github.com/Koala-Studios/newton-browser.git
+cd newton-browser
 npm install --global pnpm@10.8.0
 pnpm install --frozen-lockfile
 pnpm build
@@ -77,13 +77,13 @@ The default `local_trust` mode requires no pairing key or popup action.
 Use the absolute path to the built entry point:
 
 ```text
-/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js
+/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js
 ```
 
 On Windows, JSON and double-quoted TOML strings must escape backslashes, for example:
 
 ```text
-C:\\DEV\\browser-bridge\\apps\\mcp-server\\dist\\index.js
+C:\\DEV\\newton-browser\\apps\\mcp-server\\dist\\index.js
 ```
 
 #### Codex
@@ -91,9 +91,9 @@ C:\\DEV\\browser-bridge\\apps\\mcp-server\\dist\\index.js
 Add this to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.browser-bridge]
+[mcp_servers.newton-browser]
 command = "node"
-args = ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+args = ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -107,9 +107,9 @@ Merge this server into the client's MCP configuration:
 ```json
 {
   "mcpServers": {
-    "browser-bridge": {
+    "newton-browser": {
       "command": "node",
-      "args": ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+      "args": ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
     }
   }
 }
@@ -128,7 +128,7 @@ browser.status
 A working setup reports `ready: true` and `extensionConnected: true`. The optional doctor command provides typed setup diagnostics:
 
 ```bash
-node /absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js --doctor
+node /absolute/path/to/newton-browser/apps/mcp-server/dist/index.js --doctor
 ```
 
 If the client is not running yet, `ready: false` with `nextAction: "start_or_restart_mcp_client_then_check_browser_status"` is expected.
@@ -156,7 +156,7 @@ Every session requires an exact origin. A typical tool sequence is:
 
 `owned_group` is the safe default. Current-tab control is explicit and only succeeds when the current tab's live origin matches the session grant.
 
-See the [tool reference](skills/browser-bridge/references/tool-reference.md) for the complete tool list and action kinds.
+See the [tool reference](skills/newton-browser/references/tool-reference.md) for the complete tool list and action kinds.
 
 ## Current limitations
 
@@ -164,16 +164,16 @@ See the [tool reference](skills/browser-bridge/references/tool-reference.md) for
 - The extension must currently be loaded unpacked.
 - The MCP host must currently be built from source or installed from a release tarball.
 - JavaScript dialog control is not supported; accept or dismiss blocking dialogs manually.
-- Browser Bridge does not bypass CAPTCHAs, authentication challenges, origin grants, or its sensitive-data floor.
+- Newton Browser does not bypass CAPTCHAs, authentication challenges, origin grants, or its sensitive-data floor.
 - A session cannot silently follow focus to another tab or origin.
 
 ## Configuration
 
-Browser Bridge reads optional per-user configuration from:
+Newton Browser reads optional per-user configuration from:
 
-- Windows: `%LOCALAPPDATA%\BrowserBridge\config.json`
-- macOS: `~/Library/Application Support/BrowserBridge/config.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/browser-bridge/config.json`
+- Windows: `%LOCALAPPDATA%\NewtonBrowser\config.json`
+- macOS: `~/Library/Application Support/NewtonBrowser/config.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/newton-browser/config.json`
 
 Example:
 
@@ -192,25 +192,25 @@ Example:
 
 Environment overrides are also available:
 
-- `BROWSER_BRIDGE_AUTH_MODE=local_trust|paired`
-- `BROWSER_BRIDGE_BROWSER=auto|chrome|edge`
-- `BROWSER_BRIDGE_CONFIG_DIR=/absolute/config/directory`
+- `NEWTON_BROWSER_AUTH_MODE=local_trust|paired`
+- `NEWTON_BROWSER_BROWSER=auto|chrome|edge`
+- `NEWTON_BROWSER_CONFIG_DIR=/absolute/config/directory`
 
 When `paired` mode is enabled, run `--doctor` and enter the displayed one-time secret in the extension popup. Do not put the secret in MCP arguments, screenshots, issues, or logs.
 
 ## Security and privacy
 
-Browser Bridge is local-only infrastructure, but browser automation still carries risk.
+Newton Browser is local-only infrastructure, but browser automation still carries risk.
 
 - Relay listeners bind only to `127.0.0.1`.
 - Every session is restricted to exact HTTP(S) origins.
 - Page content is treated as untrusted data, never as instructions or authorization.
-- Browser Bridge does not inspect cookies, browser storage, profile files, saved passwords, or authentication tokens.
+- Newton Browser does not inspect cookies, browser storage, profile files, saved passwords, or authentication tokens.
 - Screenshot masking happens in the extension before bytes cross the relay.
 - The safety floor classifies external-effect actions, but it is not a human approval system. The calling agent remains responsible for authorization.
 - Page observations and screenshots stay on the local relay; they leave the machine only if the configured MCP client sends them to its model provider.
 
-Read the full [security model and vulnerability-reporting guidance](docs/SECURITY.md) before using Browser Bridge with sensitive accounts.
+Read the full [security model and vulnerability-reporting guidance](docs/SECURITY.md) before using Newton Browser with sensitive accounts.
 
 ## Development
 
@@ -236,7 +236,7 @@ apps/extension/       Manifest V3 extension
 apps/mcp-server/      stdio MCP server and localhost relay
 packages/core/        Contracts, schemas, redaction, and safety floor
 packages/driver/      Browser-side CDP driver
-skills/browser-bridge Canonical agent workflow and tool reference
+skills/newton-browser Canonical agent workflow and tool reference
 examples/mcp/         Version-pinned artifact configuration examples
 docs/                 Installation, security, decisions, and release docs
 test/                 Fixtures and recorded verification evidence
@@ -246,7 +246,7 @@ test/                 Fixtures and recorded verification evidence
 
 - [Detailed installation guide](docs/INSTALL.md)
 - [MCP client configuration](docs/MCP_CLIENTS.md)
-- [Tool reference](skills/browser-bridge/references/tool-reference.md)
+- [Tool reference](skills/newton-browser/references/tool-reference.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Security model](docs/SECURITY.md)
 - [Architecture and contract decisions](docs/DECISIONS.md)

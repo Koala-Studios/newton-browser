@@ -18,9 +18,9 @@ const child = spawn(process.execPath, [entry], {
   cwd: path.dirname(entry),
   env: {
     ...process.env,
-    BROWSER_BRIDGE_PORT: String(port),
-    BROWSER_BRIDGE_CONFIG_DIR: configDirectory,
-    BROWSER_BRIDGE_READINESS_TIMEOUT_MS: "150",
+    NEWTON_BROWSER_PORT: String(port),
+    NEWTON_BROWSER_CONFIG_DIR: configDirectory,
+    NEWTON_BROWSER_READINESS_TIMEOUT_MS: "150",
   },
   stdio: ["pipe", "pipe", "pipe"],
 });
@@ -164,7 +164,7 @@ async function connectFakeExtension() {
   if (handshake.type === "auth_challenge") {
     const pairing = JSON.parse(fs.readFileSync(path.join(configDirectory, "pairing.json"), "utf8"));
     const proof = createHmac("sha256", pairing.secret)
-      .update(`browser-bridge-auth-v1:${handshake.hostInstanceId}:${handshake.nonce}`)
+      .update(`newton-browser-auth-v1:${handshake.hostInstanceId}:${handshake.nonce}`)
       .digest("base64url");
     const readyPromise = waitForWs(socket, (message) => message.type === "ready");
     socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: handshake.hostInstanceId, proof }));

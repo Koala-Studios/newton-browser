@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 
-import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@browser-bridge/core";
+import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@newton-browser/core";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { loadBrowserTarget, loadOrCreatePairingConfig, loadTransportAuthMode, type BrowserTarget, type TransportAuthMode, validDoctorToken } from "./config.ts";
@@ -37,9 +37,9 @@ type PendingCommand = {
   timer: NodeJS.Timeout;
 };
 
-export type BrowserBridgeHost = ReturnType<typeof createBrowserBridgeHost>;
+export type NewtonBrowserHost = ReturnType<typeof createNewtonBrowserHost>;
 
-export function createBrowserBridgeHost(options: {
+export function createNewtonBrowserHost(options: {
   authMode?: TransportAuthMode;
   browserTarget?: BrowserTarget;
   pairingSecret?: string;
@@ -241,7 +241,7 @@ export function createBrowserBridgeHost(options: {
         return;
       }
       if (request.url === "/doctor-status") {
-        if (!validDoctorToken(pairingSecret, request.headers["x-browser-bridge-doctor"])) {
+        if (!validDoctorToken(pairingSecret, request.headers["x-newton-browser-doctor"])) {
           response.writeHead(403, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end('{"ok":false,"errorCode":"authentication_failed"}');
           return;
         }
@@ -299,7 +299,7 @@ export function createBrowserBridgeHost(options: {
     });
     socket.on("close", () => removeClient(client));
     socket.on("error", () => removeClient(client));
-    if (pairingRequired) send(client, { type: "auth_challenge", protocol: "browser-bridge-auth-v1", hostInstanceId, nonce });
+    if (pairingRequired) send(client, { type: "auth_challenge", protocol: "newton-browser-auth-v1", hostInstanceId, nonce });
     else send(client, { type: "ready", hostInstanceId, authMode, browserTarget, sessions: api.listSessions() });
   }
 
@@ -549,7 +549,7 @@ export function createBrowserBridgeHost(options: {
   function validProof(nonce: string, proof: unknown): boolean {
     if (typeof proof !== "string") return false;
     const expected = createHmac("sha256", pairingSecret)
-      .update(`browser-bridge-auth-v1:${hostInstanceId}:${nonce}`)
+      .update(`newton-browser-auth-v1:${hostInstanceId}:${nonce}`)
       .digest();
     let actual: Buffer;
     try {

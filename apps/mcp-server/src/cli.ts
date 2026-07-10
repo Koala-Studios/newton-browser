@@ -2,12 +2,12 @@ import net from "node:net";
 
 import { configDirectory, doctorToken, loadBrowserTarget, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
 
-export const BROWSER_BRIDGE_VERSION = "0.3.0";
+export const NEWTON_BROWSER_VERSION = "0.3.0";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
 
 export async function handleUtilityCommand(args: string[]): Promise<boolean> {
   if (args.includes("--version")) {
-    process.stdout.write(`${BROWSER_BRIDGE_VERSION}\n`);
+    process.stdout.write(`${NEWTON_BROWSER_VERSION}\n`);
     return true;
   }
   const configIndex = args.indexOf("--print-config");
@@ -42,7 +42,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
   return {
     ok: nodeMajor >= 24 && loopbackOk,
     ready: extensionConnected,
-    version: BROWSER_BRIDGE_VERSION,
+    version: NEWTON_BROWSER_VERSION,
     configDirectory: directory,
     authMode,
     browserTarget,
@@ -72,7 +72,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
 async function probePort(port: number, token: string): Promise<{ port: number; available: boolean; host: null | Record<string, unknown> }> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/doctor-status`, {
-      headers: { "X-Browser-Bridge-Doctor": token },
+      headers: { "X-Newton-Browser-Doctor": token },
       signal: AbortSignal.timeout(250),
     });
     if (response.ok) return { port, available: false, host: await response.json() as Record<string, unknown> };
@@ -93,11 +93,11 @@ function canBind(port: number): Promise<boolean> {
 
 function printConfig(target: string | undefined): string {
   const command = "npx";
-  const packageSpec = process.env.BROWSER_BRIDGE_PACKAGE_SPEC || `browser-bridge-mcp@${BROWSER_BRIDGE_VERSION}`;
-  const args = ["--yes", "--package", packageSpec, "browser-bridge-mcp"];
+  const packageSpec = process.env.NEWTON_BROWSER_PACKAGE_SPEC || `newton-browser@${NEWTON_BROWSER_VERSION}`;
+  const args = ["--yes", "--package", packageSpec, "newton-browser"];
   if (target === "codex") {
     return [
-      "[mcp_servers.browser-bridge]",
+      "[mcp_servers.newton-browser]",
       `command = ${JSON.stringify(command)}`,
       `args = [${args.map((value) => JSON.stringify(value)).join(", ")}]`,
     ].join("\n");
@@ -105,7 +105,7 @@ function printConfig(target: string | undefined): string {
   const server = { command, args };
   if (target === "generic") return JSON.stringify(server, null, 2);
   if (target === "claude-desktop" || target === "claude-code") {
-    return JSON.stringify({ mcpServers: { "browser-bridge": server } }, null, 2);
+    return JSON.stringify({ mcpServers: { "newton-browser": server } }, null, 2);
   }
   throw new Error("invalid_config_target: expected codex, claude-desktop, claude-code, or generic");
 }

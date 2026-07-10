@@ -22,4 +22,4 @@ await build({
   logLevel: "warning",
 });
 fs.chmodSync(path.join(outputDirectory, "index.js"), 0o755);
-console.log("browser bridge MCP build ok");
+console.log("newton browser MCP build ok");

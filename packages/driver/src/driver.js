@@ -1,5 +1,5 @@
 // @ts-check
-// Browser Bridge in-extension CDP driver.
+// Newton Browser in-extension CDP driver.
 //
 // Runs in the MV3 service worker. Attaches chrome.debugger (CDP) to the ACTIVE
 // tab on demand for the duration of a session, then detaches. Observing and
@@ -29,11 +29,11 @@ const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays p
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
 const INLINE_IMAGE_MAX_CHARS = 23_000_000; // supports up to the 16 MiB decoded relay bound
 
-export function createBrowserBridgeDriver(options = {}) {
-  return new BrowserBridgeDriver(options);
+export function createNewtonBrowserDriver(options = {}) {
+  return new NewtonBrowserDriver(options);
 }
 
-class BrowserBridgeDriver {
+class NewtonBrowserDriver {
   constructor(options = {}) {
     this.tabId = null;
     this.attached = false;
@@ -41,7 +41,7 @@ class BrowserBridgeDriver {
     this.devicePixelRatio = 1;
     this.zoom = 1;
     this.accent = typeof options.accent === "string" ? options.accent : null;
-    this.ownerLabel = typeof options.ownerLabel === "string" && options.ownerLabel.trim() ? options.ownerLabel.trim().slice(0, 40) : "Bridge";
+    this.ownerLabel = typeof options.ownerLabel === "string" && options.ownerLabel.trim() ? options.ownerLabel.trim().slice(0, 40) : "Newton";
     this.ownsTab = Boolean(options.ownsTab);
     // Diff-delta state (Proposal 29 / D6): baseline of the last full observation
     // and caches that cut per-action CDP round-trips.
@@ -83,12 +83,12 @@ class BrowserBridgeDriver {
   async reassertOverlay() {
     if (!this.attached || this.tabId == null) return;
     await this.injectOverlay();
-    await this.sendToPage({ type: "BB_DRIVE_BEGIN", accent: this.accent ?? undefined, ownerLabel: this.ownerLabel });
+    await this.sendToPage({ type: "NB_DRIVE_BEGIN", accent: this.accent ?? undefined, ownerLabel: this.ownerLabel });
   }
 
   async detach() {
     if (!this.attached || this.tabId == null) return;
-    await this.sendToPage({ type: "BB_DRIVE_END" }).catch(() => {});
+    await this.sendToPage({ type: "NB_DRIVE_END" }).catch(() => {});
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
     await chrome.debugger.detach({ tabId: this.tabId }).catch(() => {});
     this.attached = false;
@@ -642,7 +642,7 @@ class BrowserBridgeDriver {
       { type: "mouseWheel", x: 10, y: 10, deltaX: 0, deltaY: dy },
       SCROLL_DISPATCH_TIMEOUT_MS,
     ).then(() => true).catch(() => false);
-    await this.sendToPage({ type: "BB_DRIVE_SCROLL", dy });
+    await this.sendToPage({ type: "NB_DRIVE_SCROLL", dy });
     const afterY = await this.waitForScrollPositionChange(beforeY);
     const observation = await this.observeDelta();
     const changed = Math.abs(afterY - beforeY) > 1;
@@ -701,7 +701,7 @@ class BrowserBridgeDriver {
     const point = target.point ?? await this.actionablePoint(target.backendNodeId);
     if (!point) return this.targetMoved();
     await this.moveMouse(point);
-    await this.sendToPage({ type: "BB_DRIVE_MOVE", x: point.x, y: point.y });
+    await this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
     await this.settleShort();
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", { hovered: true }, observation);
@@ -905,7 +905,7 @@ class BrowserBridgeDriver {
     const expression = `(${functionDeclaration})(...${JSON.stringify(args)})`;
     const evaluated = await this.cdp("Runtime.evaluate", {
       expression,
-      objectGroup: "browser-bridge-target",
+      objectGroup: "newton-browser-target",
       includeCommandLineAPI: false,
     }).catch(() => null);
     if (evaluated?.exceptionDetails) {
@@ -921,7 +921,7 @@ class BrowserBridgeDriver {
       const described = await this.cdp("DOM.describeNode", { nodeId: requested.nodeId }).catch(() => null);
       return described?.node?.backendNodeId ?? null;
     } finally {
-      await this.cdp("Runtime.releaseObjectGroup", { objectGroup: "browser-bridge-target" }).catch(() => {});
+      await this.cdp("Runtime.releaseObjectGroup", { objectGroup: "newton-browser-target" }).catch(() => {});
     }
   }
 
@@ -1093,7 +1093,7 @@ class BrowserBridgeDriver {
     const described = await this.cdp("DOM.describeNode", { backendNodeId }).catch(() => null);
     const attrs = described?.node?.attributes ?? [];
     for (let i = 0; i < attrs.length; i += 2) {
-      if (attrs[i] === "data-browser-bridge-ui") return true;
+      if (attrs[i] === "data-newton-browser-ui") return true;
     }
     return false;
   }
@@ -1105,11 +1105,11 @@ class BrowserBridgeDriver {
 
   async maskZones(zones) {
     if (!Array.isArray(zones) || zones.length === 0) return;
-    await this.sendToPage({ type: "BB_DRIVE_MASK", zones });
+    await this.sendToPage({ type: "NB_DRIVE_MASK", zones });
   }
 
   async unmaskZones() {
-    await this.sendToPage({ type: "BB_DRIVE_UNMASK" });
+    await this.sendToPage({ type: "NB_DRIVE_UNMASK" });
   }
 
   async waitForSettle() {
@@ -1140,13 +1140,13 @@ class BrowserBridgeDriver {
 
   paintCursorClick(x, y) {
     // fire-and-forget, never awaited, errors swallowed (§5.1).
-    this.sendToPage({ type: "BB_DRIVE_MOVE", x, y });
-    this.sendToPage({ type: "BB_DRIVE_CLICK", x, y });
+    this.sendToPage({ type: "NB_DRIVE_MOVE", x, y });
+    this.sendToPage({ type: "NB_DRIVE_CLICK", x, y });
   }
 
   paintCursorField(point) {
-    this.sendToPage({ type: "BB_DRIVE_MOVE", x: point.x, y: point.y });
-    this.sendToPage({ type: "BB_DRIVE_FIELD", rect: { x: point.x - 12, y: point.y - 12, width: 24, height: 24 } });
+    this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
+    this.sendToPage({ type: "NB_DRIVE_FIELD", rect: { x: point.x - 12, y: point.y - 12, width: 24, height: 24 } });
   }
 
   async evalString(expression) {

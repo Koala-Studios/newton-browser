@@ -1,6 +1,6 @@
-# Contributing to Browser Bridge
+# Contributing to Newton Browser
 
-Thanks for helping improve Browser Bridge. Contributions should preserve its local-only architecture, explicit origin grants, and deterministic safety behavior.
+Thanks for helping improve Newton Browser. Contributions should preserve its local-only architecture, explicit origin grants, and deterministic safety behavior.
 
 ## Before opening an issue
 
@@ -18,8 +18,8 @@ Requirements:
 - Chrome or Edge for live-browser testing
 
 ```bash
-git clone https://github.com/Koala-Studios/browser-bridge.git
-cd browser-bridge
+git clone https://github.com/Koala-Studios/newton-browser.git
+cd newton-browser
 npm install --global pnpm@10.8.0
 pnpm install --frozen-lockfile
 pnpm build

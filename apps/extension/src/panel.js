@@ -7,7 +7,7 @@ const elements = {
 };
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "BB_STATE") {
+  if (message?.type === "NB_STATE") {
     applyStatus(Boolean(message.hostConnected), Number(message.hostCount ?? 0), Boolean(message.pairingRequired));
   }
 });
@@ -15,7 +15,7 @@ chrome.runtime.onMessage.addListener((message) => {
 void refresh();
 
 async function refresh() {
-  const response = await send({ type: "BB_PANEL_STATUS" });
+  const response = await send({ type: "NB_PANEL_STATUS" });
   applyStatus(Boolean(response.ok && response.hostConnected), Number(response.hostCount ?? 0), Boolean(response.pairingRequired));
 }
 
@@ -27,7 +27,7 @@ elements.pairing.addEventListener("submit", (event) => {
 async function savePairing() {
   const secret = elements.pairingSecret.value.trim();
   elements.pairingMessage.textContent = "Pairing…";
-  const response = await send({ type: "BB_PAIRING_SAVE", secret });
+  const response = await send({ type: "NB_PAIRING_SAVE", secret });
   if (!response.ok || !response.hostConnected) {
     elements.pairingMessage.textContent = response.error === "invalid_pairing_secret"
       ? "That pairing secret is not valid."

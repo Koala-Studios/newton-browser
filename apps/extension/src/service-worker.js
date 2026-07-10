@@ -1,7 +1,7 @@
-import { evaluateBrowserFloor } from "./vendor/browser-bridge-core/risk.js";
-import { createBridgeRuntime } from "./vendor/browser-bridge-driver/controller.js";
-import { createBrowserBridgeDriver } from "./vendor/browser-bridge-driver/driver.js";
-import { createChromeTabsPort } from "./vendor/browser-bridge-driver/chrome-tabs-port.js";
+import { evaluateBrowserFloor } from "./vendor/newton-browser-core/risk.js";
+import { createBridgeRuntime } from "./vendor/newton-browser-driver/controller.js";
+import { createNewtonBrowserDriver } from "./vendor/newton-browser-driver/driver.js";
+import { createChromeTabsPort } from "./vendor/newton-browser-driver/chrome-tabs-port.js";
 import { createLocalPanelTransport } from "./local-transport.js";
 import { OWNER_LABEL } from "./config.js";
 
@@ -17,14 +17,14 @@ const transport = createLocalPanelTransport({
 let clientIdentityPromise;
 let bindingRecordsPromise;
 let orphanCleanupTimer;
-const BRIDGE_ALARM = "browser-bridge-sync";
-const SESSION_BINDINGS_KEY = "browserBridgeOwnedBindings";
+const BRIDGE_ALARM = "newton-browser-sync";
+const SESSION_BINDINGS_KEY = "newtonBrowserOwnedBindings";
 const ORPHAN_CLEANUP_DELAY_MS = 15_000;
 const runtime = createBridgeRuntime({
   transport,
   evaluateFloor: evaluateFloorLocally,
   tabs: createChromeTabsPort(chrome),
-  driverFactory: () => createBrowserBridgeDriver({ ownerLabel: OWNER_LABEL }),
+  driverFactory: () => createNewtonBrowserDriver({ ownerLabel: OWNER_LABEL }),
   notify: notifyPanels,
 });
 
@@ -54,7 +54,7 @@ void syncHost();
 
 async function handleMessage(message) {
   switch (message?.type) {
-    case "BB_PANEL_STATUS":
+    case "NB_PANEL_STATUS":
       await syncHost();
       return {
         state: runtime.snapshot(),
@@ -62,7 +62,7 @@ async function handleMessage(message) {
         hostCount: transport.connectedHostCount(),
         pairingRequired: transport.pairingRequired(),
       };
-    case "BB_PAIRING_SAVE": {
+    case "NB_PAIRING_SAVE": {
       const secret = String(message.secret ?? "").trim();
       if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) throw new Error("invalid_pairing_secret");
       await chrome.storage.local.set({ pairingSecret: secret });
@@ -111,7 +111,7 @@ async function notifyPanels(event) {
   if (event?.type === "state") {
     await rememberOwnedBindings(event.state);
     await chrome.runtime.sendMessage({
-      type: "BB_STATE",
+      type: "NB_STATE",
       state: event.state,
       hostConnected: transport.isHostConnected(),
       hostCount: transport.connectedHostCount(),

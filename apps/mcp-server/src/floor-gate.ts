@@ -5,7 +5,7 @@ import {
   type BridgeSessionInfo,
   type BrowserAction,
   type BrowserFloorDecision,
-} from "@browser-bridge/core";
+} from "@newton-browser/core";
 
 import { loadHostPolicies } from "./config.ts";
 

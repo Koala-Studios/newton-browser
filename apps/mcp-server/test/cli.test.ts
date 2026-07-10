@@ -4,16 +4,16 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createBrowserBridgeHost } from "../src/bridge.ts";
+import { createNewtonBrowserHost } from "../src/bridge.ts";
 import { collectDoctorReport } from "../src/cli.ts";
 
 const SECRET = "d".repeat(43);
 
 test("doctor reports runtime, config, loopback, protocol, extension state, and next action", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-doctor-test-"));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-doctor-test-"));
   fs.writeFileSync(path.join(directory, "pairing.json"), `${JSON.stringify({ version: 1, secret: SECRET })}\n`);
   fs.writeFileSync(path.join(directory, "config.json"), `${JSON.stringify({ transportAuth: "paired", browserTarget: "edge" })}\n`);
-  const host = createBrowserBridgeHost({ pairingSecret: SECRET });
+  const host = createNewtonBrowserHost({ pairingSecret: SECRET });
   const address = await host.listen(0);
   try {
     const report = await collectDoctorReport({ directory, firstPort: address.port, lastPort: address.port });
@@ -38,9 +38,9 @@ test("doctor reports runtime, config, loopback, protocol, extension state, and n
 });
 
 test("doctor identifies a free bounded port when no host is running", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-doctor-free-"));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-doctor-free-"));
   try {
-    const probe = createBrowserBridgeHost({ pairingSecret: SECRET });
+    const probe = createNewtonBrowserHost({ pairingSecret: SECRET });
     const address = await probe.listen(0);
     await probe.close();
     const report = await collectDoctorReport({ directory, firstPort: address.port, lastPort: address.port });
