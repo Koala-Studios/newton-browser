@@ -12,7 +12,7 @@ const SECRET = "d".repeat(43);
 test("doctor reports runtime, config, loopback, protocol, extension state, and next action", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-doctor-test-"));
   fs.writeFileSync(path.join(directory, "pairing.json"), `${JSON.stringify({ version: 1, secret: SECRET })}\n`);
-  fs.writeFileSync(path.join(directory, "config.json"), `${JSON.stringify({ transportAuth: "paired", browserTarget: "edge" })}\n`);
+  fs.writeFileSync(path.join(directory, "config.json"), `${JSON.stringify({ transportAuth: "paired", browserTarget: "edge", hostPolicies: [{ label: "example", origins: ["https://example.com"] }] })}\n`);
   const host = createNewtonBrowserHost({ pairingSecret: SECRET });
   const address = await host.listen(0);
   try {
