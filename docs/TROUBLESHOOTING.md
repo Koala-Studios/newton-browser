@@ -4,6 +4,8 @@
 - `extension_disconnected`: load the unpacked extension in the same Chrome/Edge profile, open its popup once if the service worker is asleep, and call `browser.status` again.
 - `pairing_required` or `authentication_failed`: run `--doctor`, replace the extension popup secret, and restart the client. Never paste the secret into MCP arguments.
 - `host_collision`: another 20 processes occupy the bounded port range. Stop stale Browser Bridge clients and inspect `127.0.0.1:17321-17340`; do not widen the range casually.
+- `--doctor` reports `no_running_host`: pairing/config and loopback checks succeeded, but no MCP client host is active. Start or restart the configured client, then call `browser.status`.
+- `--doctor` reports `extension.state:"disconnected"`: a host is running but no paired extension authenticated to it. Load the extension in the intended profile, verify its pairing secret, and reopen its popup once.
 - `origin_required`, `invalid_origin`, or `origin_not_granted`: pass an exact HTTP(S) origin such as `https://example.com`, not a page URL, wildcard, credentialed URL, or path.
 - `queue_full`, `command_timeout`, or `session_limit`: wait for the current command, stop unused sessions, and retry once after observing state.
 - `result_too_large`: use screenshot `delivery:"image"` or `delivery:"file"`; inline delivery is deliberately bounded.

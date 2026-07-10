@@ -26,10 +26,17 @@ export async function startBrowserBridgeMcpServer(input: { bridge?: BrowserBridg
   const bridge = input.bridge ?? createBrowserBridgeHost({
     ...(Number.isFinite(readinessTimeoutMs) ? { limits: { readinessTimeoutMs: Math.max(50, readinessTimeoutMs) } } : {}),
   });
-  await bridge.listen(input.port, input.host ?? "127.0.0.1");
+  let startupErrorCode: string | undefined;
+  try {
+    await bridge.listen(input.port, input.host ?? "127.0.0.1");
+  } catch (error) {
+    const code = errorCode(error);
+    if (code !== "host_collision") throw error;
+    startupErrorCode = code;
+  }
   await new Promise<void>((resolve) => {
     const parser = new McpFrameParser(async (message, mode) => {
-      const response = await handleMcpMessage(bridge, message);
+      const response = await handleMcpMessage(bridge, message, { startupErrorCode });
       if (response) writeMessage(response, mode);
     }, (error, mode) => {
       writeMessage(errorResponse(null, -32700, "Malformed MCP frame.", { errorCode: "malformed_frame", detail: error.message }), mode);
@@ -46,7 +53,7 @@ export async function startBrowserBridgeMcpServer(input: { bridge?: BrowserBridg
   });
 }
 
-export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonRpcRequest, input: { startupErrorCode?: string } = {}): Promise<JsonRpcResponse | null> {
   if (message.id === undefined && message.method?.startsWith("notifications/")) return null;
   const id = message.id ?? null;
   if (message.method === "initialize") {
@@ -71,7 +78,7 @@ export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonR
       const params = asObject(message.params ?? {}, "params");
       const name = requiredString(params.name, "name");
       const args = isObject(params.arguments) ? params.arguments : {};
-      return response(id, await callTool(bridge, name, args));
+      return response(id, await callTool(bridge, name, args, input));
     } catch (error) {
       return response(id, toolError(errorCode(error), error instanceof Error ? error.message : String(error)));
     }
@@ -79,9 +86,14 @@ export async function handleMcpMessage(bridge: BrowserBridgeHost, message: JsonR
   return errorResponse(id, -32601, `Unsupported MCP method: ${message.method ?? "unknown"}.`);
 }
 
-async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<string, unknown>, input: { startupErrorCode?: string } = {}): Promise<ToolCallResult> {
   const transport = resolveTransport(args.transport);
   if (!LOCAL_TRANSPORTS.has(transport)) return toolError("unsupported_transport", "Only local Browser Bridge transports are supported.");
+  if (input.startupErrorCode) {
+    return toolError(input.startupErrorCode, "No loopback port is available in the configured Browser Bridge range.", {
+      nextAction: "stop_stale_browser_bridge_hosts_or_free_a_configured_port",
+    });
+  }
 
   if (name === "browser.status") {
     const status = bridge.getStatus();

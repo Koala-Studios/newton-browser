@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +11,7 @@ import assert from "node:assert/strict";
 import { WebSocket } from "ws";
 
 import { createBrowserBridgeHost } from "../src/bridge.ts";
+import { doctorToken } from "../src/config.ts";
 import { evaluateHostFloor } from "../src/floor-gate.ts";
 import { handleMcpMessage } from "../src/mcp-server.ts";
 
@@ -37,6 +39,9 @@ test("session start requires an exact origin and waits for authenticated extensi
   const extension = await connectExtension(address.port, bridge.hostInstanceId);
   autoBind(extension, "https://example.com");
   try {
+    const doctor = await fetch(`http://127.0.0.1:${address.port}/doctor-status`, { headers: { "X-Browser-Bridge-Doctor": doctorToken(PAIRING_SECRET) } });
+    assert.equal(doctor.status, 200);
+    assert.equal((await doctor.json() as any).extensionConnected, true);
     const missing = await toolCall(bridge, "browser.session.start", {});
     assert.equal(missing.isError, true);
     assert.equal(missing.json.errorCode, "origin_required");
@@ -140,6 +145,9 @@ test("health endpoint omits wildcard CORS", async () => {
     const response = await fetch(`http://127.0.0.1:${address.port}/health`);
     assert.equal(response.status, 204);
     assert.equal(response.headers.get("access-control-allow-origin"), null);
+    const denied = await fetch(`http://127.0.0.1:${address.port}/doctor-status`);
+    assert.equal(denied.status, 403);
+    assert.equal(denied.headers.get("access-control-allow-origin"), null);
   } finally {
     await bridge.close();
   }
@@ -214,6 +222,27 @@ test("session, pending, result, and orphan bounds return typed outcomes", async 
   }
 });
 
+test("command timeout and session stop resolve pending work with typed outcomes", async () => {
+  const bridge = testBridge({ limits: { maxCommandTimeoutMs: 250 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const first = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: first.sessionId });
+    const timedOut = await bridge.dispatch(first.sessionId, { kind: "observe" }, 100);
+    assert.equal(timedOut.errorCode, "command_timeout");
+
+    const second = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: second.sessionId });
+    const pending = bridge.dispatch(second.sessionId, { kind: "observe" }, 250);
+    bridge.stopSession(second.sessionId);
+    assert.equal((await pending).errorCode, "session_stopped");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
 test("stdio process emits MCP only and exits after stdin closes", async () => {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-test-"));
   const child = spawn(process.execPath, ["apps/mcp-server/src/index.ts"], {
@@ -268,8 +297,78 @@ test("stdio process emits MCP only and exits after stdin closes", async () => {
   fs.rmSync(configDir, { recursive: true, force: true });
 });
 
+test("stdio process stays alive and returns typed host_collision when its port is occupied", async () => {
+  const blocker = net.createServer();
+  await new Promise<void>((resolve, reject) => { blocker.once("error", reject); blocker.listen(0, "127.0.0.1", resolve); });
+  const address = blocker.address();
+  assert.ok(address && typeof address === "object");
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-collision-"));
+  const child = spawn(process.execPath, ["apps/mcp-server/src/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, BROWSER_BRIDGE_PORT: String(address.port), BROWSER_BRIDGE_CONFIG_DIR: configDir },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const client = jsonLineClient(child);
+  try {
+    const initialized = await client.request("initialize", { protocolVersion: "2025-11-25" });
+    assert.equal(initialized.result.protocolVersion, "2025-11-25");
+    const listed = await client.request("tools/list");
+    assert.ok(listed.result.tools.length >= 8);
+    const status = await client.request("tools/call", { name: "browser.status", arguments: {} });
+    assert.equal(status.result.isError, true);
+    const detail = JSON.parse(status.result.content[0].text);
+    assert.equal(detail.errorCode, "host_collision");
+    assert.equal(detail.nextAction, "stop_stale_browser_bridge_hosts_or_free_a_configured_port");
+    child.stdin.end();
+    const exitCode = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+    assert.equal(exitCode, 0, client.stderr());
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    fs.rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
 function testBridge(options: Record<string, any> = {}) {
   return createBrowserBridgeHost({ pairingSecret: PAIRING_SECRET, ...options });
+}
+
+function jsonLineClient(child: ReturnType<typeof spawn>) {
+  const responses = new Map<number, any>();
+  const waiters = new Map<number, () => void>();
+  let buffer = "";
+  let stderr = "";
+  let id = 0;
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) {
+        const message = JSON.parse(line);
+        responses.set(message.id, message);
+        waiters.get(message.id)?.();
+      }
+      newline = buffer.indexOf("\n");
+    }
+  });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  return {
+    stderr: () => stderr,
+    async request(method: string, params?: Record<string, unknown>) {
+      const requestId = ++id;
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`);
+      if (!responses.has(requestId)) await Promise.race([
+        new Promise<void>((resolve) => waiters.set(requestId, resolve)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`stdio response timeout: ${stderr}`)), 5000)),
+      ]);
+      waiters.delete(requestId);
+      return responses.get(requestId);
+    },
+  };
 }
 
 async function toolCall(bridge: ReturnType<typeof createBrowserBridgeHost>, name: string, args: Record<string, unknown>) {

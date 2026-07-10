@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +33,17 @@ export function loadOrCreatePairingConfig(input: { directory?: string } = {}): P
     return parsePairingConfig(fs.readFileSync(file, "utf8"), file);
   }
   return value;
+}
+
+export function doctorToken(secret: string): string {
+  return createHmac("sha256", secret).update("browser-bridge-doctor-v1").digest("base64url");
+}
+
+export function validDoctorToken(secret: string, value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const expected = Buffer.from(doctorToken(secret));
+  const actual = Buffer.from(value);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 export function loadHostPolicies(input: { directory?: string } = {}): BrowserHostPolicyManifest[] {

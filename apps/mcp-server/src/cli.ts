@@ -1,4 +1,6 @@
-import { configDirectory, loadOrCreatePairingConfig } from "./config.ts";
+import net from "node:net";
+
+import { configDirectory, doctorToken, loadHostPolicies, loadOrCreatePairingConfig } from "./config.ts";
 
 export const BROWSER_BRIDGE_VERSION = "0.1.0";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
@@ -15,19 +17,66 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     return true;
   }
   if (args.includes("--doctor")) {
-    const pairing = loadOrCreatePairingConfig();
-    process.stdout.write(`${JSON.stringify({
-      ok: true,
-      version: BROWSER_BRIDGE_VERSION,
-      node: process.version,
-      configDirectory: configDirectory(),
-      pairingState: "configured",
-      pairingSecret: pairing.secret,
-      note: "Paste this secret into the extension popup once. Do not share or record it.",
-    }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(await collectDoctorReport(), null, 2)}\n`);
     return true;
   }
   return false;
+}
+
+export async function collectDoctorReport(input: { directory?: string; firstPort?: number; lastPort?: number } = {}) {
+  const directory = input.directory ?? configDirectory();
+  const pairing = loadOrCreatePairingConfig({ directory });
+  const policies = loadHostPolicies({ directory });
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  const firstPort = input.firstPort ?? 17321;
+  const lastPort = input.lastPort ?? 17340;
+  const token = doctorToken(pairing.secret);
+  const ports = await Promise.all(Array.from({ length: lastPort - firstPort + 1 }, (_, index) => probePort(firstPort + index, token)));
+  const incumbents = ports.flatMap((entry) => entry.host ? [entry.host] : []);
+  const availablePort = ports.find((entry) => entry.available)?.port ?? null;
+  const extensionConnected = incumbents.some((host) => host.extensionConnected === true);
+  const extensionState = extensionConnected ? "connected" : incumbents.length ? "disconnected" : "no_running_host";
+  const loopbackOk = incumbents.length > 0 || availablePort !== null;
+  return {
+    ok: nodeMajor >= 24 && loopbackOk,
+    ready: extensionConnected,
+    version: BROWSER_BRIDGE_VERSION,
+    configDirectory: directory,
+    pairingState: "configured",
+    pairingSecret: pairing.secret,
+    checks: {
+      node: { ok: nodeMajor >= 24, version: process.version, required: ">=24.0.0" },
+      config: { ok: true, hostPolicyCount: policies.length },
+      loopback: { ok: loopbackOk, range: `${firstPort}-${lastPort}`, availablePort, incumbents },
+      pairing: { ok: true, state: "configured" },
+      protocol: { ok: true, supported: [...SUPPORTED_MCP_PROTOCOLS] },
+      extension: { ok: extensionConnected, state: extensionState },
+    },
+    nextAction: extensionConnected ? "ready" : incumbents.length ? "load_or_pair_extension" : "start_or_restart_mcp_client_then_check_browser_status",
+    note: "Paste this secret into the extension popup once. Do not share or record it.",
+  };
+}
+
+async function probePort(port: number, token: string): Promise<{ port: number; available: boolean; host: null | Record<string, unknown> }> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/doctor-status`, {
+      headers: { "X-Browser-Bridge-Doctor": token },
+      signal: AbortSignal.timeout(250),
+    });
+    if (response.ok) return { port, available: false, host: await response.json() as Record<string, unknown> };
+  } catch {
+    // A free port or an unrelated listener is resolved by the bind probe below.
+  }
+  return { port, available: await canBind(port), host: null };
+}
+
+function canBind(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    const finish = (available: boolean) => server.close(() => resolve(available));
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => finish(true));
+  });
 }
 
 function printConfig(target: string | undefined): string {

@@ -4,7 +4,7 @@ import http from "node:http";
 import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@browser-bridge/core";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { loadOrCreatePairingConfig } from "./config.ts";
+import { loadOrCreatePairingConfig, validDoctorToken } from "./config.ts";
 
 const DEFAULT_LIMITS = {
   firstPort: 17321,
@@ -224,6 +224,14 @@ export function createBrowserBridgeHost(options: {
     const candidateServer = http.createServer((request, response) => {
       if (request.url === "/health") {
         response.writeHead(204, { "Cache-Control": "no-store" }).end();
+        return;
+      }
+      if (request.url === "/doctor-status") {
+        if (!validDoctorToken(pairingSecret, request.headers["x-browser-bridge-doctor"])) {
+          response.writeHead(403, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end('{"ok":false,"errorCode":"authentication_failed"}');
+          return;
+        }
+        response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, ...api.getStatus() }));
         return;
       }
       response.writeHead(404).end();

@@ -38,4 +38,6 @@ npx --yes --package C:\BrowserBridge\browser-bridge-mcp-0.1.0.tgz browser-bridge
 
 Copy the one-time pairing secret into the extension popup and save it. Do not store the secret in screenshots, tickets, repositories, or chat. Normal MCP startup never prints it.
 
+The doctor report also verifies Node support, host-policy configuration, the bounded loopback range, supported MCP revisions, and any authenticated extension connection visible through an already-running host. `ready:false` is a setup result, not a crash; follow its typed `nextAction` and then call `browser.status` from the restarted client.
+
 Start or restart the client, call `browser.status`, then start an exact-origin session. No separate host command or extension-panel click is part of normal startup.

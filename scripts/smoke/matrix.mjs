@@ -29,7 +29,9 @@ const doctorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-doctor-
 try {
   const output = run(process.execPath, [entry, "--doctor"], { env: { ...process.env, BROWSER_BRIDGE_CONFIG_DIR: doctorRoot } }).stdout;
   const doctor = JSON.parse(output);
-  if (!doctor.ok || doctor.pairingState !== "configured" || typeof doctor.pairingSecret !== "string" || doctor.pairingSecret.length < 43) throw new Error("doctor output is incomplete");
+  if (!doctor.ok || doctor.ready !== false || doctor.pairingState !== "configured" || typeof doctor.pairingSecret !== "string" || doctor.pairingSecret.length < 43) throw new Error("doctor output is incomplete");
+  if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok) throw new Error("doctor checks are incomplete");
+  if (doctor.checks?.extension?.state !== "no_running_host" || doctor.nextAction !== "start_or_restart_mcp_client_then_check_browser_status") throw new Error("doctor setup guidance is not actionable");
 } finally {
   fs.rmSync(doctorRoot, { recursive: true, force: true });
 }

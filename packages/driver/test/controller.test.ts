@@ -456,3 +456,47 @@ test("BridgeRuntime finalizes owned and current tabs with explicit close, delive
     assert.equal(results[0].result.tabKept, scenario.kept);
   }
 });
+
+test("BridgeRuntime host reconciliation closes only sessions missing from the aggregate live set", async () => {
+  let liveSessions = [
+    { sessionId: "host-one-session", origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group", ownedTabId: 101, hostInstanceId: "host-one" },
+    { sessionId: "host-two-session", origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group", ownedTabId: 102, hostInstanceId: "host-two" },
+  ];
+  const removed: number[] = [];
+  const stopped: string[] = [];
+  const runtime = createBridgeRuntime({
+    transport: {
+      async createSession() { return { sessionId: "unused" }; },
+      async attachTab() {},
+      subscribe() { return () => {}; },
+      async listSessions() { return liveSessions; },
+      async postEvent() {},
+      async postResult() {},
+      async stopSession(sessionId: string) { stopped.push(sessionId); },
+      async stopAll() {},
+    },
+    evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" }; },
+    tabs: {
+      async createOwnedTab() { throw new Error("existing owned tabs must be reused"); },
+      async removeTab(tabId: number) { removed.push(tabId); },
+      async getTab(tabId: number) { return { id: tabId, url: "https://example.com/page" }; },
+    },
+    driverFactory: () => ({
+      attached: false, ownsTab: false, accent: null,
+      async attach() { this.attached = true; },
+      async detach() { this.attached = false; },
+      isAttachedTo() { return this.attached; },
+      async reassertOverlay() {},
+      markDetached() { this.attached = false; },
+    }),
+  });
+
+  await runtime.ensureForActiveSessions();
+  assert.equal(runtime.snapshot().count, 2);
+  liveSessions = [liveSessions[1]!];
+  await runtime.renewLeases();
+  assert.equal(runtime.snapshot().count, 1);
+  assert.equal(runtime.snapshot().sessions[0].sessionId, "host-two-session");
+  assert.deepEqual(removed, [101]);
+  assert.deepEqual(stopped, ["host-one-session"]);
+});

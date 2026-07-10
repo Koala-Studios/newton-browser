@@ -27,7 +27,8 @@ try {
   const entry = path.join(install, "node_modules", "browser-bridge-mcp", "dist", "index.js");
   if (run(process.execPath, [entry, "--version"], isolated, env, true).stdout.trim() !== version) throw new Error("clean-user version mismatch");
   const doctor = JSON.parse(run(process.execPath, [entry, "--doctor"], isolated, env, true).stdout);
-  if (!doctor.ok || doctor.pairingState !== "configured") throw new Error("clean-user doctor failed");
+  if (!doctor.ok || doctor.ready !== false || doctor.pairingState !== "configured") throw new Error("clean-user doctor failed");
+  if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.extension?.state !== "no_running_host") throw new Error("clean-user doctor checks are incomplete");
   if (!fs.existsSync(path.join(env.BROWSER_BRIDGE_CONFIG_DIR, "pairing.json"))) throw new Error("clean-user pairing config missing");
   const extract = path.join(isolated, "extension");
   run("tar", ["-xf", extensionZip, "-C", mkdir(extract)], isolated, env, false);

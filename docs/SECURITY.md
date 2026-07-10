@@ -6,6 +6,8 @@ The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). 
 
 Each stdio host binds one free address in `127.0.0.1:17321-17340`. The extension accepts only loopback hosts and authenticates every socket with a challenge-response proof derived from the per-user 256-bit pairing secret. The secret is never emitted by normal MCP mode. This prevents an unpaired webpage or ordinary local process from issuing bridge commands; it does not defend against malware already running as the same OS user.
 
+`--doctor` discovers incumbent hosts through a loopback-only `/doctor-status` endpoint authenticated by an HMAC-derived diagnostic token. The endpoint has no permissive CORS header and never returns the pairing secret. An unauthenticated request receives only `authentication_failed`.
+
 Every session has a required exact HTTP(S) origin grant. The extension reconciles the attached tab's live origin before binding and before every command. Moving focus cannot retarget a session, and one host cannot address another host's session. Page text is untrusted data and never authorization.
 
 ## Action floor
