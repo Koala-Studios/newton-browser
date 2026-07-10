@@ -20,5 +20,12 @@ export function createPanelViewModel({ sessions, extensionVersion, hostVersion }
     showSessions: rows.length > 0,
     showStopAll: rows.length > 0,
     version: hostVersion ? `Extension ${extensionVersion} · Host ${hostVersion}` : `Extension ${extensionVersion}`,
+    versionSkew: Boolean(hostVersion && incompatible(extensionVersion, hostVersion)),
   };
+}
+
+function incompatible(extensionVersion, hostVersion) {
+  const extension = /^\d+\.(\d+)\./.exec(extensionVersion ?? "");
+  const host = /^\d+\.(\d+)\./.exec(hostVersion ?? "");
+  return extension && host && (extension[1] !== host[1] || extensionVersion.split(".")[0] !== hostVersion.split(".")[0]);
 }

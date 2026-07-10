@@ -153,7 +153,7 @@ test("panel session contract exposes only bounded origin, mode, and label summar
     { origin: "https://example.net", mode: "current", label: "review" },
   ]);
   assert.deepEqual(createPanelViewModel({ sessions: [], extensionVersion: "0.3.0" }), {
-    rows: [], showSessions: false, showStopAll: false, version: "Extension 0.3.0",
+    rows: [], showSessions: false, showStopAll: false, version: "Extension 0.3.0", versionSkew: false,
   });
   assert.equal(createPanelViewModel({ sessions, extensionVersion: "0.3.0", hostVersion: "0.4.0" }).showStopAll, true);
 });

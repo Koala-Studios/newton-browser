@@ -7,6 +7,7 @@ export function createLocalPanelTransport({
   healthCheck = defaultHealthCheck,
   getPairingSecret = async () => null,
   getClientIdentity = async () => ({ clientId: "newton_browser_extension", browserFamily: "chromium" }),
+  getExtensionVersion = () => globalThis.chrome?.runtime?.getManifest?.().version ?? null,
   signChallenge = defaultSignChallenge,
   hostCleanupDelayMs = 15_000,
 } = {}) {
@@ -28,6 +29,10 @@ export function createLocalPanelTransport({
 
     connectedHostCount() {
       return readyHosts().length;
+    },
+
+    connectedHostVersion() {
+      return readyHosts().map((host) => host.version).find((version) => typeof version === "string") ?? null;
     },
 
     pairingRequired,
@@ -160,12 +165,14 @@ export function createLocalPanelTransport({
     }
     if (message?.type === "ready") {
       const identity = normalizeClientIdentity(await getClientIdentity());
-      host.socket?.send(JSON.stringify({ type: "client_hello", ...identity }));
+      const version = getExtensionVersion();
+      host.socket?.send(JSON.stringify({ type: "client_hello", ...identity, ...(typeof version === "string" ? { version } : {}) }));
       host.ready = true;
       host.browserTarget = ["chrome", "edge"].includes(message.browserTarget) ? message.browserTarget : "auto";
       host.eligible = host.browserTarget === "auto" || host.browserTarget === identity.browserFamily;
       host.pairingRequired = false;
       host.hostInstanceId = message.hostInstanceId;
+      host.version = typeof message.version === "string" ? message.version : null;
       if (host.eligible) {
         indexSessions(host, message.sessions);
         syncHostSubscriptions(host);
@@ -285,6 +292,7 @@ function createHostRecord(url) {
     browserTarget: "auto",
     pairingRequired: false,
     hostInstanceId: null,
+    version: null,
     requests: new Map(),
     counter: 0,
     connecting: null,

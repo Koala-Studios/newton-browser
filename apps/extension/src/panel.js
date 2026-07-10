@@ -10,6 +10,7 @@ const elements = {
   sessionList: document.getElementById("session-list"),
   stopAll: document.getElementById("stop-all"),
   version: document.getElementById("version"),
+  versionSkew: document.getElementById("version-skew"),
 };
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -65,6 +66,7 @@ function applyPanel(response) {
   elements.stopAll.hidden = !model.showStopAll;
   elements.sessionList.replaceChildren(...model.rows.map(sessionRow));
   elements.version.textContent = model.version;
+  elements.versionSkew.hidden = !model.versionSkew;
 }
 
 function sessionRow(session) {

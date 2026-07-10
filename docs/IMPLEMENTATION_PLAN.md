@@ -414,6 +414,8 @@ under ~150 lines).
 
 ## WS8 — Version-skew handling
 
+**Status: in progress 2026-07-10.**
+
 **Goal:** once the store auto-updates the extension while users pin an npm version,
 mismatches become routine; they must produce a typed, actionable answer instead of a
 protocol failure.

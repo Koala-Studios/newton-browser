@@ -196,3 +196,7 @@ MCP tool names (`browser.*`) are deliberately unchanged: they are generic, descr
 ## 13. Popup session-summary contract (2026-07-10)
 
 The popup remains a glanceable, local status surface. `NB_PANEL_STATUS` and `NB_STATE` carry at most 32 summaries, each containing only an exact session origin, `owned` or `current` mode, and an optional instance label. They never carry a URL path, page title, favicon, page text, or any other page-derived content. `NB_PANEL_STOP_ALL` maps only to the existing local `stopAll` lifecycle path; it does not create an approval or action channel. Contract tests enforce the field projection and empty-list behavior.
+
+## 14. Host/extension version skew (2026-07-10)
+
+The loopback `ready` and `client_hello` frames carry optional package/manifest versions. Missing versions from a 0.3 peer are tolerated as unknown. Equal versions report `none`; patch-only difference reports `patch`; major or minor difference reports `incompatible` while operations continue. `browser.status` exposes host and extension versions and, for incompatible skew, instructs the user to update the older side. The popup shows one amber warning only for incompatible skew.

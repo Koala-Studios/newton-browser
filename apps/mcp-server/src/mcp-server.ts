@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { BROWSER_CONTROL_TRANSPORTS, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
+import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
 
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
 import type { NewtonBrowserHost } from "./bridge.ts";
@@ -97,6 +97,10 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
 
   if (name === "browser.status") {
     const status = bridge.getStatus();
+    const versionSkew = classifyVersionSkew(NEWTON_BROWSER_VERSION, status.extensionVersion);
+    const nextAction = versionSkew === "incompatible"
+      ? status.extensionVersion && status.extensionVersion > NEWTON_BROWSER_VERSION ? "update the npm package" : "update the extension"
+      : undefined;
     return toolJson({
       ready: status.extensionConnected,
       version: NEWTON_BROWSER_VERSION,
@@ -105,6 +109,10 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       paired: status.authMode === "paired" && status.extensionConnected,
       zeroTouch: status.authMode === "local_trust",
       hostCountSeenByExtension: status.eligibleClientCount,
+      hostVersion: NEWTON_BROWSER_VERSION,
+      extensionVersion: status.extensionVersion,
+      versionSkew: versionSkew === "unknown" ? "none" : versionSkew,
+      ...(nextAction ? { nextAction } : {}),
     }, !status.extensionConnected, status.extensionConnected ? undefined : "extension_disconnected");
   }
 

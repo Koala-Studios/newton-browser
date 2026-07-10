@@ -5,6 +5,7 @@ import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSession
 import { WebSocket, WebSocketServer } from "ws";
 
 import { loadBrowserTarget, loadOrCreatePairingConfig, loadTransportAuthMode, type BrowserTarget, type TransportAuthMode, validDoctorToken } from "./config.ts";
+import { NEWTON_BROWSER_VERSION } from "./cli.ts";
 
 const DEFAULT_LIMITS = {
   firstPort: 17321,
@@ -24,7 +25,7 @@ type HostClient = {
   id: string;
   socket: WebSocket;
   authenticated: boolean;
-  identity: null | { clientId: string; browserFamily: "chrome" | "edge" | "chromium" };
+  identity: null | { clientId: string; browserFamily: "chrome" | "edge" | "chromium"; version?: string };
   nonce: string;
   authTimer: NodeJS.Timeout | null;
   subscriptions: Set<string>;
@@ -103,6 +104,7 @@ export function createNewtonBrowserHost(options: {
         authenticatedClientCount: authenticatedClients().length,
         eligibleClientCount: eligibleClients().length,
         connectedBrowsers: [...new Set(authenticatedClients().flatMap((client) => client.identity ? [client.identity.browserFamily] : []))].sort(),
+        extensionVersion: eligibleClients().map((client) => client.identity?.version).find((version): version is string => typeof version === "string") ?? null,
         claimedSessionsByBrowser: claimedSessionCounts(),
         sessionCount: sessions.size,
         limits,
@@ -300,7 +302,7 @@ export function createNewtonBrowserHost(options: {
     socket.on("close", () => removeClient(client));
     socket.on("error", () => removeClient(client));
     if (pairingRequired) send(client, { type: "auth_challenge", protocol: "newton-browser-auth-v1", hostInstanceId, nonce });
-    else send(client, { type: "ready", hostInstanceId, authMode, browserTarget, sessions: api.listSessions() });
+    else send(client, { type: "ready", hostInstanceId, authMode, browserTarget, version: NEWTON_BROWSER_VERSION, sessions: api.listSessions() });
   }
 
   async function handleClientMessage(client: HostClient, text: string): Promise<void> {
@@ -322,7 +324,7 @@ export function createNewtonBrowserHost(options: {
       client.authenticated = true;
       if (client.authTimer) clearTimeout(client.authTimer);
       client.authTimer = null;
-      send(client, { type: "ready", hostInstanceId, authMode, browserTarget, sessions: api.listSessions() });
+      send(client, { type: "ready", hostInstanceId, authMode, browserTarget, version: NEWTON_BROWSER_VERSION, sessions: api.listSessions() });
       return;
     }
     if (message?.type !== "bridge_request") return;
@@ -418,7 +420,11 @@ export function createNewtonBrowserHost(options: {
       removeClient(other);
       other.socket.close(4004, "client replaced");
     }
-    client.identity = { clientId, browserFamily: browserFamily as "chrome" | "edge" | "chromium" };
+    client.identity = {
+      clientId,
+      browserFamily: browserFamily as "chrome" | "edge" | "chromium",
+      ...(typeof message.version === "string" ? { version: message.version.slice(0, 32) } : {}),
+    };
     send(client, { type: "client_ready", hostInstanceId, browserTarget, eligible: isEligible(client) });
     send(client, { type: "sessions_changed", hostInstanceId, sessions: api.listSessions() });
   }

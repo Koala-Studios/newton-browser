@@ -112,6 +112,7 @@ async function panelStatus(state = runtime.snapshot()) {
     hostConnected: transport.isHostConnected(),
     hostCount: transport.connectedHostCount(),
     pairingRequired: transport.pairingRequired(),
+    hostVersion: transport.connectedHostVersion(),
     sessions: summarizePanelSessions(sessions),
   };
 }
