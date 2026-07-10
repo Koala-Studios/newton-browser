@@ -1,6 +1,6 @@
 # Release
 
-Browser Bridge 0.1.0 is developed in a public repository and currently distributed from source or locally built artifacts. npm publication, browser-store submission, GitHub release publication, and adding a public license remain separate approval gates.
+Browser Bridge 0.3.0 is developed in a public repository and currently distributed from source or locally built artifacts. npm publication, browser-store submission, GitHub release publication, and adding a public license remain separate approval gates.
 
 Run from a clean checkout with Node 24 or newer:
 
@@ -13,9 +13,9 @@ The gate runs boundary, type, unit/contract, build, deterministic extension arti
 
 Expected release artifacts:
 
-- `artifacts/browser-bridge-mcp-0.1.0.tgz`
-- `artifacts/browser-bridge-extension-0.1.0.zip`
-- `artifacts/browser-bridge-extension-0.1.0.zip.sha256`
+- `artifacts/browser-bridge-mcp-0.3.0.tgz`
+- `artifacts/browser-bridge-extension-0.3.0.zip`
+- `artifacts/browser-bridge-extension-0.3.0.zip.sha256`
 
 Before handing artifacts to another machine, compare the checksum, inspect both archive listings, run the clean-user procedure in `INSTALL.md`, and record exact versions/results in `test/evidence/qa-ledger.md`. Real-browser rows require Chrome and Edge stable with the unpacked release artifact, retained authentication, inactive owned-tab creation, current-tab scope, screenshot display, file acceptance, and cleanup.
 

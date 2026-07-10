@@ -2,7 +2,7 @@ import net from "node:net";
 
 import { configDirectory, doctorToken, loadBrowserTarget, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
 
-export const BROWSER_BRIDGE_VERSION = "0.1.0";
+export const BROWSER_BRIDGE_VERSION = "0.3.0";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
 
 export async function handleUtilityCommand(args: string[]): Promise<boolean> {

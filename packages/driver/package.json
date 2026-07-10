@@ -1,6 +1,6 @@
 {
   "name": "@browser-bridge/driver",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Browser Bridge.",
   "engines": {

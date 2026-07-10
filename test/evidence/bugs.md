@@ -139,7 +139,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 
 ## BB-016 — Codex could not initialize the packed MCP server
 
-- Minimal repro: launch Codex CLI 0.144.0 with the 0.1.0 packed server.
+- Minimal repro: launch Codex CLI 0.144.0 with the 0.3.0 packed server.
 - Root cause: the supported protocol list skipped finalized revision `2025-06-18`, which current Codex requested.
 - Fix: support and test all four relevant revisions: 2024-11-05, 2025-03-26, 2025-06-18, and 2025-11-25.
 - Regression: source negotiation test, packed stdio matrix, and actual Codex initialization.

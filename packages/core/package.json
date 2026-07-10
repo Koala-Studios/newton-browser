@@ -1,6 +1,6 @@
 {
   "name": "@browser-bridge/core",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Local-first browser-control contracts, action schema, redaction, host policy, and deterministic safety floor.",
   "engines": {

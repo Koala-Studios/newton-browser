@@ -1,6 +1,6 @@
 {
   "name": "browser-bridge-mcp",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Local stdio MCP host and localhost WebSocket relay for the Browser Bridge extension.",
   "engines": {

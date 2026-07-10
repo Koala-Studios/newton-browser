@@ -4,8 +4,12 @@ Local browser control for MCP clients using your existing Chrome or Edge profile
 
 Browser Bridge connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, daemon, database, telemetry pipeline, or cloud relay.
 
+## Purpose
+
+Browser Bridge was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
+
 > [!IMPORTANT]
-> Browser Bridge 0.1.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
+> Browser Bridge 0.3.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
 
 ## Why Browser Bridge?
 

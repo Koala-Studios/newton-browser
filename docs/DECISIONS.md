@@ -18,7 +18,7 @@ The optional hardened mode is enabled with `{"transportAuth":"paired"}` in the p
 
 Hardened mode sends `{type:"auth_challenge",protocol:"browser-bridge-auth-v1",hostInstanceId,nonce}`. The extension answers with `{type:"auth_response",hostInstanceId,proof}` where `proof = base64url(HMAC-SHA-256(secret, "browser-bridge-auth-v1:" + hostInstanceId + ":" + nonce))`. Until verification, that socket may send no bridge requests and is closed after 3 seconds. Nonces are random, single-use, and process-local; comparison is constant-time.
 
-Tradeoff: local trust allows another process running as the same OS user to imitate an extension-origin client on loopback. Pairing raises that bar for ordinary local processes, but it does not defend against same-user malware able to read the config file or extension storage. Native Messaging could provide a stronger OS registration boundary but would require a platform installer, contrary to the zero-touch artifact goal for 0.1.0.
+Tradeoff: local trust allows another process running as the same OS user to imitate an extension-origin client on loopback. Pairing raises that bar for ordinary local processes, but it does not defend against same-user malware able to read the config file or extension storage. Native Messaging could provide a stronger OS registration boundary but would require a platform installer, contrary to the zero-touch artifact goal for 0.3.0.
 
 ## 3. Screenshot delivery
 
@@ -84,7 +84,7 @@ Input: `{}`. Result:
 ```json
 {
   "ready": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "protocolVersions": ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"],
   "hostInstanceId": "uuid",
   "port": 17321,
@@ -152,9 +152,9 @@ Locked package names:
 
 Public package exports point to compiled JavaScript under `dist/`; no package bin or export points at TypeScript. Release artifact names are:
 
-- `browser-bridge-mcp-0.1.0.tgz`
-- `browser-bridge-extension-0.1.0.zip`
-- `browser-bridge-extension-0.1.0.zip.sha256`
+- `browser-bridge-mcp-0.3.0.tgz`
+- `browser-bridge-extension-0.3.0.zip`
+- `browser-bridge-extension-0.3.0.zip.sha256`
 
 The repository is public as of 2026-07-10. npm publication, browser-store submission, and adding a license remain separate approval gates; no license file is added until the public-license posture is explicitly approved.
 

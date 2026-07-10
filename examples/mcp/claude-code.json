@@ -2,7 +2,7 @@
   "mcpServers": {
     "browser-bridge": {
       "command": "npx",
-      "args": ["--yes", "--package", "C:\\BrowserBridge\\browser-bridge-mcp-0.1.0.tgz", "browser-bridge-mcp"]
+      "args": ["--yes", "--package", "C:\\BrowserBridge\\browser-bridge-mcp-0.3.0.tgz", "browser-bridge-mcp"]
     }
   }
 }

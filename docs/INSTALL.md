@@ -1,6 +1,6 @@
 # Installation
 
-Browser Bridge 0.1.0 currently supports source installs and locally built release artifacts. It requires Node 24 or newer, pnpm 10.8.0, a Chromium browser, and an MCP client that can start a local stdio server. It does not require a daemon, hosted service, database, or global Browser Bridge package.
+Browser Bridge 0.3.0 currently supports source installs and locally built release artifacts. It requires Node 24 or newer, pnpm 10.8.0, a Chromium browser, and an MCP client that can start a local stdio server. It does not require a daemon, hosted service, database, or global Browser Bridge package.
 
 ## Install from source
 
@@ -58,24 +58,24 @@ node /absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js --doctor
 
 When a GitHub release provides the following files, you can install without keeping a source checkout:
 
-- `browser-bridge-mcp-0.1.0.tgz`
-- `browser-bridge-extension-0.1.0.zip`
-- `browser-bridge-extension-0.1.0.zip.sha256`
+- `browser-bridge-mcp-0.3.0.tgz`
+- `browser-bridge-extension-0.3.0.zip`
+- `browser-bridge-extension-0.3.0.zip.sha256`
 
 Keep all three files together and verify the extension checksum before extracting it.
 
 PowerShell:
 
 ```powershell
-$expected = (Get-Content .\browser-bridge-extension-0.1.0.zip.sha256).Split()[0]
-$actual = (Get-FileHash .\browser-bridge-extension-0.1.0.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$expected = (Get-Content .\browser-bridge-extension-0.3.0.zip.sha256).Split()[0]
+$actual = (Get-FileHash .\browser-bridge-extension-0.3.0.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "Browser Bridge extension checksum mismatch" }
 ```
 
 macOS or Linux:
 
 ```bash
-sha256sum --check browser-bridge-extension-0.1.0.zip.sha256
+sha256sum --check browser-bridge-extension-0.3.0.zip.sha256
 ```
 
 Extract the ZIP and load the extracted directory through the browser's **Load unpacked** flow. Then copy the matching example from `examples/mcp`, replace its tarball path with the absolute path on your machine, and restart the MCP client.
