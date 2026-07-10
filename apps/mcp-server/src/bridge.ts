@@ -11,10 +11,13 @@ const DEFAULT_LIMITS = {
   lastPort: 17340,
   maxQueuedPerSession: 32,
   maxPending: 128,
+  maxSessions: 32,
   maxMessageBytes: 24 * 1024 * 1024,
+  maxResultBytes: 16 * 1024 * 1024,
   maxCommandTimeoutMs: 120_000,
   authTimeoutMs: 3_000,
   readinessTimeoutMs: 40_000,
+  orphanSessionTtlMs: 30 * 60_000,
 };
 
 type HostClient = {
@@ -47,15 +50,19 @@ export function createBrowserBridgeHost(options: {
   const pending = new Map<string, PendingCommand>();
   const queuedCommands = new Map<string, BridgeCommand[]>();
   const readinessWaiters = new Map<string, Set<() => void>>();
+  const sessionActivity = new Map<string, number>();
   let server: http.Server | null = null;
   let webSockets: WebSocketServer | null = null;
   let boundPort: number | null = null;
+  const orphanReaper = setInterval(() => api.reapExpiredSessions(), Math.max(1000, Math.min(60_000, Math.floor(limits.orphanSessionTtlMs / 2))));
+  orphanReaper.unref();
 
   const api = {
     hostInstanceId,
     limits,
 
     createSession(init: BridgeSessionInit): { sessionId: string } {
+      if (sessions.size >= limits.maxSessions) throw new Error("session_limit");
       const sessionId = `bbs_local_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
       sessions.set(sessionId, {
         sessionId,
@@ -70,6 +77,7 @@ export function createBrowserBridgeHost(options: {
         goal: init.goal ?? "",
         instanceLabel: init.instanceLabel ?? "",
       });
+      sessionActivity.set(sessionId, Date.now());
       broadcastSessionsChanged();
       return { sessionId };
     },
@@ -87,6 +95,16 @@ export function createBrowserBridgeHost(options: {
         sessionCount: sessions.size,
         limits,
       };
+    },
+
+    reapExpiredSessions(now = Date.now()): number {
+      let reaped = 0;
+      for (const [sessionId, lastActivity] of sessionActivity) {
+        if (now - lastActivity < limits.orphanSessionTtlMs) continue;
+        api.stopSession(sessionId);
+        reaped += 1;
+      }
+      return reaped;
     },
 
     async waitForSessionReady(sessionId: string, timeoutMs = limits.readinessTimeoutMs): Promise<BridgeSessionInfo> {
@@ -115,6 +133,7 @@ export function createBrowserBridgeHost(options: {
 
     stopSession(sessionId: string): void {
       sessions.delete(sessionId);
+      sessionActivity.delete(sessionId);
       queuedCommands.delete(sessionId);
       for (const client of clients.values()) client.subscriptions.delete(sessionId);
       for (const [commandId, waiter] of pending) {
@@ -134,6 +153,7 @@ export function createBrowserBridgeHost(options: {
 
     async dispatch(sessionId: string, action: BridgeCommand["action"], timeoutMs = 60_000): Promise<BridgeResultEvent> {
       if (!sessions.has(sessionId)) return { commandId: "", ok: false, errorCode: "unknown_session" };
+      sessionActivity.set(sessionId, Date.now());
       if (authenticatedClients().length === 0) return { commandId: "", ok: false, errorCode: "extension_disconnected" };
       if (pending.size >= limits.maxPending) return { commandId: "", ok: false, errorCode: "queue_full" };
       const queued = queuedCommands.get(sessionId) ?? [];
@@ -179,6 +199,7 @@ export function createBrowserBridgeHost(options: {
     },
 
     async close(): Promise<void> {
+      clearInterval(orphanReaper);
       for (const client of clients.values()) {
         clearTimeout(client.authTimer);
         client.socket.close(1001, "host closing");
@@ -319,6 +340,11 @@ export function createBrowserBridgeHost(options: {
       waiting.resolve({ commandId, ok: false, errorCode: "result_too_large" });
       return;
     }
+    if (Buffer.byteLength(JSON.stringify(event), "utf8") > limits.maxResultBytes) {
+      waiting.resolve({ commandId, ok: false, errorCode: "result_too_large" });
+      return;
+    }
+    sessionActivity.set(waiting.sessionId, Date.now());
     waiting.resolve(event);
   }
 

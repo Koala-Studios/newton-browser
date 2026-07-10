@@ -80,11 +80,11 @@ test("authenticated ws transport queues, subscribes, and carries frames above 64
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
     await extensionRequest(socket, "subscribeSession", { sessionId });
     const command = await commandPromise;
-    const large = "x".repeat(100_000);
+    const large = "x".repeat(3 * 1024 * 1024);
     await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: { large } } });
     const result = await dispatched;
     assert.equal(result.ok, true);
-    assert.equal((result as any).result.large.length, 100_000);
+    assert.equal((result as any).result.large.length, 3 * 1024 * 1024);
   } finally {
     socket.close();
     await bridge.close();
@@ -124,10 +124,12 @@ test("health endpoint omits wildcard CORS", async () => {
 test("two independent hosts bind separate ports and isolate sessions", async () => {
   const first = testBridge({ hostInstanceId: "host-one", limits: { firstPort: 18421, lastPort: 18422 } });
   const second = testBridge({ hostInstanceId: "host-two", limits: { firstPort: 18421, lastPort: 18422 } });
+  const third = testBridge({ hostInstanceId: "host-three", limits: { firstPort: 18421, lastPort: 18422 } });
   const firstAddress = await first.listen();
   const secondAddress = await second.listen();
   try {
     assert.notEqual(firstAddress.port, secondAddress.port);
+    await assert.rejects(third.listen(), /host_collision/);
     const one = first.createSession({ origin: "https://one.example", allowedOrigins: ["https://one.example"], tabMode: "owned_group" });
     const two = second.createSession({ origin: "https://two.example", allowedOrigins: ["https://two.example"], tabMode: "owned_group" });
     assert.equal(first.listSessions()[0]?.sessionId, one.sessionId);
@@ -138,6 +140,53 @@ test("two independent hosts bind separate ports and isolate sessions", async () 
   } finally {
     await first.close();
     await second.close();
+    await third.close();
+  }
+});
+
+test("transport supports fragmentation and ping/pong", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const pong = new Promise<void>((resolve) => socket.once("pong", () => resolve()));
+    socket.ping("health");
+    await pong;
+
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const requestId = "fragmented-subscribe";
+    const response = waitForMessage(socket, (message) => message.type === "bridge_response" && message.requestId === requestId);
+    const payload = JSON.stringify({ type: "bridge_request", requestId, method: "subscribeSession", params: { sessionId } });
+    socket.send(payload.slice(0, 12), { fin: false });
+    socket.send(payload.slice(12), { fin: true });
+    assert.equal((await response).ok, true);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("session, pending, result, and orphan bounds return typed outcomes", async () => {
+  const bridge = testBridge({ limits: { maxSessions: 1, maxPending: 1, maxResultBytes: 1024, orphanSessionTtlMs: 1000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    assert.throws(() => bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" }), /session_limit/);
+    const pending = bridge.dispatch(sessionId, { kind: "observe" }, 2000);
+    const overflow = await bridge.dispatch(sessionId, { kind: "observe" }, 2000);
+    assert.equal(overflow.errorCode, "queue_full");
+    const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const command = await commandPromise;
+    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: { value: "x".repeat(2048) } } });
+    const oversized = await pending;
+    assert.equal(oversized.errorCode, "result_too_large");
+    assert.equal(bridge.reapExpiredSessions(Date.now() + 2000), 1);
+    assert.equal(bridge.listSessions().length, 0);
+  } finally {
+    socket.close();
+    await bridge.close();
   }
 });
 
