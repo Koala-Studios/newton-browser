@@ -7,5 +7,20 @@
   "engines": {
     "node": ">=24.0.0"
   },
-  "scripts": {}
+  "scripts": {
+    "boundary:check": "node scripts/verify-boundary.mjs",
+    "build:core": "pnpm --filter @browser-bridge/core build",
+    "build:driver": "pnpm --filter @browser-bridge/driver build",
+    "build:mcp": "pnpm --filter browser-bridge-mcp build",
+    "extension:build": "node scripts/build-extension.mjs",
+    "build": "pnpm build:core && pnpm build:driver && pnpm build:mcp && pnpm extension:build",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node scripts/run-tests.mjs",
+    "lint": "pnpm boundary:check"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.0"
+  }
 }

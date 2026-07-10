@@ -1,0 +1,24 @@
+{
+  "name": "@browser-bridge/core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local-first browser-control contracts, action schema, redaction, host policy, and deterministic safety floor.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts"
+}

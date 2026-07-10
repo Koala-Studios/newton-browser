@@ -6,6 +6,6 @@ This repository is private/local during the 0.1.0 hardening cycle. No public lic
 
 ## Provenance
 
-The initial runtime is extracted from Newton commit `56e65944b3b6e4233a634fa3e7781ee449eb51cb`. That hash records source provenance only; this repository must build and operate with the source repository unavailable.
+The initial runtime is extracted from source commit `56e65944b3b6e4233a634fa3e7781ee449eb51cb`. That hash records provenance only; this repository must build and operate with its extraction source unavailable.
 
 The authoritative contract locks are in [docs/DECISIONS.md](docs/DECISIONS.md).

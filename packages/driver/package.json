@@ -1,0 +1,23 @@
+{
+  "name": "@browser-bridge/driver",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Browser Bridge.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-driver.mjs"
+  },
+  "exports": {
+    ".": "./dist/driver.js",
+    "./chrome-tabs-port": "./dist/chrome-tabs-port.js",
+    "./controller": "./dist/controller.js",
+    "./driver": "./dist/driver.js"
+  }
+}

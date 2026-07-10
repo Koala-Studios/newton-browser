@@ -85,7 +85,7 @@ Input: `{}`. Result:
 {
   "ready": true,
   "version": "0.1.0",
-  "protocolVersions": ["2024-11-05", "2025-03-26"],
+  "protocolVersions": ["2024-11-05", "2025-03-26", "2025-11-25"],
   "hostInstanceId": "uuid",
   "port": 17321,
   "paired": true,
@@ -154,6 +154,6 @@ The repository stays private and carries no license file until public-license po
 
 ## 10. Boundary and stale concepts
 
-Runtime source, package metadata, scripts, fixtures, docs, and artifacts must not import, name, or reference the source product/repository, its services, or its private shared files. The boundary check also rejects retired concepts: the `remote` transport enum, database host-policy table comments, raw TypeScript package bins, cross-package relative source escapes, and `shared.mjs`.
+Runtime source, package metadata, scripts, fixtures, docs, and artifacts must not import, name, or reference the source product/repository, its services, or its private shared files. The boundary check also rejects retired concepts: the old non-local transport enum, database host-policy table comments, raw TypeScript package bins, cross-package relative source escapes, and the former private shared module.
 
 The one provenance hash in the root README and evidence history is non-runtime provenance and is the only temporary source-reference exception during extraction; release artifacts contain no such reference.

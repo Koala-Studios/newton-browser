@@ -1,0 +1,220 @@
+import { type BrowserAction, type BrowserActionKind, type BrowserTarget, type BrowserWaitFor } from "./protocol.ts";
+
+const TEXT_CAP = 240;
+const ROLE_CAP = 80;
+const URL_CAP = 500;
+
+type BrowserActionFieldSpec =
+  | { kind: "target" }
+  | { kind: "waitFor" }
+  | { kind: "text"; cap: number }
+  | { kind: "secret" }
+  | { kind: "url" }
+  | { kind: "bool" }
+  | { kind: "int"; min: number; max: number }
+  | { kind: "num" }
+  | { kind: "stringArray"; cap: number; itemCap: number }
+  | { kind: "filePaths"; cap: number; itemCap: number }
+  | { kind: "sensitiveZones"; cap: number; itemCap: number }
+  | { kind: "enum"; values: readonly string[] }
+  | { kind: "clip" };
+
+export const BROWSER_ACTION_FIELD_SPECS = {
+  target: { kind: "target" },
+  waitFor: { kind: "waitFor" },
+  ref: { kind: "text", cap: TEXT_CAP },
+  role: { kind: "text", cap: ROLE_CAP },
+  name: { kind: "text", cap: TEXT_CAP },
+  label: { kind: "text", cap: TEXT_CAP },
+  placeholder: { kind: "text", cap: TEXT_CAP },
+  testId: { kind: "text", cap: TEXT_CAP },
+  exact: { kind: "bool" },
+  value: { kind: "secret" },
+  url: { kind: "url" },
+  text: { kind: "text", cap: TEXT_CAP },
+  selector: { kind: "text", cap: TEXT_CAP },
+  query: { kind: "text", cap: TEXT_CAP },
+  maxNodes: { kind: "int", min: 1, max: 250 },
+  timeoutMs: { kind: "int", min: 100, max: 120_000 },
+  x: { kind: "num" },
+  y: { kind: "num" },
+  keys: { kind: "stringArray", cap: 8, itemCap: 80 },
+  files: { kind: "filePaths", cap: 8, itemCap: 32_767 },
+  sensitiveZones: { kind: "sensitiveZones", cap: 32, itemCap: TEXT_CAP },
+  checked: { kind: "bool" },
+  intent: { kind: "text", cap: TEXT_CAP },
+  fullPage: { kind: "bool" },
+  device: { kind: "enum", values: ["mobile", "desktop"] },
+  waitMs: { kind: "int", min: 0, max: 10_000 },
+  inline: { kind: "bool" },
+  clip: { kind: "clip" },
+  mode: { kind: "enum", values: ["full", "diff"] },
+} as const satisfies Record<string, BrowserActionFieldSpec>;
+
+export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;
+
+export const BROWSER_ACTION_FIELDS = Object.keys(BROWSER_ACTION_FIELD_SPECS) as BrowserActionField[];
+
+export function parseBrowserAction(raw: unknown): BrowserAction {
+  const input = objectRecord(raw);
+  const action: BrowserAction = { kind: parseActionKind(input?.kind) };
+  if (!input) return action;
+  const output = action as Record<string, unknown>;
+  for (const key of BROWSER_ACTION_FIELDS) {
+    const value = parseBrowserActionField(input[key], BROWSER_ACTION_FIELD_SPECS[key]);
+    if (value !== undefined) output[key] = value;
+  }
+  return action;
+}
+
+function parseBrowserActionField(raw: unknown, spec: BrowserActionFieldSpec): unknown {
+  if (spec.kind === "target") return parseBrowserTarget(raw);
+  if (spec.kind === "waitFor") return parseBrowserWaitFor(raw);
+  if (spec.kind === "text") return boundedString(raw, spec.cap);
+  if (spec.kind === "secret") return optionalString(raw);
+  if (spec.kind === "url") return boundedString(raw, URL_CAP);
+  if (spec.kind === "bool") return typeof raw === "boolean" ? raw : undefined;
+  if (spec.kind === "int") return boundedInt(raw, spec.min, spec.max);
+  if (spec.kind === "num") return finiteNumber(raw);
+  if (spec.kind === "stringArray") return stringArray(raw, spec.cap, spec.itemCap);
+  if (spec.kind === "filePaths") return filePathArray(raw, spec.cap, spec.itemCap);
+  if (spec.kind === "sensitiveZones") return sensitiveZoneArray(raw, spec.cap, spec.itemCap);
+  if (spec.kind === "enum") return typeof raw === "string" && spec.values.includes(raw) ? raw : undefined;
+  return parseClip(raw);
+}
+
+export function parseBrowserTarget(raw: unknown): BrowserTarget | undefined {
+  const input = objectRecord(raw);
+  if (!input) return undefined;
+  const ref = boundedString(input.ref, TEXT_CAP);
+  if (ref) return { ref };
+  const role = boundedString(input.role, ROLE_CAP);
+  if (role) {
+    return {
+      role,
+      ...(boundedString(input.name, TEXT_CAP) ? { name: boundedString(input.name, TEXT_CAP) } : {}),
+      ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}),
+    };
+  }
+  const text = boundedString(input.text, TEXT_CAP);
+  if (text) return { text, ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
+  const label = boundedString(input.label, TEXT_CAP);
+  if (label) return { label, ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
+  const placeholder = boundedString(input.placeholder, TEXT_CAP);
+  if (placeholder) return { placeholder, ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
+  const testId = boundedString(input.testId, TEXT_CAP);
+  if (testId) return { testId };
+  const selector = boundedString(input.selector, TEXT_CAP);
+  if (selector) return { selector };
+  const coordinates = objectRecord(input.coordinates);
+  const x = finiteNumber(coordinates?.x);
+  const y = finiteNumber(coordinates?.y);
+  if (x !== undefined && y !== undefined) return { coordinates: { x, y } };
+  return undefined;
+}
+
+export function parseBrowserWaitFor(raw: unknown): BrowserWaitFor | undefined {
+  const input = objectRecord(raw);
+  if (!input) return undefined;
+  const output: BrowserWaitFor = {};
+  const url = boundedString(input.url, URL_CAP);
+  if (url) output.url = url;
+  const title = boundedString(input.title, TEXT_CAP);
+  if (title) output.title = title;
+  const text = boundedString(input.text, TEXT_CAP);
+  if (text) output.text = text;
+  const selector = boundedString(input.selector, TEXT_CAP);
+  if (selector) output.selector = selector;
+  const role = boundedString(input.role, ROLE_CAP);
+  if (role) output.role = role;
+  const name = boundedString(input.name, TEXT_CAP);
+  if (name) output.name = name;
+  const ref = boundedString(input.ref, TEXT_CAP);
+  if (ref) output.ref = ref;
+  const value = boundedString(input.value, TEXT_CAP);
+  if (value) output.value = value;
+  if (isWaitForState(input.state)) output.state = input.state;
+  const timeoutMs = boundedInt(input.timeoutMs, 100, 120_000);
+  if (timeoutMs !== undefined) output.timeoutMs = timeoutMs;
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function parseActionKind(raw: unknown): BrowserActionKind {
+  const kind = optionalString(raw);
+  return (kind ?? "observe") as BrowserActionKind;
+}
+
+function parseClip(raw: unknown): BrowserAction["clip"] | undefined {
+  const input = objectRecord(raw);
+  if (!input) return undefined;
+  const x = finiteNumber(input.x);
+  const y = finiteNumber(input.y);
+  const width = finiteNumber(input.width);
+  const height = finiteNumber(input.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return { x, y, width, height };
+}
+
+function stringArray(raw: unknown, cap: number, itemCap: number): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const values = raw.flatMap((value) => {
+    const parsed = boundedString(value, itemCap);
+    return parsed ? [parsed] : [];
+  }).slice(0, cap);
+  return values.length > 0 ? values : undefined;
+}
+
+function filePathArray(raw: unknown, cap: number, itemCap: number): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.slice(0, cap).flatMap((value) => {
+    if (typeof value !== "string" || !value.trim()) return [];
+    return [value.slice(0, itemCap)];
+  });
+}
+
+function sensitiveZoneArray(raw: unknown, cap: number, itemCap: number): BrowserAction["sensitiveZones"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const zones = raw.slice(0, cap).flatMap((value) => {
+    const input = objectRecord(value);
+    if (!input) return [];
+    const selector = boundedString(input.selector, itemCap);
+    const name = boundedString(input.name, itemCap);
+    const label = boundedString(input.label, itemCap);
+    return selector || name || label ? [{ ...(selector ? { selector } : {}), ...(name ? { name } : {}), ...(label ? { label } : {}) }] : [];
+  });
+  return zones.length > 0 ? zones : undefined;
+}
+
+function boundedInt(raw: unknown, min: number, max: number): number | undefined {
+  const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.max(min, Math.min(Math.trunc(parsed), max));
+}
+
+function finiteNumber(raw: unknown): number | undefined {
+  const parsed = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(parsed) ? Math.round(parsed) : undefined;
+}
+
+function boundedString(raw: unknown, cap: number): string | undefined {
+  const parsed = optionalString(raw);
+  return parsed ? parsed.slice(0, cap) : undefined;
+}
+
+function optionalString(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function objectRecord(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+}
+
+function isWaitForState(raw: unknown): raw is NonNullable<BrowserWaitFor["state"]> {
+  return raw === "attached" ||
+    raw === "detached" ||
+    raw === "visible" ||
+    raw === "hidden" ||
+    raw === "checked" ||
+    raw === "unchecked" ||
+    raw === "value";
+}

@@ -1,0 +1,145 @@
+/* Browser Bridge driving overlay.
+   All layers pointer-events:none and tagged data-browser-bridge-ui="1". The cursor is
+   cosmetic only — it never blocks an action. Accent is driven by a single custom
+   property (--nb-accent, an "r, g, b" triplet) so the rim glow, cursor halo,
+   ripple, and field ring stay consistent and are trivially re-themeable; a
+   per-session tab-group color can override it via BB_DRIVE_BEGIN. */
+
+#browser-bridge-drive-overlay {
+  --nb-accent: 31, 111, 235;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483646;
+}
+
+/* WHEN — an edge gradient vignette instead of a hard border: strongest at the
+   rim, fully transparent through the center so the page stays readable. */
+#browser-bridge-drive-overlay.nb-driving::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    125% 125% at 50% 50%,
+    rgba(var(--nb-accent), 0) 62%,
+    rgba(var(--nb-accent), 0.10) 86%,
+    rgba(var(--nb-accent), 0.30) 100%
+  );
+  box-shadow: inset 0 0 120px 6px rgba(var(--nb-accent), 0.22);
+  animation: nb-breathe 3.4s ease-in-out infinite;
+}
+
+#browser-bridge-drive-overlay.nb-driving::after {
+  content: "● Browser Bridge is driving";
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13, 17, 23, 0.92);
+  color: #fff;
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.01em;
+  padding: 6px 14px;
+  border-radius: 999px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(var(--nb-accent), 0.5);
+  pointer-events: none;
+}
+
+@keyframes nb-breathe {
+  0%, 100% { opacity: 0.82; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #browser-bridge-drive-overlay.nb-driving::before { animation: none; opacity: 1; }
+}
+
+/* WHERE — the cursor, seated on a soft radial glow that fades outward so it
+   reads as a polished spotlight rather than a hard arrow. Transform-only moves. */
+.nb-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 24px;
+  height: 24px;
+  color: rgb(var(--nb-accent));
+  transition: transform 0.1s linear;
+  will-change: transform;
+}
+
+.nb-cursor::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(var(--nb-accent), 0.45) 0%,
+    rgba(var(--nb-accent), 0.16) 45%,
+    rgba(var(--nb-accent), 0) 72%
+  );
+  filter: blur(3px);
+  pointer-events: none;
+}
+
+.nb-cursor svg {
+  position: relative;
+  filter: drop-shadow(0 1px 2px rgba(11, 31, 68, 0.45));
+}
+
+.nb-cursor-tag {
+  position: absolute;
+  left: 22px;
+  top: 16px;
+  background: rgb(var(--nb-accent));
+  color: #fff;
+  font: 600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 3px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* Action effects. */
+.nb-ripple {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: rgba(var(--nb-accent), 0.45);
+  animation: nb-ripple 0.6s ease-out forwards;
+}
+
+@keyframes nb-ripple {
+  0% { transform: scale(0.4); opacity: 0.8; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+
+.nb-field-ring {
+  position: absolute;
+  border: 2px solid rgba(var(--nb-accent), 0.9);
+  border-radius: 6px;
+  box-shadow: 0 0 0 4px rgba(var(--nb-accent), 0.18);
+  animation: nb-field 1.4s ease-out forwards;
+}
+
+@keyframes nb-field {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Sensitive-zone mask painted before a screenshot leaves the extension — stays
+   solid/opaque (never gradient). */
+.nb-mask {
+  position: fixed;
+  background: #0d1117;
+  z-index: 2147483645;
+  pointer-events: none;
+}

@@ -1,0 +1,79 @@
+:root {
+  color-scheme: light dark;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+}
+
+body {
+  margin: 0;
+  width: 360px;
+  background: Canvas;
+  color: CanvasText;
+}
+
+main {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h1 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+#status {
+  align-items: center;
+  border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.status-dot {
+  background: #b3261e;
+  border-radius: 999px;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+#status[data-connected="true"] .status-dot {
+  background: #137333;
+}
+
+#pairing {
+  border-top: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+#pairing[hidden] {
+  display: none;
+}
+
+.pairing-row {
+  display: flex;
+  gap: 8px;
+}
+
+#pairing-secret {
+  flex: 1;
+  min-width: 0;
+}
+
+#pairing-message {
+  color: color-mix(in srgb, CanvasText 70%, transparent);
+  margin: 0;
+}

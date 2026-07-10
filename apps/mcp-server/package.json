@@ -1,0 +1,27 @@
+{
+  "name": "browser-bridge-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local stdio MCP host and localhost WebSocket relay for the standalone Browser Bridge extension.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-mcp.mjs"
+  },
+  "bin": {
+    "browser-bridge-mcp": "./dist/index.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@browser-bridge/core": "workspace:*",
+    "@types/ws": "^8.18.1"
+  }
+}
