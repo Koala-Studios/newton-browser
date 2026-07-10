@@ -76,7 +76,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 
 ## B6 — Release proof gate
 
-All required command names exist. `pnpm release:check` covers boundary, types, 68 source tests, build, deterministic artifacts, packed install, fixture checks, Node matrix, three chaos repetitions, two host processes, isolated user directories, and orphan-port audit. Three consecutive green runs were recorded before the latest audit hardening; a fresh three-run gate is required after real-browser closure.
+All required command names exist. `pnpm release:check` covers boundary, types, 76 source tests, build, deterministic artifacts, packed install, fixture checks, Node matrix, three chaos repetitions, two host processes, isolated user directories, and orphan-port audit. Three consecutive green runs passed on evidence-bearing commit `ec5b8da`; every run completed all 11 stages with zero skips, failures, or orphan ports.
 
 | evidence class | status | authoritative evidence / remaining proof |
 | --- | --- | --- |
@@ -100,4 +100,4 @@ Optional live advertising workflow proof is `not-approved` and is not a release 
 
 ## Current release conclusion
 
-B0 contracts and repository implementation through B6 are substantially implemented, and Chrome/actual-client/cold-start evidence is now proved. The release gate is **not complete** because Edge stable, explicit current-tab physical-focus acceptance, literal source-unavailable full-workspace proof, and an actual second account/machine remain unproven. Severance work must not begin until those rows are proved or explicitly dispositioned by the operator and the final release gate is recorded.
+B0 contracts and repository implementation through B6 are substantially implemented, Chrome/actual-client/cold-start evidence is proved, and the final three-run release gate is green. B6 acceptance is **not complete** because Edge stable, explicit current-tab physical-focus acceptance, literal source-unavailable full-workspace proof, and an actual second account/machine remain unproven. Severance work must not begin until those rows are proved or explicitly dispositioned by the operator.
