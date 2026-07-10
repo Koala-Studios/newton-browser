@@ -83,6 +83,17 @@ test("MCP returns a typed unsupported result for JavaScript dialog control", asy
   });
 });
 
+test("MCP blocks a sensitive fill before any extension dispatch", async () => {
+  const bridge = testBridge({ limits: { commandTimeoutMs: 5000 } });
+  const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+  const started = Date.now();
+  const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "fill", label: "One-time code", value: "123456" } });
+  assert.equal(result.isError, true);
+  assert.equal(result.json.errorCode, "blocked_by_floor");
+  assert.ok(result.json.decision.reasons.includes("secret_or_password_field"));
+  assert.ok(Date.now() - started < 250, "a pre-dispatch block must not wait for an extension or command timeout");
+});
+
 test("authenticated ws transport queues, subscribes, and carries frames above 64 KiB", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);

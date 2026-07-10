@@ -9,6 +9,7 @@ const entry = requiredArg("--entry");
 const configDirectory = path.resolve(requiredArg("--config-dir"));
 const port = Number(arg("--port") ?? 18621);
 const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+const LARGE_PNG = Buffer.concat([Buffer.from(TINY_PNG, "base64"), Buffer.alloc(160 * 1024)]).toString("base64");
 const requireFromPackage = createRequire(pathToFileURL(entry));
 const { WebSocket } = requireFromPackage("ws");
 fs.mkdirSync(configDirectory, { recursive: true });
@@ -70,14 +71,17 @@ try {
   const observation = await tool("browser.observe", { sessionId: first });
   assert(observation.json.result.kind === "observation", "observe result");
 
-  const screenshot = await rawTool("browser.screenshot", { sessionId: first, delivery: "image" });
-  assert(screenshot.result.content.some((item) => item.type === "image" && item.mimeType === "image/png"), "MCP image block");
+  const screenshot = await rawTool("browser.screenshot", { sessionId: first, delivery: "image", fullPage: true });
+  const screenshotImage = screenshot.result.content.find((item) => item.type === "image" && item.mimeType === "image/png");
+  assert(screenshotImage && Buffer.from(screenshotImage.data, "base64").length > 128 * 1024, "large MCP image block");
   const screenshotDirectory = path.join(configDirectory, "screenshots");
   const fileShot = await tool("browser.screenshot", { sessionId: first, delivery: "file", outputDirectory: screenshotDirectory });
   assert(fs.existsSync(fileShot.json.path), "file screenshot exists");
 
   const acted = await tool("browser.act", { sessionId: first, action: { kind: "scroll", value: 20 } });
   assert(acted.json.decision?.class === "agentic" && acted.json.decision?.commitBoundary === "none", "act decision metadata");
+  const commitShaped = await tool("browser.act", { sessionId: first, action: { kind: "click", name: "Publish" } });
+  assert(commitShaped.json.decision?.class === "approval_required" && commitShaped.json.decision?.commitBoundary === "commit", "commit-shaped act decision metadata");
 
   const upload = path.join(configDirectory, "asset.png");
   fs.writeFileSync(upload, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64"));
@@ -168,7 +172,7 @@ async function connectFakeExtension() {
     if (action.kind === "observe") {
       result = observationResult();
     } else if (action.kind === "screenshot") {
-      result = { kind: "screenshot", mode: "cdp", origin: "https://example.com", title: "Packed smoke", width: 1, height: 1, fullPage: false, dataUrl: `data:image/png;base64,${TINY_PNG}`, inline: true, capturedAt: new Date().toISOString() };
+      result = { kind: "screenshot", mode: "cdp", origin: "https://example.com", title: "Packed smoke", width: action.fullPage ? 1440 : 1, height: action.fullPage ? 6000 : 1, fullPage: Boolean(action.fullPage), dataUrl: `data:image/png;base64,${action.fullPage ? LARGE_PNG : TINY_PNG}`, inline: true, capturedAt: new Date().toISOString() };
     } else if (action.kind === "set_files") {
       result = { ...observationResult(), actionStatus: "verified", changed: { files: [{ filename: path.basename(action.files[0]), sizeBytes: 68, mimeType: "image/png" }], fileCount: 1 } };
     } else if (action.kind === "__finalize") {

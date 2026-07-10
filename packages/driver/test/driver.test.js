@@ -334,6 +334,17 @@ test("driver observation emits a fresh ref for a hidden file input", async () =>
   assert.equal(driver.refIndex.get("e71"), 71);
 });
 
+test("driver records dialog, download, new-target, navigation, and network-write signals", () => {
+  const driver = createBrowserBridgeDriver();
+  const window = driver.beginActionSignals();
+  driver.recordDebuggerEvent("Page.javascriptDialogOpening", { type: "confirm" });
+  driver.recordDebuggerEvent("Page.downloadWillBegin", { url: "https://example.com/file" });
+  driver.recordDebuggerEvent("Target.targetCreated", { targetInfo: { type: "page", url: "https://example.com/new" } });
+  driver.recordDebuggerEvent("Page.frameNavigated", { frame: { id: "main" } });
+  driver.recordDebuggerEvent("Network.requestWillBeSent", { request: { method: "POST", url: "https://example.com/write" } });
+  assert.deepEqual(window.finish(), { dialog: true, download: true, newTarget: true, navigation: true, networkWrite: true });
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,
