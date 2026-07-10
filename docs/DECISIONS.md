@@ -10,15 +10,15 @@ Option A keeps every stdio MCP process independent: a host binds the first free 
 
 Discovery is bounded to 20 loopback ports. A host that cannot bind within the range returns typed `host_collision`; it never exits from an unhandled `EADDRINUSE`. The popup reports only connected host and session counts.
 
-## 2. Transport authentication: shared pairing secret with challenge-response
+## 2. Transport authentication: zero-touch local trust with opt-in pairing
 
-Chosen: pairing authentication is mandatory.
+Revised by explicit operator decision on 2026-07-10: `local_trust` is the default. Installing the extension and configuring the MCP package is sufficient; no key paste or popup action is required. Every host still binds only to `127.0.0.1`, accepts only Chromium extension WebSocket origins, keeps the bounded port range, and applies all session-origin and action-floor controls.
 
-On first run, the MCP package creates a random 256-bit base64url secret in the per-user config directory (`%LOCALAPPDATA%\BrowserBridge\pairing.json` on Windows; platform config-directory equivalents elsewhere) with owner-only permissions where the OS supports them. `--doctor` reports `pairing_required` and, only in an interactive utility invocation, prints the secret for one-time paste into the extension popup. The extension stores it in `chrome.storage.local`. Normal MCP mode never writes the secret to stdout, MCP results, logs, or evidence.
+The optional hardened mode is enabled with `{"transportAuth":"paired"}` in the per-user `config.json`, or `BROWSER_BRIDGE_AUTH_MODE=paired`. In that mode the MCP package creates/reads a random 256-bit base64url secret in the per-user config directory, `--doctor` prints it for deliberate one-time entry in the extension popup, and the extension stores it in `chrome.storage.local`. Normal MCP mode never emits it.
 
-After WebSocket upgrade, the host sends `{type:"auth_challenge",protocol:"browser-bridge-auth-v1",hostInstanceId,nonce}`. The extension answers with `{type:"auth_response",hostInstanceId,proof}` where `proof = base64url(HMAC-SHA-256(secret, "browser-bridge-auth-v1:" + hostInstanceId + ":" + nonce))`. Until verification, the socket may send no bridge requests and is closed after 3 seconds. Nonces are random, single-use, and process-local. Comparison is constant-time. Auth failures are typed `pairing_required` or `authentication_failed` and never reveal the expected proof.
+Hardened mode sends `{type:"auth_challenge",protocol:"browser-bridge-auth-v1",hostInstanceId,nonce}`. The extension answers with `{type:"auth_response",hostInstanceId,proof}` where `proof = base64url(HMAC-SHA-256(secret, "browser-bridge-auth-v1:" + hostInstanceId + ":" + nonce))`. Until verification, that socket may send no bridge requests and is closed after 3 seconds. Nonces are random, single-use, and process-local; comparison is constant-time.
 
-This protects against unrelated local processes that do not possess the per-user secret. It does not claim protection from malware running as the same OS user and able to read that user's files or extension storage.
+Tradeoff: local trust allows another process running as the same OS user to imitate an extension-origin client on loopback. Pairing raises that bar for ordinary local processes, but it does not defend against same-user malware able to read the config file or extension storage. Native Messaging could provide a stronger OS registration boundary but would require a platform installer, contrary to the zero-touch artifact goal for 0.1.0.
 
 ## 3. Screenshot delivery
 
@@ -88,7 +88,9 @@ Input: `{}`. Result:
   "protocolVersions": ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"],
   "hostInstanceId": "uuid",
   "port": 17321,
-  "paired": true,
+  "authMode": "local_trust",
+  "zeroTouch": true,
+  "paired": false,
   "extensionConnected": true,
   "hostCountSeenByExtension": 1,
   "sessionCount": 0,
@@ -96,7 +98,7 @@ Input: `{}`. Result:
 }
 ```
 
-Not-ready states use typed `pairing_required`, `extension_disconnected`, or `protocol_mismatch` without opening a tab.
+Default not-ready states use typed `extension_disconnected` or `protocol_mismatch` without opening a tab. Hardened mode can additionally return `pairing_required` or `authentication_failed`.
 
 ### `browser.tabs.finalize`
 

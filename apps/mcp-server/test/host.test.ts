@@ -138,6 +138,25 @@ test("pairing rejects normal webpage origins and invalid proofs", async () => {
   }
 });
 
+test("zero-touch local trust accepts an extension without a pairing key and still rejects webpages", async () => {
+  const bridge = createBrowserBridgeHost({ authMode: "local_trust", pairingSecret: PAIRING_SECRET });
+  const address = await bridge.listen(0);
+  try {
+    await assert.rejects(openSocket(address.port, "https://evil.example"), /403/);
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}`, { headers: { Origin: "chrome-extension://test-id" } });
+    const readyPromise = waitForMessage(socket, (message) => message.type === "ready");
+    await waitForOpen(socket);
+    const ready = await readyPromise;
+    assert.equal(ready.authMode, "local_trust");
+    assert.equal(ready.hostInstanceId, bridge.hostInstanceId);
+    assert.equal(bridge.getStatus().extensionConnected, true);
+    assert.equal(bridge.getStatus().authMode, "local_trust");
+    socket.close();
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("health endpoint omits wildcard CORS", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);

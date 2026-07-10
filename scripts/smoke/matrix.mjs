@@ -29,9 +29,12 @@ const doctorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-doctor-
 try {
   const output = run(process.execPath, [entry, "--doctor"], { env: { ...process.env, BROWSER_BRIDGE_CONFIG_DIR: doctorRoot } }).stdout;
   const doctor = JSON.parse(output);
-  if (!doctor.ok || doctor.ready !== false || doctor.pairingState !== "configured" || typeof doctor.pairingSecret !== "string" || doctor.pairingSecret.length < 43) throw new Error("doctor output is incomplete");
-  if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok) throw new Error("doctor checks are incomplete");
+  if (!doctor.ok || doctor.ready !== false || doctor.authMode !== "local_trust" || doctor.pairingState !== "not_required" || "pairingSecret" in doctor) throw new Error("zero-touch doctor output is incomplete");
+  if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.transportAuth?.mode !== "local_trust") throw new Error("doctor checks are incomplete");
   if (doctor.checks?.extension?.state !== "no_running_host" || doctor.nextAction !== "start_or_restart_mcp_client_then_check_browser_status") throw new Error("doctor setup guidance is not actionable");
+  fs.writeFileSync(path.join(doctorRoot, "config.json"), '{"transportAuth":"paired"}\n');
+  const hardened = JSON.parse(run(process.execPath, [entry, "--doctor"], { env: { ...process.env, BROWSER_BRIDGE_CONFIG_DIR: doctorRoot } }).stdout);
+  if (hardened.authMode !== "paired" || hardened.pairingState !== "configured" || typeof hardened.pairingSecret !== "string" || hardened.pairingSecret.length !== 43) throw new Error("hardened pairing doctor output is incomplete");
 } finally {
   fs.rmSync(doctorRoot, { recursive: true, force: true });
 }

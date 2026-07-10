@@ -1,12 +1,14 @@
 # Security
 
-The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). Browser Bridge is loopback-only, pairing-authenticated, origin-scoped, and local-user trusted. It does not inspect cookies, storage, profile files, saved passwords, or authentication tokens.
+The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). Browser Bridge is loopback-only, origin-scoped, and local-user trusted, with optional hardened pairing. It does not inspect cookies, storage, profile files, saved passwords, or authentication tokens.
 
 ## Trust boundary
 
-Each stdio host binds one free address in `127.0.0.1:17321-17340`. The extension accepts only loopback hosts and authenticates every socket with a challenge-response proof derived from the per-user 256-bit pairing secret. The secret is never emitted by normal MCP mode. This prevents an unpaired webpage or ordinary local process from issuing bridge commands; it does not defend against malware already running as the same OS user.
+Each stdio host binds one free address in `127.0.0.1:17321-17340`, and the host rejects ordinary webpage WebSocket origins. The default `local_trust` mode accepts the installed extension without a manual key. This is intentionally frictionless but allows another same-user local process to imitate an extension client if it can construct the accepted loopback request.
 
-`--doctor` discovers incumbent hosts through a loopback-only `/doctor-status` endpoint authenticated by an HMAC-derived diagnostic token. The endpoint has no permissive CORS header and never returns the pairing secret. An unauthenticated request receives only `authentication_failed`.
+Optional `paired` mode requires a challenge-response proof derived from a per-user 256-bit secret. It protects against ordinary local processes that do not have the secret, but not against same-user malware able to read user files or extension storage. Enable it with `{"transportAuth":"paired"}` in the per-user `config.json`; then run `--doctor` and enter the displayed secret in the extension popup.
+
+`--doctor` discovers incumbent hosts through a loopback-only `/doctor-status` endpoint authenticated by an internally derived diagnostic token in both modes. The endpoint has no permissive CORS header and never returns the secret. An unauthenticated request receives only `authentication_failed`.
 
 Every session has a required exact HTTP(S) origin grant. The extension reconciles the attached tab's live origin before binding and before every command. Moving focus cannot retarget a session, and one host cannot address another host's session. Page text is untrusted data and never authorization.
 

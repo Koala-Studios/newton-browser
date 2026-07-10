@@ -5,16 +5,15 @@
 1. Load the unpacked or release extension in the normal Chrome or Edge profile.
 2. Add the version-pinned `browser-bridge-mcp` stdio entry to the MCP client.
 3. Restart the client.
-4. Run `browser-bridge-mcp --doctor` and paste the one-time pairing secret into the extension popup when prompted.
-5. Call `browser.status` and confirm `ready: true`.
+4. Call `browser.status` and confirm `ready: true`. Default `local_trust` needs no pairing key or popup action.
 
-Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers authenticated hosts on the bounded loopback range.
+Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers hosts on the bounded loopback range. If the operator explicitly enables `paired` mode, run `browser-bridge-mcp --doctor` and enter its key in the popup once.
 
 ## Common typed failures
 
 | Code | Response |
 | --- | --- |
-| `pairing_required` | Complete the one-time doctor/popup pairing flow. |
+| `pairing_required` | Hardened pairing is enabled; complete the one-time doctor/popup flow. |
 | `authentication_failed` | Re-run doctor, verify the same OS-user profile, and re-pair deliberately. |
 | `extension_disconnected` | Confirm the extension is enabled in the browser profile and call status again. |
 | `host_collision` | Inspect the bounded port range for unrelated listeners; do not kill a process without identifying it. |

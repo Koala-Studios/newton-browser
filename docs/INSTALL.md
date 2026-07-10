@@ -28,16 +28,20 @@ For Codex, merge `examples/mcp/codex.toml` into `~/.codex/config.toml` and resta
 
 For Claude Desktop, merge the `mcpServers` object into its desktop configuration and restart the app. For Claude Code, add the server from `examples/mcp/claude-code.json` at user or project scope and start a new session. Generic clients use `examples/mcp/generic.json`.
 
-## 3. Pair once
+## 3. Start—no pairing required
 
-Run the private artifact interactively:
+Start or restart the client and call `browser.status`. The default `local_trust` mode connects the extension automatically; there is no pairing key or extension-popup step.
+
+The optional doctor command verifies Node support, host-policy configuration, transport-auth mode, the bounded loopback range, supported MCP revisions, and any extension connection visible through a running host:
 
 ```powershell
 npx --yes --package C:\BrowserBridge\browser-bridge-mcp-0.1.0.tgz browser-bridge-mcp --doctor
 ```
 
-Copy the one-time pairing secret into the extension popup and save it. Do not store the secret in screenshots, tickets, repositories, or chat. Normal MCP startup never prints it.
+`ready:false` is a setup result, not a crash; follow its typed `nextAction`.
 
-The doctor report also verifies Node support, host-policy configuration, the bounded loopback range, supported MCP revisions, and any authenticated extension connection visible through an already-running host. `ready:false` is a setup result, not a crash; follow its typed `nextAction` and then call `browser.status` from the restarted client.
+Then start an exact-origin session. No separate host command or extension-panel click is part of normal startup.
 
-Start or restart the client, call `browser.status`, then start an exact-origin session. No separate host command or extension-panel click is part of normal startup.
+### Optional hardened pairing
+
+To require the key handshake, create `%LOCALAPPDATA%\BrowserBridge\config.json` containing `{"transportAuth":"paired"}` (merge this field with any existing `hostPolicies`). Restart the MCP client, run `--doctor`, and paste the displayed secret into the extension popup once. Do not store the secret in screenshots, tickets, repositories, or chat.

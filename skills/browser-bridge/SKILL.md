@@ -18,7 +18,7 @@ Browser Bridge is a local MV3 extension plus an auto-started stdio MCP package. 
 
 ## Setup check
 
-Call `browser.status`. If it returns `pairing_required`, run the packed executable with `--doctor` and complete the one-time extension popup pairing flow. If tools are absent, report the MCP configuration gap; do not substitute a clean browser profile or raw CDP/JavaScript.
+Call `browser.status`. Default `local_trust` requires no pairing action. If it returns `pairing_required`, hardened pairing was explicitly enabled; run the packed executable with `--doctor` and complete the one-time extension popup flow. If tools are absent, report the MCP configuration gap; do not substitute a clean browser profile or raw CDP/JavaScript.
 
 ## Observe, act, verify
 

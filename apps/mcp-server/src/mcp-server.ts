@@ -102,7 +102,8 @@ async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<st
       version: BROWSER_BRIDGE_VERSION,
       protocolVersions: SUPPORTED_MCP_PROTOCOLS,
       ...status,
-      paired: true,
+      paired: status.authMode === "paired" && status.extensionConnected,
+      zeroTouch: status.authMode === "local_trust",
       hostCountSeenByExtension: status.authenticatedClientCount,
     }, !status.extensionConnected, status.extensionConnected ? undefined : "extension_disconnected");
   }
@@ -290,7 +291,7 @@ function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, 
 function toolList(): Array<Record<string, unknown>> {
   const transport = { type: "string", enum: BROWSER_CONTROL_TRANSPORTS };
   return [
-    tool("browser.status", "Report local host, extension, protocol, pairing, and limit readiness.", { transport }),
+    tool("browser.status", "Report local host, extension, protocol, authentication mode, and limit readiness.", { transport }),
     tool("browser.session.start", "Start and attach an origin-scoped browser session.", {
       transport,
       origin: { type: "string" },

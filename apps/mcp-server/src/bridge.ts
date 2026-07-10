@@ -4,7 +4,7 @@ import http from "node:http";
 import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@browser-bridge/core";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { loadOrCreatePairingConfig, validDoctorToken } from "./config.ts";
+import { loadOrCreatePairingConfig, loadTransportAuthMode, type TransportAuthMode, validDoctorToken } from "./config.ts";
 
 const DEFAULT_LIMITS = {
   firstPort: 17321,
@@ -25,7 +25,7 @@ type HostClient = {
   socket: WebSocket;
   authenticated: boolean;
   nonce: string;
-  authTimer: NodeJS.Timeout;
+  authTimer: NodeJS.Timeout | null;
   subscriptions: Set<string>;
 };
 
@@ -38,11 +38,13 @@ type PendingCommand = {
 export type BrowserBridgeHost = ReturnType<typeof createBrowserBridgeHost>;
 
 export function createBrowserBridgeHost(options: {
+  authMode?: TransportAuthMode;
   pairingSecret?: string;
   hostInstanceId?: string;
   limits?: Partial<typeof DEFAULT_LIMITS>;
 } = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) };
+  const authMode = options.authMode ?? (options.pairingSecret ? "paired" : loadTransportAuthMode());
   const pairingSecret = options.pairingSecret ?? loadOrCreatePairingConfig().secret;
   const hostInstanceId = options.hostInstanceId ?? randomUUID();
   const sessions = new Map<string, BridgeSessionInfo>();
@@ -89,6 +91,7 @@ export function createBrowserBridgeHost(options: {
     getStatus() {
       return {
         hostInstanceId,
+        authMode,
         port: boundPort,
         extensionConnected: authenticatedClients().length > 0,
         authenticatedClientCount: authenticatedClients().length,
@@ -201,7 +204,7 @@ export function createBrowserBridgeHost(options: {
     async close(): Promise<void> {
       clearInterval(orphanReaper);
       for (const client of clients.values()) {
-        clearTimeout(client.authTimer);
+        if (client.authTimer) clearTimeout(client.authTimer);
         client.socket.close(1001, "host closing");
       }
       clients.clear();
@@ -267,13 +270,14 @@ export function createBrowserBridgeHost(options: {
   }
 
   function addClient(socket: WebSocket): void {
+    const pairingRequired = authMode === "paired";
     const nonce = randomBytes(24).toString("base64url");
     const client = {
       id: randomUUID(),
       socket,
-      authenticated: false,
+      authenticated: !pairingRequired,
       nonce,
-      authTimer: setTimeout(() => socket.close(4001, "pairing required"), limits.authTimeoutMs),
+      authTimer: pairingRequired ? setTimeout(() => socket.close(4001, "pairing required"), limits.authTimeoutMs) : null,
       subscriptions: new Set<string>(),
     } satisfies HostClient;
     clients.set(client.id, client);
@@ -283,7 +287,8 @@ export function createBrowserBridgeHost(options: {
     });
     socket.on("close", () => removeClient(client));
     socket.on("error", () => removeClient(client));
-    send(client, { type: "auth_challenge", protocol: "browser-bridge-auth-v1", hostInstanceId, nonce });
+    if (pairingRequired) send(client, { type: "auth_challenge", protocol: "browser-bridge-auth-v1", hostInstanceId, nonce });
+    else send(client, { type: "ready", hostInstanceId, authMode, sessions: api.listSessions() });
   }
 
   async function handleClientMessage(client: HostClient, text: string): Promise<void> {
@@ -299,8 +304,9 @@ export function createBrowserBridgeHost(options: {
         return client.socket.close(4003, "authentication failed");
       }
       client.authenticated = true;
-      clearTimeout(client.authTimer);
-      send(client, { type: "ready", hostInstanceId, sessions: api.listSessions() });
+      if (client.authTimer) clearTimeout(client.authTimer);
+      client.authTimer = null;
+      send(client, { type: "ready", hostInstanceId, authMode, sessions: api.listSessions() });
       return;
     }
     if (message?.type !== "bridge_request") return;
@@ -386,7 +392,7 @@ export function createBrowserBridgeHost(options: {
 
   function removeClient(client: HostClient): void {
     if (!clients.delete(client.id)) return;
-    clearTimeout(client.authTimer);
+    if (client.authTimer) clearTimeout(client.authTimer);
     if (authenticatedClients().length === 0) {
       for (const [commandId, waiter] of pending) {
         clearTimeout(waiter.timer);

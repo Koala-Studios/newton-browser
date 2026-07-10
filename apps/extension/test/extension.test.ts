@@ -145,6 +145,40 @@ test("standalone extension retries host health after an initial miss", async () 
   }
 });
 
+test("standalone extension connects in zero-touch local-trust mode without reading a pairing key", async () => {
+  const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/local-transport.js")).href;
+  const { createLocalPanelTransport } = await import(`${moduleUrl}?local-trust=${Date.now()}`);
+  const originalWebSocket = (globalThis as any).WebSocket;
+  let pairingReads = 0;
+  (globalThis as any).WebSocket = class {
+    listeners: Record<string, (event?: any) => void> = {};
+
+    addEventListener(type: string, listener: (event?: any) => void) {
+      this.listeners[type] = listener;
+      if (type === "message") queueMicrotask(() => listener({ data: JSON.stringify({
+        type: "ready",
+        authMode: "local_trust",
+        hostInstanceId: "host-local",
+        sessions: [],
+      }) }));
+    }
+
+    send() {}
+    close() {}
+  };
+  try {
+    const transport = createLocalPanelTransport({
+      healthCheck: async () => true,
+      hostUrls: ["ws://127.0.0.1:17321"],
+      getPairingSecret: async () => { pairingReads += 1; return null; },
+    });
+    assert.deepEqual(await transport.connectHost(), { connected: true, hostCount: 1, pairingRequired: false });
+    assert.equal(pairingReads, 0);
+  } finally {
+    (globalThis as any).WebSocket = originalWebSocket;
+  }
+});
+
 test("standalone extension does not create hidden local sessions when host is unavailable", async () => {
   const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/local-transport.js")).href;
   const { createLocalPanelTransport } = await import(`${moduleUrl}?host-only=${Date.now()}`);

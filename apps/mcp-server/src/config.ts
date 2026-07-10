@@ -10,6 +10,8 @@ export type PairingConfig = {
   secret: string;
 };
 
+export type TransportAuthMode = "local_trust" | "paired";
+
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
   if (env.BROWSER_BRIDGE_CONFIG_DIR) return path.resolve(env.BROWSER_BRIDGE_CONFIG_DIR);
   if (process.platform === "win32" && env.LOCALAPPDATA) return path.join(env.LOCALAPPDATA, "BrowserBridge");
@@ -46,6 +48,23 @@ export function validDoctorToken(secret: string, value: unknown): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+export function loadTransportAuthMode(input: { directory?: string; env?: NodeJS.ProcessEnv } = {}): TransportAuthMode {
+  const env = input.env ?? process.env;
+  const override = env.BROWSER_BRIDGE_AUTH_MODE;
+  if (override !== undefined) return parseTransportAuthMode(override, "BROWSER_BRIDGE_AUTH_MODE");
+  const directory = path.resolve(input.directory ?? configDirectory(env));
+  const file = path.join(directory, "config.json");
+  if (!fs.existsSync(file)) return "local_trust";
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    throw new Error(`invalid_config: ${file} is not valid JSON`);
+  }
+  const configured = (raw as { transportAuth?: unknown })?.transportAuth;
+  return configured === undefined ? "local_trust" : parseTransportAuthMode(configured, `${file} transportAuth`);
+}
+
 export function loadHostPolicies(input: { directory?: string } = {}): BrowserHostPolicyManifest[] {
   const directory = path.resolve(input.directory ?? configDirectory());
   const file = path.join(directory, "config.json");
@@ -76,6 +95,11 @@ function parsePairingConfig(text: string, file: string): PairingConfig {
     throw new Error(`invalid_config: ${file} does not contain a valid v1 pairing secret`);
   }
   return value as PairingConfig;
+}
+
+function parseTransportAuthMode(value: unknown, label: string): TransportAuthMode {
+  if (value === "local_trust" || value === "paired") return value;
+  throw new Error(`invalid_config: ${label} must be local_trust or paired`);
 }
 
 function validateHostPolicy(value: unknown, label: string): BrowserHostPolicyManifest {

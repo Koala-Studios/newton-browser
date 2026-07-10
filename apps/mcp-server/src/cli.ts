@@ -1,6 +1,6 @@
 import net from "node:net";
 
-import { configDirectory, doctorToken, loadHostPolicies, loadOrCreatePairingConfig } from "./config.ts";
+import { configDirectory, doctorToken, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
 
 export const BROWSER_BRIDGE_VERSION = "0.1.0";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
@@ -26,6 +26,7 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
 export async function collectDoctorReport(input: { directory?: string; firstPort?: number; lastPort?: number } = {}) {
   const directory = input.directory ?? configDirectory();
   const pairing = loadOrCreatePairingConfig({ directory });
+  const authMode = loadTransportAuthMode({ directory });
   const policies = loadHostPolicies({ directory });
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   const firstPort = input.firstPort ?? 17321;
@@ -42,18 +43,26 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
     ready: extensionConnected,
     version: BROWSER_BRIDGE_VERSION,
     configDirectory: directory,
-    pairingState: "configured",
-    pairingSecret: pairing.secret,
+    authMode,
+    pairingState: authMode === "paired" ? "configured" : "not_required",
+    ...(authMode === "paired" ? { pairingSecret: pairing.secret } : {}),
     checks: {
       node: { ok: nodeMajor >= 24, version: process.version, required: ">=24.0.0" },
       config: { ok: true, hostPolicyCount: policies.length },
       loopback: { ok: loopbackOk, range: `${firstPort}-${lastPort}`, availablePort, incumbents },
-      pairing: { ok: true, state: "configured" },
+      transportAuth: { ok: true, mode: authMode, pairingRequired: authMode === "paired" },
+      pairing: { ok: true, state: authMode === "paired" ? "configured" : "not_required" },
       protocol: { ok: true, supported: [...SUPPORTED_MCP_PROTOCOLS] },
       extension: { ok: extensionConnected, state: extensionState },
     },
-    nextAction: extensionConnected ? "ready" : incumbents.length ? "load_or_pair_extension" : "start_or_restart_mcp_client_then_check_browser_status",
-    note: "Paste this secret into the extension popup once. Do not share or record it.",
+    nextAction: extensionConnected
+      ? "ready"
+      : incumbents.length
+        ? authMode === "paired" ? "load_or_pair_extension" : "load_extension"
+        : "start_or_restart_mcp_client_then_check_browser_status",
+    note: authMode === "paired"
+      ? "Hardened pairing is enabled. Paste this secret into the extension popup once. Do not share or record it."
+      : "Zero-touch local trust is enabled. Load the extension; no pairing key is required.",
   };
 }
 

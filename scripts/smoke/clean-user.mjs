@@ -27,14 +27,14 @@ try {
   const entry = path.join(install, "node_modules", "browser-bridge-mcp", "dist", "index.js");
   if (run(process.execPath, [entry, "--version"], isolated, env, true).stdout.trim() !== version) throw new Error("clean-user version mismatch");
   const doctor = JSON.parse(run(process.execPath, [entry, "--doctor"], isolated, env, true).stdout);
-  if (!doctor.ok || doctor.ready !== false || doctor.pairingState !== "configured") throw new Error("clean-user doctor failed");
-  if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.extension?.state !== "no_running_host") throw new Error("clean-user doctor checks are incomplete");
-  if (!fs.existsSync(path.join(env.BROWSER_BRIDGE_CONFIG_DIR, "pairing.json"))) throw new Error("clean-user pairing config missing");
+  if (!doctor.ok || doctor.ready !== false || doctor.authMode !== "local_trust" || doctor.pairingState !== "not_required" || "pairingSecret" in doctor) throw new Error("clean-user zero-touch doctor failed");
+  if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.transportAuth?.mode !== "local_trust" || doctor.checks?.extension?.state !== "no_running_host") throw new Error("clean-user doctor checks are incomplete");
+  if (!fs.existsSync(path.join(env.BROWSER_BRIDGE_CONFIG_DIR, "pairing.json"))) throw new Error("clean-user diagnostic credential missing");
   const extract = path.join(isolated, "extension");
   run("tar", ["-xf", extensionZip, "-C", mkdir(extract)], isolated, env, false);
   if (!fs.existsSync(path.join(extract, "manifest.json"))) throw new Error("clean-user extension extraction failed");
   run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", env.BROWSER_BRIDGE_CONFIG_DIR, "--port", "18651"], isolated, env, false);
-  process.stdout.write(`${JSON.stringify({ ok: true, isolatedProfile: true, sourceCheckoutCwd: false, globalInstall: false, artifacts: 2 })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, isolatedProfile: true, sourceCheckoutCwd: false, globalInstall: false, zeroTouch: true, artifacts: 2 })}\n`);
 } finally {
   fs.rmSync(isolated, { recursive: true, force: true });
 }

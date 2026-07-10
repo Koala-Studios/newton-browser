@@ -66,6 +66,7 @@ try {
   let extension = await connectFakeExtension();
   const status = await tool("browser.status", {});
   assert(!status.isError && status.json.ready === true, "browser.status ready");
+  assert(status.json.authMode === "local_trust" && status.json.zeroTouch === true && status.json.paired === false, "browser.status zero-touch contract");
 
   const [first, peer] = await Promise.all([startSession(), startSession()]);
   const [observation, peerObservation] = await Promise.all([
@@ -156,17 +157,21 @@ async function startSession() {
 }
 
 async function connectFakeExtension() {
-  const pairing = JSON.parse(fs.readFileSync(path.join(configDirectory, "pairing.json"), "utf8"));
   const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Origin: "chrome-extension://packed-smoke" } });
-  const challengePromise = waitForWs(socket, (message) => message.type === "auth_challenge");
+  const handshakePromise = waitForWs(socket, (message) => message.type === "auth_challenge" || message.type === "ready");
   await new Promise((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
-  const challenge = await challengePromise;
-  const proof = createHmac("sha256", pairing.secret)
-    .update(`browser-bridge-auth-v1:${challenge.hostInstanceId}:${challenge.nonce}`)
-    .digest("base64url");
-  const readyPromise = waitForWs(socket, (message) => message.type === "ready");
-  socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: challenge.hostInstanceId, proof }));
-  await readyPromise;
+  const handshake = await handshakePromise;
+  if (handshake.type === "auth_challenge") {
+    const pairing = JSON.parse(fs.readFileSync(path.join(configDirectory, "pairing.json"), "utf8"));
+    const proof = createHmac("sha256", pairing.secret)
+      .update(`browser-bridge-auth-v1:${handshake.hostInstanceId}:${handshake.nonce}`)
+      .digest("base64url");
+    const readyPromise = waitForWs(socket, (message) => message.type === "ready");
+    socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: handshake.hostInstanceId, proof }));
+    await readyPromise;
+  } else {
+    assert(handshake.authMode === "local_trust", "default packed host uses zero-touch local trust");
+  }
   const state = { socket, disconnectOnNextCommand: false };
   const sessionTabs = new Map();
   socket.on("message", (data) => {

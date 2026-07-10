@@ -4,7 +4,7 @@ All tools use the local transport and explicit session IDs.
 
 ## Tools
 
-- `browser.status`: report pairing, extension, host, protocol, session, and limit readiness without opening a tab.
+- `browser.status`: report auth mode, extension, host, protocol, session, and limit readiness without opening a tab.
 - `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab, reconcile its live origin, and return a ready session.
 - `browser.observe`: return a full compact accessibility observation or diff.
 - `browser.act`: execute one typed action and return the deterministic floor decision with the result.
