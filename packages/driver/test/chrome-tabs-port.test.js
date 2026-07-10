@@ -50,3 +50,30 @@ test("chrome tabs port creates owned tabs without taking the operator's active t
   assert.deepEqual(groups, [{ tabIds: [101] }]);
   assert.deepEqual(updates, [{ groupId: 201, input: { title: "QA", color: "blue" } }]);
 });
+
+test("chrome tabs port hands a retained tab back without touching close or deliverable tabs", async () => {
+  const ungrouped = [];
+  const updated = [];
+  const port = createChromeTabsPort({
+    tabs: {
+      async ungroup(tabId) { ungrouped.push(tabId); },
+      async update(tabId, input) { updated.push({ tabId, input }); },
+      async create() { return { id: 1 }; },
+      async group() { return 1; },
+      async remove() {},
+      async get() { return { id: 1 }; },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    tabGroups: { async update() {} },
+    debugger: {
+      onEvent: { addListener() {}, removeListener() {} },
+      onDetach: { addListener() {}, removeListener() {} },
+    },
+  });
+
+  await port.finalizeTab(10, "deliverable");
+  await port.finalizeTab(11, "close");
+  await port.finalizeTab(12, "handoff");
+  assert.deepEqual(ungrouped, [12]);
+  assert.deepEqual(updated, [{ tabId: 12, input: { active: true } }]);
+});

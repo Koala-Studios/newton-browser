@@ -290,6 +290,50 @@ test("driver sets exact files through DOM.setFileInputFiles and returns sanitize
   assert.deepEqual(result.changed.files, [{ filename: "asset.png", sizeBytes: 12, mimeType: "image/png" }]);
 });
 
+test("driver requires a fresh ref for hidden inputs, enforces multiple, and supports cancellation without submit", async () => {
+  const driver = createBrowserBridgeDriver();
+  const commands = [];
+  driver.resolveTarget = async () => ({ backendNodeId: 9 });
+  driver.fileInputFacts = async () => ({ isFileInput: true, multiple: false, visible: false });
+  driver.fileInputState = async () => [];
+  driver.observeDelta = async () => ({
+    kind: "observation_delta", mode: "cdp", origin: "https://example.com", title: "Upload",
+    added: [], removed: [], updated: [], nodeCount: 1, capturedAt: "2026-07-10T00:00:00.000Z",
+  });
+  driver.cdp = async (method, params) => { commands.push({ method, params }); return {}; };
+
+  await assert.rejects(
+    driver.executeAction({ kind: "set_files", target: { selector: "#hidden" }, files: ["C:\\fixtures\\asset.png"] }),
+    /hidden_file_input_requires_ref/,
+  );
+  await assert.rejects(
+    driver.executeAction({ kind: "set_files", target: { ref: "e9" }, files: ["C:\\fixtures\\one.png", "C:\\fixtures\\two.png"] }),
+    /file_input_not_multiple/,
+  );
+  const cancelled = await driver.executeAction({ kind: "set_files", target: { ref: "e9" }, files: [] });
+  assert.equal(cancelled.status, "verified");
+  assert.deepEqual(commands, [{ method: "DOM.setFileInputFiles", params: { backendNodeId: 9, files: [] } }]);
+  assert.equal(commands.some((entry) => /click|submit/i.test(entry.method)), false);
+});
+
+test("driver observation emits a fresh ref for a hidden file input", async () => {
+  const driver = createBrowserBridgeDriver();
+  driver.cdp = async (method) => {
+    if (method === "Runtime.evaluate") return { result: { value: method.includes?.("scrollY") ? "0" : "https://example.com/upload" } };
+    if (method === "Accessibility.getFullAXTree") return { nodes: [] };
+    if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+    if (method === "DOM.querySelectorAll") return { nodeIds: [17] };
+    if (method === "DOM.describeNode") return { node: { backendNodeId: 71 } };
+    return {};
+  };
+  driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/upload" : "Upload";
+  driver.fileInputDisplayFacts = async () => ({ name: "Creative asset", bbox: null });
+
+  const observation = await driver.observe({});
+  assert.deepEqual(observation.nodes, [{ ref: "e71", role: "file", name: "Creative asset", target: { ref: "e71" } }]);
+  assert.equal(driver.refIndex.get("e71"), 71);
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,

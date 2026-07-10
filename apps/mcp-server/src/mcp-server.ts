@@ -142,6 +142,15 @@ async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<st
     const session = bridge.listSessions().find((candidate) => candidate.sessionId === sessionId);
     if (!session) return toolError("unknown_session", "The session does not exist.");
     const action = prepareActionForRelay(actionForTool(name, args));
+    if (name === "browser.act" && isObject(action) && action.kind === "handle_dialog") {
+      return toolJson({
+        ok: false,
+        errorCode: "unsupported_dialog_control",
+        message: "JavaScript dialog control is not supported; dismiss or accept the dialog in the browser.",
+        decision: { class: "blocked", commitBoundary: "none", reasons: ["unsupported_dialog_control"] },
+        transport,
+      }, true);
+    }
     const verdict = evaluateHostFloor({ session, action });
     if (!verdict.relay) return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision), transport }, true);
     const event = await bridge.dispatch(sessionId, verdict.action);
@@ -179,7 +188,7 @@ function actionForTool(name: string, args: Record<string, unknown>): unknown {
   return isObject(args.action) ? args.action : {};
 }
 
-function prepareActionForRelay(raw: unknown): unknown {
+export function prepareActionForRelay(raw: unknown): unknown {
   if (!isObject(raw) || raw.kind !== "set_files") return raw;
   if (!Array.isArray(raw.files)) throw new Error("files_required");
   if (raw.files.length > 8) throw new Error("file_count_exceeded");
@@ -195,9 +204,28 @@ function prepareActionForRelay(raw: unknown): unknown {
     if (total > 200 * 1024 * 1024) throw new Error("file_total_too_large");
     const extension = path.extname(value).toLowerCase();
     if (!new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm"]).has(extension)) throw new Error("file_type_not_allowed");
+    if (!hasAllowedFileSignature(value, extension)) throw new Error("file_type_not_allowed");
     return value;
   });
   return { ...raw, files };
+}
+
+function hasAllowedFileSignature(file: string, extension: string): boolean {
+  const descriptor = fs.openSync(file, "r");
+  try {
+    const header = Buffer.alloc(16);
+    const bytes = fs.readSync(descriptor, header, 0, header.length, 0);
+    const view = header.subarray(0, bytes);
+    if (extension === ".png") return view.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    if (extension === ".jpg" || extension === ".jpeg") return view[0] === 0xff && view[1] === 0xd8 && view[2] === 0xff;
+    if (extension === ".gif") return ["GIF87a", "GIF89a"].includes(view.subarray(0, 6).toString("ascii"));
+    if (extension === ".webp") return view.subarray(0, 4).toString("ascii") === "RIFF" && view.subarray(8, 12).toString("ascii") === "WEBP";
+    if (extension === ".mp4") return view.subarray(4, 8).toString("ascii") === "ftyp";
+    if (extension === ".webm") return view.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+    return false;
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function screenshotToolResult(raw: unknown, decision: BrowserFloorDecision, args: Record<string, unknown>): ToolCallResult {

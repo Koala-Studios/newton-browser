@@ -159,3 +159,61 @@ test("standalone extension does not create hidden local sessions when host is un
   );
   assert.deepEqual(await transport.listSessions(), []);
 });
+
+test("standalone extension removes only a dead host's sessions", async () => {
+  const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/local-transport.js")).href;
+  const { createLocalPanelTransport } = await import(`${moduleUrl}?host-isolation=${Date.now()}`);
+  const originalWebSocket = (globalThis as any).WebSocket;
+  const sockets = new Map<string, any>();
+  const deadUrls = new Set<string>();
+  let changes = 0;
+  (globalThis as any).WebSocket = class {
+    listeners: Record<string, (event?: any) => void> = {};
+    url: string;
+    constructor(url: string) {
+      this.url = url;
+      sockets.set(url, this);
+    }
+    addEventListener(type: string, listener: (event?: any) => void) {
+      this.listeners[type] = listener;
+      if (type === "message") queueMicrotask(() => listener({ data: JSON.stringify({
+        type: "auth_challenge", hostInstanceId: `host-${this.url.at(-1)}`, nonce: "nonce",
+      }) }));
+    }
+    send(raw: string) {
+      const message = JSON.parse(raw);
+      if (message.type === "auth_response") queueMicrotask(() => this.listeners.message?.({ data: JSON.stringify({
+        type: "ready",
+        hostInstanceId: `host-${this.url.at(-1)}`,
+        sessions: [{ sessionId: `session-${this.url.at(-1)}`, origin: "https://example.com" }],
+      }) }));
+      if (message.type === "bridge_request" && message.method === "listSessions") queueMicrotask(() => this.listeners.message?.({ data: JSON.stringify({
+        type: "bridge_response",
+        requestId: message.requestId,
+        ok: true,
+        result: [{ sessionId: `session-${this.url.at(-1)}`, origin: "https://example.com" }],
+      }) }));
+    }
+    close() { this.listeners.close?.(); }
+  };
+  try {
+    const urls = ["ws://127.0.0.1:17321", "ws://127.0.0.1:17322"];
+    const transport = createLocalPanelTransport({
+      hostUrls: urls,
+      healthCheck: async (url: string) => !deadUrls.has(url),
+      getPairingSecret: async () => "test-secret",
+      signChallenge: async () => "test-proof",
+      hostCleanupDelayMs: 0,
+      onHostSessionsChanged: () => { changes += 1; },
+    });
+    assert.deepEqual(await transport.connectHost(), { connected: true, hostCount: 2, pairingRequired: false });
+    assert.deepEqual((await transport.listSessions()).map((session: any) => session.sessionId).sort(), ["session-1", "session-2"]);
+    deadUrls.add(urls[0]);
+    sockets.get(urls[0])?.close();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(changes >= 3, true, "two ready hosts plus one dead-host reconciliation");
+    assert.deepEqual((await transport.listSessions()).map((session: any) => session.sessionId), ["session-2"]);
+  } finally {
+    (globalThis as any).WebSocket = originalWebSocket;
+  }
+});

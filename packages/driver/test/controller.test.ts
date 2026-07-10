@@ -405,3 +405,54 @@ test("BridgeRuntime refuses a current-tab session when focus moved outside the o
   assert.equal(attachCalls, 1, "the pending binding is reported but never marked attached");
   assert.deepEqual(stopped, ["focused-escape"]);
 });
+
+test("BridgeRuntime finalizes owned and current tabs with explicit close, deliverable, and handoff semantics", async () => {
+  for (const scenario of [
+    { mode: "owned_group", disposition: "close", removed: true, kept: false, finalized: false },
+    { mode: "owned_group", disposition: "deliverable", removed: false, kept: true, finalized: true },
+    { mode: "owned_group", disposition: "handoff", removed: false, kept: true, finalized: true },
+    { mode: "current", disposition: "close", removed: false, kept: true, finalized: true },
+  ] as const) {
+    const removed: number[] = [];
+    const finalized: Array<{ tabId: number; disposition: string }> = [];
+    const results: any[] = [];
+    const stopped: string[] = [];
+    let handler: ((command: any) => Promise<void> | void) | null = null;
+    const tabId = scenario.mode === "current" ? 202 : 101;
+    const runtime = createBridgeRuntime({
+      transport: {
+        async createSession() { return { sessionId: "s-finalize" }; },
+        async attachTab() {},
+        subscribe(_sessionId: string, callback: (command: any) => Promise<void> | void) { handler = callback; return () => { handler = null; }; },
+        async listSessions() { return []; },
+        async postEvent() {},
+        async postResult(result: any) { results.push(result); },
+        async stopSession(sessionId: string) { stopped.push(sessionId); },
+        async stopAll() {},
+      },
+      evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" }; },
+      tabs: {
+        async createOwnedTab() { return { tabId, groupId: 301 }; },
+        async removeTab(id: number) { removed.push(id); },
+        async getTab() { return { id: tabId, url: "https://example.com/page" }; },
+        async finalizeTab(id: number, disposition: string) { finalized.push({ tabId: id, disposition }); },
+      },
+      driverFactory: () => ({
+        attached: false, ownsTab: false, accent: null,
+        async attach() { this.attached = true; },
+        async detach() { this.attached = false; },
+        isAttachedTo() { return this.attached; },
+        async reassertOverlay() {},
+        markDetached() { this.attached = false; },
+      }),
+    });
+
+    await runtime.startSession({ tabId, origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: scenario.mode });
+    await handler?.({ commandId: `c-${scenario.disposition}`, sessionId: "s-finalize", actionKind: "__finalize", action: { kind: "__finalize", disposition: scenario.disposition } });
+    assert.equal(runtime.snapshot().count, 0);
+    assert.deepEqual(removed, scenario.removed ? [tabId] : []);
+    assert.deepEqual(finalized, scenario.finalized ? [{ tabId, disposition: scenario.disposition }] : []);
+    assert.deepEqual(stopped, ["s-finalize"]);
+    assert.equal(results[0].result.tabKept, scenario.kept);
+  }
+});

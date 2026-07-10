@@ -7,6 +7,7 @@ export function createLocalPanelTransport({
   healthCheck = defaultHealthCheck,
   getPairingSecret = async () => null,
   signChallenge = defaultSignChallenge,
+  hostCleanupDelayMs = 15_000,
 } = {}) {
   const hosts = new Map();
   const subscribers = new Map();
@@ -262,7 +263,7 @@ export function createLocalPanelTransport({
       if (!host.ready && typeof onHostSessionsChanged === "function") {
         void Promise.resolve(onHostSessionsChanged()).catch(() => {});
       }
-    }, 15_000);
+    }, hostCleanupDelayMs);
   }
 }
 

@@ -37,6 +37,7 @@ The deterministic floor blocks sensitive fields and disallowed origins, but Brow
 - Use `delivery: "file"` with an explicit absolute `outputDirectory` for large full-page captures.
 - Use bounded `inline` delivery only for compatibility.
 - `set_files` accepts exact absolute paths and a fresh file-input ref. It validates all files before setting them and never submits the form.
+- JavaScript dialog control is intentionally out of scope. A `handle_dialog` attempt returns `unsupported_dialog_control`; ask the operator to accept or dismiss the dialog in the browser.
 
 ## Finish deliberately
 

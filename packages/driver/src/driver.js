@@ -211,6 +211,13 @@ class BrowserBridgeDriver {
       this.refIndex.set(ref, backendNodeId);
       nodes.push({ ref, role, name, ...(value ? { value } : {}), bbox, target: { ref } });
     }
+    for (const fileNode of await this.fileInputObservationNodes(cap - nodes.length)) {
+      if (nodes.some((node) => node.ref === fileNode.ref)) continue;
+      this.refIndex.set(fileNode.ref, fileNode.backendNodeId);
+      const { backendNodeId: _backendNodeId, ...publicNode } = fileNode;
+      nodes.push(publicNode);
+      if (nodes.length >= cap) { truncated = true; break; }
+    }
     this.lastScrollY = scrollY;
     const title = await this.evalString("document.title");
     const origin = safeOrigin(url);
@@ -502,6 +509,50 @@ class BrowserBridgeDriver {
     const afterState = await this.elementState(target.backendNodeId).catch(() => ({}));
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", diffElement(beforeState, afterState), observation);
+  }
+
+  async fileInputObservationNodes(limit) {
+    if (limit <= 0) return [];
+    const document = await this.cdp("DOM.getDocument", { depth: 0, pierce: true }).catch(() => null);
+    const nodeId = document?.root?.nodeId;
+    if (!nodeId) return [];
+    const queried = await this.cdp("DOM.querySelectorAll", { nodeId, selector: "input[type='file']" }).catch(() => null);
+    const output = [];
+    for (const candidateNodeId of (queried?.nodeIds ?? []).slice(0, limit)) {
+      const described = await this.cdp("DOM.describeNode", { nodeId: candidateNodeId }).catch(() => null);
+      const backendNodeId = described?.node?.backendNodeId;
+      if (!Number.isInteger(backendNodeId)) continue;
+      const facts = await this.fileInputDisplayFacts(backendNodeId);
+      const ref = `e${backendNodeId}`;
+      output.push({
+        backendNodeId,
+        ref,
+        role: "file",
+        name: facts.name || "File input",
+        ...(facts.bbox ? { bbox: facts.bbox } : {}),
+        target: { ref },
+      });
+    }
+    return output;
+  }
+
+  async fileInputDisplayFacts(backendNodeId) {
+    const objectId = await this.objectIdFor(backendNodeId);
+    if (!objectId) return { name: "", bbox: null };
+    const result = await this.cdp("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function () {
+        const id = String(this.id || "");
+        const label = this.labels && this.labels[0] ? (this.labels[0].innerText || this.labels[0].textContent || "") : "";
+        const name = String(this.getAttribute("aria-label") || label || this.getAttribute("name") || id || "File input").trim().slice(0, 240);
+        const rect = this.getBoundingClientRect();
+        const style = getComputedStyle(this);
+        const visible = rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        return { name, bbox: visible ? [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)] : null };
+      }`,
+      returnByValue: true,
+    }).catch(() => null);
+    return result?.result?.value ?? { name: "", bbox: null };
   }
 
   async setFiles(action) {

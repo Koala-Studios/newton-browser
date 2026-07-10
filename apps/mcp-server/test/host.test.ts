@@ -70,6 +70,19 @@ test("host floor blocks sensitive fields before dispatch", () => {
   assert.ok(verdict.decision.reasons.includes("payment_or_pii_field"));
 });
 
+test("MCP returns a typed unsupported result for JavaScript dialog control", async () => {
+  const bridge = testBridge();
+  const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+  const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "handle_dialog", accept: true } });
+  assert.equal(result.isError, true);
+  assert.equal(result.json.errorCode, "unsupported_dialog_control");
+  assert.deepEqual(result.json.decision, {
+    class: "blocked",
+    commitBoundary: "none",
+    reasons: ["unsupported_dialog_control"],
+  });
+});
+
 test("authenticated ws transport queues, subscribes, and carries frames above 64 KiB", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);
