@@ -21,7 +21,7 @@ test("doctor reports runtime, config, loopback, protocol, extension state, and n
     assert.equal(report.ready, false);
     assert.equal(report.authMode, "paired");
     assert.equal(report.pairingSecret, SECRET);
-    assert.deepEqual(report.checks.node, { ok: true, version: process.version, required: ">=24.0.0" });
+    assert.deepEqual(report.checks.node, { ok: true, version: process.version, required: ">=20.0.0" });
     assert.equal(report.checks.config.ok, true);
     assert.equal(report.checks.config.hostPolicyCount > 0, true);
     assert.deepEqual(report.checks.transportAuth, { ok: true, mode: "paired", pairingRequired: true });

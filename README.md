@@ -37,7 +37,7 @@ The MCP client starts its own host process. The extension discovers local hosts 
 
 ## Requirements
 
-- Node.js 24 or newer
+- Node.js 20 or newer to run the host; Node.js 24 or newer to develop the repository
 - pnpm 10.8.0
 - Git
 - Google Chrome or Microsoft Edge with Developer mode available
@@ -74,10 +74,10 @@ The default `local_trust` mode requires no pairing key or popup action.
 
 ### 3. Configure your MCP client
 
-Use the absolute path to the built entry point:
+Use the published host through npx:
 
 ```text
-/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js
+npx -y newton-browser
 ```
 
 On Windows, JSON and double-quoted TOML strings must escape backslashes, for example:

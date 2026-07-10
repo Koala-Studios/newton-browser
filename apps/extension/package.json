@@ -4,9 +4,7 @@
   "license": "MIT",
   "type": "module",
   "description": "Standalone MV3 Newton Browser extension source.",
-  "engines": {
-    "node": ">=24.0.0"
-  },
+  "engines": { "node": ">=20.0.0" },
   "files": [
     "manifest.json",
     "onboarding.html",

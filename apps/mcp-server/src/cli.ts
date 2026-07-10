@@ -1,9 +1,17 @@
 import net from "node:net";
 
 import { configDirectory, doctorToken, loadBrowserTarget, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
+import { INSTALL_CLIENTS, type InstallClient, runInstall, serverInvocation } from "./install.ts";
 
 export const NEWTON_BROWSER_VERSION = "0.3.0";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
+
+// Runtime floor for the published package. The dev workspace still requires Node 24
+// (see root package.json engines) because tests type-strip TypeScript sources, but the
+// compiled `dist` targets Node 20 (see scripts/build-mcp.mjs) so end users on current
+// LTS can run the host through npx.
+export const MINIMUM_NODE_MAJOR = 20;
+export const MINIMUM_NODE_RANGE = ">=20.0.0";
 
 export async function handleUtilityCommand(args: string[]): Promise<boolean> {
   if (args.includes("--version")) {
@@ -20,7 +28,41 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     process.stdout.write(`${JSON.stringify(await collectDoctorReport(), null, 2)}\n`);
     return true;
   }
+  const installIndex = args.indexOf("--install");
+  if (installIndex >= 0) {
+    process.stdout.write(`${runInstallCommand(args, installIndex)}\n`);
+    return true;
+  }
   return false;
+}
+
+function runInstallCommand(args: string[], installIndex: number): string {
+  const client = args[installIndex + 1] as InstallClient | undefined;
+  if (!client || !INSTALL_CLIENTS.includes(client)) {
+    throw new Error(`invalid_install_target: expected one of ${INSTALL_CLIENTS.join(", ")}`);
+  }
+  const dryRun = args.includes("--dry-run");
+  const force = args.includes("--force");
+  const result = runInstall({ client, dryRun, force });
+  const lines: string[] = [];
+  if (result.action === "manual") {
+    lines.push(result.message, "", result.manualCommand ?? "");
+    return lines.join("\n").trimEnd();
+  }
+  if (result.action === "conflict") {
+    lines.push(result.message);
+    return lines.join("\n");
+  }
+  if (dryRun) {
+    lines.push(`Dry run — no files changed. Planned: ${result.message}`);
+    if (result.path) lines.push(`Target: ${result.path}`);
+    if (result.nextContent) lines.push("", "--- proposed file ---", result.nextContent.trimEnd());
+    return lines.join("\n");
+  }
+  lines.push(result.message);
+  if (result.backupPath) lines.push(`Backed up the previous file to ${result.backupPath}.`);
+  lines.push("Restart the client to pick up the new server.");
+  return lines.join("\n");
 }
 
 export async function collectDoctorReport(input: { directory?: string; firstPort?: number; lastPort?: number } = {}) {
@@ -40,7 +82,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
   const extensionState = extensionConnected ? "connected" : incumbents.length ? "disconnected" : "no_running_host";
   const loopbackOk = incumbents.length > 0 || availablePort !== null;
   return {
-    ok: nodeMajor >= 24 && loopbackOk,
+    ok: nodeMajor >= MINIMUM_NODE_MAJOR && loopbackOk,
     ready: extensionConnected,
     version: NEWTON_BROWSER_VERSION,
     configDirectory: directory,
@@ -49,7 +91,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
     pairingState: authMode === "paired" ? "configured" : "not_required",
     ...(authMode === "paired" ? { pairingSecret: pairing.secret } : {}),
     checks: {
-      node: { ok: nodeMajor >= 24, version: process.version, required: ">=24.0.0" },
+      node: { ok: nodeMajor >= MINIMUM_NODE_MAJOR, version: process.version, required: MINIMUM_NODE_RANGE },
       config: { ok: true, hostPolicyCount: policies.length },
       loopback: { ok: loopbackOk, range: `${firstPort}-${lastPort}`, availablePort, incumbents },
       transportAuth: { ok: true, mode: authMode, pairingRequired: authMode === "paired" },
@@ -92,9 +134,7 @@ function canBind(port: number): Promise<boolean> {
 }
 
 function printConfig(target: string | undefined): string {
-  const command = "npx";
-  const packageSpec = process.env.NEWTON_BROWSER_PACKAGE_SPEC || `newton-browser@${NEWTON_BROWSER_VERSION}`;
-  const args = ["--yes", "--package", packageSpec, "newton-browser"];
+  const { command, args } = serverInvocation();
   if (target === "codex") {
     return [
       "[mcp_servers.newton-browser]",

@@ -31,7 +31,7 @@ for (const [file, name] of packageChecks) {
   const value = readJson(file);
   if (!value) continue;
   if (value.name !== name) failures.push(`${file}: expected package name ${name}`);
-  if (value.engines?.node !== ">=24.0.0") failures.push(`${file}: expected Node >=24.0.0`);
+  if (value.engines?.node !== ">=20.0.0") failures.push(`${file}: expected Node >=20.0.0`);
   if (!Array.isArray(value.files) || value.files.length === 0) failures.push(`${file}: missing files allowlist`);
 }
 

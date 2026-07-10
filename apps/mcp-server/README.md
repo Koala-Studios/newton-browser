@@ -38,13 +38,14 @@ Use the host as a stdio MCP server. Keep normal network access disabled for the 
 {
   "mcpServers": {
     "newton-browser": {
-      "command": "newton-browser"
+      "command": "npx",
+      "args": ["-y", "newton-browser"]
     }
   }
 }
 ```
 
-Use the packed, version-pinned executable in real client configuration. Development can run the compiled `apps/mcp-server/dist/index.js` after `pnpm build`.
+Install the extension first, then use this npx configuration in Codex, Claude Code, Claude Desktop, or any compatible stdio client. Development can run the compiled `apps/mcp-server/dist/index.js` after `pnpm build`.
 
 ## Privacy Boundary
 

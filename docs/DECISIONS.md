@@ -200,3 +200,22 @@ The popup remains a glanceable, local status surface. `NB_PANEL_STATUS` and `NB_
 ## 14. Host/extension version skew (2026-07-10)
 
 The loopback `ready` and `client_hello` frames carry optional package/manifest versions. Missing versions from a 0.3 peer are tolerated as unknown. Equal versions report `none`; patch-only difference reports `patch`; major or minor difference reports `incompatible` while operations continue. `browser.status` exposes host and extension versions and, for incompatible skew, instructs the user to update the older side. The popup shows one amber warning only for incompatible skew.
+
+## 13. npm packaging, runtime Node floor, and `--install` (2026-07-10)
+
+The host publishes to npm as **`newton-browser`** (the `browser-bridge`/`browser-bridge-mcp` names were already occupied by unrelated projects). The bin is also `newton-browser`, so `npx -y newton-browser` both installs and launches.
+
+Runtime vs. development Node floors are split deliberately:
+
+- The published package declares `engines.node >=20.0.0`, and `scripts/build-mcp.mjs` targets `node20`. The compiled `dist` bundle carries its only runtime dependency (`ws`) and uses no API newer than Node 20, so current-LTS users can run the host through `npx`. `--doctor` accepts Node 20+.
+- The root workspace still declares `engines.node >=24.0.0` because the test suite type-strips TypeScript sources with `node --test`, which requires a modern Node. Contributors need Node 24; end users do not.
+- The private workspace packages (`@newton-browser/core`, `@newton-browser/driver`, `@newton-browser/extension`) declare `>=20.0.0` to match the runtime floor of the code they compile into the bundle. `scripts/verify-boundary.mjs` enforces the `>=20.0.0` engines contract on all package manifests.
+
+`newton-browser --install <codex|claude-desktop|claude-code|generic>` configures a client:
+
+- `codex` merges a `[mcp_servers.newton-browser]` table into `~/.codex/config.toml`; `claude-desktop` merges an `mcpServers["newton-browser"]` entry into the platform Claude Desktop config JSON.
+- Any existing file is copied to a timestamped `.bak` before writing. An existing `newton-browser` entry is never overwritten without `--force`; the tool returns a typed conflict message instead.
+- `--dry-run` prints the planned file without touching disk. Unparseable existing config is reported (`client_config_unparseable`), never clobbered.
+- `claude-code` and `generic` are not edited in place — Claude Code owns its own MCP store and generic clients have no canonical path — so the tool prints the exact `claude mcp add-json` command or config block to apply. Interactive confirmation is intentionally omitted in favor of `--dry-run` preview plus mandatory backup, which are deterministic and testable.
+
+The planning logic (`planClientInstall`) is IO-free and unit-tested for all clients across Windows, macOS, and Linux path conventions.

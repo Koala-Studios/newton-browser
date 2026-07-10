@@ -1,6 +1,6 @@
 # Installation
 
-Newton Browser 0.3.0 currently supports source installs and locally built release artifacts. It requires Node 24 or newer, pnpm 10.8.0, a Chromium browser, and an MCP client that can start a local stdio server. It does not require a daemon, hosted service, database, or global Newton Browser package.
+Newton Browser requires Node 20 or newer to run, Node 24 or newer to develop, a Chromium browser, and an MCP client that can start a local stdio server. It does not require a daemon, hosted service, database, or global Newton Browser package.
 
 ## Install from source
 
@@ -33,14 +33,29 @@ Configure a local stdio MCP server with:
 
 ```json
 {
-  "command": "node",
-  "args": ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
+  "command": "npx",
+  "args": ["-y", "newton-browser"]
 }
 ```
 
 Use a real absolute path. Windows paths in JSON or double-quoted TOML strings must escape backslashes.
 
 For Codex, add the equivalent `[mcp_servers.newton-browser]` entry to `~/.codex/config.toml` and restart Codex. For Claude Desktop or Claude Code, merge the `mcpServers` entry documented in the root README and start a new client session. Generic clients use the same `command` and `args` shape.
+
+#### Configure automatically
+
+Instead of editing configuration by hand, let the host write it for you:
+
+```bash
+npx -y newton-browser --install codex          # or claude-desktop
+npx -y newton-browser --install codex --dry-run # preview the change first
+```
+
+`--install` locates the client's configuration, backs up any existing file to a
+timestamped `.bak`, and merges a `newton-browser` entry. It refuses to overwrite an
+existing entry unless you pass `--force`. For Claude Code and generic clients it prints
+the exact command or config block to apply instead of editing files it does not own.
+Restart the client afterward.
 
 ### 4. Verify startup
 

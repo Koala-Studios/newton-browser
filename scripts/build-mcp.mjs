@@ -15,7 +15,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node24",
+  target: "node20",
   external: ["ws"],
   sourcemap: true,
   banner: { js: "#!/usr/bin/env node" },
