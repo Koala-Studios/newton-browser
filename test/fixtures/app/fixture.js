@@ -1,4 +1,12 @@
 const count = () => document.querySelector("#count");
+const inputEvents = [];
+
+for (const type of ["mousemove", "mousedown", "mouseup", "click"]) {
+  document.addEventListener(type, (event) => {
+    inputEvents.push(`${type}:${event.target?.id || event.target?.tagName || "unknown"}:${Math.round(event.clientX)},${Math.round(event.clientY)}`);
+    document.querySelector("#event-log").value = inputEvents.slice(-8).join("|");
+  }, true);
+}
 
 customElements.define("fixture-shadow", class extends HTMLElement {
   connectedCallback() {

@@ -9,6 +9,7 @@ import { startFixtureServers } from "../../test/fixtures/server.mjs";
 const fixturePort = Number(process.env.BROWSER_BRIDGE_QA_FIXTURE_PORT ?? 18231);
 const hostPort = Number(process.env.BROWSER_BRIDGE_PORT ?? 17321);
 const results = [];
+const failures = [];
 
 let fixtureServer;
 let bridge;
@@ -40,97 +41,142 @@ try {
   }, "extension auto-bind");
   log("extension_auto_bound", { ownedTabId: boundSession.ownedTabId, tabGroupId: boundSession.tabGroupId ?? null });
 
-  const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 120 }), "observe");
-  assert(observed.origin === `http://127.0.0.1:${fixturePort}`, "observe origin mismatch", observed);
-  for (const name of ["Increment", "Network write", "Publish fixture", "Name", "Plan", "Password", "Credit card number", "Creative assets", "Shadow button", "Same-origin frame button", "Editable notes", "Custom region"]) {
-    assert(hasName(observed, name), `observe missing ${name}`, observed);
-  }
-  assert(!hasName(observed, "Cross-origin denied target"), "cross-origin frame target escaped the observation grant", observed);
-  log("observe_ok", { nodeCount: observed.nodeCount, kind: observed.kind });
-
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Name", value: "Alice" } }), "fill by label");
-  log("fill_label_ok");
-
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "type", selector: "#notes", value: "typed notes" } }), "type by selector");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Editable notes", value: "editable notes" } }), "contenteditable fill");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Custom region" } }), "custom combobox");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Shadow button" } }), "shadow button");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Same-origin frame button" } }), "same-origin frame button");
-  log("type_selector_ok");
-
-  const selected = await mcp("browser.act", { sessionId, action: { kind: "select", label: "Plan", value: "pro" } });
-  assert(["verified", "dispatched_unverified"].includes(statusOf(selected)), "select failed", selected);
-  log("select_label_ok", { status: statusOf(selected) });
-
-  const clicked = await mcp("browser.act", {
-    sessionId,
-    action: { kind: "click", name: "Increment", waitFor: { text: "Count: 1" }, timeoutMs: 3000 },
+  await phase("observe", async () => {
+    const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 120 }), "observe");
+    assert(observed.origin === `http://127.0.0.1:${fixturePort}`, "observe origin mismatch", observed);
+    for (const name of ["Increment", "Network write", "Publish fixture", "Name", "Plan", "Password", "Credit card number", "Creative assets", "Shadow button", "Same-origin frame button", "Editable notes", "Custom region"]) {
+      assert(hasName(observed, name), `observe missing ${name}`, observed);
+    }
+    assert(!hasName(observed, "Cross-origin denied target"), "cross-origin frame target escaped the observation grant", observed);
+    log("observe_ok", { nodeCount: observed.nodeCount, kind: observed.kind });
   });
-  assert(statusOf(clicked) === "verified", "click by name failed", clicked);
-  log("click_name_ok");
 
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "hover", name: "Increment" } }), "hover");
-  log("hover_ok");
+  await phase("fill_label", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Name", value: "Alice" } }), "fill by label");
+    log("fill_label_ok");
+  });
+  await phase("type_selector", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "type", selector: "#notes", value: "typed notes" } }), "type by selector");
+    log("type_selector_ok");
+  });
+  await phase("contenteditable", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Editable notes", value: "editable notes" } }), "contenteditable fill");
+    log("contenteditable_ok");
+  });
+  await phase("custom_combobox", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Custom region" } }), "custom combobox");
+    log("custom_combobox_ok");
+  });
+  await phase("shadow_button", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Shadow button" } }), "shadow button");
+    log("shadow_button_ok");
+  });
+  await phase("same_origin_frame", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Same-origin frame button" } }), "same-origin frame button");
+    log("same_origin_frame_ok");
+  });
+  await phase("select_label", async () => {
+    const selected = await mcp("browser.act", { sessionId, action: { kind: "select", label: "Plan", value: "pro" } });
+    assert(["verified", "dispatched_unverified"].includes(statusOf(selected)), "select failed", selected);
+    log("select_label_ok", { status: statusOf(selected) });
+  });
+  await phase("click_name", async () => {
+    const clicked = await mcp("browser.act", {
+      sessionId,
+      action: { kind: "click", name: "Increment", waitFor: { text: "Count: 1" }, timeoutMs: 3000 },
+    });
+    if (statusOf(clicked) !== "verified") {
+      const diagnostic = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "click diagnostic observe");
+      const eventLog = (diagnostic.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Event log")?.value ?? "missing";
+      assert(false, "click by name failed", { clicked, eventLog });
+    }
+    log("click_name_ok");
+  });
+  await phase("hover", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "hover", name: "Increment" } }), "hover");
+    log("hover_ok");
+  });
+  await phase("scroll", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "scroll", value: 900 } }), "scroll");
+    log("scroll_ok");
+  });
 
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "scroll", value: 900 } }), "scroll");
-  log("scroll_ok");
+  await phase("screenshot_mobile", async () => {
+    const shot = okResult(await mcp("browser.screenshot", {
+      sessionId,
+      fullPage: true,
+      device: "mobile",
+      waitMs: 100,
+      inline: false,
+    }), "screenshot");
+    assert(shot.kind === "screenshot" && Number(shot.width) > 0 && Number(shot.height) > 0, "screenshot missing metadata", shot);
+    log("screenshot_mobile_ok", { width: shot.width, height: shot.height, fullPage: shot.fullPage, device: shot.device });
+  });
 
-  const shot = okResult(await mcp("browser.screenshot", {
-    sessionId,
-    fullPage: true,
-    device: "mobile",
-    waitMs: 100,
-    inline: false,
-  }), "screenshot");
-  assert(shot.kind === "screenshot" && Number(shot.width) > 0 && Number(shot.height) > 0, "screenshot missing metadata", shot);
-  log("screenshot_mobile_ok", { width: shot.width, height: shot.height, fullPage: shot.fullPage, device: shot.device });
+  await phase("spa_stale_ref", async () => {
+    const staleObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "stale observe");
+    const staleRef = (staleObservation.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Stale target")?.ref;
+    assert(staleRef, "stale target ref missing", staleObservation);
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Rerender counter" } }), "SPA rerender");
+    const stale = await mcp("browser.act", { sessionId, action: { kind: "click", target: { ref: staleRef } } });
+    assert(["not_found", "stale_target"].includes(statusOf(stale)), "stale ref was not rejected", stale);
+    log("spa_stale_ref_ok", { status: statusOf(stale) });
+  });
 
-  const staleObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "stale observe");
-  const staleRef = (staleObservation.nodes ?? []).find((node) => node.name === "Stale target")?.ref;
-  assert(staleRef, "stale target ref missing", staleObservation);
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Rerender counter" } }), "SPA rerender");
-  const stale = await mcp("browser.act", { sessionId, action: { kind: "click", target: { ref: staleRef } } });
-  assert(["not_found", "stale_target"].includes(statusOf(stale)), "stale ref was not rejected", stale);
-  log("spa_stale_ref_ok", { status: statusOf(stale) });
+  await phase("navigation_history", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/second.html") } }), "navigate");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "back" } }), "back");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "forward" } }), "forward");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "reload" } }), "reload");
+    log("navigation_history_ok");
+  });
 
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/second.html") } }), "navigate");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "back" } }), "back");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "forward" } }), "forward");
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "reload" } }), "reload");
-  log("navigation_history_ok");
+  await phase("navigate_home", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/") } }), "navigate home");
+    log("navigate_home_ok");
+  });
+  await phase("password_block", async () => {
+    const password = await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Password", value: "not-a-real-secret" } });
+    assert(password.ok === false && password.errorCode === "blocked_by_floor", "password fill was not blocked", password);
+    log("password_blocked_ok");
+  });
+  await phase("card_block", async () => {
+    const card = await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Credit card number", value: "4111111111111111" } });
+    assert(card.ok === false && card.errorCode === "blocked_by_floor", "card fill was not blocked", card);
+    log("card_blocked_ok");
+  });
+  await phase("post_action_reconciliation", async () => {
+    const localWrite = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Network write" } });
+    assert(statusOf(localWrite) === "blocked", "post-action reconciliation did not block local write", localWrite);
+    log("post_action_reconciliation_ok");
+  });
+  await phase("file_inputs", async () => {
+    const uploadObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "upload observe");
+    const uploadNode = (uploadObservation.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Creative assets");
+    assert(uploadNode?.ref, "file input ref missing", uploadObservation);
+    const uploadFiles = fs.readdirSync(uploadRoot).map((name) => path.join(uploadRoot, name));
+    const uploaded = await mcp("browser.act", { sessionId, action: { kind: "set_files", target: { ref: uploadNode.ref }, files: uploadFiles } });
+    assert(statusOf(uploaded) === "verified", "set_files was not verified", uploaded);
+    const accepted = uploaded.result?.changed?.files ?? uploaded.changed?.files ?? [];
+    assert(accepted.length === uploadFiles.length, "browser FileList acceptance mismatch", uploaded);
+    assert(accepted.every((file) => !String(file.filename).includes("\\") && !String(file.filename).includes("/")), "set_files exposed a local path", accepted);
+    log("real_file_inputs_ok", { files: accepted.map((file) => file.filename), autoSubmit: false });
+  });
 
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/") } }), "navigate home");
-  const password = await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Password", value: "not-a-real-secret" } });
-  assert(password.ok === false && password.errorCode === "blocked_by_floor", "password fill was not blocked", password);
-  log("password_blocked_ok");
-
-  const card = await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Credit card number", value: "4111111111111111" } });
-  assert(card.ok === false && card.errorCode === "blocked_by_floor", "card fill was not blocked", card);
-  log("card_blocked_ok");
-
-  const localWrite = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Network write" } });
-  assert(statusOf(localWrite) === "blocked", "post-action reconciliation did not block local write", localWrite);
-  log("post_action_reconciliation_ok");
-
-  const uploadObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "upload observe");
-  const uploadNode = (uploadObservation.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Creative assets");
-  assert(uploadNode?.ref, "file input ref missing", uploadObservation);
-  const uploadFiles = fs.readdirSync(uploadRoot).map((name) => path.join(uploadRoot, name));
-  const uploaded = await mcp("browser.act", { sessionId, action: { kind: "set_files", target: { ref: uploadNode.ref }, files: uploadFiles } });
-  assert(statusOf(uploaded) === "verified", "set_files was not verified", uploaded);
-  const accepted = uploaded.result?.changed?.files ?? uploaded.changed?.files ?? [];
-  assert(accepted.length === uploadFiles.length, "browser FileList acceptance mismatch", uploaded);
-  assert(accepted.every((file) => !String(file.filename).includes("\\") && !String(file.filename).includes("/")), "set_files exposed a local path", accepted);
-  log("real_file_inputs_ok", { files: accepted.map((file) => file.filename), autoSubmit: false });
-
-  const stopped = await mcp("browser.stop_all", {});
-  assert(stopped.stopped, "stop_all failed", stopped);
-  await waitFor(async () => {
-    const listed = await mcp("browser.tabs.list", {});
-    return Array.isArray(listed.sessions) && listed.sessions.length === 0 ? listed : null;
-  }, "empty host session list", 10000);
-  log("cleanup_ok", { stopped: stopped.stopped });
-  log("live_qa_pass", { steps: results.length });
+  await phase("cleanup", async () => {
+    const stopped = await mcp("browser.stop_all", {});
+    assert(stopped.stopped, "stop_all failed", stopped);
+    await waitFor(async () => {
+      const listed = await mcp("browser.tabs.list", {});
+      return Array.isArray(listed.sessions) && listed.sessions.length === 0 ? listed : null;
+    }, "empty host session list", 10000);
+    log("cleanup_ok", { stopped: stopped.stopped });
+  });
+  if (failures.length > 0) {
+    log("live_qa_batch_complete", { passedSteps: results.filter((entry) => entry.step.endsWith("_ok")).length, failures });
+    throw new Error(`live QA batch failures: ${failures.map((failure) => failure.phase).join(", ")}`);
+  }
+  log("live_qa_pass", { steps: results.length, failures: 0 });
 } catch (error) {
   log("live_qa_fail", { message: error.message, detail: error.detail });
   process.exitCode = 1;
@@ -164,6 +210,21 @@ async function mcp(name, args = {}) {
   const text = response?.result?.content?.[0]?.text;
   assert(typeof text === "string", `missing MCP text for ${name}`, { response });
   return JSON.parse(text);
+}
+
+async function phase(name, task) {
+  try {
+    return await task();
+  } catch (error) {
+    const failure = {
+      phase: name,
+      message: error?.message ?? String(error),
+      ...(error?.detail ? { detail: error.detail } : {}),
+    };
+    failures.push(failure);
+    log("phase_fail", failure);
+    return null;
+  }
 }
 
 async function waitFor(predicate, label, timeoutMs = 90000) {

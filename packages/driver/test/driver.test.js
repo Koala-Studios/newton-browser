@@ -3,6 +3,40 @@ import assert from "node:assert/strict";
 
 import { createBrowserBridgeDriver } from "../src/driver.js";
 
+test("driver emulates focus for an inactive owned tab and restores it on detach", async () => {
+  const originalChrome = globalThis.chrome;
+  const debuggerCalls = [];
+  globalThis.chrome = {
+    debugger: {
+      async attach(target, version) { debuggerCalls.push({ method: "attach", target, version }); },
+      async detach(target) { debuggerCalls.push({ method: "detach", target }); },
+    },
+    runtime: { lastError: null },
+  };
+  try {
+    const driver = createBrowserBridgeDriver();
+    const commands = [];
+    driver.cdp = async (method, params) => { commands.push({ method, params }); return {}; };
+    driver.calibrate = async () => {};
+    driver.reassertOverlay = async () => {};
+    driver.sendToPage = async () => {};
+
+    await driver.attach(17);
+    await driver.detach();
+
+    assert.deepEqual(commands.filter((call) => call.method === "Emulation.setFocusEmulationEnabled"), [
+      { method: "Emulation.setFocusEmulationEnabled", params: { enabled: true } },
+      { method: "Emulation.setFocusEmulationEnabled", params: { enabled: false } },
+    ]);
+    assert.deepEqual(debuggerCalls, [
+      { method: "attach", target: { tabId: 17 }, version: "1.3" },
+      { method: "detach", target: { tabId: 17 } },
+    ]);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
 test("driver observation emits stable refs and excludes bridge overlay nodes", async () => {
   const driver = createBrowserBridgeDriver();
   let boxCalls = 0;

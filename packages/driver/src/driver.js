@@ -65,6 +65,11 @@ class BrowserBridgeDriver {
     for (const domain of CDP_DOMAINS) {
       await this.cdp(`${domain}.enable`, {}).catch(() => {});
     }
+    // Owned tabs stay inactive so they never steal the operator's focus. Chrome
+    // otherwise accepts pointer/key CDP commands for a background tab while
+    // dropping their press/release events. Focus emulation makes only this
+    // debugger target behave as active without activating the visible tab.
+    await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
     // Child frames / popups attach to the same session (§7.5).
     await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: false }).catch(() => {});
     await this.calibrate();
@@ -84,6 +89,7 @@ class BrowserBridgeDriver {
   async detach() {
     if (!this.attached || this.tabId == null) return;
     await this.sendToPage({ type: "BB_DRIVE_END" }).catch(() => {});
+    await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
     await chrome.debugger.detach({ tabId: this.tabId }).catch(() => {});
     this.attached = false;
     this.tabId = null;
