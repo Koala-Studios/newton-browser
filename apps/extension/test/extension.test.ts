@@ -12,7 +12,7 @@ test("standalone extension source has no forbidden product coupling", () => {
     "manifest.json",
     "package.json",
     "panel.html",
-    "icons/icon.svg",
+    "icons/icon-generated-v2.png",
     "src/config.js",
     "src/local-transport.js",
     "src/panel.css",

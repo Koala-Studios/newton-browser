@@ -4,15 +4,15 @@ import sharp from "sharp";
 
 const root = process.cwd();
 const icons = path.join(root, "apps", "extension", "icons");
-const master = path.join(icons, "icon.svg");
+const master = path.join(icons, "icon-generated-v2.png");
 const output = [16, 32, 48, 128].map((size) => ({ name: `icon-${size}.png`, size }));
 
-if (!fs.existsSync(master)) throw new Error(`missing master icon: ${master}`);
-const svg = fs.readFileSync(master);
-await Promise.all(output.map(({ name, size }) => writePng(path.join(icons, name), sharp(svg).resize(size, size, { fit: "contain" }))));
+if (!fs.existsSync(master)) throw new Error(`missing transparent master icon: ${master}`);
+const cleanMaster = await cleanTransparentMaster();
+await Promise.all(output.map(({ name, size }) => writePng(path.join(icons, name), iconAtSize(size))));
 await Promise.all([16, 32].flatMap((size) => [
-  writePng(path.join(icons, `action-connected-${size}.png`), sharp(svg).resize(size, size, { fit: "contain" })),
-  writePng(path.join(icons, `action-disconnected-${size}.png`), sharp(svg).resize(size, size, { fit: "contain" }).grayscale().tint("#64748B")),
+  writePng(path.join(icons, `action-connected-${size}.png`), iconAtSize(size)),
+  writePng(path.join(icons, `action-disconnected-${size}.png`), iconAtSize(size).grayscale().tint("#64748B")),
 ]));
 
 if (process.argv.includes("--contact-sheet")) await renderContactSheet();
@@ -20,6 +20,37 @@ process.stdout.write(`${JSON.stringify({ ok: true, icons: output.map(({ name }) 
 
 async function writePng(file, image) {
   await image.png({ compressionLevel: 9, adaptiveFiltering: false }).toFile(file);
+}
+
+function iconAtSize(size) {
+  return sharp(cleanMaster).resize(size, size, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } });
+}
+
+async function cleanTransparentMaster() {
+  const { data, info } = await sharp(master).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let left = info.width;
+  let top = info.height;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const offset = (y * info.width + x) * info.channels;
+      const red = data[offset];
+      const green = data[offset + 1];
+      const blue = data[offset + 2];
+      if (red < 12 && green < 12 && blue < 12) data[offset + 3] = 0;
+      if (data[offset + 3] <= 10) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+  if (right < left || bottom < top) throw new Error("transparent master icon has no visible pixels");
+  return sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } })
+    .extract({ left, top, width: right - left + 1, height: bottom - top + 1 })
+    .png({ compressionLevel: 9, adaptiveFiltering: false })
+    .toBuffer();
 }
 
 async function renderContactSheet() {
