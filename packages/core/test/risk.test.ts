@@ -45,7 +45,7 @@ test("a structurally-detected commit on an unknown host is classified as commit 
   const formSubmit = evaluateBrowserFloor({ action: { kind: "click", text: "Go" }, resolved: { role: "button", formOwner: "checkout-form" }, origin: "https://example.com", policy: allowed });
   assert.equal(formSubmit.class, "approval_required");
 
-  // Spaced/styled commit labels are caught (Shopify's "CHECK OUT", "PLACE ORDER").
+  // Spaced or styled commit labels remain detectable.
   for (const name of ["CHECK OUT", "Place Order", "Complete order", "Remove item"]) {
     const decision = evaluateBrowserFloor({ action: { kind: "click", target: { ref: "n1" } }, resolved: { role: "button", accessibleName: name }, origin: "https://shop.example", policy: { allowedOrigins: ["https://shop.example"] } });
     assert.equal(decision.class, "approval_required", `${name} should be classified as commit metadata`);
@@ -81,13 +81,13 @@ test("misleading page text cannot authorize a write; the floor only raises risk"
 
 test("a ref-targeted commit is gated once the driver supplies resolved evidence (S3/D16)", () => {
   const manifest: BrowserHostPolicyManifest = {
-    origins: ["https://adsmanager.facebook.com"],
-    commitRules: [{ match: { name: "publish" }, effect: "external_effect", reason: "ads_manager_publish" }],
+    origins: ["https://app.example.invalid"],
+    commitRules: [{ match: { name: "publish" }, effect: "external_effect", reason: "custom_policy_publish" }],
   };
-  const adsPolicy = { allowedOrigins: ["https://adsmanager.facebook.com"] };
+  const hostPolicy = { allowedOrigins: ["https://app.example.invalid"] };
 
   // Without resolved evidence a ref click is opaque → agentic (the old gap).
-  const blind = evaluateBrowserFloor({ action: { kind: "click", target: { ref: "n5" } }, manifest, origin: "https://adsmanager.facebook.com", policy: adsPolicy });
+  const blind = evaluateBrowserFloor({ action: { kind: "click", target: { ref: "n5" } }, manifest, origin: "https://app.example.invalid", policy: hostPolicy });
   assert.equal(blind.class, "agentic");
 
   // With the driver's pre-dispatch resolved name, the host rule matches by ref.
@@ -95,8 +95,8 @@ test("a ref-targeted commit is gated once the driver supplies resolved evidence 
     action: { kind: "click", target: { ref: "n5" } },
     resolved: { role: "button", accessibleName: "Publish" },
     manifest,
-    origin: "https://adsmanager.facebook.com",
-    policy: adsPolicy,
+    origin: "https://app.example.invalid",
+    policy: hostPolicy,
   });
   assert.equal(resolved.class, "approval_required");
   assert.equal(resolved.commitBoundary, "external_effect");

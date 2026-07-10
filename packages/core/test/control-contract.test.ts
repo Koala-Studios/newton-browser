@@ -14,7 +14,7 @@ test("generic target descriptors are preserved without leaking fill values", () 
   const action: BrowserAction = {
     kind: "fill",
     target: { role: "textbox", name: "Email token=secret" },
-    value: "frank@example.invalid",
+    value: "user@example.invalid",
     waitFor: { text: "Saved", timeoutMs: 2500 },
   };
   const redacted = redactBrowserAction(action);

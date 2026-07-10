@@ -70,6 +70,17 @@ const blockedTerms = [
   ["com", "panion"],
   ["doc", "ket"],
 ].map((parts) => parts.join(""));
+const identitySpecificTerms = [
+  ["fr", "ank"],
+  ["shop", "ify"],
+  ["klavi", "yo"],
+  ["face", "book"],
+  ["ads ", "manager"],
+  ["meta ", "ads"],
+  ["koala ", "studios"],
+  ["standalone ", "browser bridge"],
+  ["oper", "ator"],
+].map((parts) => parts.join(""));
 const blockedExact = ["shared" + ".mjs", "browser_bridge_host_" + "policies"];
 const retiredTransport = ["re", "mote"].join("");
 const oldPathFragments = [
@@ -91,7 +102,7 @@ for (const file of walk(root)) {
   if (!isTextFile(file)) continue;
   const text = fs.readFileSync(file, "utf8");
   const lower = text.toLowerCase();
-  for (const term of [...blockedTerms, ...blockedExact]) {
+  for (const term of [...blockedTerms, ...identitySpecificTerms, ...blockedExact]) {
     if (lower.includes(term)) failures.push(`${relative}: forbidden standalone-boundary term`);
   }
   for (const fragment of oldPathFragments) {

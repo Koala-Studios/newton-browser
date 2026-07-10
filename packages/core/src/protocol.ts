@@ -131,7 +131,7 @@ export type BrowserTabRef = {
 // What the floor concluded about how far the action commits. `none` = a pure
 // read or in-page move; `draft` = edits a draft field; `commit` = a recorded
 // save/submit-like action; `external_effect` = an irreversible outward action
-// (publish/pay/budget/account). Standalone Browser Bridge treats these as risk
+// (publish/pay/budget/account). Browser Bridge treats these as risk
 // metadata, not a human approval layer.
 export const BROWSER_COMMIT_BOUNDARIES = ["none", "draft", "commit", "external_effect"] as const;
 

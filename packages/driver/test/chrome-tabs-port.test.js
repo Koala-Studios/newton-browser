@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { createChromeTabsPort } from "../src/chrome-tabs-port.js";
 
-test("chrome tabs port creates owned tabs without taking the operator's active tab", async () => {
+test("chrome tabs port creates owned tabs without taking the user's active tab", async () => {
   const creates = [];
   const groups = [];
   const updates = [];

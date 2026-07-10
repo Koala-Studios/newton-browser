@@ -7,7 +7,7 @@
 3. Restart the client.
 4. Call `browser.status` and confirm `ready: true`. Default `local_trust` needs no pairing key or popup action.
 
-Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers hosts on the bounded loopback range. If the operator explicitly enables `paired` mode, run `browser-bridge-mcp --doctor` and enter its key in the popup once.
+Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers hosts on the bounded loopback range. If the user explicitly enables `paired` mode, run `browser-bridge-mcp --doctor` and enter its key in the popup once.
 
 Chrome and Edge can remain enabled together. The host atomically assigns a session to one browser, and standbys receive no commands. Default `auto` mode needs no choice; set per-user `browserTarget` or `BROWSER_BRIDGE_BROWSER=chrome|edge` only when a specific browser is required.
 

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Standalone Browser Bridge"
-  short_description: "Drive authenticated Chrome through local MCP"
-  default_prompt: "Use $browser-bridge to inspect and operate this site in a new owned tab within my existing Chrome profile."
+  display_name: "Browser Bridge"
+  short_description: "Control an authenticated browser through MCP"
+  default_prompt: "Use $browser-bridge to inspect and operate this site in a new owned tab within the user's existing authenticated browser profile."

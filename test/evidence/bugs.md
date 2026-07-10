@@ -29,7 +29,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix commit: `94de2f0`.
 - Status: closed.
 
-## BB-004 — Owned tabs stole operator focus
+## BB-004 — Owned tabs stole user focus
 
 - Minimal repro: call `createOwnedTab` and inspect the `chrome.tabs.create` input.
 - Root cause: the copied implementation set `active: true` to support trusted input, contradicting the owned-tab product invariant.
@@ -223,7 +223,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Minimal repro: keep using another Chrome tab while the owned fixture tab dispatches Increment and Network write clicks.
 - Root cause: Chrome accepted pointer movement but dropped mouse-button and keyboard activation events for the inactive page. Fixture tracing repeatedly showed only `mousemove` at the correct target and coordinates.
 - Fix: enable `Emulation.setFocusEmulationEnabled` for the attached debugger target and disable it on detach. This simulates a focused and active page without activating the visible tab.
-- Regression: focused attach/detach test plus three consecutive full live Chrome batches (69/69 phases) while the operator used other tabs.
+- Regression: focused attach/detach test plus three consecutive full live Chrome batches (69/69 phases) while the user used other tabs.
 - Fix commit: `d7adab1`.
 - Status: closed.
 

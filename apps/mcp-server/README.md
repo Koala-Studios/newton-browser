@@ -1,6 +1,6 @@
 # Browser Bridge Host
 
-Local MCP host for the standalone Browser Bridge extension.
+Local MCP host for the Browser Bridge extension.
 
 ## Run
 

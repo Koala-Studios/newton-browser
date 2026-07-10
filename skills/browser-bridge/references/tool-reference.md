@@ -35,4 +35,4 @@ Every act result includes:
 
 Important statuses are `verified`, `dispatched_unverified`, `blocked`, `not_found`, `ambiguous`, `stale_target`, `timed_out`, and `failed`. A blocked post-action reconciliation may occur after dispatch; inspect current state before retrying.
 
-Exact schemas and bounds are locked in `docs/DECISIONS.md` and exposed by MCP `tools/list`.
+MCP `tools/list` is authoritative for exact schemas and bounds.

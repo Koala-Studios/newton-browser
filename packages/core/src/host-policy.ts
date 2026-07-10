@@ -6,9 +6,9 @@ export type BrowserHostPolicy = {
   deniedOrigins?: string[];
 };
 
-// A host-policy manifest (B3). Authored for the real targets (e.g. Ads Manager)
-// so commit boundaries are known structurally and the unknown-host gray zone is
-// removed. Standalone manifests are loaded from the optional local config.
+// Optional host-policy manifests let a user add structural commit rules and
+// screenshot masking for specific origins. Manifests are loaded from local
+// configuration; the product ships without vendor-specific defaults.
 export type BrowserHostCommitRule = {
   // structural match, never page prose: a role/name/testid/selector that the
   // driver already resolved on the target element.
@@ -40,36 +40,8 @@ export type BrowserHostPolicyManifest = {
   sensitiveZones?: BrowserHostSensitiveZone[];
 };
 
-// Authored host policies for the real first targets (§12 B3). Start with the
-// Meta Ads Manager UI-gap surfaces: structure reads/writes go through
-// platform-meta (§8); the bridge is only for UI-only review/preview/billing.
-// Publish/budget/account/payment are external_effect — always a full packet.
-export const ADS_MANAGER_HOST_POLICY: BrowserHostPolicyManifest = {
-  origins: ["https://adsmanager.facebook.com", "https://business.facebook.com", "https://www.facebook.com"],
-  label: "Meta Ads Manager",
-  routeClass: "app",
-  defaultForUnmatched: "conservative",
-  commitRules: [
-    { match: { name: "publish" }, effect: "external_effect", reason: "ads_manager_publish" },
-    { match: { name: "confirm" }, effect: "external_effect", reason: "ads_manager_confirm" },
-    { match: { name: "place order" }, effect: "external_effect", reason: "ads_manager_place_order" },
-    { match: { name: "pay" }, effect: "external_effect", reason: "ads_manager_payment" },
-    { match: { name: "add payment" }, effect: "external_effect", reason: "ads_manager_payment" },
-    { match: { name: "set budget" }, effect: "external_effect", reason: "ads_manager_budget" },
-    { match: { name: "save budget" }, effect: "external_effect", reason: "ads_manager_budget" },
-    { match: { name: "delete" }, effect: "external_effect", reason: "ads_manager_delete" },
-    { match: { name: "save" }, effect: "commit", reason: "ads_manager_save" },
-    { match: { name: "review and publish" }, effect: "external_effect", reason: "ads_manager_review_publish" },
-  ],
-  sensitiveZones: [
-    { selector: "[data-testid*='spend']", label: "spend" },
-    { selector: "[aria-label*='Amount spent']", label: "amount_spent" },
-    { selector: "[data-testid*='payment']", label: "payment" },
-    { selector: "[aria-label*='audience']", label: "audience" },
-  ],
-};
-
-export const DEFAULT_BROWSER_HOST_POLICIES: BrowserHostPolicyManifest[] = [ADS_MANAGER_HOST_POLICY];
+// The generic structural floor remains active when this collection is empty.
+export const DEFAULT_BROWSER_HOST_POLICIES: BrowserHostPolicyManifest[] = [];
 
 export function normalizeOrigin(value: unknown): string {
   return redactBrowserOrigin(value);

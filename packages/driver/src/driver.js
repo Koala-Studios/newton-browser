@@ -6,7 +6,7 @@
 // acting are the same subsystem — an observation is the read half of an action.
 //
 // Trusted input only: CDP Input dispatches real events that land on SPAs that
-// check isTrusted (Ads Manager / React). The model never gets raw CDP or raw JS;
+// check isTrusted in event-driven applications. The model never gets raw CDP or raw JS;
 // every action is funneled through the typed contract. The cursor overlay is
 // fire-and-forget and NEVER gates execution (§5.1).
 
@@ -65,7 +65,7 @@ class BrowserBridgeDriver {
     for (const domain of CDP_DOMAINS) {
       await this.cdp(`${domain}.enable`, {}).catch(() => {});
     }
-    // Owned tabs stay inactive so they never steal the operator's focus. Chrome
+    // Owned tabs stay inactive so they never steal the user's focus. Chrome
     // otherwise accepts pointer/key CDP commands for a background tab while
     // dropping their press/release events. Focus emulation makes only this
     // debugger target behave as active without activating the visible tab.
@@ -355,7 +355,7 @@ class BrowserBridgeDriver {
   }
 
   // Apply a mobile/desktop device render (D5). Owned-tab only by default — it
-  // visibly reflows the page, so we never silently distort the operator's own
+  // visibly reflows the page, so we never silently distort the user's own
   // current tab. Returns { restore, clip } — the clip is the device viewport so
   // the capture can target an explicit region (see screenshot()).
   async applyDeviceEmulation(device) {
@@ -929,7 +929,7 @@ class BrowserBridgeDriver {
     // Bring off-screen / below-the-fold targets into view first — the single
     // biggest real-world reliability win. Without this, an element outside the
     // viewport never hit-tests and times out as stale_target (seen live on the
-    // Shopify catalog).
+    // large dynamic catalog).
     await this.scrollIntoView(backendNodeId);
     const deadline = Date.now() + AUTO_WAIT_TIMEOUT_MS;
     const vh = (await this.evalNumber("window.innerHeight")) || 100000;

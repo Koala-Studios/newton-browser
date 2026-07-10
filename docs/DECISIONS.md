@@ -12,7 +12,7 @@ Discovery is bounded to 20 loopback ports. A host that cannot bind within the ra
 
 ## 2. Transport authentication: zero-touch local trust with opt-in pairing
 
-Revised by explicit operator decision on 2026-07-10: `local_trust` is the default. Installing the extension and configuring the MCP package is sufficient; no key paste or popup action is required. Every host still binds only to `127.0.0.1`, accepts only Chromium extension WebSocket origins, keeps the bounded port range, and applies all session-origin and action-floor controls.
+Revised by explicit user decision on 2026-07-10: `local_trust` is the default. Installing the extension and configuring the MCP package is sufficient; no key paste or popup action is required. Every host still binds only to `127.0.0.1`, accepts only Chromium extension WebSocket origins, keeps the bounded port range, and applies all session-origin and action-floor controls.
 
 The optional hardened mode is enabled with `{"transportAuth":"paired"}` in the per-user `config.json`, or `BROWSER_BRIDGE_AUTH_MODE=paired`. In that mode the MCP package creates/reads a random 256-bit base64url secret in the per-user config directory, `--doctor` prints it for deliberate one-time entry in the extension popup, and the extension stores it in `chrome.storage.local`. Normal MCP mode never emits it.
 
@@ -73,7 +73,7 @@ The tool does not return success until the extension has created/selected the ta
 
 Chosen: wire the machinery.
 
-The built-in Ads Manager manifest is enabled by default. An optional per-user `config.json` may add or replace `hostPolicies`; the schema is validated at startup and by `--doctor`. The host selects the manifest from the command's reconciled live origin and passes it into both preflight and extension-side floor evaluation. Screenshot `sensitiveZones` from the selected manifest are passed into capture. Invalid configuration produces typed `invalid_config`; inert manifests are forbidden by tests.
+Browser Bridge ships without vendor-specific host-policy manifests. An optional per-user `config.json` may define `hostPolicies`; the schema is validated at startup and by `--doctor`. The host selects a matching manifest from the command's reconciled live origin and passes it into both preflight and extension-side floor evaluation. Screenshot `sensitiveZones` from a selected manifest are passed into capture. The generic structural safety floor remains active when no manifest matches. Invalid configuration produces typed `invalid_config`; inert manifests are forbidden by tests.
 
 ## 7. New lifecycle contracts
 
@@ -112,7 +112,7 @@ Input: `{sessionId, disposition:"close | deliverable | handoff"}`.
 - `deliverable`: detach, remove the driving overlay, keep the tab and its group for passive review, then end the session.
 - `handoff`: detach, remove overlay and Browser Bridge group ownership, activate the tab, then end the session.
 
-The result is `{finalized:true,disposition,tabId,tabKept}`. Current-tab sessions never close the operator's tab. On normal host exit, unfinalized owned sessions are closed by the extension after a 15-second disconnect grace; finalized deliverable/handoff tabs remain. One host's death affects only sessions stamped with its `hostInstanceId`.
+The result is `{finalized:true,disposition,tabId,tabKept}`. Current-tab sessions never close the user's tab. On normal host exit, unfinalized owned sessions are closed by the extension after a 15-second disconnect grace; finalized deliverable/handoff tabs remain. One host's death affects only sessions stamped with its `hostInstanceId`.
 
 ## 8. `set_files` contract
 
@@ -170,4 +170,4 @@ Chrome and Edge may keep the same unpacked extension enabled at the same time. E
 
 Only the owner may attach a tab, subscribe, stop the session, or return command results. Commands are sent only to that owner's socket. A non-owner receives typed `session_not_owned` and cannot race or duplicate an action. If the owner disconnects, the host releases the claim, clears browser-specific tab identifiers, and lets one standby reclaim and bind a fresh tab; an in-flight command fails closed as `extension_disconnected` rather than being replayed.
 
-The default `browserTarget` is `auto`, so installation remains zero-touch and the first atomic claimant owns each new session. An operator who wants deterministic browser selection may set `{"browserTarget":"chrome"}` or `{"browserTarget":"edge"}` in the per-user `config.json`, or set `BROWSER_BRIDGE_BROWSER=chrome|edge` for that MCP process. Non-selected browsers stay connected as standby and never receive session control. `browser.status` reports the target, connected browser families, eligible-client count, and aggregate claimed-session counts without exposing profile identity values.
+The default `browserTarget` is `auto`, so installation remains zero-touch and the first atomic claimant owns each new session. A user who wants deterministic browser selection may set `{"browserTarget":"chrome"}` or `{"browserTarget":"edge"}` in the per-user `config.json`, or set `BROWSER_BRIDGE_BROWSER=chrome|edge` for that MCP process. Non-selected browsers stay connected as standby and never receive session control. `browser.status` reports the target, connected browser families, eligible-client count, and aggregate claimed-session counts without exposing profile identity values.
