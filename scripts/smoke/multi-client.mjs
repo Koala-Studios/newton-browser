@@ -14,7 +14,7 @@ try {
     const directory = path.join(temp, `${client} install`);
     fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: `${client}-packed-check`, private: true }));
-    await run("npm", ["install", "--ignore-scripts", tarball], directory, true);
+    await run(process.execPath, [npmCli(), "install", "--ignore-scripts", tarball], directory, cleanPackageManagerEnv());
     return { client, directory, entry: path.join(directory, "node_modules", "browser-bridge-mcp", "dist", "index.js") };
   }));
   const results = await Promise.all(installs.map((install, index) => run(process.execPath, [
@@ -22,16 +22,18 @@ try {
     "--entry", install.entry,
     "--config-dir", path.join(install.directory, "config"),
     "--port", String(18641 + index),
-  ], root, false)));
+  ], root, process.env)));
   if (results.some((result) => !result.includes('"ok":true'))) throw new Error("one packed client failed its browser task");
   process.stdout.write(`${JSON.stringify({ ok: true, concurrentClients: installs.map((item) => item.client), isolatedHosts: 2, packedArtifact: path.basename(tarball) })}\n`);
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }
 
-function run(command, args, cwd, useShell) {
+function npmCli() { return path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"); }
+function cleanPackageManagerEnv() { const env = { ...process.env, npm_config_update_notifier: "false" }; delete env.npm_config_verify_deps_before_run; return env; }
+function run(command, args, cwd, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" && useShell });
+    const child = spawn(command, args, { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = ""; let stderr = "";
     const timer = setTimeout(() => { child.kill(); reject(new Error(`${command} timed out`)); }, 120_000);
     child.stdout.on("data", (chunk) => { stdout += chunk; });

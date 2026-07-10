@@ -37,9 +37,22 @@ try {
 process.stdout.write(`${JSON.stringify({ ok: true, tarball, files: listing.length, installPathWithSpaces: true })}\n`);
 
 function run(command, args, { cwd = root, capture = false } = {}) {
-  const useShell = process.platform === "win32" && ["pnpm", "npm"].includes(command);
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", stdio: capture ? "pipe" : "inherit", windowsHide: true, shell: useShell });
+  const manager = packageManagerCommand(command, args);
+  const result = spawnSync(manager.command, manager.args, { cwd, env: cleanPackageManagerEnv(), encoding: "utf8", stdio: capture ? "pipe" : "inherit", windowsHide: true });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed (${result.status})\n${result.stderr ?? ""}`);
   return result;
+}
+
+function packageManagerCommand(command, args) {
+  if (command === "pnpm" && process.env.npm_execpath) return { command: process.execPath, args: [process.env.npm_execpath, ...args] };
+  if (command === "npm") return { command: process.execPath, args: [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), ...args] };
+  return { command, args };
+}
+
+function cleanPackageManagerEnv() {
+  const env = { ...process.env };
+  delete env.npm_config_verify_deps_before_run;
+  env.npm_config_update_notifier = "false";
+  return env;
 }

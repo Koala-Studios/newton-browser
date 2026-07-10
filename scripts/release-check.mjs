@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import net from "node:net";
 
 for (const command of ["lint", "typecheck", "test", "build", "extension:artifact", "pack:check", "smoke:quick", "smoke:matrix", "smoke:chaos", "smoke:multi-client", "smoke:clean-user"]) {
-  const result = spawnSync("pnpm", [command], { cwd: process.cwd(), stdio: "inherit", windowsHide: true, timeout: 300_000, shell: process.platform === "win32" });
+  const executable = process.env.npm_execpath ? process.execPath : "pnpm";
+  const args = process.env.npm_execpath ? [process.env.npm_execpath, command] : [command];
+  const result = spawnSync(executable, args, { cwd: process.cwd(), stdio: "inherit", windowsHide: true, timeout: 300_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`release stage ${command} failed (${result.status})`);
 }

@@ -23,7 +23,7 @@ const env = {
 try {
   fs.mkdirSync(install, { recursive: true });
   fs.writeFileSync(path.join(install, "package.json"), '{"name":"clean-user-proof","private":true}');
-  run("npm", ["install", "--ignore-scripts", tarball], install, env, false);
+  run(process.execPath, [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "install", "--ignore-scripts", tarball], install, cleanPackageManagerEnv(env), false);
   const entry = path.join(install, "node_modules", "browser-bridge-mcp", "dist", "index.js");
   if (run(process.execPath, [entry, "--version"], isolated, env, true).stdout.trim() !== version) throw new Error("clean-user version mismatch");
   const doctor = JSON.parse(run(process.execPath, [entry, "--doctor"], isolated, env, true).stdout);
@@ -39,9 +39,9 @@ try {
 }
 
 function mkdir(directory) { fs.mkdirSync(directory, { recursive: true }); return directory; }
+function cleanPackageManagerEnv(input) { const output = { ...input, npm_config_update_notifier: "false" }; delete output.npm_config_verify_deps_before_run; return output; }
 function run(command, args, cwd, environment, capture) {
-  const useShell = process.platform === "win32" && command === "npm";
-  const result = spawnSync(command, args, { cwd, env: environment, encoding: "utf8", stdio: capture ? "pipe" : "inherit", windowsHide: true, timeout: 120_000, shell: useShell });
+  const result = spawnSync(command, args, { cwd, env: environment, encoding: "utf8", stdio: capture ? "pipe" : "inherit", windowsHide: true, timeout: 120_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed (${result.status}): ${result.stderr ?? ""}`);
   return result;

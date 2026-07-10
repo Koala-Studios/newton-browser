@@ -58,8 +58,9 @@ function fileVersion(file) {
 }
 
 function run(command, args, { env = process.env } = {}) {
-  const useShell = process.platform === "win32" && command === "npx";
-  const result = spawnSync(command, args, { cwd: root, env, encoding: "utf8", stdio: "pipe", windowsHide: true, timeout: 120_000, shell: useShell });
+  const executable = command === "npx" ? process.execPath : command;
+  const commandArgs = command === "npx" ? [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js"), ...args] : args;
+  const result = spawnSync(executable, commandArgs, { cwd: root, env, encoding: "utf8", stdio: "pipe", windowsHide: true, timeout: 120_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed (${result.status}): ${result.stderr}`);
   return result;
