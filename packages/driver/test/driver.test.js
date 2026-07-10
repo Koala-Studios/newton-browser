@@ -270,11 +270,13 @@ test("driver wait_for text normalizes layout whitespace", async () => {
 test("driver click dispatches complete CDP mouse button state", async () => {
   const driver = createBrowserBridgeDriver();
   const mouseEvents = [];
+  const commandOrder = [];
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
   driver.pageSignature = async () => ({ url: "https://example.com/page", title: "Example" });
   driver.elementState = async () => ({});
   driver.cdp = async (method, params) => {
+    commandOrder.push(method);
     if (method === "Input.dispatchMouseEvent") mouseEvents.push(params);
     return {};
   };
@@ -293,6 +295,7 @@ test("driver click dispatches complete CDP mouse button state", async () => {
 
   await driver.click({ kind: "click", target: { ref: "e7" } });
 
+  assert.deepEqual(commandOrder.slice(0, 4), ["DOM.focus", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent"]);
   assert.deepEqual(mouseEvents, [
     { type: "mouseMoved", x: 20, y: 30, button: "none", buttons: 0, pointerType: "mouse" },
     { type: "mousePressed", x: 20, y: 30, button: "left", buttons: 1, clickCount: 1, pointerType: "mouse" },

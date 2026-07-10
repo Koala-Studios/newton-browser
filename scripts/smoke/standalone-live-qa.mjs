@@ -113,7 +113,7 @@ try {
   log("post_action_reconciliation_ok");
 
   const uploadObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "upload observe");
-  const uploadNode = (uploadObservation.nodes ?? []).find((node) => node.name === "Creative assets");
+  const uploadNode = (uploadObservation.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Creative assets");
   assert(uploadNode?.ref, "file input ref missing", uploadObservation);
   const uploadFiles = fs.readdirSync(uploadRoot).map((name) => path.join(uploadRoot, name));
   const uploaded = await mcp("browser.act", { sessionId, action: { kind: "set_files", target: { ref: uploadNode.ref }, files: uploadFiles } });

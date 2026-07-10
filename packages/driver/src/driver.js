@@ -417,6 +417,7 @@ class BrowserBridgeDriver {
   async click(action) {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
+    if (target.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
     const point = target.point ?? await this.actionablePoint(target.backendNodeId);
     if (!point) return this.targetMoved();
     this.paintCursorClick(point.x, point.y); // fire-and-forget (§5.1)
