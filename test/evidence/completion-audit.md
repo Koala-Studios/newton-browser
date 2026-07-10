@@ -23,7 +23,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 | 8 | Set Node engines from active-LTS evidence | proved | Node 24.18.0 and 25.9.0 matrix; `engines.node >=24.0.0` |
 | 9 | Forbidden boundary with inverted standalone assertions | proved | repository-wide boundary scanner and clean release checks |
 | 10 | Real `DOM.setFileInputFiles` feasibility probe | proved | repeated real Chrome acceptance of PNG/JPEG/WebP/GIF/MP4/WebM; sanitized filenames; no auto-submit |
-| exit | Full tests/build with extraction source literally unavailable or renamed | partial | packed/isolated-profile non-checkout proofs pass; literal rename is unauthorized before severance and Docker/Sandbox alternatives are unavailable |
+| exit | Full tests/build with extraction source literally unavailable or renamed | not-approved | packed/isolated-profile non-checkout proofs pass; on 2026-07-10 Frank explicitly declined renaming the extraction source repository because it contains other important information; this check was not run and is not claimed proved |
 | exit | Extension loads from standalone artifact | proved Chrome + Edge | the same checksum-verified unpacked standalone artifact was reloaded through Computer Use and fully driven in both stable browsers |
 | exit | Source remains intact for rollback | proved | no post-provenance writes or deletions were made in the source repository |
 
@@ -69,7 +69,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 | 2 | Packed tarball only, including path with spaces | proved | pack and multi-client harnesses |
 | 3 | Unpacked extension artifact, deterministic ZIP, checksum | proved | artifact builder; final SHA-256 `5d8873e8d13bbf6471ca6e7e0d59e70c6cf84f4c0df39167fe4ad4d89dcdf995` |
 | 4 | Chrome stable and Edge stable with same extension source | proved | Chrome 150 and Edge 150 use the same unpacked artifact; both targeted suites passed 33/33 steps with both extensions enabled |
-| 5 | Clean Windows user/machine procedure | partial | isolated HOME/USERPROFILE/LOCALAPPDATA/npm-cache proof passes; actual second account requires elevation or another machine |
+| 5 | Clean Windows user/machine procedure | not-approved | isolated HOME/USERPROFILE/LOCALAPPDATA/npm-cache proof passes; on 2026-07-10 Frank explicitly declined creating another Windows account; this check was not run and is not claimed proved |
 | 6 | Concurrent actual Codex and Claude low-risk browser work | proved Chrome + Edge Codex repeat | visible packed-client transcripts include search/extract/full-page screenshot/finalize; Edge repeated Codex acceptance |
 | 7 | No source checkout/global install/daemon/service/panel click during normal startup | proved | isolated non-checkout and real-client proofs; zero-touch startup requires no pairing or popup action |
 | 8 | Browser/client/version matrix and exact results | proved/current | QA ledger; real rows explicitly remain pending |
@@ -100,4 +100,4 @@ Optional live advertising workflow proof is `not-approved` and is not a release 
 
 ## Current release conclusion
 
-B0 contracts and repository implementation through B6 are implemented, and three consecutive exhaustive release gates are green on `305bd51`. Chrome, Edge, current-tab focus escape, three-session isolation, subagent inheritance, actual clients, packed distribution, cold start, lifecycle chaos, and cleanup are proved. Two environmental acceptance rows remain unproven: a full workspace run with the extraction source literally unavailable, and an actual second Windows account/machine. Both still require Frank's explicit approval before B0-B6 can be called fully closed and before severance work begins.
+B0 contracts and repository implementation through B6 are implemented, and three consecutive exhaustive release gates are green on `305bd51`. Chrome, Edge, current-tab focus escape, three-session isolation, subagent inheritance, actual clients, packed distribution, cold start, lifecycle chaos, and cleanup are proved. Two environmental acceptance rows remain unproven: a full workspace run with the extraction source literally unavailable, and an actual second Windows account/machine. On 2026-07-10 Frank explicitly declined both environment mutations and authorized the remaining local release work to proceed. They are excluded from execution by operator disposition, not claimed complete, and do not authorize any extraction-source severance work.
