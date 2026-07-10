@@ -199,6 +199,8 @@ artifact check still passes; evidence screenshot in the qa-ledger.
 
 ## WS3 — CI and release automation
 
+**Status: in progress 2026-07-10.**
+
 **Goal:** the existing local release gate runs on every PR, and tagging a version
 produces a GitHub Release with the exact artifacts `docs/RELEASE.md` already defines.
 

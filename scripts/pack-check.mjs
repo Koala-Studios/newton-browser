@@ -28,6 +28,9 @@ try {
   const entry = path.join(temp, "node_modules", "newton-browser", "dist", "index.js");
   const versionResult = run(process.execPath, [entry, "--version"], { cwd: temp, capture: true }).stdout.trim();
   if (versionResult !== version) throw new Error(`packed version mismatch: ${versionResult}`);
+  const doctorResult = run(process.execPath, [entry, "--doctor"], { cwd: temp, capture: true }).stdout.trim();
+  const doctor = JSON.parse(doctorResult);
+  if (doctor?.checks?.node?.ok !== true || doctor?.version !== version) throw new Error("packed doctor report is invalid");
   const config = run(process.execPath, [entry, "--print-config", "codex"], { cwd: temp, capture: true }).stdout;
   if (!config.includes("[mcp_servers.newton-browser]") || !config.includes(`newton-browser@${version}`)) throw new Error("packed Codex config is not version-pinned");
   run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", path.join(temp, "config"), "--port", "18631"], { cwd: root });
