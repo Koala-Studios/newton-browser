@@ -171,6 +171,40 @@ test("driver actionablePoint scrolls offscreen targets and verifies candidate hi
   assert.equal(hitTests, 2);
 });
 
+test("driver rejects ambiguous accessible-name and selector targets", async () => {
+  const accessible = createBrowserBridgeDriver();
+  accessible.observe = async () => ({
+    nodes: [
+      { ref: "e1", role: "button", name: "Duplicate target" },
+      { ref: "e2", role: "button", name: "Duplicate target" },
+    ],
+  });
+  await assert.rejects(
+    accessible.resolveTarget({ kind: "click", target: { role: "button", name: "Duplicate target", exact: true } }),
+    /ambiguous/,
+  );
+
+  const selector = createBrowserBridgeDriver();
+  selector.cdp = async (method) => {
+    if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+    if (method === "DOM.querySelectorAll") return { nodeIds: [2, 3] };
+    return {};
+  };
+  await assert.rejects(selector.resolveTarget({ kind: "click", target: { selector: ".duplicate" } }), /ambiguous/);
+});
+
+test("driver reports target_moved when an attached target never stabilizes", async () => {
+  const driver = createBrowserBridgeDriver();
+  driver.resolveTarget = async () => ({ backendNodeId: 7 });
+  driver.actionablePoint = async () => null;
+  driver.cdp = async () => ({});
+  driver.observe = async () => ({ kind: "observation", nodes: [], nodeCount: 0, capturedAt: "2026-07-10T00:00:00.000Z" });
+
+  const result = await driver.click({ kind: "click", target: { ref: "e7" } });
+  assert.equal(result.status, "stale_target");
+  assert.equal(result.reason, "target_moved");
+});
+
 test("driver observes same-origin iframe AX trees and excludes cross-origin frames", async () => {
   const driver = createBrowserBridgeDriver();
   const requestedFrames = [];
@@ -307,6 +341,7 @@ test("driver click dispatches complete CDP mouse button state", async () => {
   const commandOrder = [];
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
+  driver.hitTestTarget = async () => true;
   driver.pageSignature = async () => ({ url: "https://example.com/page", title: "Example" });
   driver.elementState = async () => ({});
   driver.cdp = async (method, params) => {
@@ -337,10 +372,31 @@ test("driver click dispatches complete CDP mouse button state", async () => {
   ]);
 });
 
+test("driver rejects a target that moves after pointer entry before pressing", async () => {
+  const driver = createBrowserBridgeDriver();
+  let pressed = false;
+  driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
+  driver.paintCursorClick = () => {};
+  driver.pageSignature = async () => ({ url: "https://example.com/page", title: "Example" });
+  driver.elementState = async () => ({});
+  driver.cdp = async () => ({});
+  driver.moveMouse = async () => {};
+  driver.hitTestTarget = async () => false;
+  driver.pressMouse = async () => { pressed = true; };
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-07-10T00:00:00.000Z" });
+
+  const result = await driver.click({ kind: "click", target: { ref: "e7" } });
+
+  assert.equal(result.status, "stale_target");
+  assert.equal(result.reason, "target_moved");
+  assert.equal(pressed, false, "driver must not press at a point the target vacated");
+});
+
 test("driver reconciles post-action network writes after an allowed click", async () => {
   const driver = createBrowserBridgeDriver();
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
+  driver.hitTestTarget = async () => true;
   driver.pageSignature = async () => ({ url: "https://example.com/page", title: "Example" });
   driver.elementState = async () => ({});
   driver.cdp = async () => ({});
@@ -373,6 +429,7 @@ test("driver ignores read-only network traffic during post-action reconciliation
   const driver = createBrowserBridgeDriver();
   driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 } });
   driver.paintCursorClick = () => {};
+  driver.hitTestTarget = async () => true;
   driver.pageSignature = async () => ({ url: "https://example.com/page", title: "Example" });
   driver.elementState = async () => ({});
   driver.cdp = async () => ({});

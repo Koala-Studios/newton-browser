@@ -408,6 +408,103 @@ test("BridgeRuntime accepts the granted pending URL while an owned tab is loadin
   assert.equal(runtime.snapshot().sessions[0]?.tabId, 101);
 });
 
+test("BridgeRuntime reuses a persisted owned tab after an extension worker restart", async () => {
+  let createOwnedTabCalls = 0;
+  const attached: any[] = [];
+  const driver = {
+    attached: false,
+    ownsTab: false,
+    accent: null,
+    async attach(tabId: number) { this.attached = true; attached.push(tabId); },
+    async detach() { this.attached = false; },
+    isAttachedTo(tabId: number) { return this.attached && tabId === 707; },
+    async reassertOverlay() {},
+    markDetached() { this.attached = false; },
+  };
+  const runtime = createBridgeRuntime({
+    transport: {
+      async createSession() { return { sessionId: "unused" }; },
+      async attachTab() {},
+      subscribe() { return () => {}; },
+      async listSessions() {
+        return [{ sessionId: "restored-session", origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" }];
+      },
+      async postEvent() {},
+      async postResult() {},
+      async stopSession() {},
+      async stopAll() {},
+    },
+    evaluateFloor() {
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+    },
+    tabs: {
+      async createOwnedTab() { createOwnedTabCalls += 1; return { tabId: 999, groupId: 998 }; },
+      async removeTab() {},
+      async getTab(tabId: number) { return tabId === 707 ? { id: 707, url: "https://example.com/page" } : null; },
+    },
+    driverFactory: () => driver,
+  });
+
+  await runtime.ensureForActiveSessions(undefined, [{ sessionId: "restored-session", tabId: 707, tabGroupId: 808 }]);
+
+  assert.equal(createOwnedTabCalls, 0, "restart must not create a duplicate owned tab");
+  assert.deepEqual(attached, [707]);
+  assert.equal(runtime.snapshot().sessions[0]?.tabId, 707);
+  assert.equal(runtime.snapshot().sessions[0]?.tabGroupId, 808);
+  assert.equal(runtime.snapshot().sessions[0]?.ownsTab, true);
+});
+
+test("BridgeRuntime rejects and closes an owned session after a redirect escapes its origin grant", async () => {
+  const results: any[] = [];
+  const removed: number[] = [];
+  const stopped: string[] = [];
+  let currentUrl = "https://example.com/start";
+  let handler: ((command: any) => Promise<void> | void) | null = null;
+  const driver = {
+    attached: false,
+    ownsTab: false,
+    accent: null,
+    async attach() { this.attached = true; },
+    async detach() { this.attached = false; },
+    isAttachedTo() { return this.attached; },
+    async reassertOverlay() {},
+    markDetached() { this.attached = false; },
+    async resolveEvidence() { return { resolved: { origin: "https://example.com" }, signals: {} }; },
+    async executeAction() {
+      currentUrl = "https://outside.example/escaped";
+      return { status: "verified", verified: true, changed: { navigated: true } };
+    },
+  };
+  const runtime = createBridgeRuntime({
+    transport: {
+      async createSession() { return { sessionId: "redirect-escape" }; },
+      async attachTab() {},
+      subscribe(_sessionId: string, callback: (command: any) => Promise<void> | void) { handler = callback; return () => { handler = null; }; },
+      async listSessions() { return []; },
+      async postEvent() {},
+      async postResult(result: any) { results.push(result); },
+      async stopSession(sessionId: string) { stopped.push(sessionId); },
+      async stopAll() {},
+    },
+    evaluateFloor() { return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" }; },
+    tabs: {
+      async createOwnedTab() { return { tabId: 101, groupId: 201 }; },
+      async removeTab(tabId: number) { removed.push(tabId); },
+      async getTab() { return { id: 101, url: currentUrl }; },
+      async finalizeTab() {},
+    },
+    driverFactory: () => driver,
+  });
+
+  await runtime.startSession({ origin: currentUrl, allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+  await handler?.({ commandId: "redirect-command", sessionId: "redirect-escape", actionKind: "navigate", action: { kind: "navigate", url: "https://example.com/redirect" } });
+
+  assert.deepEqual(results, [{ commandId: "redirect-command", ok: false, errorCode: "origin_not_granted" }]);
+  assert.deepEqual(removed, [101]);
+  assert.deepEqual(stopped, ["redirect-escape"]);
+  assert.equal(runtime.snapshot().count, 0);
+});
+
 test("BridgeRuntime refuses a current-tab session when focus moved outside the origin grant", async () => {
   const stopped: string[] = [];
   let attachCalls = 0;

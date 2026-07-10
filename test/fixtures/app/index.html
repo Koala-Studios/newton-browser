@@ -15,14 +15,24 @@
 <body>
   <h1>Browser Bridge deterministic fixture</h1>
   <p id="ready">fixture-ready</p>
+  <label>Auth persistence <input id="auth-persistence" readonly value="pending"></label>
 
   <section aria-label="Basic form controls">
+    <label>Search records <input id="search-records" placeholder="Search fixtures"></label>
+    <button id="run-search" type="button">Run fixture search</button>
+    <output id="search-result">search-idle</output>
     <label>Name <input id="name" autocomplete="off"></label>
+    <label>Alias <input id="alias" placeholder="Display alias"></label>
+    <input id="notification-email" aria-label="Notification email" type="email">
     <label>Notes <textarea id="notes"></textarea></label>
     <label>Plan <select id="plan"><option value="basic">Basic</option><option value="pro">Pro</option></select></label>
     <label><input id="agree" type="checkbox"> Agree</label>
+    <fieldset><legend>Tier</legend><label><input id="tier-standard" type="radio" name="tier" value="standard"> Standard tier</label><label><input id="tier-pro" type="radio" name="tier" value="pro"> Pro tier</label></fieldset>
+    <label>Launch date <input id="launch-date" type="date"></label>
     <div id="editable" contenteditable="true" role="textbox" aria-label="Editable notes"></div>
     <div id="custom-combobox" role="combobox" tabindex="0" aria-label="Custom region" aria-expanded="false">Choose region</div>
+    <div id="custom-listbox" role="listbox" aria-label="Region options"><div id="canada-option" role="option" tabindex="0" aria-selected="false">Canada option</div><div role="option" tabindex="0" aria-selected="false">United States option</div></div>
+    <output id="selected-option">no-option</output>
   </section>
 
   <section aria-label="Dynamic controls">
@@ -30,11 +40,13 @@
     <label>Event log <input id="event-log" readonly value="none"></label>
     <button id="rerender">Rerender counter</button>
     <button id="increment">Increment</button>
+    <button id="moving-target">Moving target</button>
     <div id="spa-slot"><button id="stale-target">Stale target</button></div>
   </section>
 
   <section aria-label="Frames and shadow DOM">
     <fixture-shadow></fixture-shadow>
+    <fixture-nested-shadow></fixture-nested-shadow>
     <iframe title="Same origin frame" src="/frame.html"></iframe>
     <iframe title="Cross origin frame" id="cross-frame"></iframe>
   </section>
@@ -43,7 +55,12 @@
     <label>Password <input id="password" type="password" autocomplete="current-password"></label>
     <label>One-time code <input id="otp" autocomplete="one-time-code"></label>
     <label>Credit card number <input id="card" autocomplete="cc-number"></label>
-    <button id="dialog">Open JavaScript dialog</button>
+    <label>SSN <input id="ssn" autocomplete="off"></label>
+    <label>IBAN <input id="iban" autocomplete="off"></label>
+    <label>Sensitive key log <input id="sensitive-key-log" readonly value="none"></label>
+    <button id="dialog-alert">Open alert dialog</button>
+    <button id="dialog-confirm">Open confirm dialog</button>
+    <button id="dialog-prompt">Open prompt dialog</button>
     <a id="download" href="/download" download>Download fixture</a>
     <button id="popup">Open new target</button>
     <button id="network-write">Network write</button>
@@ -52,17 +69,25 @@
   <section aria-label="Commit boundaries">
     <form id="draft-form"><label>Draft title <input id="draft-title"></label><button id="save-draft" type="button">Save draft</button></form>
     <form id="publish-form" action="/submitted" method="post"><button id="publish" type="submit">Publish fixture</button></form>
+    <button id="place-order" type="button">Place order</button>
+    <button id="delete-record" type="button">Delete record</button>
+    <button id="like-fixture" type="button">Like fixture</button>
+    <button id="subscribe-fixture" type="button">Subscribe fixture</button>
+    <output id="commit-log">none</output>
   </section>
 
   <section aria-label="File inputs">
     <label>Creative assets <input id="assets" type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm" multiple></label>
     <input id="hidden-asset" class="hidden" type="file" accept="image/png">
+    <input id="ambiguous-asset-a" type="file" accept="image/png" aria-label="Ambiguous asset">
+    <input id="ambiguous-asset-b" type="file" accept="image/png" aria-label="Ambiguous asset">
     <output id="accepted-files">none</output>
     <output id="submit-count">0</output>
   </section>
 
   <div id="lazy-region" aria-label="Long lazy page">Long-page screenshot payload region</div>
   <a id="origin-transition" href="/second.html">Same-origin transition</a>
+  <a id="disallowed-transition" href="/redirect-cross">Disallowed origin redirect</a>
 
   <script type="module" src="/fixture.js"></script>
 </body>

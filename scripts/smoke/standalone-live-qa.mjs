@@ -67,7 +67,7 @@ try {
   await phase("observe", async () => {
     const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 120 }), "observe");
     assert(observed.origin === `http://127.0.0.1:${fixturePort}`, "observe origin mismatch", observed);
-    for (const name of ["Increment", "Network write", "Publish fixture", "Name", "Plan", "Password", "Credit card number", "Creative assets", "Shadow button", "Same-origin frame button", "Editable notes", "Custom region"]) {
+    for (const name of ["Increment", "Network write", "Publish fixture", "Name", "Plan", "Password", "Credit card number", "SSN", "IBAN", "Creative assets", "Shadow button", "Nested shadow button", "Same-origin frame button", "Editable notes", "Custom region", "Region options", "Notification email"]) {
       assert(hasName(observed, name), `observe missing ${name}`, observed);
     }
     assert(!hasName(observed, "Cross-origin denied target"), "cross-origin frame target escaped the observation grant", observed);
@@ -77,6 +77,17 @@ try {
   await phase("fill_label", async () => {
     okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Name", value: "Alice" } }), "fill by label");
     log("fill_label_ok");
+  });
+  await phase("search_flow", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Search records", value: "needle" } }), "search fill");
+    const searched = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Run fixture search", waitFor: { text: "search-result:needle" }, timeoutMs: 3000 } });
+    assert(statusOf(searched) === "verified", "search result was not verified", searched);
+    log("search_flow_ok");
+  });
+  await phase("placeholder_and_aria", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", placeholder: "Display alias", value: "fixture-alias" } }), "fill by placeholder");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", name: "Notification email", value: "qa@example.invalid" } }), "fill by aria name");
+    log("placeholder_and_aria_ok");
   });
   await phase("type_selector", async () => {
     okResult(await mcp("browser.act", { sessionId, action: { kind: "type", selector: "#notes", value: "typed notes" } }), "type by selector");
@@ -90,9 +101,18 @@ try {
     okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Custom region" } }), "custom combobox");
     log("custom_combobox_ok");
   });
+  await phase("custom_listbox", async () => {
+    const selected = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Canada option", waitFor: { text: "Canada option selected" }, timeoutMs: 3000 } });
+    assert(statusOf(selected) === "verified", "custom listbox option was not verified", selected);
+    log("custom_listbox_ok");
+  });
   await phase("shadow_button", async () => {
-    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Shadow button" } }), "shadow button");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Shadow button", exact: true } }), "shadow button");
     log("shadow_button_ok");
+  });
+  await phase("nested_shadow_button", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Nested shadow button" } }), "nested shadow button");
+    log("nested_shadow_button_ok");
   });
   await phase("same_origin_frame", async () => {
     okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Same-origin frame button" } }), "same-origin frame button");
@@ -102,6 +122,12 @@ try {
     const selected = await mcp("browser.act", { sessionId, action: { kind: "select", label: "Plan", value: "pro" } });
     assert(["verified", "dispatched_unverified"].includes(statusOf(selected)), "select failed", selected);
     log("select_label_ok", { status: statusOf(selected) });
+  });
+  await phase("checkbox_radio_date", async () => {
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Agree" } }), "checkbox");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Standard tier" } }), "radio");
+    okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Launch date", value: "2026-07-10" } }), "date");
+    log("checkbox_radio_date_ok");
   });
   await phase("click_name", async () => {
     const clicked = await mcp("browser.act", {
@@ -130,10 +156,16 @@ try {
       fullPage: true,
       device: "mobile",
       waitMs: 100,
-      inline: false,
+      delivery: "file",
+      outputDirectory: uploadRoot,
+      filename: "long-page.png",
     }), "screenshot");
     assert(shot.kind === "screenshot" && Number(shot.width) > 0 && Number(shot.height) > 0, "screenshot missing metadata", shot);
-    log("screenshot_mobile_ok", { width: shot.width, height: shot.height, fullPage: shot.fullPage, device: shot.device });
+    assert(Number(shot.bytes) > 64 * 1024, "full-page screenshot was not larger than 64 KiB", shot);
+    const screenshotBytes = fs.readFileSync(shot.path);
+    assert(screenshotBytes.length === Number(shot.bytes), "delivered screenshot byte count mismatch", shot);
+    assert(screenshotBytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "delivered screenshot is not a decodable PNG payload", shot);
+    log("screenshot_mobile_ok", { width: shot.width, height: shot.height, fullPage: shot.fullPage, device: shot.device, bytes: shot.bytes, sha256: shot.sha256 });
   });
 
   await phase("spa_stale_ref", async () => {
@@ -144,6 +176,11 @@ try {
     const stale = await mcp("browser.act", { sessionId, action: { kind: "click", target: { ref: staleRef } } });
     assert(["not_found", "stale_target"].includes(statusOf(stale)), "stale ref was not rejected", stale);
     log("spa_stale_ref_ok", { status: statusOf(stale) });
+  });
+  await phase("spa_moved_target", async () => {
+    const moved = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Moving target", exact: true } });
+    assert(statusOf(moved) === "stale_target" && reasonOf(moved) === "target_moved", "target that moved under the pointer was not rejected", moved);
+    log("spa_moved_target_ok", { status: statusOf(moved), reason: reasonOf(moved) });
   });
 
   await phase("navigation_history", async () => {
@@ -158,32 +195,80 @@ try {
     okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/") } }), "navigate home");
     log("navigate_home_ok");
   });
-  await phase("password_block", async () => {
-    const password = await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Password", value: "not-a-real-secret" } });
-    assert(password.ok === false && password.errorCode === "blocked_by_floor", "password fill was not blocked", password);
-    log("password_blocked_ok");
+  await phase("sensitive_fields_zero_keys", async () => {
+    for (const [label, value] of [
+      ["Password", "not-a-real-secret"],
+      ["One-time code", "123456"],
+      ["Credit card number", "4111111111111111"],
+      ["SSN", "111-22-3333"],
+      ["IBAN", "GB82WEST12345698765432"],
+    ]) {
+      const blocked = await mcp("browser.act", { sessionId, action: { kind: "fill", label, value } });
+      assert(blocked.ok === false && blocked.errorCode === "blocked_by_floor", `${label} fill was not blocked`, blocked);
+    }
+    const diagnostic = okResult(await mcp("browser.observe", { sessionId, maxNodes: 200 }), "sensitive diagnostic observe");
+    const keyLog = (diagnostic.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Sensitive key log")?.value;
+    assert(keyLog === "none", "sensitive input dispatched page-side key or input events", { keyLog });
+    log("sensitive_fields_zero_keys_ok", { fields: 5, pageKeyLog: keyLog });
   });
-  await phase("card_block", async () => {
-    const card = await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Credit card number", value: "4111111111111111" } });
-    assert(card.ok === false && card.errorCode === "blocked_by_floor", "card fill was not blocked", card);
-    log("card_blocked_ok");
+  await phase("commit_boundaries", async () => {
+    for (const [name, boundary] of [
+      ["Publish fixture", "commit"],
+      ["Place order", "commit"],
+      ["Delete record", "commit"],
+      ["Like fixture", "external_effect"],
+      ["Subscribe fixture", "external_effect"],
+    ]) {
+      const acted = await mcp("browser.act", { sessionId, action: { kind: "click", name } });
+      assert(acted.ok === true, `${name} did not execute with decision metadata`, acted);
+      const decision = decisionOf(acted);
+      assert(decision.class === "approval_required" && decision.commitBoundary === boundary, `${name} boundary metadata mismatch`, acted);
+    }
+    log("commit_boundaries_ok", { controls: 5 });
   });
   await phase("post_action_reconciliation", async () => {
     const localWrite = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Network write" } });
     assert(statusOf(localWrite) === "blocked", "post-action reconciliation did not block local write", localWrite);
     log("post_action_reconciliation_ok");
   });
+  await phase("auth_persistence", async () => {
+    const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 200 }), "auth persistence observe");
+    const sentinel = (observed.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Auth persistence")?.value;
+    assert(sentinel === "cookie:preserved|local:preserved|session:preserved", "cookie or web storage sentinel changed", { sentinel });
+    log("auth_persistence_ok", { sentinel });
+  });
   await phase("file_inputs", async () => {
     const uploadObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "upload observe");
     const uploadNode = (uploadObservation.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Creative assets");
     assert(uploadNode?.ref, "file input ref missing", uploadObservation);
     const uploadFiles = fs.readdirSync(uploadRoot).map((name) => path.join(uploadRoot, name));
+    const ambiguous = await mcp("browser.act", { sessionId, action: { kind: "set_files", label: "Ambiguous asset", files: [path.join(uploadRoot, "asset.png")] } });
+    assert(ambiguous.ok === false && ambiguous.errorCode === "ambiguous", "ambiguous file inputs were not rejected", ambiguous);
     const uploaded = await mcp("browser.act", { sessionId, action: { kind: "set_files", target: { ref: uploadNode.ref }, files: uploadFiles } });
     assert(statusOf(uploaded) === "verified", "set_files was not verified", uploaded);
     const accepted = uploaded.result?.changed?.files ?? uploaded.changed?.files ?? [];
     assert(accepted.length === uploadFiles.length, "browser FileList acceptance mismatch", uploaded);
     assert(accepted.every((file) => !String(file.filename).includes("\\") && !String(file.filename).includes("/")), "set_files exposed a local path", accepted);
     log("real_file_inputs_ok", { files: accepted.map((file) => file.filename), autoSubmit: false });
+  });
+
+  await phase("disallowed_redirect", async () => {
+    const redirectStarted = await mcp("browser.session.start", {
+      origin: page("/"),
+      allowedOrigins: [`http://127.0.0.1:${fixturePort}`],
+      tabMode: "owned_group",
+      goal: "disallowed redirect QA",
+      instanceLabel: "standalone-live-qa-redirect",
+    });
+    const redirectSessionId = redirectStarted.sessionId;
+    assert(redirectSessionId, "redirect session did not start", redirectStarted);
+    const redirected = await mcp("browser.act", { redirectSessionId, sessionId: redirectSessionId, action: { kind: "navigate", url: page("/redirect-cross") } });
+    assert(redirected.ok === false && redirected.errorCode === "origin_not_granted", "redirect outside the grant was not denied", redirected);
+    await waitFor(async () => {
+      const listed = await mcp("browser.tabs.list", {});
+      return listed.sessions?.every((item) => item.sessionId !== redirectSessionId) ? listed : null;
+    }, "redirect session cleanup", 10000);
+    log("disallowed_redirect_ok", { errorCode: redirected.errorCode });
   });
 
   await phase("cleanup", async () => {
@@ -268,6 +353,14 @@ function okResult(result, label) {
 
 function statusOf(result) {
   return result?.result?.actionStatus ?? result?.result?.status ?? result?.actionStatus ?? result?.status;
+}
+
+function decisionOf(result) {
+  return result?.decision ?? result?.result?.decision ?? {};
+}
+
+function reasonOf(result) {
+  return result?.result?.reason ?? result?.reason;
 }
 
 function hasName(observation, expected) {

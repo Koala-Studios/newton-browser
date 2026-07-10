@@ -15,7 +15,11 @@ const transport = createLocalPanelTransport({
   },
 });
 let clientIdentityPromise;
+let bindingRecordsPromise;
+let orphanCleanupTimer;
 const BRIDGE_ALARM = "browser-bridge-sync";
+const SESSION_BINDINGS_KEY = "browserBridgeOwnedBindings";
+const ORPHAN_CLEANUP_DELAY_MS = 15_000;
 const runtime = createBridgeRuntime({
   transport,
   evaluateFloor: evaluateFloorLocally,
@@ -72,8 +76,10 @@ async function handleMessage(message) {
 
 async function ensureForHostSessions() {
   const activeTab = await findActiveWebTab();
+  const bindings = [...(await getBindingRecords()).values()];
   await runtime.renewLeases();
-  await runtime.ensureForActiveSessions(activeTab?.id);
+  await runtime.ensureForActiveSessions(activeTab?.id, bindings);
+  scheduleOrphanCleanup();
 }
 
 async function syncHost() {
@@ -81,6 +87,7 @@ async function syncHost() {
   if (host.connected) {
     await ensureForHostSessions().catch(() => {});
   }
+  scheduleOrphanCleanup();
   await notifyPanels({ type: "state", state: runtime.snapshot() });
   return host.connected;
 }
@@ -97,7 +104,12 @@ function evaluateFloorLocally(input) {
 }
 
 async function notifyPanels(event) {
+  if (event?.type === "finalized") {
+    await forgetBinding(event.sessionId);
+    return;
+  }
   if (event?.type === "state") {
+    await rememberOwnedBindings(event.state);
     await chrome.runtime.sendMessage({
       type: "BB_STATE",
       state: event.state,
@@ -107,6 +119,64 @@ async function notifyPanels(event) {
     }).catch(() => {});
     return;
   }
+}
+
+function getBindingRecords() {
+  if (!bindingRecordsPromise) bindingRecordsPromise = loadBindingRecords();
+  return bindingRecordsPromise;
+}
+
+async function loadBindingRecords() {
+  const stored = await chrome.storage.local.get(SESSION_BINDINGS_KEY).catch(() => ({})) ?? {};
+  const values = Array.isArray(stored?.[SESSION_BINDINGS_KEY]) ? stored[SESSION_BINDINGS_KEY] : [];
+  return new Map(values.flatMap((binding) =>
+    binding?.sessionId && Number.isInteger(binding?.tabId) ? [[binding.sessionId, binding]] : [],
+  ));
+}
+
+async function rememberOwnedBindings(state) {
+  const records = await getBindingRecords();
+  for (const session of state?.sessions ?? []) {
+    if (!session?.ownsTab || !session.sessionId || !Number.isInteger(session.tabId)) continue;
+    records.set(session.sessionId, {
+      sessionId: session.sessionId,
+      tabId: session.tabId,
+      tabGroupId: Number.isInteger(session.tabGroupId) ? session.tabGroupId : null,
+      origin: typeof session.origin === "string" ? session.origin : null,
+    });
+  }
+  await persistBindingRecords(records);
+  scheduleOrphanCleanup();
+}
+
+async function forgetBinding(sessionId) {
+  const records = await getBindingRecords();
+  records.delete(String(sessionId ?? ""));
+  await persistBindingRecords(records);
+}
+
+function scheduleOrphanCleanup() {
+  if (orphanCleanupTimer) clearTimeout(orphanCleanupTimer);
+  orphanCleanupTimer = setTimeout(() => { void cleanupOrphanBindings(); }, ORPHAN_CLEANUP_DELAY_MS);
+}
+
+async function cleanupOrphanBindings() {
+  orphanCleanupTimer = null;
+  const records = await getBindingRecords();
+  if (records.size === 0) return;
+  const live = await transport.listSessions().catch(() => []);
+  const liveIds = new Set((Array.isArray(live) ? live : []).map((session) => session?.sessionId).filter(Boolean));
+  const activeIds = new Set((runtime.snapshot().sessions ?? []).map((session) => session.sessionId));
+  for (const [sessionId, binding] of [...records]) {
+    if (liveIds.has(sessionId) || activeIds.has(sessionId)) continue;
+    await chrome.tabs.remove(binding.tabId).catch(() => {});
+    records.delete(sessionId);
+  }
+  await persistBindingRecords(records);
+}
+
+async function persistBindingRecords(records) {
+  await chrome.storage.local.set({ [SESSION_BINDINGS_KEY]: [...records.values()] }).catch(() => {});
 }
 
 function errorCode(error) {

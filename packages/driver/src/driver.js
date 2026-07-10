@@ -429,10 +429,13 @@ class BrowserBridgeDriver {
     this.paintCursorClick(point.x, point.y); // fire-and-forget (§5.1)
     const before = await this.pageSignature();
     const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId) : {};
-    const signalWindow = this.beginActionSignals();
-    try {
-      await this.moveMouse(point);
-      await this.pressMouse(point);
+      const signalWindow = this.beginActionSignals();
+      try {
+        await this.moveMouse(point);
+        if (target.backendNodeId && !(await this.hitTestTarget(target.backendNodeId, point.x, point.y))) {
+          return this.targetMoved();
+        }
+        await this.pressMouse(point);
       await this.releaseMouse(point);
       await this.settleShort();
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
@@ -845,7 +848,9 @@ class BrowserBridgeDriver {
       }
       if (target.role || target.name || target.label || target.text || target.ref) {
         const observation = await this.observe({});
-        const match = observation.nodes.find((node) => nodeMatchesTarget(node, target));
+        const matches = observation.nodes.filter((node) => nodeMatchesTarget(node, target));
+        if (matches.length > 1) throw new Error("ambiguous");
+        const match = matches[0];
         if (match && this.refIndex.has(match.ref)) return { backendNodeId: this.refIndex.get(match.ref) };
       }
       if (target.text) {
@@ -859,21 +864,16 @@ class BrowserBridgeDriver {
       return { backendNodeId: this.refIndex.get(action.ref) };
     }
     if (action.selector) {
-      const root = await this.cdp("DOM.getDocument", { depth: 0 }).catch(() => null);
-      const nodeId = root?.root?.nodeId;
-      if (nodeId) {
-        const found = await this.cdp("DOM.querySelector", { nodeId, selector: action.selector }).catch(() => null);
-        if (found?.nodeId) {
-          const described = await this.cdp("DOM.describeNode", { nodeId: found.nodeId }).catch(() => null);
-          if (described?.node?.backendNodeId) return { backendNodeId: described.node.backendNodeId };
-        }
-      }
+      const backendNodeId = await this.backendNodeIdForSelector(action.selector);
+      if (backendNodeId) return { backendNodeId };
     }
     if (action.text || action.ref) {
       // Re-snapshot and match by accessible name / value.
       const observation = await this.observe({});
       const needle = String(action.text ?? action.ref ?? "").toLowerCase();
-      const match = observation.nodes.find((node) => (node.name ?? "").toLowerCase().includes(needle));
+      const matches = observation.nodes.filter((node) => (node.name ?? "").toLowerCase().includes(needle));
+      if (matches.length > 1) throw new Error("ambiguous");
+      const match = matches[0];
       if (match && this.refIndex.has(match.ref)) return { backendNodeId: this.refIndex.get(match.ref) };
     }
     return null;
@@ -893,9 +893,11 @@ class BrowserBridgeDriver {
     const root = await this.cdp("DOM.getDocument", { depth: 0 }).catch(() => null);
     const nodeId = root?.root?.nodeId;
     if (!nodeId) return null;
-    const found = await this.cdp("DOM.querySelector", { nodeId, selector }).catch(() => null);
-    if (!found?.nodeId) return null;
-    const described = await this.cdp("DOM.describeNode", { nodeId: found.nodeId }).catch(() => null);
+    const found = await this.cdp("DOM.querySelectorAll", { nodeId, selector }).catch(() => null);
+    const nodeIds = Array.isArray(found?.nodeIds) ? found.nodeIds : [];
+    if (nodeIds.length > 1) throw new Error("ambiguous");
+    if (nodeIds.length === 0) return null;
+    const described = await this.cdp("DOM.describeNode", { nodeId: nodeIds[0] }).catch(() => null);
     return described?.node?.backendNodeId ?? null;
   }
 
@@ -906,6 +908,11 @@ class BrowserBridgeDriver {
       objectGroup: "browser-bridge-target",
       includeCommandLineAPI: false,
     }).catch(() => null);
+    if (evaluated?.exceptionDetails) {
+      const detail = `${evaluated.exceptionDetails.text ?? ""} ${evaluated.exceptionDetails.exception?.description ?? ""}`;
+      if (/ambiguous/i.test(detail)) throw new Error("ambiguous");
+      throw new Error("target_resolution_failed");
+    }
     const objectId = evaluated?.result?.objectId;
     if (!objectId) return null;
     try {
@@ -1445,22 +1452,23 @@ function reconcilePostActionSignals(signals) {
 function findByTestIdSource() {
   return `function (testId) {
     const attrs = ["data-testid", "data-test-id", "data-test"];
-    for (const attr of attrs) {
-      const found = Array.from(document.querySelectorAll("[" + attr + "]")).find((node) => node.getAttribute(attr) === testId);
-      if (found) return found;
-    }
-    return null;
+    const matches = Array.from(document.querySelectorAll("[data-testid],[data-test-id],[data-test]"))
+      .filter((node) => attrs.some((attr) => node.getAttribute(attr) === testId));
+    if (matches.length > 1) throw new Error("ambiguous");
+    return matches[0] || null;
   }`;
 }
 
 function findByAttributeTextSource() {
   return `function (attr, value, exact) {
     const expected = String(value || "").toLowerCase();
-    return Array.from(document.querySelectorAll("input,textarea,[role='textbox'],[contenteditable='true']"))
-      .find((node) => {
+    const found = Array.from(document.querySelectorAll("input,textarea,[role='textbox'],[contenteditable='true']"))
+      .filter((node) => {
         const actual = String(node.getAttribute(attr) || "").trim().toLowerCase();
         return exact ? actual === expected : actual.includes(expected);
-      }) || null;
+      });
+    if (found.length > 1) throw new Error("ambiguous");
+    return found[0] || null;
   }`;
 }
 
@@ -1471,14 +1479,17 @@ function findByLabelSource() {
       const actual = String(text || "").trim().toLowerCase();
       return exact ? actual === expected : actual.includes(expected);
     };
+    const found = [];
     for (const label of Array.from(document.querySelectorAll("label"))) {
       if (!matches(label.innerText || label.textContent)) continue;
-      if (label.control) return label.control;
+      if (label.control) { found.push(label.control); continue; }
       const nested = label.querySelector("input,textarea,select,[contenteditable='true']");
-      if (nested) return nested;
+      if (nested) found.push(nested);
     }
-    const aria = Array.from(document.querySelectorAll("[aria-label]")).find((node) => matches(node.getAttribute("aria-label")));
-    return aria || null;
+    found.push(...Array.from(document.querySelectorAll("[aria-label]")).filter((node) => matches(node.getAttribute("aria-label"))));
+    const unique = Array.from(new Set(found));
+    if (unique.length > 1) throw new Error("ambiguous");
+    return unique[0] || null;
   }`;
 }
 
@@ -1490,12 +1501,14 @@ function findByVisibleTextSource() {
       return exact ? actual === expected : actual.includes(expected);
     };
     const candidates = Array.from(document.querySelectorAll("button,a,input,textarea,select,[role],[contenteditable='true']"));
-    return candidates.find((node) => {
+    const found = candidates.filter((node) => {
       const rect = node.getBoundingClientRect();
       const style = getComputedStyle(node);
       if (rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none") return false;
       return matches(node.innerText || node.textContent || node.getAttribute("aria-label") || node.getAttribute("title") || node.value || "");
-    }) || null;
+    });
+    if (found.length > 1) throw new Error("ambiguous");
+    return found[0] || null;
   }`;
 }
 

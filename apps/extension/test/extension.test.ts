@@ -67,6 +67,10 @@ test("standalone extension build materializes package runtime into dist", () => 
   assert.doesNotMatch(serviceWorker, /BB_PANEL_HOST_CONNECT|BB_PANEL_START|BB_PANEL_COMMAND|BB_PANEL_STOP_ALL|BB_PANEL_APPROVAL|ApprovalSink|PanelApproval|approvalSink/);
   assert.match(serviceWorker, /void syncHost\(\)/);
   assert.match(serviceWorker, /runtime\.renewLeases\(\)/);
+  assert.match(serviceWorker, /chrome\.storage\.local\.get\(SESSION_BINDINGS_KEY\)/);
+  assert.match(serviceWorker, /chrome\.storage\.local\.set\(\{ \[SESSION_BINDINGS_KEY\]/);
+  assert.match(serviceWorker, /ensureForActiveSessions\(activeTab\?\.id, bindings\)/);
+  assert.match(serviceWorker, /cleanupOrphanBindings/);
   const localTransport = fs.readFileSync(path.join(distRoot, "src/local-transport.js"), "utf8");
   assert.doesNotMatch(localTransport, /enqueueCommand|postEscalation|no_live_session|command_timeout|sessions = new Map/);
 });

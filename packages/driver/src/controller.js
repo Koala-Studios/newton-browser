@@ -31,8 +31,10 @@ class SessionController {
     return {
       sessionId: this.sessionId,
       tabId: this.tabId,
+      tabGroupId: this.tabGroupId,
       origin: this.origin,
       tabMode: this.tabMode,
+      ownsTab: this.ownsTab,
       streaming: this.streaming,
       attached: this.driver.attached,
     };
@@ -135,9 +137,12 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }
     },
 
-    async ensureForActiveSessions(activeTabId) {
+    async ensureForActiveSessions(activeTabId, restoredBindings = []) {
       const list = await transport.listSessions().catch(() => null);
       if (!Array.isArray(list)) return;
+      const restored = new Map((Array.isArray(restoredBindings) ? restoredBindings : []).flatMap((binding) =>
+        binding?.sessionId && Number.isInteger(binding?.tabId) ? [[binding.sessionId, binding]] : [],
+      ));
       for (const session of list) {
         if (!session?.sessionId) continue;
         if (sessions.has(session.sessionId)) {
@@ -147,7 +152,11 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         }
         if (bindingSessions.has(session.sessionId)) continue;
         bindingSessions.add(session.sessionId);
-        await bindExternalSession(session, activeTabId).catch(() => {}).finally(() => {
+        const prior = restored.get(session.sessionId);
+        const bindable = prior && !Number.isInteger(session.ownedTabId)
+          ? { ...session, ownedTabId: prior.tabId, tabGroupId: Number.isInteger(prior.tabGroupId) ? prior.tabGroupId : null }
+          : session;
+        await bindExternalSession(bindable, activeTabId).catch(() => {}).finally(() => {
           bindingSessions.delete(session.sessionId);
         });
       }
@@ -272,6 +281,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     let tabId = Number.isInteger(session.ownedTabId) ? session.ownedTabId : null;
     let tabGroupId = Number.isInteger(session.tabGroupId) ? session.tabGroupId : null;
     const origin = session.origin ?? null;
+    if (tabId !== null && !(await tabs.getTab(tabId).catch(() => null))) {
+      tabId = null;
+      tabGroupId = null;
+    }
     if (tabId === null) {
       if (mode === "current") {
         if (typeof activeTabId !== "number") return;
@@ -359,6 +372,13 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         return;
       }
       const delta = await controller.driver.executeAction(action);
+      const postActionOrigin = await liveTabOrigin(controller.tabId);
+      if (!controller.allowedOrigins.includes(postActionOrigin)) {
+        await transport.postResult({ commandId, ok: false, errorCode: "origin_not_granted" }).catch(() => {});
+        await finalizeLocal(controller, "close").catch(() => {});
+        await transport.stopSession(controller.sessionId).catch(() => {});
+        return;
+      }
       await transport.postResult({ commandId, ok: true, result: deltaToResult(delta), ...(verdict?.decision ? { decision: verdict.decision } : {}) }).catch(() => {});
       await emit({ type: "activity", commandId, actionKind: command.actionKind, status: delta.status, changed: delta.changed ?? {} });
     } catch (error) {
@@ -394,6 +414,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     } else if (typeof tabId === "number") {
       await tabs.finalizeTab?.(tabId, disposition).catch(() => {});
     }
+    await emit({ type: "finalized", sessionId: controller.sessionId, disposition, tabId, tabKept });
     await notifyState();
     return { finalized: true, disposition, tabId, tabKept };
   }
