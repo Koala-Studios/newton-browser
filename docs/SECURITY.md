@@ -21,3 +21,5 @@ File input actions accept only exact local image/video paths, validate signature
 ## Lifecycle
 
 Owned tabs start inactive. Finalize `close` closes only an owned tab; `deliverable` retains a passive review tab; `handoff` ungroups and activates it. Current-tab sessions never close the operator's tab. If a host disappears, only its unfinalized sessions are cleaned after the grace period; finalized tabs and other hosts remain unaffected.
+
+While a debugger session is attached, Browser Bridge enables CDP focus emulation for that target so trusted pointer and key events remain reliable without activating the visible tab or following the operator's focus. The override is disabled before detach. It does not change which tab/session is authorized: the exact origin and bound tab are still reconciled for every command.

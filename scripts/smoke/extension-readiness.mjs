@@ -39,7 +39,7 @@ const timeoutMs = Math.max(1_000, Number(process.env.BROWSER_BRIDGE_EXTENSION_PR
 const startedAt = Date.now();
 let last = { ready: false, errorCode: "extension_disconnected" };
 try {
-  await request("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "extension-readiness", version } });
+  await request("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "extension-readiness", version } }, 30_000);
   while (Date.now() - startedAt < timeoutMs) {
     const response = await request("tools/call", { name: "browser.status", arguments: {} });
     const result = response.result;
@@ -60,12 +60,12 @@ try {
   if (!cleanExit) terminateProcessTree(child);
 }
 
-async function request(method, params) {
+async function request(method, params, responseTimeoutMs = 10_000) {
   const requestId = String(++id);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`);
   if (!responses.has(requestId)) await Promise.race([
     new Promise((resolve) => waiters.set(requestId, resolve)),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`MCP response timeout: ${stderr}`)), 10_000)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`MCP response timeout: ${stderr}`)), responseTimeoutMs)),
   ]);
   waiters.delete(requestId);
   return responses.get(requestId);

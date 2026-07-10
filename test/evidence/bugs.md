@@ -172,3 +172,84 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: occupied-port stdio process test verifies a clean exit after stdin closes.
 - Fix commit: `a304a26`.
 - Status: closed.
+
+## BB-020 — Packed readiness probe orphaned its MCP child
+
+- Minimal repro: run `pnpm smoke:extension-ready`, then inspect port 17321 after the probe exits.
+- Root cause: terminating the `npx` wrapper did not terminate its spawned `browser-bridge-mcp` process on Windows.
+- Fix: capture the exit listener before closing stdin and terminate the complete Windows process tree on the bounded fallback path.
+- Regression: repeated readiness trials verify every next host can bind the same port; final 10/10 batch left no listener.
+- Fix commit: `e2bd5f4`.
+- Status: closed.
+
+## BB-021 — Chrome pending navigation failed the owned-tab origin check
+
+- Minimal repro: create an inactive owned Chrome tab and reconcile its origin immediately after `chrome.tabs.create`.
+- Root cause: Chrome can expose the authorized destination in `pendingUrl` while `url` is still `about:blank`; the controller checked only `url` and closed the valid tab.
+- Fix: prefer a valid `pendingUrl` origin, then fall back to `url`.
+- Regression: `packages/driver/test/controller.test.ts` plus real Chrome session attachment.
+- Fix commit: `e2bd5f4`.
+- Status: closed.
+
+## BB-022 — Root-only accessibility reads omitted same-origin iframes
+
+- Minimal repro: observe the fixture containing same-origin and cross-origin frames.
+- Root cause: `Accessibility.getFullAXTree` was called only for the root frame.
+- Fix: enumerate the frame tree, request AX trees only for same-origin child branches, and use page-coordinate CDP quads for targeting.
+- Regression: driver frame/filter/coordinate tests and repeated real Chrome batches; the cross-origin target remained absent.
+- Fix commit: `48ce75e`.
+- Status: closed.
+
+## BB-023 — CDP page hit tests could disagree with ordinary DOM hit testing
+
+- Minimal repro: resolve a main-frame target whose CDP location hit returns a neighboring or descendant node.
+- Root cause: the frame-safe CDP hit test had no fallback to the previously proven DOM containment check.
+- Fix: retain CDP page-coordinate hit testing first, then use the scoped runtime containment check when CDP does not prove the target.
+- Regression: `packages/driver/test/driver.test.js` fallback ordering test and live main-frame clicks.
+- Fix commit: `d752011`.
+- Status: closed.
+
+## BB-024 — Chrome delivered scroll without acknowledging the wheel command
+
+- Minimal repro: run the full inactive-tab fixture sequence through hover and scroll.
+- Root cause: `Input.dispatchMouseEvent(mouseWheel)` could change scroll state while its debugger callback never returned, causing a generic 20-second CDP timeout.
+- Fix: bound wheel acknowledgement separately and reconcile the actual `window.scrollY` state before deciding the result.
+- Regression: driver dropped-acknowledgement test and repeated real Chrome scroll phases.
+- Fix commit: `c7c210a`.
+- Status: closed.
+
+## BB-025 — Inactive Chrome tabs intermittently dropped press/release input
+
+- Minimal repro: keep using another Chrome tab while the owned fixture tab dispatches Increment and Network write clicks.
+- Root cause: Chrome accepted pointer movement but dropped mouse-button and keyboard activation events for the inactive page. Fixture tracing repeatedly showed only `mousemove` at the correct target and coordinates.
+- Fix: enable `Emulation.setFocusEmulationEnabled` for the attached debugger target and disable it on detach. This simulates a focused and active page without activating the visible tab.
+- Regression: focused attach/detach test plus three consecutive full live Chrome batches (69/69 phases) while the operator used other tabs.
+- Fix commit: `d7adab1`.
+- Status: closed.
+
+## BB-026 — Live file-input assertion did not normalize accessible-name whitespace
+
+- Minimal repro: observe Chrome's file input name `Creative assets ` and compare it literally with `Creative assets`.
+- Root cause: the QA harness skipped the normalization already used by its general accessible-name checks.
+- Fix: trim the browser-supplied name before selecting the file input.
+- Regression: repeated live acceptance of PNG/JPEG/WebP/GIF/MP4/WebM with sanitized names and no submit.
+- Fix commit: `32471ed`.
+- Status: closed.
+
+## BB-027 — Cold-start probe conflated tarball startup with MCP response latency
+
+- Minimal repro: run ten fresh exact-tarball readiness probes against a cold npm cache.
+- Root cause: initialization had the same 10-second response bound as an already-running MCP call, so `npx` extraction and startup could be aborted before initialize returned.
+- Fix: give packed process initialization a distinct 30-second budget while retaining the 10-second per-status response bound.
+- Regression: corrected 10/10 trial batch; min 1.925s, median 15.566s, mean 12.136s, max 22.082s.
+- Fix commit: evidence batch commit following `d7adab1`.
+- Status: closed.
+
+## BB-028 — Claude stopped at diagnostic status before exercising readiness wait
+
+- Minimal repro: launch Codex and Claude concurrently; the second host initially reports `extension_disconnected` before the extension's next discovery cycle.
+- Root cause: the QA prompt treated `browser.status` as a terminal prerequisite even though `browser.session.start` owns the bounded cold-discovery wait.
+- Fix: require both clients to call session start after one diagnostic status call and collect both client outcomes with `Promise.allSettled`.
+- Regression: actual concurrent Codex 0.144.0 and Claude Code 2.1.201 completed and finalized separate packed sessions.
+- Fix commit: evidence batch commit following `d7adab1`.
+- Status: closed.
