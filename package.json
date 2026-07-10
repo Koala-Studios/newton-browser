@@ -23,6 +23,7 @@
     "smoke:clean-user": "node scripts/smoke/clean-user.mjs",
     "smoke:real-browser": "node scripts/smoke/standalone-live-qa.mjs",
     "smoke:real-clients": "node scripts/smoke/real-clients.mjs",
+    "smoke:extension-ready": "node scripts/smoke/extension-readiness.mjs",
     "release:check": "node scripts/release-check.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/run-tests.mjs",
