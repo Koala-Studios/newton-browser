@@ -8,6 +8,8 @@ import { startFixtureServers } from "../../test/fixtures/server.mjs";
 
 const fixturePort = Number(process.env.BROWSER_BRIDGE_QA_FIXTURE_PORT ?? 18231);
 const hostPort = Number(process.env.BROWSER_BRIDGE_PORT ?? 17321);
+const requiredBrowsers = String(process.env.BROWSER_BRIDGE_QA_REQUIRE_BROWSERS ?? "").split(",").map((value) => value.trim()).filter(Boolean).sort();
+const expectedOwner = String(process.env.BROWSER_BRIDGE_QA_EXPECT_OWNER ?? "").trim();
 const results = [];
 const failures = [];
 
@@ -22,6 +24,19 @@ try {
   bridge = createBrowserBridgeHost();
   await bridge.listen(hostPort, "127.0.0.1");
   log("servers_started", { fixture: page(), hostPort });
+
+  if (requiredBrowsers.length > 0) {
+    const simultaneous = await waitFor(() => {
+      const status = bridge.getStatus();
+      return requiredBrowsers.every((browser) => status.connectedBrowsers.includes(browser)) ? status : null;
+    }, "all required browser extensions");
+    log("simultaneous_browsers_connected", {
+      connectedBrowsers: simultaneous.connectedBrowsers,
+      browserTarget: simultaneous.browserTarget,
+      authenticatedClientCount: simultaneous.authenticatedClientCount,
+      eligibleClientCount: simultaneous.eligibleClientCount,
+    });
+  }
 
   const started = await mcp("browser.session.start", {
     origin: page("/"),
@@ -40,6 +55,14 @@ try {
     return session?.ownedTabId ? session : null;
   }, "extension auto-bind");
   log("extension_auto_bound", { ownedTabId: boundSession.ownedTabId, tabGroupId: boundSession.tabGroupId ?? null });
+  if (expectedOwner) {
+    const ownerStatus = bridge.getStatus();
+    const claimEntries = Object.entries(ownerStatus.claimedSessionsByBrowser).filter(([, count]) => count > 0);
+    assert(claimEntries.length === 1 && claimEntries[0][1] === 1, "more than one browser claimed the session", ownerStatus);
+    const actualOwner = claimEntries[0][0];
+    if (expectedOwner !== "any") assert(actualOwner === expectedOwner, "session was not claimed by the expected browser", ownerStatus);
+    log("single_browser_claim_ok", { expectedOwner, actualOwner, claimedSessionsByBrowser: ownerStatus.claimedSessionsByBrowser });
+  }
 
   await phase("observe", async () => {
     const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 120 }), "observe");

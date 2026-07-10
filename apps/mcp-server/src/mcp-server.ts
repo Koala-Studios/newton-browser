@@ -104,7 +104,7 @@ async function callTool(bridge: BrowserBridgeHost, name: string, args: Record<st
       ...status,
       paired: status.authMode === "paired" && status.extensionConnected,
       zeroTouch: status.authMode === "local_trust",
-      hostCountSeenByExtension: status.authenticatedClientCount,
+      hostCountSeenByExtension: status.eligibleClientCount,
     }, !status.extensionConnected, status.extensionConnected ? undefined : "extension_disconnected");
   }
 

@@ -1,6 +1,6 @@
 import net from "node:net";
 
-import { configDirectory, doctorToken, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
+import { configDirectory, doctorToken, loadBrowserTarget, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
 
 export const BROWSER_BRIDGE_VERSION = "0.1.0";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
@@ -27,6 +27,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
   const directory = input.directory ?? configDirectory();
   const pairing = loadOrCreatePairingConfig({ directory });
   const authMode = loadTransportAuthMode({ directory });
+  const browserTarget = loadBrowserTarget({ directory });
   const policies = loadHostPolicies({ directory });
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   const firstPort = input.firstPort ?? 17321;
@@ -44,6 +45,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
     version: BROWSER_BRIDGE_VERSION,
     configDirectory: directory,
     authMode,
+    browserTarget,
     pairingState: authMode === "paired" ? "configured" : "not_required",
     ...(authMode === "paired" ? { pairingSecret: pairing.secret } : {}),
     checks: {
@@ -51,6 +53,7 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
       config: { ok: true, hostPolicyCount: policies.length },
       loopback: { ok: loopbackOk, range: `${firstPort}-${lastPort}`, availablePort, incumbents },
       transportAuth: { ok: true, mode: authMode, pairingRequired: authMode === "paired" },
+      browserSelection: { ok: true, target: browserTarget },
       pairing: { ok: true, state: authMode === "paired" ? "configured" : "not_required" },
       protocol: { ok: true, supported: [...SUPPORTED_MCP_PROTOCOLS] },
       extension: { ok: extensionConnected, state: extensionState },

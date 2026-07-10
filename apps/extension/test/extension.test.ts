@@ -179,6 +179,43 @@ test("standalone extension connects in zero-touch local-trust mode without readi
   }
 });
 
+test("standalone extension stays connected as a non-controlling standby for another browser target", async () => {
+  const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/local-transport.js")).href;
+  const { createLocalPanelTransport } = await import(`${moduleUrl}?browser-target=${Date.now()}`);
+  const originalWebSocket = (globalThis as any).WebSocket;
+  const sent: any[] = [];
+  (globalThis as any).WebSocket = class {
+    listeners: Record<string, (event?: any) => void> = {};
+
+    addEventListener(type: string, listener: (event?: any) => void) {
+      this.listeners[type] = listener;
+      if (type === "message") queueMicrotask(() => listener({ data: JSON.stringify({
+        type: "ready",
+        authMode: "local_trust",
+        browserTarget: "edge",
+        hostInstanceId: "host-edge-only",
+        sessions: [{ sessionId: "edge-session", origin: "https://example.com" }],
+      }) }));
+    }
+
+    send(raw: string) { sent.push(JSON.parse(raw)); }
+    close() {}
+  };
+  try {
+    const transport = createLocalPanelTransport({
+      healthCheck: async () => true,
+      hostUrls: ["ws://127.0.0.1:17321"],
+      getClientIdentity: async () => ({ clientId: "chrome_profile_test", browserFamily: "chrome" }),
+    });
+    assert.deepEqual(await transport.connectHost(), { connected: false, hostCount: 0, pairingRequired: false });
+    assert.deepEqual(sent, [{ type: "client_hello", clientId: "chrome_profile_test", browserFamily: "chrome" }]);
+    assert.deepEqual(await transport.listSessions(), []);
+    assert.equal(sent.some((message) => message.type === "bridge_request"), false, "standby must not claim or query sessions");
+  } finally {
+    (globalThis as any).WebSocket = originalWebSocket;
+  }
+});
+
 test("standalone extension does not create hidden local sessions when host is unavailable", async () => {
   const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/local-transport.js")).href;
   const { createLocalPanelTransport } = await import(`${moduleUrl}?host-only=${Date.now()}`);

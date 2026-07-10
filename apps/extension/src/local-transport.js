@@ -6,6 +6,7 @@ export function createLocalPanelTransport({
   hostUrls = DEFAULT_HOST_URLS,
   healthCheck = defaultHealthCheck,
   getPairingSecret = async () => null,
+  getClientIdentity = async () => ({ clientId: "browser_bridge_extension", browserFamily: "chromium" }),
   signChallenge = defaultSignChallenge,
   hostCleanupDelayMs = 15_000,
 } = {}) {
@@ -158,16 +159,22 @@ export function createLocalPanelTransport({
       return;
     }
     if (message?.type === "ready") {
+      const identity = normalizeClientIdentity(await getClientIdentity());
+      host.socket?.send(JSON.stringify({ type: "client_hello", ...identity }));
       host.ready = true;
+      host.browserTarget = ["chrome", "edge"].includes(message.browserTarget) ? message.browserTarget : "auto";
+      host.eligible = host.browserTarget === "auto" || host.browserTarget === identity.browserFamily;
       host.pairingRequired = false;
       host.hostInstanceId = message.hostInstanceId;
-      indexSessions(host, message.sessions);
-      syncHostSubscriptions(host);
+      if (host.eligible) {
+        indexSessions(host, message.sessions);
+        syncHostSubscriptions(host);
+      }
       host.finishConnect?.();
       if (typeof onHostSessionsChanged === "function") void Promise.resolve(onHostSessionsChanged()).catch(() => {});
       return;
     }
-    if (!host.ready) return;
+    if (!host.ready || !host.eligible) return;
     if (message?.type === "stop_all") {
       if (globalStopInFlight) return;
       globalStopInFlight = true;
@@ -225,7 +232,7 @@ export function createLocalPanelTransport({
   }
 
   function readyHosts() {
-    return [...hosts.values()].filter((host) => host.ready);
+    return [...hosts.values()].filter((host) => host.ready && host.eligible);
   }
 
   function pairingRequired() {
@@ -252,6 +259,7 @@ export function createLocalPanelTransport({
 
   function resetHost(host) {
     host.ready = false;
+    host.eligible = false;
     host.socket = null;
     host.finishConnect?.();
     for (const [requestId, waiting] of host.requests) {
@@ -273,6 +281,8 @@ function createHostRecord(url) {
     url,
     socket: null,
     ready: false,
+    eligible: false,
+    browserTarget: "auto",
     pairingRequired: false,
     hostInstanceId: null,
     requests: new Map(),
@@ -280,6 +290,15 @@ function createHostRecord(url) {
     connecting: null,
     finishConnect: null,
   };
+}
+
+function normalizeClientIdentity(value) {
+  const clientId = String(value?.clientId ?? "");
+  const browserFamily = String(value?.browserFamily ?? "");
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(clientId) || !["chrome", "edge", "chromium"].includes(browserFamily)) {
+    throw new Error("invalid_client_identity");
+  }
+  return { clientId, browserFamily };
 }
 
 async function defaultHealthCheck(hostUrl) {

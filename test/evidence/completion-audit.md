@@ -24,7 +24,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 | 9 | Forbidden boundary with inverted standalone assertions | proved | repository-wide boundary scanner and clean release checks |
 | 10 | Real `DOM.setFileInputFiles` feasibility probe | proved | repeated real Chrome acceptance of PNG/JPEG/WebP/GIF/MP4/WebM; sanitized filenames; no auto-submit |
 | exit | Full tests/build with extraction source literally unavailable or renamed | partial | packed/isolated-profile non-checkout proofs pass; literal rename is unauthorized before severance and Docker/Sandbox alternatives are unavailable |
-| exit | Extension loads from standalone artifact | proved Chrome | checksum-verified unpacked standalone artifact loaded and repeatedly driven in Chrome stable; Edge remains pending |
+| exit | Extension loads from standalone artifact | proved Chrome + Edge | the same checksum-verified unpacked standalone artifact was reloaded through Computer Use and fully driven in both stable browsers |
 | exit | Source remains intact for rollback | proved | no post-provenance writes or deletions were made in the source repository |
 
 ## B2 — Auto-started MCP package
@@ -47,7 +47,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 | 2 | Determine subagent MCP process/surface sharing | proved/informational | QA-B3-005: Codex child inherited `browser.status` |
 | 3 | Two independent host processes; typed collision without crash | proved | concurrent packed host smoke; degraded stdio `host_collision` regression (`a304a26`) |
 | 4-5 | Audited WebSocket library and fragmentation/large/ping/close/malformed/disconnect tests | proved | `ws` dependency and focused host/chaos tests |
-| 6-8 | All queue/pending/result/inline/orphan bounds, direct session ownership, typed failures | proved | host source plus tests for queue/session/result/timeout/stop/collision/disconnect/protocol outcomes |
+| 6-8 | All queue/pending/result/inline/orphan bounds, direct session ownership, typed failures | proved | host source plus tests for queue/session/result/timeout/stop/collision/disconnect/protocol outcomes; atomic cross-browser owner, standby denial, targeted selection, and failover are deterministic and real-browser proved |
 | 9 | Pairing authentication, extension-origin hardening, no wildcard health CORS | proved | HMAC challenge tests, origin rejection, health and authenticated doctor endpoint tests |
 | 10 | Mandatory origin and focus-escape regression | proved | start/readiness and controller focus-escape tests |
 
@@ -57,7 +57,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 | --- | --- | --- | --- |
 | 1-2 | Close/deliverable/handoff and host-exit semantics | proved | controller, tab-port, extension dead-host, and aggregate-live-set regressions |
 | 3 | Exact-path `set_files` contract | proved | validation, driver, hidden-ref, cancellation, and packed tests |
-| 4-6 | Image/video fixtures, sanitized browser acceptance, no auto-submit | proved Chrome | deterministic validation plus repeated real PNG/JPEG/WebP/GIF/MP4/WebM FileList acceptance; no path leakage or submit |
+| 4-6 | Image/video fixtures, sanitized browser acceptance, no auto-submit | proved Chrome + Edge | deterministic validation plus repeated real PNG/JPEG/WebP/GIF/MP4/WebM FileList acceptance; no path leakage or submit |
 | 7 | Explicit unsupported JavaScript-dialog result | proved | `unsupported_dialog_control` MCP regression |
 | 8 | Tool schema and canonical skill | proved | MCP schemas and `skills/browser-bridge/SKILL.md` |
 
@@ -68,7 +68,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 | 1 | Version-pinned Codex, Claude Desktop, Claude Code, and generic configs | proved | `examples/mcp/`; CLI generation; official Codex TOML shape verified |
 | 2 | Packed tarball only, including path with spaces | proved | pack and multi-client harnesses |
 | 3 | Unpacked extension artifact, deterministic ZIP, checksum | proved | artifact builder; stable SHA-256 in ledger QA-B5-001 |
-| 4 | Chrome stable and Edge stable with same extension source | partial | Chrome 150 real batches pass; Edge 150 installed but extension loading/interaction remains operator-pending |
+| 4 | Chrome stable and Edge stable with same extension source | proved | Chrome 150 and Edge 150 use the same unpacked artifact; Edge-targeted and default-auto simultaneous-browser suites each passed 25/25 steps with both extensions enabled |
 | 5 | Clean Windows user/machine procedure | partial | isolated HOME/USERPROFILE/LOCALAPPDATA/npm-cache proof passes; actual second account requires elevation or another machine |
 | 6 | Concurrent actual Codex and Claude low-risk browser work | proved Chrome | both installed clients simultaneously completed separate exact-tarball owned sessions and finalized cleanly |
 | 7 | No source checkout/global install/daemon/service/panel click during normal startup | proved | isolated non-checkout and real-client proofs; zero-touch startup requires no pairing or popup action |
@@ -76,7 +76,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 
 ## B6 — Release proof gate
 
-All required command names exist. `pnpm release:check` covers boundary, types, 76 source tests, build, deterministic artifacts, packed install, fixture checks, Node matrix, three chaos repetitions, two host processes, isolated user directories, and orphan-port audit. Three consecutive green runs passed on evidence-bearing commit `ec5b8da`; every run completed all 11 stages with zero skips, failures, or orphan ports.
+All required command names exist. `pnpm release:check` covers boundary, types, 79 source tests, build, deterministic artifacts, packed install, fixture checks, Node matrix, three chaos repetitions, two host processes, isolated user directories, and orphan-port audit. The prior evidence-bearing commit `ec5b8da` passed three consecutive runs; the arbitration slice requires a fresh three-run final gate before release acceptance is current.
 
 | evidence class | status | authoritative evidence / remaining proof |
 | --- | --- | --- |
@@ -84,20 +84,20 @@ All required command names exist. `pnpm release:check` covers boundary, types, 7
 | Screenshot >64 KiB through caller contract | proved packed | packed MCP image content block >128 KiB |
 | Dialog/download/new-target/network-write signals | proved deterministic | debugger-signal and reconciliation tests; dialog control explicitly unsupported |
 | Sensitive fields with zero keystrokes | proved deterministic | MCP pre-dispatch block returns before extension dispatch |
-| Origin transitions and observe grant regression | proved owned; current pending-manual | owned sessions stayed bound while operator focus changed; explicit current-tab requires physical OS tab selection for final acceptance |
+| Origin transitions and observe grant regression | proved owned + current | owned sessions stayed bound while operator focus changed; Computer Use physically focused the Edge fixture, bound current-tab, moved focus to Chrome, and observation remained on the original Edge origin |
 | Decision metadata across commit-shaped fixture | proved packed | packed commit-shaped action result |
-| Approved image/video file inputs | proved Chrome | validation + packed tests + repeated real browser acceptance |
+| Approved image/video file inputs | proved Chrome + Edge | validation + packed tests + repeated real browser acceptance in both stable browsers |
 | Two logical workers and two host processes | proved packed | single-host dual-session and two-process harnesses |
 | Restart/reconnect and readiness budget | proved Chrome | packed reconnect plus 10/10 cold-start distribution, max 22.082s |
 | Finalize/cleanup with no orphan processes/tabs | proved Chrome | repeated empty session/tab/port audits after live and client batches |
-| Existing authenticated profile retained | proved Chrome | live QA used the operator's existing profile without inspecting cookies/storage/profile files |
+| Existing authenticated profile retained | proved Chrome + Edge | live QA used the operator's existing profiles without inspecting cookies/storage/profile files |
 | Owned tab does not steal active tab | proved Chrome | operator focused other tabs during sessions; observations and actions remained on owned fixture |
-| Explicit current-tab scope | proved contract; pending-real | controller origin/focus tests; real requested-tab proof pending |
+| Explicit current-tab scope | proved Edge | deterministic controller regression plus real OS focus/bind/focus-escape proof through Computer Use |
 | Concurrent Codex and Claude tasks | proved Chrome | actual packed clients passed concurrently |
-| Chrome and Edge stable | partial | Chrome stable proved; Edge stable pending operator extension load |
+| Chrome and Edge stable | proved | full Edge-targeted and default-auto simultaneous suites passed while both extensions remained enabled; exactly one browser owned each session |
 
 Optional live advertising workflow proof is `not-approved` and is not a release requirement. No live client/account action has been attempted.
 
 ## Current release conclusion
 
-B0 contracts and repository implementation through B6 are substantially implemented, Chrome/actual-client/cold-start evidence is proved, and the final three-run release gate is green. B6 acceptance is **not complete** because Edge stable, explicit current-tab physical-focus acceptance, literal source-unavailable full-workspace proof, and an actual second account/machine remain unproven. Severance work must not begin until those rows are proved or explicitly dispositioned by the operator.
+B0 contracts and repository implementation through B6 are substantially implemented; Chrome, Edge, simultaneous-browser arbitration, current-tab focus escape, actual-client, and cold-start evidence are proved. B6 acceptance is **not complete** until the arbitration slice passes a fresh three-run release gate. Literal source-unavailable full-workspace proof and an actual second account/machine also remain unproven and require either stronger external evidence or explicit operator disposition. Severance work must not begin before that audit closes.

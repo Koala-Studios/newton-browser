@@ -91,7 +91,11 @@ Input: `{}`. Result:
   "authMode": "local_trust",
   "zeroTouch": true,
   "paired": false,
+  "browserTarget": "auto",
   "extensionConnected": true,
+  "connectedBrowsers": ["chrome", "edge"],
+  "eligibleClientCount": 2,
+  "claimedSessionsByBrowser": {},
   "hostCountSeenByExtension": 1,
   "sessionCount": 0,
   "limits": {}
@@ -159,3 +163,11 @@ The repository stays private and carries no license file until public-license po
 Runtime source, package metadata, scripts, fixtures, docs, and artifacts must not import, name, or reference the source product/repository, its services, or its private shared files. The boundary check also rejects retired concepts: the old non-local transport enum, database host-policy table comments, raw TypeScript package bins, cross-package relative source escapes, and the former private shared module.
 
 The one provenance hash in the root README and evidence history is non-runtime provenance and is the only temporary source-reference exception during extraction; release artifacts contain no such reference.
+
+## 11. Simultaneous-browser arbitration
+
+Chrome and Edge may keep the same unpacked extension enabled at the same time. Every browser profile persists a random local client identity and announces only that identity plus its browser family to each loopback host. For every session, the host performs one atomic claim: exactly one eligible extension becomes owner, while every other extension remains connected as standby.
+
+Only the owner may attach a tab, subscribe, stop the session, or return command results. Commands are sent only to that owner's socket. A non-owner receives typed `session_not_owned` and cannot race or duplicate an action. If the owner disconnects, the host releases the claim, clears browser-specific tab identifiers, and lets one standby reclaim and bind a fresh tab; an in-flight command fails closed as `extension_disconnected` rather than being replayed.
+
+The default `browserTarget` is `auto`, so installation remains zero-touch and the first atomic claimant owns each new session. An operator who wants deterministic browser selection may set `{"browserTarget":"chrome"}` or `{"browserTarget":"edge"}` in the per-user `config.json`, or set `BROWSER_BRIDGE_BROWSER=chrome|edge` for that MCP process. Non-selected browsers stay connected as standby and never receive session control. `browser.status` reports the target, connected browser families, eligible-client count, and aggregate claimed-session counts without exposing profile identity values.

@@ -9,6 +9,8 @@
 
 Normal tasks do not manually start a host. Every configured MCP client starts its own packed process; the extension discovers hosts on the bounded loopback range. If the operator explicitly enables `paired` mode, run `browser-bridge-mcp --doctor` and enter its key in the popup once.
 
+Chrome and Edge can remain enabled together. The host atomically assigns a session to one browser, and standbys receive no commands. Default `auto` mode needs no choice; set per-user `browserTarget` or `BROWSER_BRIDGE_BROWSER=chrome|edge` only when a specific browser is required.
+
 ## Common typed failures
 
 | Code | Response |
@@ -23,6 +25,8 @@ Normal tasks do not manually start a host. Every configured MCP client starts it
 | `result_too_large` | Use screenshot image or file delivery as recommended by the result. |
 | `command_timeout` | Inspect session status and current state; never blindly repeat a commit-shaped action. |
 | `session_stopped` | Start a new session and re-establish page state. |
+| `browser_not_selected` | The host targets another browser; use that browser or change the explicit `browserTarget`. |
+| `session_not_owned` | Another browser owns the session; do not retry the operation from the standby. |
 | `stale_target` / `target_moved` | Take a fresh observation and use a new ref. |
 | `ambiguous` | Use a fresh exact ref or narrower accessible target. |
 | `blocked_by_floor` | Do not bypass the floor; have the user complete sensitive input when necessary. |

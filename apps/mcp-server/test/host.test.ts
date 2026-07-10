@@ -149,10 +149,92 @@ test("zero-touch local trust accepts an extension without a pairing key and stil
     const ready = await readyPromise;
     assert.equal(ready.authMode, "local_trust");
     assert.equal(ready.hostInstanceId, bridge.hostInstanceId);
+    socket.send(JSON.stringify({ type: "client_hello", clientId: "local_chrome_client", browserFamily: "chrome" }));
+    await waitForMessage(socket, (message) => message.type === "client_ready");
     assert.equal(bridge.getStatus().extensionConnected, true);
     assert.equal(bridge.getStatus().authMode, "local_trust");
     socket.close();
   } finally {
+    await bridge.close();
+  }
+});
+
+test("simultaneous Chrome and Edge atomically claim one session without duplicate control", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const chrome = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "qa_chrome_profile", browserFamily: "chrome" });
+  const edge = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "qa_edge_profile", browserFamily: "edge" });
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const [chromeList, edgeList] = await Promise.all([
+      extensionRequest(chrome, "listSessions", {}),
+      extensionRequest(edge, "listSessions", {}),
+    ]);
+    const chromeClaimed = Array.isArray(chromeList.result) && chromeList.result.some((session: any) => session.sessionId === sessionId);
+    const edgeClaimed = Array.isArray(edgeList.result) && edgeList.result.some((session: any) => session.sessionId === sessionId);
+    assert.notEqual(chromeClaimed, edgeClaimed, "exactly one browser must win the atomic session claim");
+    const winner = chromeClaimed ? chrome : edge;
+    const loser = chromeClaimed ? edge : chrome;
+
+    const denied = await extensionRequest(loser, "attachTab", { sessionId, tab: { ownedTabId: 9, attached: true, liveOrigin: "https://example.com" } });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error, "session_not_owned");
+    const attached = await extensionRequest(winner, "attachTab", { sessionId, tab: { ownedTabId: 10, attached: true, liveOrigin: "https://example.com" } });
+    assert.equal(attached.ok, true);
+    await extensionRequest(winner, "subscribeSession", { sessionId });
+
+    let loserCommandCount = 0;
+    const onLoserMessage = (data: any) => {
+      if (JSON.parse(data.toString()).type === "bridge_command") loserCommandCount += 1;
+    };
+    loser.on("message", onLoserMessage);
+    const commandPromise = waitForMessage(winner, (message) => message.type === "bridge_command");
+    const dispatched = bridge.dispatch(sessionId, { kind: "observe", maxNodes: 5 }, 2000);
+    const command = await commandPromise;
+    await extensionRequest(winner, "postResult", { event: { commandId: command.command.commandId, ok: true, result: { browser: chromeClaimed ? "chrome" : "edge" } } });
+    assert.equal((await dispatched).ok, true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    loser.off("message", onLoserMessage);
+    assert.equal(loserCommandCount, 0, "standby browser must never receive the claimed session command");
+
+    const released = waitForMessage(loser, (message) => message.type === "sessions_changed" && message.sessions?.some((session: any) => session.sessionId === sessionId));
+    winner.close();
+    await released;
+    const takeover = await extensionRequest(loser, "listSessions", {});
+    const transferred = takeover.result.find((session: any) => session.sessionId === sessionId);
+    assert.ok(transferred);
+    assert.equal(transferred.attached, false);
+    assert.equal(transferred.ownedTabId, null);
+    assert.equal((await extensionRequest(loser, "attachTab", { sessionId, tab: { ownedTabId: 11, attached: true, liveOrigin: "https://example.com" } })).ok, true);
+  } finally {
+    chrome.close();
+    edge.close();
+    await bridge.close();
+  }
+});
+
+test("browser target selects Edge while Chrome remains connected as standby", async () => {
+  const bridge = testBridge({ browserTarget: "edge" });
+  const address = await bridge.listen(0);
+  const chrome = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "target_chrome_profile", browserFamily: "chrome" });
+  try {
+    assert.equal(bridge.getStatus().extensionConnected, false);
+    assert.equal(bridge.getStatus().browserTarget, "edge");
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const denied = await extensionRequest(chrome, "listSessions", {});
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error, "browser_not_selected");
+
+    const edge = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "target_edge_profile", browserFamily: "edge" });
+    try {
+      assert.equal(bridge.getStatus().extensionConnected, true);
+      const claimed = await extensionRequest(edge, "listSessions", {});
+      assert.deepEqual(claimed.result.map((session: any) => session.sessionId), [sessionId]);
+    } finally {
+      edge.close();
+    }
+  } finally {
+    chrome.close();
     await bridge.close();
   }
 });
@@ -396,7 +478,7 @@ async function toolCall(bridge: ReturnType<typeof createBrowserBridgeHost>, name
   return { isError: result?.isError === true, json: JSON.parse(result.content[0].text) };
 }
 
-async function connectExtension(port: number, hostInstanceId: string) {
+async function connectExtension(port: number, hostInstanceId: string, identity = { clientId: "test_chrome_client", browserFamily: "chrome" }) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Origin: "chrome-extension://test-id" } });
   const challengePromise = waitForMessage(socket, (message) => message.type === "auth_challenge");
   await waitForOpen(socket);
@@ -408,6 +490,9 @@ async function connectExtension(port: number, hostInstanceId: string) {
   const readyPromise = waitForMessage(socket, (message) => message.type === "ready");
   socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: challenge.hostInstanceId, proof }));
   await readyPromise;
+  const clientReady = waitForMessage(socket, (message) => message.type === "client_ready");
+  socket.send(JSON.stringify({ type: "client_hello", ...identity }));
+  await clientReady;
   return socket;
 }
 

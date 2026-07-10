@@ -4,7 +4,7 @@ import http from "node:http";
 import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@browser-bridge/core";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { loadOrCreatePairingConfig, loadTransportAuthMode, type TransportAuthMode, validDoctorToken } from "./config.ts";
+import { loadBrowserTarget, loadOrCreatePairingConfig, loadTransportAuthMode, type BrowserTarget, type TransportAuthMode, validDoctorToken } from "./config.ts";
 
 const DEFAULT_LIMITS = {
   firstPort: 17321,
@@ -24,6 +24,7 @@ type HostClient = {
   id: string;
   socket: WebSocket;
   authenticated: boolean;
+  identity: null | { clientId: string; browserFamily: "chrome" | "edge" | "chromium" };
   nonce: string;
   authTimer: NodeJS.Timeout | null;
   subscriptions: Set<string>;
@@ -31,6 +32,7 @@ type HostClient = {
 
 type PendingCommand = {
   sessionId: string;
+  targetClientId: string | null;
   resolve: (event: BridgeResultEvent) => void;
   timer: NodeJS.Timeout;
 };
@@ -39,15 +41,18 @@ export type BrowserBridgeHost = ReturnType<typeof createBrowserBridgeHost>;
 
 export function createBrowserBridgeHost(options: {
   authMode?: TransportAuthMode;
+  browserTarget?: BrowserTarget;
   pairingSecret?: string;
   hostInstanceId?: string;
   limits?: Partial<typeof DEFAULT_LIMITS>;
 } = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) };
   const authMode = options.authMode ?? (options.pairingSecret ? "paired" : loadTransportAuthMode());
+  const browserTarget = options.browserTarget ?? loadBrowserTarget();
   const pairingSecret = options.pairingSecret ?? loadOrCreatePairingConfig().secret;
   const hostInstanceId = options.hostInstanceId ?? randomUUID();
   const sessions = new Map<string, BridgeSessionInfo>();
+  const sessionOwners = new Map<string, string>();
   const clients = new Map<string, HostClient>();
   const pending = new Map<string, PendingCommand>();
   const queuedCommands = new Map<string, BridgeCommand[]>();
@@ -92,9 +97,13 @@ export function createBrowserBridgeHost(options: {
       return {
         hostInstanceId,
         authMode,
+        browserTarget,
         port: boundPort,
-        extensionConnected: authenticatedClients().length > 0,
+        extensionConnected: eligibleClients().length > 0,
         authenticatedClientCount: authenticatedClients().length,
+        eligibleClientCount: eligibleClients().length,
+        connectedBrowsers: [...new Set(authenticatedClients().flatMap((client) => client.identity ? [client.identity.browserFamily] : []))].sort(),
+        claimedSessionsByBrowser: claimedSessionCounts(),
         sessionCount: sessions.size,
         limits,
       };
@@ -124,7 +133,7 @@ export function createBrowserBridgeHost(options: {
         };
         const timer = setTimeout(() => {
           removeReadinessWaiter(sessionId, finish);
-          const error = authenticatedClients().length === 0 ? "extension_disconnected" : "session_setup_timeout";
+          const error = eligibleClients().length === 0 ? "extension_disconnected" : "session_setup_timeout";
           api.stopSession(sessionId);
           reject(new Error(error));
         }, Math.max(50, Math.min(timeoutMs, limits.maxCommandTimeoutMs)));
@@ -136,6 +145,7 @@ export function createBrowserBridgeHost(options: {
 
     stopSession(sessionId: string): void {
       sessions.delete(sessionId);
+      sessionOwners.delete(sessionId);
       sessionActivity.delete(sessionId);
       queuedCommands.delete(sessionId);
       for (const client of clients.values()) client.subscriptions.delete(sessionId);
@@ -157,10 +167,10 @@ export function createBrowserBridgeHost(options: {
     async dispatch(sessionId: string, action: BridgeCommand["action"], timeoutMs = 60_000): Promise<BridgeResultEvent> {
       if (!sessions.has(sessionId)) return { commandId: "", ok: false, errorCode: "unknown_session" };
       sessionActivity.set(sessionId, Date.now());
-      if (authenticatedClients().length === 0) return { commandId: "", ok: false, errorCode: "extension_disconnected" };
+      if (eligibleClients().length === 0) return { commandId: "", ok: false, errorCode: "extension_disconnected" };
       if (pending.size >= limits.maxPending) return { commandId: "", ok: false, errorCode: "queue_full" };
       const queued = queuedCommands.get(sessionId) ?? [];
-      if (!hasSubscriber(sessionId) && queued.length >= limits.maxQueuedPerSession) {
+      if (ownerClient(sessionId)?.subscriptions.has(sessionId) !== true && queued.length >= limits.maxQueuedPerSession) {
         return { commandId: "", ok: false, errorCode: "queue_full" };
       }
       const commandId = `bbc_${Date.now().toString(36)}_${randomUUID().slice(0, 12)}`;
@@ -169,10 +179,11 @@ export function createBrowserBridgeHost(options: {
           pending.delete(commandId);
           resolve({ commandId, ok: false, errorCode: "command_timeout" });
         }, Math.max(100, Math.min(timeoutMs, limits.maxCommandTimeoutMs)));
-        pending.set(commandId, { sessionId, resolve, timer });
+        pending.set(commandId, { sessionId, targetClientId: null, resolve, timer });
       });
       const command: BridgeCommand = { commandId, sessionId, actionKind: action.kind, action };
-      if (hasSubscriber(sessionId)) broadcast({ type: "bridge_command", command }, (client) => client.subscriptions.has(sessionId));
+      const owner = ownerClient(sessionId);
+      if (owner?.subscriptions.has(sessionId)) sendCommand(owner, command);
       else queueCommand(command);
       return result;
     },
@@ -276,6 +287,7 @@ export function createBrowserBridgeHost(options: {
       id: randomUUID(),
       socket,
       authenticated: !pairingRequired,
+      identity: null,
       nonce,
       authTimer: pairingRequired ? setTimeout(() => socket.close(4001, "pairing required"), limits.authTimeoutMs) : null,
       subscriptions: new Set<string>(),
@@ -288,7 +300,7 @@ export function createBrowserBridgeHost(options: {
     socket.on("close", () => removeClient(client));
     socket.on("error", () => removeClient(client));
     if (pairingRequired) send(client, { type: "auth_challenge", protocol: "browser-bridge-auth-v1", hostInstanceId, nonce });
-    else send(client, { type: "ready", hostInstanceId, authMode, sessions: api.listSessions() });
+    else send(client, { type: "ready", hostInstanceId, authMode, browserTarget, sessions: api.listSessions() });
   }
 
   async function handleClientMessage(client: HostClient, text: string): Promise<void> {
@@ -299,6 +311,10 @@ export function createBrowserBridgeHost(options: {
     } catch {
       return client.socket.close(1007, "invalid json");
     }
+    if (message?.type === "client_hello") {
+      registerClientIdentity(client, message);
+      return;
+    }
     if (!client.authenticated) {
       if (message?.type !== "auth_response" || message.hostInstanceId !== hostInstanceId || !validProof(client.nonce, message.proof)) {
         return client.socket.close(4003, "authentication failed");
@@ -306,7 +322,7 @@ export function createBrowserBridgeHost(options: {
       client.authenticated = true;
       if (client.authTimer) clearTimeout(client.authTimer);
       client.authTimer = null;
-      send(client, { type: "ready", hostInstanceId, authMode, sessions: api.listSessions() });
+      send(client, { type: "ready", hostInstanceId, authMode, browserTarget, sessions: api.listSessions() });
       return;
     }
     if (message?.type !== "bridge_request") return;
@@ -320,20 +336,27 @@ export function createBrowserBridgeHost(options: {
 
   async function handleBridgeRequest(client: HostClient, message: any): Promise<unknown> {
     const params = message.params && typeof message.params === "object" ? message.params : {};
-    if (message.method === "createSession") return api.createSession(params);
-    if (message.method === "attachTab") return attachTab(params);
-    if (message.method === "listSessions") return api.listSessions();
+    requireIdentity(client);
+    if (message.method === "createSession") {
+      requireEligible(client);
+      const created = api.createSession(params);
+      sessionOwners.set(created.sessionId, client.id);
+      return created;
+    }
+    if (message.method === "attachTab") return attachTab(client, params);
+    if (message.method === "listSessions") return claimSessions(client);
     if (message.method === "subscribeSession") return subscribeSession(client, params.sessionId);
-    if (message.method === "unsubscribeSession") return client.subscriptions.delete(String(params.sessionId ?? ""));
-    if (message.method === "postEvent") return {};
-    if (message.method === "postResult") return postBridgeResult(params.event);
-    if (message.method === "stopSession") return api.stopSession(String(params.sessionId ?? ""));
-    if (message.method === "stopAll") return api.stopAll();
+    if (message.method === "unsubscribeSession") return unsubscribeSession(client, params.sessionId);
+    if (message.method === "postEvent") return requireSessionOwner(client, params.sessionId ?? pending.get(String(params.commandId ?? ""))?.sessionId);
+    if (message.method === "postResult") return postBridgeResult(client, params.event);
+    if (message.method === "stopSession") return stopOwnedSession(client, params.sessionId);
+    if (message.method === "stopAll") return stopOwnedSessions(client);
     throw new Error("unknown_bridge_method");
   }
 
-  function attachTab(params: any): void {
+  function attachTab(client: HostClient, params: any): void {
     const sessionId = String(params.sessionId ?? "");
+    requireSessionOwner(client, sessionId);
     const session = sessions.get(sessionId);
     if (!session) throw new Error("unknown_session");
     session.ownedTabId = Number.isInteger(params.tab?.ownedTabId) ? params.tab.ownedTabId : session.ownedTabId ?? null;
@@ -344,10 +367,11 @@ export function createBrowserBridgeHost(options: {
     broadcastSessionsChanged();
   }
 
-  function postBridgeResult(event: BridgeResultEvent): void {
+  function postBridgeResult(client: HostClient, event: BridgeResultEvent): void {
     const commandId = String(event?.commandId ?? "");
     const waiting = pending.get(commandId);
     if (!waiting) return;
+    if (waiting.targetClientId !== client.id || sessionOwners.get(waiting.sessionId) !== client.id) throw new Error("session_not_owned");
     clearTimeout(waiting.timer);
     pending.delete(commandId);
     if (Buffer.byteLength(JSON.stringify(event), "utf8") > limits.maxMessageBytes) {
@@ -364,7 +388,7 @@ export function createBrowserBridgeHost(options: {
 
   function subscribeSession(client: HostClient, sessionId: unknown): void {
     const normalized = String(sessionId ?? "");
-    if (!sessions.has(normalized)) throw new Error("unknown_session");
+    requireSessionOwner(client, normalized);
     client.subscriptions.add(normalized);
     flushQueuedCommands(client, normalized);
   }
@@ -376,30 +400,135 @@ export function createBrowserBridgeHost(options: {
   }
 
   function flushQueuedCommands(client: HostClient, sessionId: string): void {
+    requireSessionOwner(client, sessionId);
     const queued = queuedCommands.get(sessionId);
     if (!queued?.length) return;
     queuedCommands.delete(sessionId);
-    for (const command of queued) send(client, { type: "bridge_command", command });
+    for (const command of queued) sendCommand(client, command);
   }
 
-  function hasSubscriber(sessionId: string): boolean {
-    return authenticatedClients().some((client) => client.subscriptions.has(sessionId));
+  function registerClientIdentity(client: HostClient, message: any): void {
+    const clientId = String(message.clientId ?? "");
+    const browserFamily = String(message.browserFamily ?? "");
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(clientId) || !["chrome", "edge", "chromium"].includes(browserFamily)) {
+      throw new Error("invalid_client_identity");
+    }
+    for (const other of clients.values()) {
+      if (other.id === client.id || other.identity?.clientId !== clientId) continue;
+      removeClient(other);
+      other.socket.close(4004, "client replaced");
+    }
+    client.identity = { clientId, browserFamily: browserFamily as "chrome" | "edge" | "chromium" };
+    send(client, { type: "client_ready", hostInstanceId, browserTarget, eligible: isEligible(client) });
+    send(client, { type: "sessions_changed", hostInstanceId, sessions: api.listSessions() });
+  }
+
+  function claimSessions(client: HostClient): BridgeSessionInfo[] {
+    requireEligible(client);
+    const claimed: BridgeSessionInfo[] = [];
+    for (const session of sessions.values()) {
+      const ownerId = sessionOwners.get(session.sessionId);
+      if (!ownerId) sessionOwners.set(session.sessionId, client.id);
+      if (sessionOwners.get(session.sessionId) === client.id) claimed.push({ ...session, allowedOrigins: [...(session.allowedOrigins ?? [])] });
+    }
+    return claimed;
+  }
+
+  function unsubscribeSession(client: HostClient, sessionId: unknown): boolean {
+    const normalized = String(sessionId ?? "");
+    requireSessionOwner(client, normalized);
+    return client.subscriptions.delete(normalized);
+  }
+
+  function stopOwnedSession(client: HostClient, sessionId: unknown): void {
+    const normalized = String(sessionId ?? "");
+    requireSessionOwner(client, normalized);
+    api.stopSession(normalized);
+  }
+
+  function stopOwnedSessions(client: HostClient): void {
+    for (const [sessionId, ownerId] of [...sessionOwners]) {
+      if (ownerId === client.id) api.stopSession(sessionId);
+    }
+  }
+
+  function requireIdentity(client: HostClient): void {
+    if (!client.identity) throw new Error("client_identity_required");
+  }
+
+  function requireEligible(client: HostClient): void {
+    requireIdentity(client);
+    if (!isEligible(client)) throw new Error("browser_not_selected");
+  }
+
+  function requireSessionOwner(client: HostClient, sessionId: unknown): void {
+    const normalized = String(sessionId ?? "");
+    if (!sessions.has(normalized)) throw new Error("unknown_session");
+    if (!sessionOwners.has(normalized)) {
+      requireEligible(client);
+      sessionOwners.set(normalized, client.id);
+    }
+    if (sessionOwners.get(normalized) !== client.id) throw new Error("session_not_owned");
+  }
+
+  function isEligible(client: HostClient): boolean {
+    return client.authenticated && client.socket.readyState === WebSocket.OPEN && client.identity !== null
+      && (browserTarget === "auto" || client.identity.browserFamily === browserTarget);
+  }
+
+  function ownerClient(sessionId: string): HostClient | null {
+    const ownerId = sessionOwners.get(sessionId);
+    const owner = ownerId ? clients.get(ownerId) : null;
+    return owner && isEligible(owner) ? owner : null;
+  }
+
+  function sendCommand(client: HostClient, command: BridgeCommand): void {
+    const waiting = pending.get(command.commandId);
+    if (waiting) waiting.targetClientId = client.id;
+    send(client, { type: "bridge_command", command });
   }
 
   function authenticatedClients(): HostClient[] {
     return [...clients.values()].filter((client) => client.authenticated && client.socket.readyState === WebSocket.OPEN);
   }
 
+  function eligibleClients(): HostClient[] {
+    return authenticatedClients().filter(isEligible);
+  }
+
+  function claimedSessionCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const ownerId of sessionOwners.values()) {
+      const family = clients.get(ownerId)?.identity?.browserFamily ?? "unknown";
+      counts[family] = (counts[family] ?? 0) + 1;
+    }
+    return counts;
+  }
+
   function removeClient(client: HostClient): void {
     if (!clients.delete(client.id)) return;
     if (client.authTimer) clearTimeout(client.authTimer);
-    if (authenticatedClients().length === 0) {
-      for (const [commandId, waiter] of pending) {
-        clearTimeout(waiter.timer);
-        pending.delete(commandId);
-        waiter.resolve({ commandId, ok: false, errorCode: "extension_disconnected" });
+    let released = false;
+    for (const [sessionId, ownerId] of [...sessionOwners]) {
+      if (ownerId !== client.id) continue;
+      sessionOwners.delete(sessionId);
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.ownedTabId = null;
+        session.tabGroupId = null;
+        session.attached = false;
+        session.liveOrigin = null;
       }
+      notifyReadiness(sessionId);
+      released = true;
     }
+    for (const [commandId, waiter] of pending) {
+      if (waiter.targetClientId !== client.id) continue;
+      clearTimeout(waiter.timer);
+      pending.delete(commandId);
+      waiter.resolve({ commandId, ok: false, errorCode: "extension_disconnected" });
+    }
+    if (released) broadcastSessionsChanged();
   }
 
   function broadcast(message: unknown, filter: (client: HostClient) => boolean = () => true): void {
@@ -433,7 +562,7 @@ export function createBrowserBridgeHost(options: {
 
   function readySession(sessionId: string): BridgeSessionInfo | null {
     const session = sessions.get(sessionId);
-    return session?.attached && Number.isInteger(session.ownedTabId) && typeof session.liveOrigin === "string" ? { ...session } : null;
+    return ownerClient(sessionId) && session?.attached && Number.isInteger(session.ownedTabId) && typeof session.liveOrigin === "string" ? { ...session } : null;
   }
 
   function notifyReadiness(sessionId: string): void {

@@ -4,6 +4,8 @@ Browser Bridge lets an MCP client control isolated tabs in an existing authentic
 
 The default setup is zero-touch local trust: load the extension, add the MCP config, and start the client. An opt-in HMAC pairing mode is available for a stricter local boundary.
 
+Chrome and Edge may stay enabled simultaneously. Each session is atomically owned by one browser while the other remains a non-controlling standby; an optional browser target selects Chrome or Edge without extension toggling.
+
 This repository is private/local during the 0.1.0 hardening cycle. No public license, remote, npm publication, or browser-store submission is implied.
 
 ## Provenance

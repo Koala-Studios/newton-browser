@@ -42,6 +42,12 @@ npx --yes --package C:\BrowserBridge\browser-bridge-mcp-0.1.0.tgz browser-bridge
 
 Then start an exact-origin session. No separate host command or extension-panel click is part of normal startup.
 
+### Chrome and Edge together
+
+Both extensions may remain enabled. The host atomically assigns each session to one browser; the other browser stays connected as standby and cannot attach to or receive commands for that session. No disable/reload choreography is required.
+
+The default `auto` selection keeps setup zero-touch. To choose one browser deterministically, add `"browserTarget":"chrome"` or `"browserTarget":"edge"` to `%LOCALAPPDATA%\BrowserBridge\config.json` and restart the MCP client. The equivalent per-process override is `BROWSER_BRIDGE_BROWSER=chrome|edge`.
+
 ### Optional hardened pairing
 
-To require the key handshake, create `%LOCALAPPDATA%\BrowserBridge\config.json` containing `{"transportAuth":"paired"}` (merge this field with any existing `hostPolicies`). Restart the MCP client, run `--doctor`, and paste the displayed secret into the extension popup once. Do not store the secret in screenshots, tickets, repositories, or chat.
+To require the key handshake, create `%LOCALAPPDATA%\BrowserBridge\config.json` containing `{"transportAuth":"paired"}` (merge this field with any existing `browserTarget` or `hostPolicies`). Restart the MCP client, run `--doctor`, and paste the displayed secret into the extension popup once. Do not store the secret in screenshots, tickets, repositories, or chat.

@@ -8,11 +8,13 @@ import { OWNER_LABEL } from "./config.js";
 const transport = createLocalPanelTransport({
   notify: notifyPanels,
   onHostSessionsChanged: () => ensureForHostSessions().catch(() => {}),
+  getClientIdentity,
   getPairingSecret: async () => {
     const stored = await chrome.storage.local.get("pairingSecret");
     return typeof stored?.pairingSecret === "string" ? stored.pairingSecret : null;
   },
 });
+let clientIdentityPromise;
 const BRIDGE_ALARM = "browser-bridge-sync";
 const runtime = createBridgeRuntime({
   transport,
@@ -114,6 +116,25 @@ function errorCode(error) {
 
 function ensureBridgeAlarm() {
   chrome.alarms?.create?.(BRIDGE_ALARM, { periodInMinutes: 0.5 });
+}
+
+function getClientIdentity() {
+  if (!clientIdentityPromise) clientIdentityPromise = loadClientIdentity();
+  return clientIdentityPromise;
+}
+
+async function loadClientIdentity() {
+  const stored = await chrome.storage.local.get("bridgeClientId");
+  let clientId = typeof stored?.bridgeClientId === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(stored.bridgeClientId)
+    ? stored.bridgeClientId
+    : null;
+  if (!clientId) {
+    clientId = `bb_${crypto.randomUUID().replaceAll("-", "")}`;
+    await chrome.storage.local.set({ bridgeClientId: clientId });
+  }
+  const userAgent = String(globalThis.navigator?.userAgent ?? "");
+  const browserFamily = /Edg\//i.test(userAgent) ? "edge" : /Chrome\//i.test(userAgent) ? "chrome" : "chromium";
+  return { clientId, browserFamily };
 }
 
 async function findActiveWebTab() {

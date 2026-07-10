@@ -172,6 +172,9 @@ async function connectFakeExtension() {
   } else {
     assert(handshake.authMode === "local_trust", "default packed host uses zero-touch local trust");
   }
+  const clientReady = waitForWs(socket, (message) => message.type === "client_ready");
+  socket.send(JSON.stringify({ type: "client_hello", clientId: "packed_smoke_extension", browserFamily: "chromium" }));
+  await clientReady;
   const state = { socket, disconnectOnNextCommand: false };
   const sessionTabs = new Map();
   socket.on("message", (data) => {

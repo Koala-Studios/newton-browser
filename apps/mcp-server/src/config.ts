@@ -11,6 +11,7 @@ export type PairingConfig = {
 };
 
 export type TransportAuthMode = "local_trust" | "paired";
+export type BrowserTarget = "auto" | "chrome" | "edge";
 
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
   if (env.BROWSER_BRIDGE_CONFIG_DIR) return path.resolve(env.BROWSER_BRIDGE_CONFIG_DIR);
@@ -65,6 +66,23 @@ export function loadTransportAuthMode(input: { directory?: string; env?: NodeJS.
   return configured === undefined ? "local_trust" : parseTransportAuthMode(configured, `${file} transportAuth`);
 }
 
+export function loadBrowserTarget(input: { directory?: string; env?: NodeJS.ProcessEnv } = {}): BrowserTarget {
+  const env = input.env ?? process.env;
+  const override = env.BROWSER_BRIDGE_BROWSER;
+  if (override !== undefined) return parseBrowserTarget(override, "BROWSER_BRIDGE_BROWSER");
+  const directory = path.resolve(input.directory ?? configDirectory(env));
+  const file = path.join(directory, "config.json");
+  if (!fs.existsSync(file)) return "auto";
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    throw new Error(`invalid_config: ${file} is not valid JSON`);
+  }
+  const configured = (raw as { browserTarget?: unknown })?.browserTarget;
+  return configured === undefined ? "auto" : parseBrowserTarget(configured, `${file} browserTarget`);
+}
+
 export function loadHostPolicies(input: { directory?: string } = {}): BrowserHostPolicyManifest[] {
   const directory = path.resolve(input.directory ?? configDirectory());
   const file = path.join(directory, "config.json");
@@ -100,6 +118,11 @@ function parsePairingConfig(text: string, file: string): PairingConfig {
 function parseTransportAuthMode(value: unknown, label: string): TransportAuthMode {
   if (value === "local_trust" || value === "paired") return value;
   throw new Error(`invalid_config: ${label} must be local_trust or paired`);
+}
+
+function parseBrowserTarget(value: unknown, label: string): BrowserTarget {
+  if (value === "auto" || value === "chrome" || value === "edge") return value;
+  throw new Error(`invalid_config: ${label} must be auto, chrome, or edge`);
 }
 
 function validateHostPolicy(value: unknown, label: string): BrowserHostPolicyManifest {
