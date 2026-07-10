@@ -154,3 +154,21 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: actual Codex reached typed `extension_disconnected` rather than tool cancellation.
 - Fix commit: `73218dc`.
 - Status: closed.
+
+## BB-018 — Doctor reported pairing but omitted required diagnostics
+
+- Minimal repro: run the original `--doctor` and inspect its JSON.
+- Root cause: the utility created a pairing secret but did not check Node support, host-policy config, bounded loopback capacity/incumbents, protocol compatibility, extension connection state, or a typed next action.
+- Fix: add a complete diagnostic report and a loopback-only HMAC-authenticated incumbent-status endpoint with no permissive CORS.
+- Regression: `apps/mcp-server/test/cli.test.ts`, authenticated/denied endpoint tests, packed matrix, and isolated-user smoke.
+- Fix commit: `a304a26`.
+- Status: closed.
+
+## BB-019 — Port collision exited before MCP could return a typed error
+
+- Minimal repro: occupy the configured host port and launch the stdio executable.
+- Root cause: startup awaited `listen()` before installing the MCP frame pump, so `host_collision` rejected the process instead of becoming a tool result.
+- Fix: retain a degraded MCP session after a collision; initialize and tools/list work, while tool calls return typed `host_collision` and an actionable next step.
+- Regression: occupied-port stdio process test verifies a clean exit after stdin closes.
+- Fix commit: `a304a26`.
+- Status: closed.
