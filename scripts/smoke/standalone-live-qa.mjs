@@ -1,10 +1,10 @@
-import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { createBrowserBridgeHost } from "../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
+import { startFixtureServers } from "../../test/fixtures/server.mjs";
 
 const fixturePort = Number(process.env.BROWSER_BRIDGE_QA_FIXTURE_PORT ?? 18231);
 const hostPort = Number(process.env.BROWSER_BRIDGE_PORT ?? 17321);
@@ -42,15 +42,20 @@ try {
 
   const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 120 }), "observe");
   assert(observed.origin === `http://127.0.0.1:${fixturePort}`, "observe origin mismatch", observed);
-  for (const name of ["Increment", "Local write", "Submit order", "Name", "Plan", "Password", "Credit card number", "Creative assets"]) {
+  for (const name of ["Increment", "Network write", "Publish fixture", "Name", "Plan", "Password", "Credit card number", "Creative assets", "Shadow button", "Same-origin frame button", "Editable notes", "Custom region"]) {
     assert(hasName(observed, name), `observe missing ${name}`, observed);
   }
+  assert(!hasName(observed, "Cross-origin denied target"), "cross-origin frame target escaped the observation grant", observed);
   log("observe_ok", { nodeCount: observed.nodeCount, kind: observed.kind });
 
   okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Name", value: "Alice" } }), "fill by label");
   log("fill_label_ok");
 
   okResult(await mcp("browser.act", { sessionId, action: { kind: "type", selector: "#notes", value: "typed notes" } }), "type by selector");
+  okResult(await mcp("browser.act", { sessionId, action: { kind: "fill", label: "Editable notes", value: "editable notes" } }), "contenteditable fill");
+  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Custom region" } }), "custom combobox");
+  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Shadow button" } }), "shadow button");
+  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Same-origin frame button" } }), "same-origin frame button");
   log("type_selector_ok");
 
   const selected = await mcp("browser.act", { sessionId, action: { kind: "select", label: "Plan", value: "pro" } });
@@ -80,7 +85,15 @@ try {
   assert(shot.kind === "screenshot" && Number(shot.width) > 0 && Number(shot.height) > 0, "screenshot missing metadata", shot);
   log("screenshot_mobile_ok", { width: shot.width, height: shot.height, fullPage: shot.fullPage, device: shot.device });
 
-  okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/second") } }), "navigate");
+  const staleObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "stale observe");
+  const staleRef = (staleObservation.nodes ?? []).find((node) => node.name === "Stale target")?.ref;
+  assert(staleRef, "stale target ref missing", staleObservation);
+  okResult(await mcp("browser.act", { sessionId, action: { kind: "click", name: "Rerender counter" } }), "SPA rerender");
+  const stale = await mcp("browser.act", { sessionId, action: { kind: "click", target: { ref: staleRef } } });
+  assert(["not_found", "stale_target"].includes(statusOf(stale)), "stale ref was not rejected", stale);
+  log("spa_stale_ref_ok", { status: statusOf(stale) });
+
+  okResult(await mcp("browser.act", { sessionId, action: { kind: "navigate", url: page("/second.html") } }), "navigate");
   okResult(await mcp("browser.act", { sessionId, action: { kind: "back" } }), "back");
   okResult(await mcp("browser.act", { sessionId, action: { kind: "forward" } }), "forward");
   okResult(await mcp("browser.act", { sessionId, action: { kind: "reload" } }), "reload");
@@ -95,7 +108,7 @@ try {
   assert(card.ok === false && card.errorCode === "blocked_by_floor", "card fill was not blocked", card);
   log("card_blocked_ok");
 
-  const localWrite = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Local write" } });
+  const localWrite = await mcp("browser.act", { sessionId, action: { kind: "click", name: "Network write" } });
   assert(statusOf(localWrite) === "blocked", "post-action reconciliation did not block local write", localWrite);
   log("post_action_reconciliation_ok");
 
@@ -130,67 +143,15 @@ try {
     }
   } catch {}
   try {
-    if (fixtureServer) await new Promise((resolve) => fixtureServer.close(resolve));
+    if (fixtureServer) await fixtureServer.close();
   } catch {}
   try {
     if (uploadRoot) fs.rmSync(uploadRoot, { recursive: true, force: true });
   } catch {}
 }
 
-function startFixture() {
-  fixtureServer = http.createServer((req, res) => {
-    if (req.url === "/write") {
-      res.writeHead(204, { "Access-Control-Allow-Origin": "*" }).end();
-      return;
-    }
-    if (req.url === "/second") {
-      res.writeHead(200, { "content-type": "text/html" }).end(html(`
-        <h1>Second page</h1>
-        <a href="/">Home</a>
-        <p id="second-marker">Second marker</p>
-      `, "Second"));
-      return;
-    }
-    res.writeHead(200, { "content-type": "text/html" }).end(html(`
-      <h1>Browser Bridge QA Fixture</h1>
-      <p class="status">Ready marker</p>
-      <label>Name <input id="name" aria-label="Name"></label>
-      <label>Notes <textarea id="notes" placeholder="Notes"></textarea></label>
-      <label>Plan <select id="plan" aria-label="Plan"><option value="basic">Basic</option><option value="pro">Pro</option></select></label>
-      <p>Count: <span id="count">0</span></p>
-      <button id="increment">Increment</button>
-      <button id="local-write">Local write</button><span id="write-status"></span>
-      <form id="commit-form" action="/submitted" method="post"><button id="submit" type="submit">Submit order</button></form>
-      <label>Password <input id="password" type="password" aria-label="Password"></label>
-      <label>Credit card number <input id="card" aria-label="Credit card number"></label>
-      <form id="upload-form"><label>Creative assets <input id="assets" type="file" aria-label="Creative assets" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"></label><output id="accepted-files">none</output></form>
-      <div class="spacer"></div><button id="bottom">Bottom target</button>
-    `));
-  });
-  return new Promise((resolve) => fixtureServer.listen(fixturePort, "127.0.0.1", resolve));
-}
-
-function html(body, title = "Browser Bridge QA") {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>
-    body{font-family:Arial,sans-serif;margin:24px;line-height:1.4;min-height:1800px}
-    label{display:block;margin:12px 0}
-    button,a,select,input,textarea{font:inherit;margin:4px;padding:6px}
-    .spacer{height:900px}
-    .status{padding:8px;background:#eef;border:1px solid #99c}
-  </style></head><body>${body}<script>
-    document.addEventListener('click', async (event) => {
-      if (event.target && event.target.id === 'increment') {
-        document.getElementById('count').textContent = String(Number(document.getElementById('count').textContent || '0') + 1);
-      }
-      if (event.target && event.target.id === 'local-write') {
-        await fetch('/write', { method: 'POST', body: 'write=1' });
-        document.getElementById('write-status').textContent = 'write attempted';
-      }
-    });
-    document.getElementById('assets').addEventListener('change', (event) => {
-      document.getElementById('accepted-files').textContent = Array.from(event.target.files).map((file) => file.name).join('|');
-    });
-  </script></body></html>`;
+async function startFixture() {
+  fixtureServer = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
 }
 
 async function mcp(name, args = {}) {
