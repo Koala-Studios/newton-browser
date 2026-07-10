@@ -5,6 +5,9 @@ import type { BrowserAction, BrowserActionResultStatus, NewtonBrowserResult, Bro
 const TEXT_CAP = 240;
 const URL_CAP = 500;
 const NODE_CAP = 80;
+// Hard ceiling for a `mode: "text"` observation after redaction. The driver applies
+// the caller's `maxChars`; this bounds the result regardless of what crossed the relay.
+const TEXT_OBSERVE_CAP = 200_000;
 // Inline screenshot bytes (Proposal 29 / D5) ride result_json transiently (masked
 // pre-capture, pruned with the short-TTL command). Cap so a vision worker gets the
 // image without bloating Postgres; over the cap we drop bytes and flag truncated.
@@ -18,6 +21,14 @@ const INLINE_IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+
 const SENSITIVE_FIELD_NAME = /password|passcode|secret|token|api[_ -]?key|credential|otp|2fa|one[_ -]?time|verification code|security code|credit[_ -]?card|card[_ -]?number|cardnumber|\bcvv\b|\bcvc\b|\bccv\b|\bssn\b|social[_ -]?security|\biban\b|routing[_ -]?number|account[_ -]?number|sort[_ -]?code|tax[_ -]?id/i;
 const CARD_LIKE = /(?:\d[ -]?){13,19}/;
 const SSN_LIKE = /\b\d{3}-\d{2}-\d{4}\b/;
+
+// Free page text can contain card/SSN sequences that the keyed field redaction never
+// sees. Run the standard secret/PII pass, then mask bare card- and SSN-like digit runs.
+function redactObservationText(value: string): string {
+  return redactText(value)
+    .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED_SSN]")
+    .replace(/\b(?:\d[ -]?){13,19}\b/g, (match) => (/\d{13,19}/.test(match.replace(/[ -]/g, "")) ? "[REDACTED_CARD]" : match));
+}
 
 function redactSensitiveValue(name: string, value: string): string {
   if (SENSITIVE_FIELD_NAME.test(name) || SENSITIVE_FIELD_NAME.test(value)) return "[REDACTED]";
@@ -106,6 +117,19 @@ export function summarizeBrowserResult(result: NewtonBrowserResult | null): Reco
       capturedAt: result.capturedAt,
     };
   }
+  if (result.kind === "observation_text") {
+    return {
+      kind: result.kind,
+      mode: result.mode,
+      origin: redactBrowserOrigin(result.origin),
+      chars: result.chars,
+      truncated: result.truncated,
+      capturedAt: result.capturedAt,
+      ...(result.actionStatus ? { actionStatus: result.actionStatus } : {}),
+      ...(typeof result.verified === "boolean" ? { verified: result.verified } : {}),
+      ...(result.reason ? { reason: redactText(result.reason).slice(0, TEXT_CAP) } : {}),
+    };
+  }
   return { kind: result.kind, message: redactText(result.message).slice(0, TEXT_CAP) };
 }
 
@@ -158,6 +182,22 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
       ...(input.changed && typeof input.changed === "object" && !Array.isArray(input.changed) ? { changed: redactBrowserChanged(input.changed as Record<string, unknown>) } : {}),
+    };
+  }
+  if (input.kind === "observation_text") {
+    const bounded = redactObservationText(String(input.text ?? "")).slice(0, TEXT_OBSERVE_CAP);
+    return {
+      kind: "observation_text",
+      mode: "text",
+      origin: redactBrowserOrigin(input.origin),
+      title: redactText(String(input.title ?? "")).slice(0, TEXT_CAP),
+      text: bounded,
+      chars: bounded.length,
+      truncated: Boolean(input.truncated) || String(input.text ?? "").length > TEXT_OBSERVE_CAP,
+      capturedAt: isoOrNow(input.capturedAt),
+      ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
+      ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
+      ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
     };
   }
   if (input.kind === "observation") {

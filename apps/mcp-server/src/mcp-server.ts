@@ -195,6 +195,9 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
 
 function actionForTool(name: string, args: Record<string, unknown>): unknown {
   if (name === "browser.observe") {
+    if (args.mode === "text") {
+      return { kind: "observe", mode: "text", maxChars: clampNumber(args.maxChars, 20_000, 200, 200_000) };
+    }
     return { kind: "observe", mode: args.mode === "diff" ? "diff" : "full", maxNodes: clampNumber(args.maxNodes, 80, 1, 250) };
   }
   if (name === "browser.screenshot") {
@@ -308,7 +311,7 @@ function toolList(): Array<Record<string, unknown>> {
       tabMode: { type: "string", enum: ["owned_group", "current"] },
       instanceLabel: { type: "string" },
     }, ["origin"]),
-    tool("browser.observe", "Observe the current session tab.", { transport, sessionId: { type: "string" }, mode: { type: "string", enum: ["full", "diff"] }, maxNodes: { type: "number" } }, ["sessionId"]),
+    tool("browser.observe", "Observe the current session tab. mode:\"text\" returns bounded, redacted readable page text instead of the accessibility tree.", { transport, sessionId: { type: "string" }, mode: { type: "string", enum: ["full", "diff", "text"] }, maxNodes: { type: "number" }, maxChars: { type: "number" } }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", { transport, sessionId: { type: "string" }, action: { type: "object" } }, ["sessionId", "action"]),
     tool("browser.screenshot", "Capture and deliver a screenshot.", {
       transport,

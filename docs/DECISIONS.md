@@ -219,3 +219,15 @@ Runtime vs. development Node floors are split deliberately:
 - `claude-code` and `generic` are not edited in place — Claude Code owns its own MCP store and generic clients have no canonical path — so the tool prints the exact `claude mcp add-json` command or config block to apply. Interactive confirmation is intentionally omitted in favor of `--dry-run` preview plus mandatory backup, which are deterministic and testable.
 
 The planning logic (`planClientInstall`) is IO-free and unit-tested for all clients across Windows, macOS, and Linux path conventions.
+
+## 14. Readable-text observations, and no arbitrary JavaScript (2026-07-10)
+
+### `browser.observe` text mode (WS9.1)
+
+`browser.observe` accepts `mode: "text"` with an optional `maxChars` (200–200,000, default 20,000). It returns `{ kind: "observation_text", origin, title, text, chars, truncated }` where `text` is the page's main/article content (falling back to `document.body.innerText`). This is the cheap "read the prose" primitive; a full accessibility snapshot is unnecessary when the caller only needs to read, not target.
+
+The raw text crosses the loopback relay and is redacted host-side by `redactBrowserResult` before it reaches the client — the same trust boundary as accessible names in a normal observation. Redaction runs the standard secret/PII pass plus bare card- and SSN-like masking, then bounds the result at a hard 200,000-character cap independent of the requested `maxChars`. The mode is read-only (`decision.class: "read_only"`); it dispatches no input and mutates nothing.
+
+### No arbitrary JavaScript evaluation tool (WS9.7)
+
+Newton Browser will not expose a general JavaScript-evaluation or expression tool. Every mutation must route through a typed action so the safety floor's classification (`read_only`/`agentic`/`approval_required`/`blocked`, and the commit boundary) is sound. An eval tool would let a caller perform navigation, form submission, network writes, and DOM mutation without any of that classification, converting the floor from a guarantee into a suggestion. This is a deliberate capability gap, not an oversight. It may be revisited only as a sandboxed, provably read-only expression evaluator with its own contract; unrestricted evaluation is out of scope permanently.

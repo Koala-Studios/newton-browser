@@ -117,8 +117,11 @@ export type BrowserAction = {
   waitMs?: number;
   inline?: boolean;
   clip?: { x: number; y: number; width: number; height: number };
-  // Observation delta mode (Proposal 29 / D6): "diff" returns added/removed/updated.
-  mode?: "full" | "diff";
+  // Observation mode (Proposal 29 / D6): "diff" returns added/removed/updated;
+  // "text" (WS9.1) returns bounded, redacted readable page text.
+  mode?: "full" | "diff" | "text";
+  // Character cap for `mode: "text"` observations.
+  maxChars?: number;
 };
 
 export type BrowserTabRef = {
@@ -227,7 +230,24 @@ export type BrowserObservationDelta = {
   changed?: Record<string, unknown>;
 };
 
-export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserScreenshotResult | { kind: "ack"; message: string };
+// A readable-text observation (WS9.1): the page's main/article text (falling back
+// to body innerText), bounded and secret-redacted. Cheaper than a full accessibility
+// snapshot when the caller only needs to read prose, not target controls.
+export type BrowserObservationText = {
+  kind: "observation_text";
+  mode: "text";
+  origin: string;
+  title: string;
+  text: string;
+  chars: number;
+  truncated: boolean;
+  capturedAt: string;
+  actionStatus?: BrowserActionResultStatus;
+  verified?: boolean;
+  reason?: string;
+};
+
+export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | { kind: "ack"; message: string };
 
 export type BrowserControlStatus = {
   ok: boolean;

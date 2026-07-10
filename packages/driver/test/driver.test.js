@@ -536,6 +536,34 @@ test("driver records dialog, download, new-target, navigation, and network-write
   assert.deepEqual(window.finish(), { dialog: true, download: true, newTarget: true, navigation: true, networkWrite: true });
 });
 
+test("driver observe mode:text returns bounded main-content text", async () => {
+  const driver = createNewtonBrowserDriver();
+  const longText = "word ".repeat(100); // 500 chars, over the 200 floor
+  driver.evalString = async (expression) => {
+    if (expression === "location.href") return "https://example.com/article";
+    if (expression === "document.title") return "Article";
+    if (expression.includes("main,article")) return longText;
+    return "";
+  };
+  const result = await driver.observe({ mode: "text", maxChars: 200 });
+  assert.equal(result.kind, "observation_text");
+  assert.equal(result.mode, "text");
+  assert.equal(result.origin, "https://example.com");
+  assert.equal(result.title, "Article");
+  assert.equal(result.text.length, 200);
+  assert.equal(result.chars, 200);
+  assert.equal(result.truncated, true);
+});
+
+test("driver observe mode:text does not consult the accessibility tree", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.evalString = async (expression) => (expression.includes("main,article") ? "Just some prose." : expression === "location.href" ? "https://example.com/" : "");
+  driver.cdp = async (method) => { throw new Error(`unexpected cdp call: ${method}`); };
+  const result = await driver.observe({ mode: "text" });
+  assert.equal(result.text, "Just some prose.");
+  assert.equal(result.truncated, false);
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,

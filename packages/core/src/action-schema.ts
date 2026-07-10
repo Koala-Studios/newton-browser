@@ -48,7 +48,8 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   waitMs: { kind: "int", min: 0, max: 10_000 },
   inline: { kind: "bool" },
   clip: { kind: "clip" },
-  mode: { kind: "enum", values: ["full", "diff"] },
+  mode: { kind: "enum", values: ["full", "diff", "text"] },
+  maxChars: { kind: "int", min: 200, max: 200_000 },
 } as const satisfies Record<string, BrowserActionFieldSpec>;
 
 export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;

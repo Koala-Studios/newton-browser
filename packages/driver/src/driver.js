@@ -21,6 +21,11 @@ const AUTO_WAIT_TIMEOUT_MS = 8000;
 const AUTO_WAIT_POLL_MS = 120;
 const SETTLE_TIMEOUT_MS = 4000;
 const NODE_CAP = 80;
+// WS9.1 readable-text observation defaults. The DOM expression prefers main/article
+// content and falls back to body innerText; it reads nothing outside the live document.
+const TEXT_OBSERVE_CHAR_CAP = 20_000;
+const TEXT_OBSERVE_EXPRESSION =
+  "(function(){var m=document.querySelector('main,article,[role=\"main\"]');var el=m||document.body;return (el&&el.innerText)||(document.body&&document.body.innerText)||'';})()";
 const MAX_SCREENSHOT_WAIT_MS = 10000; // bound the pre-capture wait (D5)
 const MAX_SHOT_PX = 20000;            // bound an explicit-clip capture (D5)
 const CDP_TIMEOUT_MS = 20000;         // bound each CDP call so a hang can't wedge the pump
@@ -171,7 +176,8 @@ class NewtonBrowserDriver {
   // ── Observation (the read half) ───────────────────────────────────────────
   // Compact AX observation with backendNodeId-keyed refs (§7.5). Excludes
   // the bridge overlay UI so the agent never targets the bubble.
-  async observe({ maxNodes = NODE_CAP, query, mode = "full" } = {}) {
+  async observe({ maxNodes = NODE_CAP, query, mode = "full", maxChars } = {}) {
+    if (mode === "text") return this.observeText({ maxChars });
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
     const url = await this.evalString("location.href");
     // A navigation invalidates the diff baseline and the per-document owned-node
@@ -243,6 +249,28 @@ class NewtonBrowserDriver {
       }
     }
     return full;
+  }
+
+  // WS9.1: readable-text observation. Prefer main/article content, fall back to body
+  // innerText. Raw text crosses the loopback relay and is secret-redacted host-side by
+  // redactBrowserResult before it reaches the client, exactly like accessible names.
+  async observeText({ maxChars = TEXT_OBSERVE_CHAR_CAP } = {}) {
+    const cap = Math.max(200, Math.min(Number(maxChars) || TEXT_OBSERVE_CHAR_CAP, TEXT_OBSERVE_CHAR_CAP));
+    const url = await this.evalString("location.href");
+    const title = await this.evalString("document.title");
+    const raw = await this.evalString(TEXT_OBSERVE_EXPRESSION);
+    const full = String(raw ?? "");
+    const truncated = full.length > cap;
+    return {
+      kind: "observation_text",
+      mode: "text",
+      origin: safeOrigin(url),
+      title,
+      text: full.slice(0, cap),
+      chars: Math.min(full.length, cap),
+      truncated,
+      capturedAt: new Date().toISOString(),
+    };
   }
 
   async accessibilityTreesForOrigin(origin) {
