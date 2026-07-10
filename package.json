@@ -20,6 +20,7 @@
     "smoke:matrix": "node scripts/smoke/matrix.mjs",
     "smoke:chaos": "node scripts/smoke/chaos.mjs",
     "smoke:multi-client": "node scripts/smoke/multi-client.mjs",
+    "smoke:clean-user": "node scripts/smoke/clean-user.mjs",
     "smoke:real-browser": "node scripts/smoke/standalone-live-qa.mjs",
     "smoke:real-clients": "node scripts/smoke/real-clients.mjs",
     "release:check": "node scripts/release-check.mjs",
