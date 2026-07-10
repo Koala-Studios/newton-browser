@@ -67,13 +67,23 @@ try {
   const status = await tool("browser.status", {});
   assert(!status.isError && status.json.ready === true, "browser.status ready");
 
-  const first = await startSession();
-  const observation = await tool("browser.observe", { sessionId: first });
+  const [first, peer] = await Promise.all([startSession(), startSession()]);
+  const [observation, peerObservation] = await Promise.all([
+    tool("browser.observe", { sessionId: first }),
+    tool("browser.observe", { sessionId: peer }),
+  ]);
   assert(observation.json.result.kind === "observation", "observe result");
+  assert(peerObservation.json.result.kind === "observation", "peer observe result");
+  assert(observation.json.result.nodes[0].ref !== peerObservation.json.result.nodes[0].ref, "logical workers received distinct refs");
 
-  const screenshot = await rawTool("browser.screenshot", { sessionId: first, delivery: "image", fullPage: true });
+  const [screenshot, peerScreenshot] = await Promise.all([
+    rawTool("browser.screenshot", { sessionId: first, delivery: "image", fullPage: true }),
+    rawTool("browser.screenshot", { sessionId: peer, delivery: "image" }),
+  ]);
   const screenshotImage = screenshot.result.content.find((item) => item.type === "image" && item.mimeType === "image/png");
+  const peerScreenshotImage = peerScreenshot.result.content.find((item) => item.type === "image" && item.mimeType === "image/png");
   assert(screenshotImage && Buffer.from(screenshotImage.data, "base64").length > 128 * 1024, "large MCP image block");
+  assert(peerScreenshotImage && Buffer.from(peerScreenshotImage.data, "base64").length > 0, "peer MCP image block");
   const screenshotDirectory = path.join(configDirectory, "screenshots");
   const fileShot = await tool("browser.screenshot", { sessionId: first, delivery: "file", outputDirectory: screenshotDirectory });
   assert(fs.existsSync(fileShot.json.path), "file screenshot exists");
@@ -89,7 +99,14 @@ try {
   assert(setFiles.json.result.changed.files[0].filename === "asset.png", "set_files sanitized result");
 
   const tabs = await tool("browser.tabs.list", {});
-  assert(tabs.json.sessions.some((session) => session.sessionId === first), "tabs list session");
+  const firstTab = tabs.json.sessions.find((session) => session.sessionId === first);
+  const peerTab = tabs.json.sessions.find((session) => session.sessionId === peer);
+  assert(firstTab && peerTab, "tabs list both logical workers");
+  assert(firstTab.ownedTabId !== peerTab.ownedTabId && firstTab.tabGroupId !== peerTab.tabGroupId, "logical workers received distinct tabs and groups");
+  await tool("browser.session.stop", { sessionId: peer });
+  const afterPeerStop = await tool("browser.tabs.list", {});
+  assert(afterPeerStop.json.sessions.some((session) => session.sessionId === first), "scoped peer stop preserved first worker");
+  assert(!afterPeerStop.json.sessions.some((session) => session.sessionId === peer), "scoped peer stop removed only peer worker");
   const finalized = await tool("browser.tabs.finalize", { sessionId: first, disposition: "deliverable" });
   assert(finalized.json.finalized === true && finalized.json.tabKept === true, "finalize deliverable");
   await tool("browser.session.stop", { sessionId: first });
@@ -151,12 +168,15 @@ async function connectFakeExtension() {
   socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: challenge.hostInstanceId, proof }));
   await readyPromise;
   const state = { socket, disconnectOnNextCommand: false };
+  const sessionTabs = new Map();
   socket.on("message", (data) => {
     const message = JSON.parse(data.toString());
     if (message.type === "sessions_changed") {
       for (const session of message.sessions ?? []) {
         if (session.attached) continue;
-        sendExtensionRequest(socket, "attachTab", { sessionId: session.sessionId, tab: { ownedTabId: 501, tabGroupId: 601, attached: true, liveOrigin: session.origin } });
+        if (!sessionTabs.has(session.sessionId)) sessionTabs.set(session.sessionId, { tabId: 501 + sessionTabs.size, groupId: 601 + sessionTabs.size });
+        const owned = sessionTabs.get(session.sessionId);
+        sendExtensionRequest(socket, "attachTab", { sessionId: session.sessionId, tab: { ownedTabId: owned.tabId, tabGroupId: owned.groupId, attached: true, liveOrigin: session.origin } });
         sendExtensionRequest(socket, "subscribeSession", { sessionId: session.sessionId });
       }
       return;
@@ -168,15 +188,16 @@ async function connectFakeExtension() {
       return;
     }
     const action = message.command.action;
+    const owned = sessionTabs.get(message.command.sessionId) ?? { tabId: 500, groupId: 600 };
     let result;
     if (action.kind === "observe") {
-      result = observationResult();
+      result = observationResult(message.command.sessionId, owned.tabId);
     } else if (action.kind === "screenshot") {
-      result = { kind: "screenshot", mode: "cdp", origin: "https://example.com", title: "Packed smoke", width: action.fullPage ? 1440 : 1, height: action.fullPage ? 6000 : 1, fullPage: Boolean(action.fullPage), dataUrl: `data:image/png;base64,${action.fullPage ? LARGE_PNG : TINY_PNG}`, inline: true, capturedAt: new Date().toISOString() };
+      result = { kind: "screenshot", mode: "cdp", origin: "https://example.com", title: `Packed smoke ${message.command.sessionId}`, width: action.fullPage ? 1440 : 1, height: action.fullPage ? 6000 : 1, fullPage: Boolean(action.fullPage), dataUrl: `data:image/png;base64,${action.fullPage ? LARGE_PNG : TINY_PNG}`, inline: true, capturedAt: new Date().toISOString() };
     } else if (action.kind === "set_files") {
-      result = { ...observationResult(), actionStatus: "verified", changed: { files: [{ filename: path.basename(action.files[0]), sizeBytes: 68, mimeType: "image/png" }], fileCount: 1 } };
+      result = { ...observationResult(message.command.sessionId, owned.tabId), actionStatus: "verified", changed: { files: [{ filename: path.basename(action.files[0]), sizeBytes: 68, mimeType: "image/png" }], fileCount: 1 } };
     } else if (action.kind === "__finalize") {
-      result = { finalized: true, disposition: action.disposition, tabId: 501, tabKept: action.disposition !== "close" };
+      result = { finalized: true, disposition: action.disposition, tabId: owned.tabId, tabKept: action.disposition !== "close" };
     } else {
       result = { kind: "ack", message: "verified", actionStatus: "verified" };
     }
@@ -185,8 +206,8 @@ async function connectFakeExtension() {
   return state;
 }
 
-function observationResult() {
-  return { kind: "observation", mode: "cdp", origin: "https://example.com", title: "Packed smoke", nodes: [{ ref: "e7", role: "button", name: "Example" }], nodeCount: 1, truncated: false, capturedAt: new Date().toISOString() };
+function observationResult(sessionId = "session", tabId = 7) {
+  return { kind: "observation", mode: "cdp", origin: "https://example.com", title: `Packed smoke ${sessionId}`, nodes: [{ ref: `e${tabId}`, role: "button", name: "Example" }], nodeCount: 1, truncated: false, capturedAt: new Date().toISOString() };
 }
 
 function sendExtensionRequest(socket, method, params) {
