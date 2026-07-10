@@ -1,17 +1,63 @@
-# MCP Clients
+# MCP clients
 
-All clients start the same `browser-bridge-mcp` 0.1.0 tarball over stdio. Each process independently binds one free loopback port, so Codex and Claude Code can run concurrently without a shared daemon. Use the files under `examples/mcp`; replace only the absolute artifact path.
+Every configured client starts an independent `browser-bridge-mcp` process over stdio. Each process binds one free loopback port, so multiple clients can run concurrently without a shared daemon.
 
-Codex uses TOML under `[mcp_servers.browser-bridge]`. The Codex desktop app, CLI, and IDE extension share `~/.codex/config.toml`; project `.codex/config.toml` is supported only for trusted projects. Restart the client after changing MCP configuration.
+## Source checkout
 
-Claude Desktop and Claude Code use JSON `mcpServers` shapes. Claude Code may also manage the equivalent entry through its `claude mcp` commands. A new client session is required after changing the configuration.
+After `pnpm build`, point the client directly at the compiled entry point.
 
-Generic clients must support local stdio MCP servers and MCP image content blocks to use primary screenshot delivery. Clients that cannot render image blocks should request `delivery:"file"` with an absolute directory. Browser-only ChatGPT sessions do not read local Codex configuration and therefore cannot start this local package.
+Codex:
 
-The generated config command is:
+```toml
+[mcp_servers.browser-bridge]
+command = "node"
+args = ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+startup_timeout_sec = 45
+tool_timeout_sec = 150
+```
+
+Claude Desktop or Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "browser-bridge": {
+      "command": "node",
+      "args": ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+    }
+  }
+}
+```
+
+Generic stdio client:
+
+```json
+{
+  "command": "node",
+  "args": ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+}
+```
+
+Use an absolute path, restart the client after changing its configuration, and rebuild after pulling runtime changes.
+
+## Release artifact
+
+The files under `examples/mcp` contain the version-pinned tarball form used for release artifacts. Replace the example Windows tarball path with the absolute `.tgz` path on your machine.
+
+The generated artifact config command is:
 
 ```text
 browser-bridge-mcp --print-config codex|claude-desktop|claude-code|generic
 ```
 
-Set `BROWSER_BRIDGE_PACKAGE_SPEC` to the absolute private tarball before generating a private-artifact config. Without it, output names the future version-pinned registry package; that form is not usable until publication is separately approved.
+Set `BROWSER_BRIDGE_PACKAGE_SPEC` to the absolute tarball before generating a config. The default registry-package form is reserved for a future npm publication and is not currently installable.
+
+## Client notes
+
+- Codex desktop, CLI, and IDE surfaces share `~/.codex/config.toml`. Project `.codex/config.toml` should be used only for trusted projects.
+- Claude Desktop and Claude Code use JSON `mcpServers` shapes. Claude Code can also manage an equivalent entry through its `claude mcp` commands.
+- Generic clients must support local stdio MCP servers. MCP image-content support is required for primary screenshot delivery.
+- Clients that cannot render image blocks should request `delivery:"file"` with an absolute output directory.
+- Browser-only chat sessions cannot start a package installed on your local machine unless that product explicitly supports local MCP servers.
+
+After configuration, start a new client session and call `browser.status` before opening the first browser session.

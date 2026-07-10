@@ -2,6 +2,14 @@
 
 The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). Browser Bridge is loopback-only, origin-scoped, and local-user trusted, with optional hardened pairing. It does not inspect cookies, storage, profile files, saved passwords, or authentication tokens.
 
+## Reporting a vulnerability
+
+Do not disclose credentials, pairing secrets, sensitive page content, or exploitable vulnerability details in a public issue.
+
+If private vulnerability reporting is enabled for the GitHub repository, use **Security → Report a vulnerability**. Otherwise, open a minimal public issue asking the maintainers to establish a private contact channel; include no exploit details until that channel is confirmed.
+
+Please include the affected version or commit, operating system, browser and version, MCP client, deterministic reproduction steps, expected and actual behavior, and whether the issue crosses a documented trust boundary.
+
 ## Trust boundary
 
 Each stdio host binds one free address in `127.0.0.1:17321-17340`, and the host rejects ordinary webpage WebSocket origins. The default `local_trust` mode accepts the installed extension without a manual key. This is intentionally frictionless but allows another same-user local process to imitate an extension client if it can construct the accepted loopback request.

@@ -1,53 +1,109 @@
 # Installation
 
-Browser Bridge 0.1.0 is a private artifact release. It requires Node 24 or newer, a Chromium browser, the MCP tarball, and the extension ZIP. It does not require a source checkout, global npm install, daemon, or service.
+Browser Bridge 0.1.0 currently supports source installs and locally built release artifacts. It requires Node 24 or newer, pnpm 10.8.0, a Chromium browser, and an MCP client that can start a local stdio server. It does not require a daemon, hosted service, database, or global Browser Bridge package.
 
-## 1. Verify artifacts
+## Install from source
 
-Copy these files to `C:\BrowserBridge`:
+This is the recommended path while npm and browser-store packages are not published.
+
+### 1. Clone and build
+
+```bash
+git clone https://github.com/Koala-Studios/browser-bridge.git
+cd browser-bridge
+npm install --global pnpm@10.8.0
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+The build must produce:
+
+- `apps/mcp-server/dist/index.js`
+- `apps/extension/dist/src/service-worker.js`
+
+### 2. Load the unpacked extension
+
+Open `chrome://extensions` or `edge://extensions`, enable Developer mode, select **Load unpacked**, and choose `apps/extension`. The selected directory must contain `manifest.json` at its root.
+
+Do not select `apps/extension/dist`; that directory contains generated runtime files but not the extension manifest.
+
+### 3. Configure an MCP client
+
+Configure a local stdio MCP server with:
+
+```json
+{
+  "command": "node",
+  "args": ["/absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js"]
+}
+```
+
+Use a real absolute path. Windows paths in JSON or double-quoted TOML strings must escape backslashes.
+
+For Codex, add the equivalent `[mcp_servers.browser-bridge]` entry to `~/.codex/config.toml` and restart Codex. For Claude Desktop or Claude Code, merge the `mcpServers` entry documented in the root README and start a new client session. Generic clients use the same `command` and `args` shape.
+
+### 4. Verify startup
+
+Call `browser.status` from the MCP client. The default `local_trust` mode connects the extension automatically and requires no pairing key or popup step.
+
+The optional doctor command verifies Node support, configuration, transport-auth mode, the bounded loopback range, supported MCP revisions, and any extension connection visible through a running host:
+
+```bash
+node /absolute/path/to/browser-bridge/apps/mcp-server/dist/index.js --doctor
+```
+
+`ready: false` is a setup result, not a crash. Follow the typed `nextAction`.
+
+## Install from release artifacts
+
+When a GitHub release provides the following files, you can install without keeping a source checkout:
 
 - `browser-bridge-mcp-0.1.0.tgz`
 - `browser-bridge-extension-0.1.0.zip`
 - `browser-bridge-extension-0.1.0.zip.sha256`
 
-Verify the extension archive:
+Keep all three files together and verify the extension checksum before extracting it.
+
+PowerShell:
 
 ```powershell
-$expected = (Get-Content C:\BrowserBridge\browser-bridge-extension-0.1.0.zip.sha256).Split()[0]
-$actual = (Get-FileHash C:\BrowserBridge\browser-bridge-extension-0.1.0.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$expected = (Get-Content .\browser-bridge-extension-0.1.0.zip.sha256).Split()[0]
+$actual = (Get-FileHash .\browser-bridge-extension-0.1.0.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "Browser Bridge extension checksum mismatch" }
 ```
 
-Extract the ZIP to `C:\BrowserBridge\extension`. In Chrome or Edge, open the extensions page, enable Developer mode, choose Load unpacked, and select that directory. The selected directory must contain `manifest.json` at its root.
+macOS or Linux:
 
-## 2. Configure one client
-
-Copy the matching version-pinned example from `examples/mcp`, keeping the absolute tarball path correct for that machine. `npx --package <absolute-tarball> browser-bridge-mcp` installs only into the npm cache and auto-starts one stdio host per client; it is not a global install.
-
-For Codex, merge `examples/mcp/codex.toml` into `~/.codex/config.toml` and restart Codex. Official Codex guidance stores MCP configuration there and defines local stdio servers with `command` and `args`.
-
-For Claude Desktop, merge the `mcpServers` object into its desktop configuration and restart the app. For Claude Code, add the server from `examples/mcp/claude-code.json` at user or project scope and start a new session. Generic clients use `examples/mcp/generic.json`.
-
-## 3. Start—no pairing required
-
-Start or restart the client and call `browser.status`. The default `local_trust` mode connects the extension automatically; there is no pairing key or extension-popup step.
-
-The optional doctor command verifies Node support, host-policy configuration, transport-auth mode, the bounded loopback range, supported MCP revisions, and any extension connection visible through a running host:
-
-```powershell
-npx --yes --package C:\BrowserBridge\browser-bridge-mcp-0.1.0.tgz browser-bridge-mcp --doctor
+```bash
+sha256sum --check browser-bridge-extension-0.1.0.zip.sha256
 ```
 
-`ready:false` is a setup result, not a crash; follow its typed `nextAction`.
+Extract the ZIP and load the extracted directory through the browser's **Load unpacked** flow. Then copy the matching example from `examples/mcp`, replace its tarball path with the absolute path on your machine, and restart the MCP client.
 
-Then start an exact-origin session. No separate host command or extension-panel click is part of normal startup.
+`npx --package <absolute-tarball> browser-bridge-mcp` installs into the npm cache and starts one stdio host per client. It is not a global install.
 
-### Chrome and Edge together
+To generate a version-pinned artifact configuration, set `BROWSER_BRIDGE_PACKAGE_SPEC` to the absolute tarball path and run:
 
-Both extensions may remain enabled. The host atomically assigns each session to one browser; the other browser stays connected as standby and cannot attach to or receive commands for that session. No disable/reload choreography is required.
+```text
+browser-bridge-mcp --print-config codex|claude-desktop|claude-code|generic
+```
 
-The default `auto` selection keeps setup zero-touch. To choose one browser deterministically, add `"browserTarget":"chrome"` or `"browserTarget":"edge"` to `%LOCALAPPDATA%\BrowserBridge\config.json` and restart the MCP client. The equivalent per-process override is `BROWSER_BRIDGE_BROWSER=chrome|edge`.
+## Chrome and Edge together
 
-### Optional hardened pairing
+Both extensions may remain enabled. The host atomically assigns each session to one browser; the other browser stays connected as standby and cannot attach to or receive commands for that session.
 
-To require the key handshake, create `%LOCALAPPDATA%\BrowserBridge\config.json` containing `{"transportAuth":"paired"}` (merge this field with any existing `browserTarget` or `hostPolicies`). Restart the MCP client, run `--doctor`, and paste the displayed secret into the extension popup once. Do not store the secret in screenshots, tickets, repositories, or chat.
+The default `auto` selection requires no extension toggling. To choose one browser, add `"browserTarget":"chrome"` or `"browserTarget":"edge"` to the per-user `config.json` and restart the MCP client. The equivalent process override is `BROWSER_BRIDGE_BROWSER=chrome|edge`.
+
+## Optional hardened pairing
+
+To require the HMAC handshake, add `"transportAuth":"paired"` to the per-user `config.json`, restart the MCP client, run `--doctor`, and paste the displayed secret into the extension popup once.
+
+Do not store the secret in screenshots, issues, repositories, MCP arguments, or chat.
+
+Configuration locations:
+
+- Windows: `%LOCALAPPDATA%\BrowserBridge\config.json`
+- macOS: `~/Library/Application Support/BrowserBridge/config.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/browser-bridge/config.json`
+
+Continue with [MCP client configuration](MCP_CLIENTS.md) or [troubleshooting](TROUBLESHOOTING.md).

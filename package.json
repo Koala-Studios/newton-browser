@@ -2,6 +2,15 @@
   "name": "browser-bridge-workspace",
   "version": "0.1.0",
   "private": true,
+  "description": "Local-only browser control for MCP clients using an existing Chrome or Edge profile.",
+  "homepage": "https://github.com/Koala-Studios/browser-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/Koala-Studios/browser-bridge/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Koala-Studios/browser-bridge.git"
+  },
   "type": "module",
   "packageManager": "pnpm@10.8.0",
   "engines": {

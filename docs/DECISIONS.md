@@ -156,13 +156,13 @@ Public package exports point to compiled JavaScript under `dist/`; no package bi
 - `browser-bridge-extension-0.1.0.zip`
 - `browser-bridge-extension-0.1.0.zip.sha256`
 
-The repository stays private and carries no license file until public-license posture is separately approved.
+The repository is public as of 2026-07-10. npm publication, browser-store submission, and adding a license remain separate approval gates; no license file is added until the public-license posture is explicitly approved.
 
 ## 10. Boundary and stale concepts
 
 Runtime source, package metadata, scripts, fixtures, docs, and artifacts must not import, name, or reference the source product/repository, its services, or its private shared files. The boundary check also rejects retired concepts: the old non-local transport enum, database host-policy table comments, raw TypeScript package bins, cross-package relative source escapes, and the former private shared module.
 
-The one provenance hash in the root README and evidence history is non-runtime provenance and is the only temporary source-reference exception during extraction; release artifacts contain no such reference.
+The provenance hash in the evidence history is non-runtime provenance and is the only temporary source-reference exception from extraction; release artifacts contain no such reference.
 
 ## 11. Simultaneous-browser arbitration
 

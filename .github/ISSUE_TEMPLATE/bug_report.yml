@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible Browser Bridge defect
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include credentials, pairing secrets, sensitive page content, or private screenshots. Security issues belong in the private reporting flow described in docs/SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The Browser Bridge version or Git commit you tested.
+      placeholder: 0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node version, browser/version, and MCP client/version.
+      placeholder: Windows 11; Node 24.x; Chrome 150; Codex ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Deterministic reproduction
+      description: List the smallest exact sequence that reproduces the issue.
+      placeholder: |
+        1. Build with ...
+        2. Load the extension ...
+        3. Call browser.status ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include typed error codes and sanitized logs where useful.
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add sanitized context only. Dragging files here may make them public.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched existing issues and troubleshooting guidance.
+          required: true
+        - label: I removed credentials, pairing secrets, sensitive page content, and private local paths.
+          required: true
+        - label: This is not a privately reportable security vulnerability.
+          required: true
