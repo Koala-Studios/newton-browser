@@ -24,6 +24,7 @@ const NODE_CAP = 80;
 const MAX_SCREENSHOT_WAIT_MS = 10000; // bound the pre-capture wait (D5)
 const MAX_SHOT_PX = 20000;            // bound an explicit-clip capture (D5)
 const CDP_TIMEOUT_MS = 20000;         // bound each CDP call so a hang can't wedge the pump
+const SCROLL_DISPATCH_TIMEOUT_MS = 2000; // scroll verifies page state even if Chrome drops the wheel acknowledgement
 const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays practical
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
 const INLINE_IMAGE_MAX_CHARS = 23_000_000; // supports up to the 16 MiB decoded relay bound
@@ -626,12 +627,32 @@ class BrowserBridgeDriver {
   async scroll(action) {
     const dy = Number(action.value) || 600;
     const beforeY = await this.evalNumber("window.scrollY");
-    await this.cdp("Input.dispatchMouseEvent", { type: "mouseWheel", x: 10, y: 10, deltaX: 0, deltaY: dy });
+    const acknowledged = await this.cdp(
+      "Input.dispatchMouseEvent",
+      { type: "mouseWheel", x: 10, y: 10, deltaX: 0, deltaY: dy },
+      SCROLL_DISPATCH_TIMEOUT_MS,
+    ).then(() => true).catch(() => false);
     await this.sendToPage({ type: "BB_DRIVE_SCROLL", dy });
-    await this.settleShort();
-    const afterY = await this.evalNumber("window.scrollY");
+    const afterY = await this.waitForScrollPositionChange(beforeY);
     const observation = await this.observeDelta();
-    return this.withObservationMeta(Math.abs(afterY - beforeY) > 1 ? "verified" : "dispatched_unverified", { scrollY: Math.round(afterY) }, observation);
+    const changed = Math.abs(afterY - beforeY) > 1;
+    return this.withObservationMeta(
+      changed ? "verified" : "dispatched_unverified",
+      { scrollY: Math.round(afterY), wheelAcknowledged: acknowledged },
+      observation,
+      !changed && !acknowledged ? "wheel_acknowledgement_timeout" : undefined,
+    );
+  }
+
+  async waitForScrollPositionChange(beforeY, timeoutMs = 1200) {
+    const deadline = Date.now() + timeoutMs;
+    let current = beforeY;
+    while (Date.now() < deadline) {
+      current = await this.evalNumber("window.scrollY");
+      if (Math.abs(current - beforeY) > 1) return current;
+      await delay(AUTO_WAIT_POLL_MS);
+    }
+    return current;
   }
 
   // First-class wait_for: ref-appears / text-appears / networkIdle. Never

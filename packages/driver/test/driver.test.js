@@ -213,6 +213,26 @@ test("driver falls back to the proven DOM hit test when the page-coordinate hit 
   assert.equal(functions[1].includes("document.elementFromPoint"), true);
 });
 
+test("driver verifies scroll state when Chrome drops the wheel acknowledgement", async () => {
+  const driver = createBrowserBridgeDriver();
+  const calls = [];
+  const positions = [0, 900];
+  driver.evalNumber = async (expression) => expression === "window.scrollY" ? positions.shift() ?? 900 : 0;
+  driver.cdp = async (method, params, timeoutMs) => {
+    calls.push({ method, params, timeoutMs });
+    if (method === "Input.dispatchMouseEvent") throw new Error("cdp_timeout_input_dispatchmouseevent");
+    return {};
+  };
+  driver.sendToPage = async () => {};
+  driver.observeDelta = async () => ({ kind: "observation_delta", nodes: [] });
+
+  const result = await driver.scroll({ value: 900 });
+
+  assert.equal(result.status, "verified");
+  assert.deepEqual(result.changed, { scrollY: 900, wheelAcknowledged: false });
+  assert.equal(calls[0].timeoutMs, 2000);
+});
+
 test("driver resolves top-level action target shorthands from observations", async () => {
   const driver = createBrowserBridgeDriver();
   driver.refIndex.set("e2", 2);
