@@ -1,4 +1,7 @@
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { createBrowserBridgeHost } from "../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
@@ -10,9 +13,11 @@ const results = [];
 let fixtureServer;
 let bridge;
 let sessionId = "";
+let uploadRoot = "";
 
 try {
   await startFixture();
+  uploadRoot = materializeUploadFixtures();
   bridge = createBrowserBridgeHost();
   await bridge.listen(hostPort, "127.0.0.1");
   log("servers_started", { fixture: page(), hostPort });
@@ -37,7 +42,7 @@ try {
 
   const observed = okResult(await mcp("browser.observe", { sessionId, maxNodes: 120 }), "observe");
   assert(observed.origin === `http://127.0.0.1:${fixturePort}`, "observe origin mismatch", observed);
-  for (const name of ["Increment", "Local write", "Submit order", "Name", "Plan", "Password", "Credit card number"]) {
+  for (const name of ["Increment", "Local write", "Submit order", "Name", "Plan", "Password", "Credit card number", "Creative assets"]) {
     assert(hasName(observed, name), `observe missing ${name}`, observed);
   }
   log("observe_ok", { nodeCount: observed.nodeCount, kind: observed.kind });
@@ -94,6 +99,17 @@ try {
   assert(statusOf(localWrite) === "blocked", "post-action reconciliation did not block local write", localWrite);
   log("post_action_reconciliation_ok");
 
+  const uploadObservation = okResult(await mcp("browser.observe", { sessionId, maxNodes: 160 }), "upload observe");
+  const uploadNode = (uploadObservation.nodes ?? []).find((node) => node.name === "Creative assets");
+  assert(uploadNode?.ref, "file input ref missing", uploadObservation);
+  const uploadFiles = fs.readdirSync(uploadRoot).map((name) => path.join(uploadRoot, name));
+  const uploaded = await mcp("browser.act", { sessionId, action: { kind: "set_files", target: { ref: uploadNode.ref }, files: uploadFiles } });
+  assert(statusOf(uploaded) === "verified", "set_files was not verified", uploaded);
+  const accepted = uploaded.result?.changed?.files ?? uploaded.changed?.files ?? [];
+  assert(accepted.length === uploadFiles.length, "browser FileList acceptance mismatch", uploaded);
+  assert(accepted.every((file) => !String(file.filename).includes("\\") && !String(file.filename).includes("/")), "set_files exposed a local path", accepted);
+  log("real_file_inputs_ok", { files: accepted.map((file) => file.filename), autoSubmit: false });
+
   const stopped = await mcp("browser.stop_all", {});
   assert(stopped.stopped, "stop_all failed", stopped);
   await waitFor(async () => {
@@ -115,6 +131,9 @@ try {
   } catch {}
   try {
     if (fixtureServer) await new Promise((resolve) => fixtureServer.close(resolve));
+  } catch {}
+  try {
+    if (uploadRoot) fs.rmSync(uploadRoot, { recursive: true, force: true });
   } catch {}
 }
 
@@ -144,6 +163,7 @@ function startFixture() {
       <form id="commit-form" action="/submitted" method="post"><button id="submit" type="submit">Submit order</button></form>
       <label>Password <input id="password" type="password" aria-label="Password"></label>
       <label>Credit card number <input id="card" aria-label="Credit card number"></label>
+      <form id="upload-form"><label>Creative assets <input id="assets" type="file" aria-label="Creative assets" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"></label><output id="accepted-files">none</output></form>
       <div class="spacer"></div><button id="bottom">Bottom target</button>
     `));
   });
@@ -166,6 +186,9 @@ function html(body, title = "Browser Bridge QA") {
         await fetch('/write', { method: 'POST', body: 'write=1' });
         document.getElementById('write-status').textContent = 'write attempted';
       }
+    });
+    document.getElementById('assets').addEventListener('change', (event) => {
+      document.getElementById('accepted-files').textContent = Array.from(event.target.files).map((file) => file.name).join('|');
     });
   </script></body></html>`;
 }
@@ -215,6 +238,20 @@ function log(step, detail = {}) {
   const entry = { step, ...detail };
   results.push(entry);
   console.log(JSON.stringify(entry));
+}
+
+function materializeUploadFixtures() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "browser-bridge-live-files-"));
+  const fixtures = {
+    "asset.png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    "asset.jpg": Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    "asset.webp": Buffer.from("RIFF0000WEBP", "ascii"),
+    "asset.gif": Buffer.from("GIF89a", "ascii"),
+    "asset.mp4": Buffer.from([0, 0, 0, 16, ...Buffer.from("ftyp", "ascii")]),
+    "asset.webm": Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
+  };
+  for (const [name, bytes] of Object.entries(fixtures)) fs.writeFileSync(path.join(root, name), bytes);
+  return root;
 }
 
 function assert(condition, message, detail = {}) {

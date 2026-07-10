@@ -85,7 +85,7 @@ Input: `{}`. Result:
 {
   "ready": true,
   "version": "0.1.0",
-  "protocolVersions": ["2024-11-05", "2025-03-26", "2025-11-25"],
+  "protocolVersions": ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"],
   "hostInstanceId": "uuid",
   "port": 17321,
   "paired": true,

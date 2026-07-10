@@ -1,7 +1,7 @@
 import { configDirectory, loadOrCreatePairingConfig } from "./config.ts";
 
 export const BROWSER_BRIDGE_VERSION = "0.1.0";
-export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-11-25"] as const;
+export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
 
 export async function handleUtilityCommand(args: string[]): Promise<boolean> {
   if (args.includes("--version")) {

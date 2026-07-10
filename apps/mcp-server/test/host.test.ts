@@ -17,7 +17,7 @@ const PAIRING_SECRET = "a".repeat(43);
 
 test("MCP negotiates required protocol versions and lists release tools", async () => {
   const bridge = testBridge();
-  for (const protocolVersion of ["2024-11-05", "2025-11-25"]) {
+  for (const protocolVersion of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]) {
     const initialized = await handleMcpMessage(bridge, { jsonrpc: "2.0", id: protocolVersion, method: "initialize", params: { protocolVersion } });
     assert.equal((initialized?.result as any)?.protocolVersion, protocolVersion);
   }

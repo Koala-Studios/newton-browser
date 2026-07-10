@@ -50,7 +50,7 @@ child.stderr.on("data", (chunk) => { stderr += chunk; });
 
 try {
   await waitForHealth();
-  for (const protocolVersion of ["2024-11-05", "2025-11-25"]) {
+  for (const protocolVersion of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]) {
     const initialized = await request("initialize", { protocolVersion });
     assert(initialized.result?.protocolVersion === protocolVersion, `initialize ${protocolVersion}`);
   }
@@ -121,7 +121,7 @@ try {
   ]);
   assert(exitCode === 0, `packed host exit ${exitCode}: ${stderr}`);
   assert(!stdoutBuffer.trim(), "stdout contains only complete MCP frames");
-  process.stdout.write(`${JSON.stringify({ ok: true, protocols: 2, tools: toolNames.length, packedEntry: entry })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, protocols: 4, tools: toolNames.length, packedEntry: entry })}\n`);
 } catch (error) {
   child.kill();
   throw error;
