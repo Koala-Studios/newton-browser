@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Bridge Fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; min-height: 4200px; }
+    label, fieldset { display: block; margin: 12px 0; }
+    input, textarea, select, button, [contenteditable], [role="combobox"] { font: inherit; margin: 4px; padding: 8px; }
+    #lazy-region { margin-top: 1800px; height: 1200px; background: repeating-linear-gradient(45deg,#eef,#eef 10px,#dde 10px,#dde 20px); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Browser Bridge deterministic fixture</h1>
+  <p id="ready">fixture-ready</p>
+
+  <section aria-label="Basic form controls">
+    <label>Name <input id="name" autocomplete="off"></label>
+    <label>Notes <textarea id="notes"></textarea></label>
+    <label>Plan <select id="plan"><option>Basic</option><option>Pro</option></select></label>
+    <label><input id="agree" type="checkbox"> Agree</label>
+    <div id="editable" contenteditable="true" role="textbox" aria-label="Editable notes"></div>
+    <div id="custom-combobox" role="combobox" tabindex="0" aria-label="Custom region" aria-expanded="false">Choose region</div>
+  </section>
+
+  <section aria-label="Dynamic controls">
+    <p>Count: <span id="count">0</span></p>
+    <button id="rerender">Rerender counter</button>
+    <button id="increment">Increment</button>
+    <div id="spa-slot"><button id="stale-target">Stale target</button></div>
+  </section>
+
+  <section aria-label="Frames and shadow DOM">
+    <fixture-shadow></fixture-shadow>
+    <iframe title="Same origin frame" src="/frame.html"></iframe>
+    <iframe title="Cross origin frame" id="cross-frame"></iframe>
+  </section>
+
+  <section aria-label="Safety signals">
+    <label>Password <input id="password" type="password" autocomplete="current-password"></label>
+    <label>One-time code <input id="otp" autocomplete="one-time-code"></label>
+    <label>Credit card number <input id="card" autocomplete="cc-number"></label>
+    <button id="dialog">Open JavaScript dialog</button>
+    <a id="download" href="/download" download>Download fixture</a>
+    <button id="popup">Open new target</button>
+    <button id="network-write">Network write</button>
+  </section>
+
+  <section aria-label="Commit boundaries">
+    <form id="draft-form"><label>Draft title <input id="draft-title"></label><button id="save-draft" type="button">Save draft</button></form>
+    <form id="publish-form" action="/submitted" method="post"><button id="publish" type="submit">Publish fixture</button></form>
+  </section>
+
+  <section aria-label="File inputs">
+    <label>Creative assets <input id="assets" type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm" multiple></label>
+    <input id="hidden-asset" class="hidden" type="file" accept="image/png">
+    <output id="accepted-files">none</output>
+    <output id="submit-count">0</output>
+  </section>
+
+  <div id="lazy-region" aria-label="Long lazy page">Long-page screenshot payload region</div>
+  <a id="origin-transition" href="/second.html">Same-origin transition</a>
+
+  <script type="module" src="/fixture.js"></script>
+</body>
+</html>

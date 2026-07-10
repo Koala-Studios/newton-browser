@@ -1,0 +1,5 @@
+[mcp_servers.browser-bridge]
+command = "npx"
+args = ["--yes", "--package", "C:\\BrowserBridge\\browser-bridge-mcp-0.1.0.tgz", "browser-bridge-mcp"]
+startup_timeout_sec = 45
+tool_timeout_sec = 150

@@ -32,7 +32,8 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
 
 function printConfig(target: string | undefined): string {
   const command = "npx";
-  const args = ["--yes", `browser-bridge-mcp@${BROWSER_BRIDGE_VERSION}`];
+  const packageSpec = process.env.BROWSER_BRIDGE_PACKAGE_SPEC || `browser-bridge-mcp@${BROWSER_BRIDGE_VERSION}`;
+  const args = ["--yes", "--package", packageSpec, "browser-bridge-mcp"];
   if (target === "codex") {
     return [
       "[mcp_servers.browser-bridge]",
