@@ -18,16 +18,33 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
-| WS9 | Capability gaps (new tools) | ⛔ | not started |
-| WS10 | Performance / observation budgets | ⛔ | not started |
-| WS11 | Release 0.4.0 | ⛔ | versions still 0.3.0 (correct until WS11) |
+| WS9 | Capability gaps (new tools) | 🔶 | 9.1 text observe + 9.7 eval-exclusion done; 9.2–9.6, 9.8 remaining |
+| WS10 | Performance / observation budgets | ⛔ | not started (needs live measurement) |
+| WS11 | Release 0.4.0 | ⛔ `[H5]` | versions still 0.3.0 (correct until WS11); depends on WS9/WS10 + npm creds |
 | WS12 | Discovery (ROADMAP/PRIVACY/landing) | ⛔ | not started |
 
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 98/98 pass
+- `pnpm test` — ✅ 107/107 pass
 - `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
+
+## WS9 breakdown
+
+| Item | Capability | Status | Why / what it needs |
+|------|-----------|--------|---------------------|
+| 9.1 | `observe` text mode | ✅ committed | read-only; done to full quality with redaction + tests |
+| 9.7 | eval exclusion (decision) | ✅ committed | DECISIONS §14 |
+| 9.8 | `fill_form` batch fill | ⛔ | needs per-field floor expansion (security-sensitive — the host floor is currently one-action-per-call) |
+| 9.4 | dialog accept/dismiss | ⛔ | replaces `unsupported_dialog_control`; needs CDP `Page.handleJavaScriptDialog` + live evidence |
+| 9.6 | viewport / `resize` | ⛔ | session-persistent viewport state + re-apply on attach |
+| 9.2 | `browser.console` | ⛔ | new MCP tool + CDP console ring buffer in driver/extension |
+| 9.3 | `browser.network` | ⛔ | new MCP tool + CDP network ring buffer; origin-gated bodies, header exclusion |
+| 9.5 | multi-tab sessions | ⛔ | CDP target tracking; most invasive |
+
+All remaining WS9 items also require live Chrome/Edge evidence rows in `qa-ledger.md`
+per the release-gate convention — the extension must be loaded unpacked in a real
+browser, which needs the human.
 
 ## Residual cosmetic items (non-blocking)
 
@@ -40,3 +57,13 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 
 - 2026-07-10 — Ledger created; audited WS0–WS8 committed, WS4 staged/incomplete,
   lint gate red. Beginning WS4 completion → WS11.
+- 2026-07-10 — WS4 completed (`6fc4ae3`): Node 20 runtime floor reconciled across
+  manifests/esbuild/doctor/boundary guard; `--install` command with backup/dry-run/
+  force + contract tests; DECISIONS §13. Lint gate green.
+- 2026-07-10 — WS9.1 + WS9.7 committed (`f710a97`): `observe` text mode with host-side
+  redaction (card/SSN masking, 200k cap) + tests; permanent no-arbitrary-JS decision.
+  DECISIONS §14. Gate green, 107/107 tests.
+- 2026-07-10 — Paused WS9 after the two low-risk increments. Remaining WS9 items
+  (9.2/9.3 new tools + CDP ring buffers, 9.4 dialogs, 9.5 multi-tab, 9.6 viewport,
+  9.8 fill_form floor expansion) each need heavier infra, security-sensitive floor
+  design, and/or live-browser evidence. WS10/WS11 depend on them; WS11 also needs H5.
