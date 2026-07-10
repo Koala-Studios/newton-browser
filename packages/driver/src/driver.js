@@ -178,12 +178,12 @@ class BrowserBridgeDriver {
     // observe (bbox is viewport-relative — a scroll moves every node).
     const scrollY = (await this.evalNumber("window.scrollY")) || 0;
     const reuseBboxes = Math.abs(scrollY - (this.lastScrollY || 0)) < 1;
-    const tree = await this.cdp("Accessibility.getFullAXTree", {}).catch(() => ({ nodes: [] }));
+    const trees = await this.accessibilityTreesForOrigin(safeOrigin(url));
     const filterText = typeof query === "string" ? query.toLowerCase() : "";
     const nodes = [];
     this.refIndex.clear();
     let truncated = false;
-    for (const axNode of tree.nodes ?? []) {
+    for (const axNode of trees.flatMap((tree) => tree.nodes ?? [])) {
       if (nodes.length >= cap) { truncated = true; break; }
       const role = axNode.role?.value;
       if (!role || !ACTIONABLE_ROLES.has(role)) continue;
@@ -236,6 +236,17 @@ class BrowserBridgeDriver {
       }
     }
     return full;
+  }
+
+  async accessibilityTreesForOrigin(origin) {
+    const main = await this.cdp("Accessibility.getFullAXTree", {}).catch(() => ({ nodes: [] }));
+    if (!origin) return [main];
+    const page = await this.cdp("Page.getFrameTree", {}).catch(() => null);
+    const frameIds = sameOriginChildFrameIds(page?.frameTree, origin);
+    const children = await Promise.all(frameIds.map((frameId) =>
+      this.cdp("Accessibility.getFullAXTree", { frameId }).catch(() => ({ nodes: [] })),
+    ));
+    return [main, ...children];
   }
 
   // Post-action observation as a compact diff (D6). Used after in-place actions
@@ -929,6 +940,9 @@ class BrowserBridgeDriver {
   // wrapped line for inline content), then the bounding-box centre as a fallback.
   // This is what makes off-screen / multi-line inline links reliably clickable.
   async candidatePoints(backendNodeId) {
+    const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }).catch(() => null);
+    const cdpPoints = centersForQuads(quads?.quads);
+    if (cdpPoints.length > 0) return cdpPoints;
     const objectId = await this.objectIdFor(backendNodeId);
     if (!objectId) return [];
     const res = await this.cdp("Runtime.callFunctionOn", {
@@ -960,6 +974,9 @@ class BrowserBridgeDriver {
   }
 
   async boxFor(backendNodeId) {
+    const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }).catch(() => null);
+    const quadBox = boundsForQuads(quads?.quads);
+    if (quadBox) return quadBox;
     const objectId = await this.objectIdFor(backendNodeId);
     if (objectId) {
       const rect = await this.cdp("Runtime.callFunctionOn", {
@@ -995,15 +1012,21 @@ class BrowserBridgeDriver {
   }
 
   async hitTestTarget(backendNodeId, x, y) {
+    const hit = await this.cdp("DOM.getNodeForLocation", {
+      x: Math.round(x),
+      y: Math.round(y),
+      includeUserAgentShadowDOM: true,
+      ignorePointerEventsNone: false,
+    }).catch(() => null);
+    if (!Number.isInteger(hit?.backendNodeId)) return false;
+    if (hit.backendNodeId === backendNodeId) return true;
     const objectId = await this.objectIdFor(backendNodeId);
-    if (!objectId) return false;
+    const hitObjectId = await this.objectIdFor(hit.backendNodeId);
+    if (!objectId || !hitObjectId) return false;
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
-      functionDeclaration: `function (x, y) {
-        const hit = document.elementFromPoint(x, y);
-        return Boolean(hit && (hit === this || this.contains(hit)));
-      }`,
-      arguments: [{ value: x }, { value: y }],
+      functionDeclaration: "function (hit) { return Boolean(hit && (hit === this || this.contains(hit))); }",
+      arguments: [{ objectId: hitObjectId }],
       returnByValue: true,
     }).catch(() => null);
     return Boolean(result?.result?.value);
@@ -1272,6 +1295,41 @@ function normalizedWaitFor(waitFor) {
   if (typeof waitFor.state === "string") output.state = waitFor.state;
   if (typeof waitFor.timeoutMs === "number") output.timeoutMs = waitFor.timeoutMs;
   return Object.keys(output).length > 0 ? output : null;
+}
+
+function sameOriginChildFrameIds(frameTree, origin) {
+  const ids = [];
+  const visit = (tree) => {
+    for (const child of tree?.childFrames ?? []) {
+      if (safeOrigin(child?.frame?.url) !== origin) continue;
+      if (typeof child?.frame?.id === "string") ids.push(child.frame.id);
+      visit(child);
+    }
+  };
+  visit(frameTree);
+  return ids;
+}
+
+function centersForQuads(quads) {
+  if (!Array.isArray(quads)) return [];
+  return quads.flatMap((quad) => {
+    if (!Array.isArray(quad) || quad.length < 8 || quad.some((value) => !Number.isFinite(value))) return [];
+    return [{
+      x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4,
+      y: (quad[1] + quad[3] + quad[5] + quad[7]) / 4,
+    }];
+  });
+}
+
+function boundsForQuads(quads) {
+  if (!Array.isArray(quads)) return null;
+  const points = quads.flatMap((quad) => Array.isArray(quad) ? quad : []);
+  if (points.length < 8 || points.some((value) => !Number.isFinite(value))) return null;
+  const xs = points.filter((_value, index) => index % 2 === 0);
+  const ys = points.filter((_value, index) => index % 2 === 1);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
 function textWaitExpression(text) {

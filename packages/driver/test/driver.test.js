@@ -13,6 +13,7 @@ test("driver observation emits stable refs and excludes bridge overlay nodes", a
   };
   driver.evalNumber = async (expression) => (expression === "window.scrollY" ? 0 : 0);
   driver.cdp = async (method) => {
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", url: "https://example.com/page" } } };
     assert.equal(method, "Accessibility.getFullAXTree");
     return {
       nodes: [
@@ -134,6 +135,63 @@ test("driver actionablePoint scrolls offscreen targets and verifies candidate hi
   assert.deepEqual(point, { x: 60, y: 40 });
   assert.equal(scrolled, 1);
   assert.equal(hitTests, 2);
+});
+
+test("driver observes same-origin iframe AX trees and excludes cross-origin frames", async () => {
+  const driver = createBrowserBridgeDriver();
+  const requestedFrames = [];
+  driver.evalString = async (expression) => {
+    if (expression === "location.href") return "https://example.com/page";
+    if (expression === "document.title") return "Frame fixture";
+    return "";
+  };
+  driver.evalNumber = async () => 0;
+  driver.cdp = async (method, params) => {
+    if (method === "Page.getFrameTree") return {
+      frameTree: {
+        frame: { id: "main", url: "https://example.com/page" },
+        childFrames: [
+          { frame: { id: "same", url: "https://example.com/frame.html" } },
+          { frame: { id: "cross", url: "https://other.example/frame.html" } },
+        ],
+      },
+    };
+    if (method === "Accessibility.getFullAXTree") {
+      requestedFrames.push(params?.frameId ?? "main");
+      if (params?.frameId === "same") return { nodes: [axNode(202, "button", "Same-origin frame button")] };
+      if (params?.frameId === "cross") return { nodes: [axNode(303, "button", "Cross-origin denied target")] };
+      return { nodes: [axNode(101, "button", "Main button")] };
+    }
+    return {};
+  };
+  driver.isOwnedOverlayNodeCached = async () => false;
+  driver.boxFor = async (backendNodeId) => ({ x: backendNodeId, y: 10, width: 80, height: 20 });
+
+  const observation = await driver.observe({ maxNodes: 10 });
+
+  assert.deepEqual(requestedFrames, ["main", "same"]);
+  assert.deepEqual(observation.nodes.map((node) => node.name), ["Main button", "Same-origin frame button"]);
+});
+
+test("driver uses CDP page coordinates for iframe candidates and hit testing", async () => {
+  const driver = createBrowserBridgeDriver();
+  const calls = [];
+  driver.cdp = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "DOM.getContentQuads") return { quads: [[100, 200, 180, 200, 180, 240, 100, 240]] };
+    if (method === "DOM.getNodeForLocation") return { backendNodeId: 77, frameId: "same" };
+    return {};
+  };
+
+  assert.deepEqual(await driver.candidatePoints(77), [{ x: 140, y: 220 }]);
+  assert.deepEqual(await driver.boxFor(77), { x: 100, y: 200, width: 80, height: 40 });
+  assert.equal(await driver.hitTestTarget(77, 140, 220), true);
+  assert.deepEqual(calls.find((call) => call.method === "DOM.getNodeForLocation")?.params, {
+    x: 140,
+    y: 220,
+    includeUserAgentShadowDOM: true,
+    ignorePointerEventsNone: false,
+  });
 });
 
 test("driver resolves top-level action target shorthands from observations", async () => {
