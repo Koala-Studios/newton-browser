@@ -9,6 +9,7 @@
   },
   "files": [
     "manifest.json",
+    "onboarding.html",
     "panel.html",
     "src",
     "README.md",

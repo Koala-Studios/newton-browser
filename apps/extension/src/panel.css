@@ -77,3 +77,9 @@ h1 {
   color: color-mix(in srgb, CanvasText 70%, transparent);
   margin: 0;
 }
+
+.setup-guide {
+  color: #2563eb;
+  font-size: 12px;
+  justify-self: start;
+}

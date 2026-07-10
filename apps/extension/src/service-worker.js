@@ -5,6 +5,7 @@ import { createChromeTabsPort } from "./vendor/newton-browser-driver/chrome-tabs
 import { createLocalPanelTransport } from "./local-transport.js";
 import { OWNER_LABEL } from "./config.js";
 import { createToolbarIconController } from "./toolbar-icon.js";
+import { openOnFirstInstall } from "./onboarding-lifecycle.js";
 
 const transport = createLocalPanelTransport({
   notify: notifyPanels,
@@ -40,9 +41,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onInstalled?.addListener?.(() => {
+chrome.runtime.onInstalled?.addListener?.((details) => {
   ensureBridgeAlarm();
   void syncHost();
+  openOnFirstInstall(details, () => chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") }));
 });
 
 chrome.runtime.onStartup?.addListener?.(() => {

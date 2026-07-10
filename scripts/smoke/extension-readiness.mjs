@@ -4,6 +4,10 @@ import path from "node:path";
 
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
 const tarball = path.resolve(`artifacts/newton-browser-${version}.tgz`);
+const extensionArtifact = path.resolve(`artifacts/newton-browser-extension-${version}.zip`);
+if (!fs.existsSync(extensionArtifact) || !fs.readFileSync(extensionArtifact).includes(Buffer.from("onboarding.html"))) {
+  throw new Error("packed extension artifact is missing onboarding.html");
+}
 const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");
 const child = spawn(process.execPath, [npxCli, "--yes", "--package", tarball, "newton-browser"], {
   cwd: process.cwd(),

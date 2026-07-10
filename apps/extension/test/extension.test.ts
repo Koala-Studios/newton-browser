@@ -12,9 +12,13 @@ test("standalone extension source has no forbidden product coupling", () => {
     "manifest.json",
     "package.json",
     "panel.html",
+    "onboarding.html",
     "icons/icon-generated-v2.png",
     "src/config.js",
     "src/local-transport.js",
+    "src/onboarding-lifecycle.js",
+    "src/onboarding.js",
+    "src/onboarding.css",
     "src/panel.css",
     "src/panel.js",
     "src/service-worker.js",
@@ -45,6 +49,7 @@ test("standalone extension root manifest points at generated runtime", () => {
     manifest.web_accessible_resources[0].resources,
     ["dist/src/overlay.js", "dist/src/overlay.css"],
   );
+  assert.match(fs.readFileSync(path.join(appRoot, "onboarding.html"), "utf8"), /dist\/src\/onboarding\.js/);
 });
 
 test("standalone extension build materializes package runtime into dist", () => {
@@ -62,6 +67,8 @@ test("standalone extension build materializes package runtime into dist", () => 
     "src/vendor/newton-browser-driver/driver.js",
     "src/overlay.js",
     "src/overlay.css",
+    "src/onboarding.js",
+    "src/onboarding.css",
   ]) {
     assert.ok(fs.existsSync(path.join(distRoot, file)), file);
   }
@@ -84,8 +91,19 @@ test("standalone extension build materializes package runtime into dist", () => 
   assert.match(serviceWorker, /ensureForActiveSessions\(activeTab\?\.id, bindings\)/);
   assert.match(serviceWorker, /cleanupOrphanBindings/);
   assert.match(serviceWorker, /createToolbarIconController/);
+  assert.match(serviceWorker, /openOnFirstInstall/);
   const localTransport = fs.readFileSync(path.join(distRoot, "src/local-transport.js"), "utf8");
   assert.doesNotMatch(localTransport, /enqueueCommand|postEscalation|no_live_session|command_timeout|sessions = new Map/);
+});
+
+test("first-run onboarding opens once for installation and never for updates", async () => {
+  const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/onboarding-lifecycle.js")).href;
+  const { openOnFirstInstall } = await import(`${moduleUrl}?install=${Date.now()}`);
+  let opened = 0;
+  assert.equal(openOnFirstInstall({ reason: "update" }, () => { opened += 1; }), false);
+  assert.equal(openOnFirstInstall({ reason: "install" }, () => { opened += 1; }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(opened, 1);
 });
 
 test("icon renderer creates manifest and toolbar assets that are packed", () => {

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Set up Newton Browser</title>
+    <link rel="stylesheet" href="dist/src/onboarding.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon-128.png" width="48" height="48" alt="">
+        <div>
+          <p class="eyebrow">Newton Browser</p>
+          <h1>Set up local browser control</h1>
+        </div>
+        <p id="connection-status" class="status" data-connected="false" aria-live="polite">Waiting for an MCP client…</p>
+      </header>
+
+      <section>
+        <p class="step">1. Install the host</p>
+        <h2>Add Newton Browser to your MCP client</h2>
+        <p>The extension connects only to an MCP host running on this computer.</p>
+        <div id="configurations" class="configurations"></div>
+        <p class="install-command"><code>newton-browser --install &lt;client&gt;</code> can add a supported client configuration for you.</p>
+      </section>
+
+      <section>
+        <p class="step">2. Verify</p>
+        <h2>Ask your agent to call <code>browser.status</code></h2>
+        <p>When an MCP client is running, this page changes to <strong>Connected</strong>.</p>
+      </section>
+
+      <details>
+        <summary>Troubleshooting</summary>
+        <ul>
+          <li>If status stays disconnected, restart your MCP client and load this extension in the same Chrome or Edge profile.</li>
+          <li>Run <code>newton-browser --doctor</code> to check Node, the bounded loopback port range, and extension state.</li>
+          <li>If pairing is required, copy the one-time secret from <code>--doctor</code> into the extension popup. Never put it in MCP configuration.</li>
+        </ul>
+      </details>
+
+      <footer><a href="https://github.com/Koala-Studios/newton-browser" target="_blank" rel="noreferrer">Documentation and troubleshooting</a></footer>
+    </main>
+    <script type="module" src="dist/src/onboarding.js"></script>
+  </body>
+</html>

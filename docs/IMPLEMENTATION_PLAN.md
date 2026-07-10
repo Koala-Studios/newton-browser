@@ -352,6 +352,8 @@ recorded in `docs/RELEASE.md` for future update uploads.
 
 ## WS6 — First-run onboarding page
 
+**Status: in progress 2026-07-10.**
+
 **Goal:** installing the extension immediately tells the user whether the bridge works
 and how to configure their client — currently install ends in silence.
 
