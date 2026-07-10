@@ -192,3 +192,7 @@ The project, formerly "Browser Bridge", is renamed to **Newton Browser** (`newto
 The standalone-boundary guards that previously blocked the terms "newton" (a legacy internal codename, guarded in `scripts/verify-boundary.mjs` and the extension coupling test) and "koala studios" (now the public GitHub org and MIT copyright holder) are lifted by this decision; both strings are now sanctioned public branding. All other boundary and identity guards remain in force.
 
 MCP tool names (`browser.*`) are deliberately unchanged: they are generic, describe the capability rather than the brand, and renaming them would invalidate recorded client transcripts for no benefit. Historical evidence under `test/evidence/` and recorded artifacts keep the old name as accurate records of what was tested. No compatibility shims are provided for old env vars, config directories, or the old auth protocol id; 0.3.0 installs must be reconfigured.
+
+## 13. Popup session-summary contract (2026-07-10)
+
+The popup remains a glanceable, local status surface. `NB_PANEL_STATUS` and `NB_STATE` carry at most 32 summaries, each containing only an exact session origin, `owned` or `current` mode, and an optional instance label. They never carry a URL path, page title, favicon, page text, or any other page-derived content. `NB_PANEL_STOP_ALL` maps only to the existing local `stopAll` lifecycle path; it does not create an approval or action channel. Contract tests enforce the field projection and empty-list behavior.

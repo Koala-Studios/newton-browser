@@ -1,14 +1,20 @@
+import { createPanelViewModel } from "./panel-session-summary.js";
+
 const elements = {
   status: document.getElementById("status"),
   statusText: document.getElementById("status-text"),
   pairing: document.getElementById("pairing"),
   pairingSecret: document.getElementById("pairing-secret"),
   pairingMessage: document.getElementById("pairing-message"),
+  sessions: document.getElementById("sessions"),
+  sessionList: document.getElementById("session-list"),
+  stopAll: document.getElementById("stop-all"),
+  version: document.getElementById("version"),
 };
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "NB_STATE") {
-    applyStatus(Boolean(message.hostConnected), Number(message.hostCount ?? 0), Boolean(message.pairingRequired));
+    applyPanel(message);
   }
 });
 
@@ -16,13 +22,15 @@ void refresh();
 
 async function refresh() {
   const response = await send({ type: "NB_PANEL_STATUS" });
-  applyStatus(Boolean(response.ok && response.hostConnected), Number(response.hostCount ?? 0), Boolean(response.pairingRequired));
+  applyPanel(response);
 }
 
 elements.pairing.addEventListener("submit", (event) => {
   event.preventDefault();
   void savePairing();
 });
+
+elements.stopAll.addEventListener("click", () => { void stopAll(); });
 
 async function savePairing() {
   const secret = elements.pairingSecret.value.trim();
@@ -35,7 +43,45 @@ async function savePairing() {
     return;
   }
   elements.pairingSecret.value = "";
-  applyStatus(true, Number(response.hostCount ?? 1), false);
+  applyPanel({ ...response, hostConnected: true, pairingRequired: false });
+}
+
+async function stopAll() {
+  elements.stopAll.disabled = true;
+  const response = await send({ type: "NB_PANEL_STOP_ALL" });
+  elements.stopAll.disabled = false;
+  applyPanel(response);
+}
+
+function applyPanel(response) {
+  const connected = Boolean(response.ok !== false && response.hostConnected);
+  applyStatus(connected, Number(response.hostCount ?? 0), Boolean(response.pairingRequired));
+  const model = createPanelViewModel({
+    sessions: response.sessions,
+    extensionVersion: chrome.runtime.getManifest().version,
+    hostVersion: response.hostVersion,
+  });
+  elements.sessions.hidden = !model.showSessions;
+  elements.stopAll.hidden = !model.showStopAll;
+  elements.sessionList.replaceChildren(...model.rows.map(sessionRow));
+  elements.version.textContent = model.version;
+}
+
+function sessionRow(session) {
+  const row = document.createElement("li");
+  const origin = document.createElement("span");
+  const mode = document.createElement("span");
+  origin.textContent = session.origin;
+  mode.className = "session-mode";
+  mode.textContent = session.mode;
+  row.append(origin, mode);
+  if (session.label) {
+    const label = document.createElement("span");
+    label.className = "session-label";
+    label.textContent = session.label;
+    row.append(label);
+  }
+  return row;
 }
 
 function applyStatus(connected, hostCount, pairingRequired) {

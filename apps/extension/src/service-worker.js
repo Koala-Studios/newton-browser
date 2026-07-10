@@ -6,6 +6,7 @@ import { createLocalPanelTransport } from "./local-transport.js";
 import { OWNER_LABEL } from "./config.js";
 import { createToolbarIconController } from "./toolbar-icon.js";
 import { openOnFirstInstall } from "./onboarding-lifecycle.js";
+import { summarizePanelSessions } from "./panel-session-summary.js";
 
 const transport = createLocalPanelTransport({
   notify: notifyPanels,
@@ -63,12 +64,11 @@ async function handleMessage(message) {
   switch (message?.type) {
     case "NB_PANEL_STATUS":
       await syncHost();
-      return {
-        state: runtime.snapshot(),
-        hostConnected: transport.isHostConnected(),
-        hostCount: transport.connectedHostCount(),
-        pairingRequired: transport.pairingRequired(),
-      };
+      return panelStatus();
+    case "NB_PANEL_STOP_ALL": {
+      const result = await runtime.stopAll();
+      return { ...await panelStatus(), stopped: result.stopped };
+    }
     case "NB_PAIRING_SAVE": {
       const secret = String(message.secret ?? "").trim();
       if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) throw new Error("invalid_pairing_secret");
@@ -105,6 +105,17 @@ function onHostSessionsChanged() {
   void ensureForHostSessions().catch(() => {});
 }
 
+async function panelStatus(state = runtime.snapshot()) {
+  const sessions = await transport.listSessions().catch(() => []);
+  return {
+    state,
+    hostConnected: transport.isHostConnected(),
+    hostCount: transport.connectedHostCount(),
+    pairingRequired: transport.pairingRequired(),
+    sessions: summarizePanelSessions(sessions),
+  };
+}
+
 function evaluateFloorLocally(input) {
   return evaluateBrowserFloor({
     action: input.action,
@@ -123,12 +134,10 @@ async function notifyPanels(event) {
   }
   if (event?.type === "state") {
     await rememberOwnedBindings(event.state);
+    const panel = await panelStatus(event.state);
     await chrome.runtime.sendMessage({
       type: "NB_STATE",
-      state: event.state,
-      hostConnected: transport.isHostConnected(),
-      hostCount: transport.connectedHostCount(),
-      pairingRequired: transport.pairingRequired(),
+      ...panel,
     }).catch(() => {});
     return;
   }

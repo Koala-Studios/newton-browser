@@ -21,6 +21,7 @@ test("standalone extension source has no forbidden product coupling", () => {
     "src/onboarding.css",
     "src/panel.css",
     "src/panel.js",
+    "src/panel-session-summary.js",
     "src/service-worker.js",
     "src/toolbar-icon.js",
   ];
@@ -83,7 +84,7 @@ test("standalone extension build materializes package runtime into dist", () => 
   assert.doesNotMatch(panel, /approval|id="host"|id="start"|id="observe"|id="screenshot"/i);
   const serviceWorker = fs.readFileSync(path.join(distRoot, "src/service-worker.js"), "utf8");
   assert.doesNotMatch(serviceWorker, /void maybeConnectHost|function maybeConnectHost/);
-  assert.doesNotMatch(serviceWorker, /NB_PANEL_HOST_CONNECT|NB_PANEL_START|NB_PANEL_COMMAND|NB_PANEL_STOP_ALL|NB_PANEL_APPROVAL|ApprovalSink|PanelApproval|approvalSink/);
+  assert.doesNotMatch(serviceWorker, /NB_PANEL_HOST_CONNECT|NB_PANEL_START|NB_PANEL_COMMAND|NB_PANEL_APPROVAL|ApprovalSink|PanelApproval|approvalSink/);
   assert.match(serviceWorker, /void syncHost\(\)/);
   assert.match(serviceWorker, /runtime\.renewLeases\(\)/);
   assert.match(serviceWorker, /chrome\.storage\.local\.get\(SESSION_BINDINGS_KEY\)/);
@@ -92,6 +93,8 @@ test("standalone extension build materializes package runtime into dist", () => 
   assert.match(serviceWorker, /cleanupOrphanBindings/);
   assert.match(serviceWorker, /createToolbarIconController/);
   assert.match(serviceWorker, /openOnFirstInstall/);
+  assert.match(serviceWorker, /case "NB_PANEL_STOP_ALL"/);
+  assert.match(serviceWorker, /sessions: summarizePanelSessions\(sessions\)/);
   const localTransport = fs.readFileSync(path.join(distRoot, "src/local-transport.js"), "utf8");
   assert.doesNotMatch(localTransport, /enqueueCommand|postEscalation|no_live_session|command_timeout|sessions = new Map/);
 });
@@ -136,6 +139,23 @@ test("toolbar icon state is debounced and follows host connection state", async 
   timers.at(-1)?.();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(calls, [{ path: { 16: "icons/action-connected-16.png", 32: "icons/action-connected-32.png" } }]);
+});
+
+test("panel session contract exposes only bounded origin, mode, and label summaries", async () => {
+  const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/panel-session-summary.js")).href;
+  const { summarizePanelSessions, createPanelViewModel } = await import(`${moduleUrl}?sessions=${Date.now()}`);
+  const sessions = [
+    { origin: "https://example.com", tabMode: "owned_group", instanceLabel: "research", title: "do not expose", url: "https://example.com/private" },
+    { origin: "https://example.net", tabMode: "current", instanceLabel: "review" },
+  ];
+  assert.deepEqual(summarizePanelSessions(sessions), [
+    { origin: "https://example.com", mode: "owned", label: "research" },
+    { origin: "https://example.net", mode: "current", label: "review" },
+  ]);
+  assert.deepEqual(createPanelViewModel({ sessions: [], extensionVersion: "0.3.0" }), {
+    rows: [], showSessions: false, showStopAll: false, version: "Extension 0.3.0",
+  });
+  assert.equal(createPanelViewModel({ sessions, extensionVersion: "0.3.0", hostVersion: "0.4.0" }).showStopAll, true);
 });
 
 test("standalone extension polls host health without opening a WebSocket when unavailable", async () => {

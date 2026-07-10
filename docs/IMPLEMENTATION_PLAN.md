@@ -382,6 +382,8 @@ Connected when a host starts; screenshots captured for WS5.4; qa-ledger row reco
 
 ## WS7 — Popup: minimal session visibility
 
+**Status: in progress 2026-07-10.**
+
 **Goal (scoped by owner decision):** the popup stays a glanceable surface the user is
 *not expected to check* — it only answers "is it connected, what is it touching" when
 someone does look. Hard cap on scope; anything beyond the list below is out.
