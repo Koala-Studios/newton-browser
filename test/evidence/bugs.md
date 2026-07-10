@@ -260,5 +260,5 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: the host authenticated multiple extension sockets but had no per-session owner. It broadcast session setup and commands to every subscribing socket, so both browsers could race to create/attach tabs and could execute the same command.
 - Fix: each browser profile announces a stable local identity and browser family; the host atomically claims every session for exactly one eligible socket, routes commands/results only to that owner, denies standby mutation, fails in-flight work closed on owner loss, and clears browser-local tab identifiers before safe standby takeover. Optional `browserTarget` selects Chrome or Edge while leaving both extensions enabled.
 - Regression: paired-host dual-browser tests prove exactly one claim, zero standby commands, denied standby attach, safe takeover, and explicit Edge selection. Two real simultaneous-browser suites proved `connectedBrowsers:["chrome","edge"]`, one session owner, 25/25 steps, real files, screenshots, sensitive-field blocks, and clean teardown in both explicit-Edge and default-auto modes.
-- Fix commit: pending arbitration slice.
+- Fix commit: `2faf97a`.
 - Status: closed.

@@ -76,7 +76,7 @@ Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, o
 
 ## B6 — Release proof gate
 
-All required command names exist. `pnpm release:check` covers boundary, types, 79 source tests, build, deterministic artifacts, packed install, fixture checks, Node matrix, three chaos repetitions, two host processes, isolated user directories, and orphan-port audit. The prior evidence-bearing commit `ec5b8da` passed three consecutive runs; the arbitration slice requires a fresh three-run final gate before release acceptance is current.
+All required command names exist. `pnpm release:check` covers boundary, types, 79 source tests, build, deterministic artifacts, packed install, fixture checks, Node matrix, three chaos repetitions, two host processes, isolated user directories, and orphan-port audit. Arbitration commit `2faf97a` passed three consecutive final runs (77.8s, 77.3s, and 77.5s); every run completed all 11 stages with zero skips, failures, or orphan ports.
 
 | evidence class | status | authoritative evidence / remaining proof |
 | --- | --- | --- |
@@ -100,4 +100,4 @@ Optional live advertising workflow proof is `not-approved` and is not a release 
 
 ## Current release conclusion
 
-B0 contracts and repository implementation through B6 are substantially implemented; Chrome, Edge, simultaneous-browser arbitration, current-tab focus escape, actual-client, and cold-start evidence are proved. B6 acceptance is **not complete** until the arbitration slice passes a fresh three-run release gate. Literal source-unavailable full-workspace proof and an actual second account/machine also remain unproven and require either stronger external evidence or explicit operator disposition. Severance work must not begin before that audit closes.
+B0 contracts and repository implementation through B6 are implemented, and the final three-run release gate is green on the simultaneous-browser arbitration commit. Chrome, Edge, current-tab focus escape, actual-client, packed, cold-start, and cleanup evidence are proved. Two environmental acceptance rows remain unproven: a full workspace run with the extraction source literally unavailable, and an actual second Windows account/machine. They require stronger external evidence or explicit operator disposition before the B0-B6 audit can be called fully closed and before severance work begins.
