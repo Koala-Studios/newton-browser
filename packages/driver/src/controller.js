@@ -413,7 +413,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   async function liveTabOrigin(tabId) {
     if (typeof tabId !== "number") return "";
     const tab = await tabs.getTab(tabId).catch(() => null);
-    return safeOrigin(tab?.url);
+    return safeOrigin(tab?.pendingUrl) || safeOrigin(tab?.url);
   }
 
   return runtime;

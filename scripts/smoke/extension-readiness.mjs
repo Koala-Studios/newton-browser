@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -51,11 +51,13 @@ try {
   }
   process.stdout.write(`${JSON.stringify({ ...last, elapsedMs: Date.now() - startedAt, secretExposed: false })}\n`);
 } finally {
+  const exited = new Promise((resolve) => child.once("exit", resolve));
   child.stdin.end();
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(() => { child.kill(); resolve(undefined); }, 5_000)),
+  const cleanExit = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
   ]);
+  if (!cleanExit) terminateProcessTree(child);
 }
 
 async function request(method, params) {
@@ -73,4 +75,16 @@ function cleanEnvironment() {
   const env = { ...process.env, npm_config_update_notifier: "false" };
   delete env.npm_config_verify_deps_before_run;
   return env;
+}
+
+function terminateProcessTree(processHandle) {
+  if (processHandle.exitCode !== null || processHandle.signalCode !== null) return;
+  if (process.platform === "win32") {
+    spawnSync("taskkill.exe", ["/PID", String(processHandle.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    return;
+  }
+  processHandle.kill("SIGKILL");
 }

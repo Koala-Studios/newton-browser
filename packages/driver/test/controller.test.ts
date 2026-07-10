@@ -359,6 +359,55 @@ test("BridgeRuntime binds host sessions once when ensure runs concurrently", asy
   assert.equal(attachTabCalls, 2, "binding reports pending and attached states exactly once each");
 });
 
+test("BridgeRuntime accepts the granted pending URL while an owned tab is loading", async () => {
+  let attachCalls = 0;
+  let stopCalls = 0;
+  const driver = {
+    attached: false,
+    ownsTab: false,
+    accent: null,
+    async attach() { this.attached = true; },
+    async detach() { this.attached = false; },
+    isAttachedTo() { return this.attached; },
+    async reassertOverlay() {},
+    markDetached() { this.attached = false; },
+  };
+  const runtime = createBridgeRuntime({
+    transport: {
+      async createSession() { return { sessionId: "unused" }; },
+      async attachTab() { attachCalls += 1; },
+      subscribe() { return () => {}; },
+      async listSessions() {
+        return [{
+          sessionId: "pending-navigation",
+          origin: "https://example.com/path",
+          allowedOrigins: ["https://example.com"],
+          tabMode: "owned_group",
+        }];
+      },
+      async postEvent() {},
+      async postResult() {},
+      async stopSession() { stopCalls += 1; },
+      async stopAll() {},
+    },
+    evaluateFloor() {
+      return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "browser_bridge.act", commitBoundary: "none" };
+    },
+    tabs: {
+      async createOwnedTab() { return { tabId: 101, groupId: 201 }; },
+      async removeTab() {},
+      async getTab() { return { id: 101, url: "about:blank", pendingUrl: "https://example.com/path" }; },
+    },
+    driverFactory: () => driver,
+  });
+
+  await runtime.ensureForActiveSessions();
+
+  assert.equal(attachCalls, 2, "pending and attached states are both reported");
+  assert.equal(stopCalls, 0, "the granted pending navigation is not rejected");
+  assert.equal(runtime.snapshot().sessions[0]?.tabId, 101);
+});
+
 test("BridgeRuntime refuses a current-tab session when focus moved outside the origin grant", async () => {
   const stopped: string[] = [];
   let attachCalls = 0;
