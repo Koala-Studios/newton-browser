@@ -1018,15 +1018,32 @@ class BrowserBridgeDriver {
       includeUserAgentShadowDOM: true,
       ignorePointerEventsNone: false,
     }).catch(() => null);
-    if (!Number.isInteger(hit?.backendNodeId)) return false;
+    if (!Number.isInteger(hit?.backendNodeId)) return this.runtimeHitTestTarget(backendNodeId, x, y);
     if (hit.backendNodeId === backendNodeId) return true;
     const objectId = await this.objectIdFor(backendNodeId);
     const hitObjectId = await this.objectIdFor(hit.backendNodeId);
-    if (!objectId || !hitObjectId) return false;
+    if (objectId && hitObjectId) {
+      const result = await this.cdp("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: "function (hit) { return Boolean(hit && (hit === this || this.contains(hit))); }",
+        arguments: [{ objectId: hitObjectId }],
+        returnByValue: true,
+      }).catch(() => null);
+      if (result?.result?.value === true) return true;
+    }
+    return this.runtimeHitTestTarget(backendNodeId, x, y);
+  }
+
+  async runtimeHitTestTarget(backendNodeId, x, y) {
+    const objectId = await this.objectIdFor(backendNodeId);
+    if (!objectId) return false;
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
-      functionDeclaration: "function (hit) { return Boolean(hit && (hit === this || this.contains(hit))); }",
-      arguments: [{ objectId: hitObjectId }],
+      functionDeclaration: `function (x, y) {
+        const hit = document.elementFromPoint(x, y);
+        return Boolean(hit && (hit === this || this.contains(hit)));
+      }`,
+      arguments: [{ value: x }, { value: y }],
       returnByValue: true,
     }).catch(() => null);
     return Boolean(result?.result?.value);

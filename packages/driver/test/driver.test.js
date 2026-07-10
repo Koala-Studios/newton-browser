@@ -194,6 +194,25 @@ test("driver uses CDP page coordinates for iframe candidates and hit testing", a
   });
 });
 
+test("driver falls back to the proven DOM hit test when the page-coordinate hit differs", async () => {
+  const driver = createBrowserBridgeDriver();
+  const functions = [];
+  driver.objectIdFor = async (backendNodeId) => `object-${backendNodeId}`;
+  driver.cdp = async (method, params) => {
+    if (method === "DOM.getNodeForLocation") return { backendNodeId: 88, frameId: "main" };
+    if (method === "Runtime.callFunctionOn") {
+      functions.push(params.functionDeclaration);
+      return { result: { value: params.functionDeclaration.includes("elementFromPoint") } };
+    }
+    return {};
+  };
+
+  assert.equal(await driver.hitTestTarget(77, 140, 220), true);
+  assert.equal(functions.length, 2);
+  assert.equal(functions[0].includes("this.contains(hit)"), true);
+  assert.equal(functions[1].includes("document.elementFromPoint"), true);
+});
+
 test("driver resolves top-level action target shorthands from observations", async () => {
   const driver = createBrowserBridgeDriver();
   driver.refIndex.set("e2", 2);
