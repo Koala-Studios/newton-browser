@@ -298,3 +298,12 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: focused driver test and real Chrome/Edge moving-target phase.
 - Fix commit: `305bd51`.
 - Status: closed.
+
+## BB-034 — General-purpose distribution retained identity-specific coupling
+
+- Minimal repro: scan source, tests, documentation, evidence, and skill assets for personal, organization, or unrelated platform terminology; inspect the default host-policy collection.
+- Root cause: extraction preserved a vendor-specific default host manifest and identity-specific examples even though the product boundary was intended to be general-purpose.
+- Fix: ship no vendor-specific host-policy defaults, preserve the generic configurable policy engine and structural floor, neutralize examples and redaction identifiers, and strengthen the skill's routing, recovery, sign-in handoff, safety, and browser-choice rules.
+- Regression: `scripts/verify-boundary.mjs` now rejects identity-specific coupling and product-name drift; the full standalone suite, build, packed install, and skill validator pass.
+- Fix commit: `0fb12d7`.
+- Status: closed.
