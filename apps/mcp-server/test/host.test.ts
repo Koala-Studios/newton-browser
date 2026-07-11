@@ -120,6 +120,60 @@ test("authenticated ws transport queues, subscribes, and carries frames above 64
   }
 });
 
+test("observation results are secret-redacted before reaching the MCP client", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
+    const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "full" });
+    const command = await commandPromise;
+    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+      kind: "observation", mode: "cdp", origin: "https://example.com", title: "Checkout",
+      nodes: [{ ref: "n0", role: "textbox", name: "Card number", value: "4111 1111 1111 1111" }],
+      nodeCount: 1, truncated: false, capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
+    } } });
+    const result = await callPromise;
+    assert.equal(result.isError, false);
+    assert.equal(result.json.result.kind, "observation");
+    assert.equal(result.json.result.nodes[0].value, "[REDACTED]");
+    assert.equal(result.json.result.nodes[0].name, "Card number");
+    assert.equal(result.json.result.actionStatus, "verified");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("mode:text observations mask card/SSN sequences before reaching the client", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
+    const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "text" });
+    const command = await commandPromise;
+    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+      kind: "observation_text", mode: "text", origin: "https://example.com", title: "Receipt",
+      text: "Your card 4111 1111 1111 1111 and SSN 123-45-6789 are on file.", chars: 60, truncated: false,
+      capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
+    } } });
+    const result = await callPromise;
+    assert.equal(result.isError, false);
+    assert.equal(result.json.result.text.includes("4111"), false);
+    assert.equal(result.json.result.text.includes("123-45-6789"), false);
+    assert.ok(result.json.result.text.includes("[REDACTED_CARD]"));
+    assert.ok(result.json.result.text.includes("[REDACTED_SSN]"));
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
 test("pairing rejects normal webpage origins and invalid proofs", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);

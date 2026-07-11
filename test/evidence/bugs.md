@@ -307,3 +307,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: `scripts/verify-boundary.mjs` now rejects identity-specific coupling and product-name drift; the full standalone suite, build, packed install, and skill validator pass.
 - Fix commit: `0fb12d7`.
 - Status: closed.
+
+## BB-035 — Observation redaction was never wired into the result path
+
+- Minimal repro: run any `browser.observe`/`browser.act` that returns accessible values or `mode:"text"` page text containing a card/SSN sequence; observe the client-facing JSON.
+- Root cause: `redactBrowserResult` (and the whole secret/PII redaction layer) was exported and unit-tested but never invoked in the live pipeline. The driver populated `node.value` from the accessibility tree and returned full page innerText raw; neither the extension nor the host called redaction, so sensitive values reached the MCP client (the model) unredacted. The driver comment claimed "secret-redacted host-side by redactBrowserResult" but no such call existed.
+- Fix: wire `redactBrowserResult` into the host result path (`redactObservationResult` in `mcp-server.ts`) for `observation`, `observation_delta`, and `observation_text` results, before they reach the client. Guarded so non-observation control results (finalize acks, transport test shapes) pass through untouched. The host is the exfiltration boundary; the loopback relay stays same-machine/same-user.
+- Regression: `apps/mcp-server/test/host.test.ts` — "observation results are secret-redacted before reaching the MCP client" and "mode:text observations mask card/SSN sequences before reaching the client" drive a real MCP tool call through a live fake extension and assert masking end to end.
+- Status: closed. Live cross-browser evidence row still pending (extension loaded unpacked).

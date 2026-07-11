@@ -262,3 +262,16 @@ on the driver and re-applied after a debugger re-attach (e.g. a cross-process
 navigation), so the caller's chosen size is not silently reverted. Floor class is
 `agentic` (a layout change, not a commit). The per-shot screenshot `device` preset is
 unchanged and independent.
+
+## 17. Host-side observation redaction is wired into the result path (2026-07-10)
+
+Secret/PII redaction of observation results (`redactBrowserResult`) runs in the host
+before results reach the MCP client, closing BB-035. The driver produces raw accessible
+names/values and, for `mode:"text"`, full page innerText; these cross only the
+127.0.0.1 loopback relay (same machine, same OS user) and are redacted at the host — the
+actual exfiltration boundary to the model — for `observation`, `observation_delta`, and
+`observation_text` kinds. Screenshot protection is unchanged and remains in the
+extension (sensitive-zone masking before capture, non-inline bytes dropped pre-relay),
+because image pixels cannot be un-leaked once transmitted. Redaction is guarded to the
+three observation kinds so finalize acknowledgements and other control results pass
+through unchanged.

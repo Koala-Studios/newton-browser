@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
+import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, redactBrowserResult, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
 
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
 import type { NewtonBrowserHost } from "./bridge.ts";
@@ -179,7 +179,7 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
     const decision = strongestDecision(verdict.decision, event.decision);
     if (name === "browser.screenshot") return screenshotToolResult(event.result, decision, args);
     if (name === "browser.act") {
-      const result = isObject(event.result) ? event.result : { value: event.result };
+      const result = isObject(event.result) ? redactObservationResult(event.result) : { value: event.result };
       return toolJson({
         ok: true,
         actionStatus: typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified",
@@ -188,7 +188,7 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
         transport,
       });
     }
-    return toolJson({ ok: true, result: event.result, transport });
+    return toolJson({ ok: true, result: redactObservationResult(event.result), transport });
   }
   return toolError("unknown_tool", `Unknown tool: ${name}`);
 }
@@ -345,6 +345,21 @@ function toolJson(value: unknown, isError = false, errorCodeValue?: string): Too
 
 function toolError(code: string, message: string, detail: Record<string, unknown> = {}): ToolCallResult {
   return toolJson({ ok: false, errorCode: code, message, ...detail }, true);
+}
+
+// Secret/PII redaction of observation results before they reach the MCP client
+// (the model). The driver produces raw accessible names, values, and page text on
+// the loopback relay; the host is the exfiltration boundary, so redaction runs here
+// (as the driver's own comment documents). Only real observation kinds are touched —
+// finalize acks and other control results pass through unchanged.
+function redactObservationResult(result: unknown): any {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const kind = (result as Record<string, unknown>).kind;
+    if (kind === "observation" || kind === "observation_delta" || kind === "observation_text") {
+      return redactBrowserResult(result) ?? result;
+    }
+  }
+  return result;
 }
 
 function publicDecision(decision: BrowserFloorDecision | undefined) {
