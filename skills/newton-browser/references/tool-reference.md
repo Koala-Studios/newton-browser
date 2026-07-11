@@ -1,32 +1,50 @@
-# Newton Browser Tool Reference
+# Newton Browser 0.4 Tool Reference
 
-All tools use the local transport and explicit session IDs.
+All tools use local transport and explicit session IDs. MCP `tools/list` remains
+authoritative for exact schemas and bounds.
 
 ## Tools
 
-- `browser.status`: report auth mode, extension, host, protocol, session, and limit readiness without opening a tab.
-- `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab, reconcile its live origin, and return a ready session. Pass `incognito: true` (owned-group only) to open the tab in an incognito window so no profile login is used; requires the extension to be allowed in incognito.
-- `browser.observe`: return a full compact accessibility observation, a diff, or (with `mode: "text"`) bounded, secret-redacted readable page text. Use text mode to read prose/articles; use full/diff to target controls.
-- `browser.act`: execute one typed action and return the deterministic floor decision with the result.
-- `browser.screenshot`: deliver evidence through an MCP image block, caller-designated file, or bounded inline fallback. Optional `region: {x,y,width,height}` captures just that area; `format:"jpeg"` with `quality` (default 70) trades fidelity for a much smaller payload (PNG default).
-- `browser.console`: read the session tab's buffered console output (read-only). Filter by `level`/`pattern`; `clear:true` empties the buffer. Rendered text only — never raw objects or headers; secret-redacted.
-- `browser.network`: list the session tab's buffered request metadata (read-only, method/url/status/type/size — never headers). Pass `requestId` to fetch one response body, returned only when its URL origin is within the session grant and bounded/redacted.
+- `browser.status`: report readiness, auth mode, host/extension/protocol versions,
+  version skew, browser selection, sessions, and limits without opening a tab.
+- `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab,
+  reconcile its live origin, and return a ready session. `incognito: true` opens an
+  owned tab in an incognito window and requires extension permission there.
+- `browser.observe`: return `full` accessibility state, a `diff`, or bounded/redacted
+  readable `text` (`maxChars` 200–200,000).
+- `browser.act`: execute one typed action and return deterministic floor metadata.
+- `browser.screenshot`: deliver PNG/JPEG through `image`, caller-designated `file`, or
+  bounded `inline`. Supports `fullPage`, `device`, `waitMs`, explicit `region`, and JPEG
+  `quality` 1–100.
+- `browser.console`: read a bounded, secret-redacted console buffer. Filter by
+  `level`/`pattern`; `clear: true` empties it.
+- `browser.network`: list bounded request metadata without headers. Filter by URL or
+  pass `requestId` for one origin-gated, bounded/redacted response body.
 - `browser.tabs.list`: list only this host's session state.
-- `browser.tabs.finalize`: close, retain as deliverable, or hand off one session tab.
+- `browser.tabs.finalize`: `close`, retain as `deliverable`, or detach/activate as
+  `handoff`.
 - `browser.session.stop`: stop and clean one session.
 - `browser.stop_all`: explicit global cleanup across connected hosts.
 
 ## Action kinds
 
-`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`, `dialog_dismiss`, `resize`, and `fill_form`.
+`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`,
+`type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`,
+`dialog_accept`, `dialog_dismiss`, `resize`, and `fill_form`.
 
-`resize` sets the owned tab's viewport via `viewport: { width, height }` (owned tabs only; bounded to 200–3840 × 200–2160) and the size persists across a debugger re-attach.
+`resize` accepts `viewport: {width,height}` for owned tabs only, bounded to
+200–3840 × 200–2160, and persists across debugger re-attach.
 
-`fill_form` fills an ordered `fields` array (each entry is a fill target plus `value`) in one call. Each field passes the full per-field floor; the batch stops at the first blocked or failed field and returns a per-field `fields` summary with `stoppedAt`. A sensitive field (password/OTP/payment) halts the batch before it is dispatched.
+`fill_form` accepts an ordered `fields` array. Each field uses the normal target and
+`value`, passes the full per-field floor, and returns a per-field summary. The batch
+halts before a sensitive field and reports `stoppedAt`.
 
-When a page opens a JavaScript dialog (`alert`/`confirm`/`prompt`/`beforeunload`), the renderer blocks until it is answered and the open dialog is reported as `pendingDialog` on observations. Respond with `dialog_accept` (optionally `promptText` for a `prompt`) or `dialog_dismiss`. These are `agentic`; post-action reconciliation still catches any navigation or network write the accept triggers.
+A page-created `alert`, `confirm`, `prompt`, or `beforeunload` appears as
+`pendingDialog` on observations. Respond with `dialog_accept` (optionally
+`promptText`) or `dialog_dismiss`. These are agentic; reconciliation still detects any
+navigation or network write caused by acceptance.
 
-Every act result includes:
+Every act result includes floor metadata similar to:
 
 ```json
 {
@@ -41,6 +59,7 @@ Every act result includes:
 }
 ```
 
-Important statuses are `verified`, `dispatched_unverified`, `blocked`, `not_found`, `ambiguous`, `stale_target`, `timed_out`, and `failed`. A blocked post-action reconciliation may occur after dispatch; inspect current state before retrying.
-
-MCP `tools/list` is authoritative for exact schemas and bounds.
+Important statuses include `verified`, `dispatched_unverified`, `blocked`,
+`not_found`, `ambiguous`, `stale_target`, `target_moved`, `timed_out`, and `failed`.
+A post-action `blocked` result can occur after dispatch; inspect current state before a
+retry.

@@ -201,7 +201,7 @@ The popup remains a glanceable, local status surface. `NB_PANEL_STATUS` and `NB_
 
 The loopback `ready` and `client_hello` frames carry optional package/manifest versions. Missing versions from a 0.3 peer are tolerated as unknown. Equal versions report `none`; patch-only difference reports `patch`; major or minor difference reports `incompatible` while operations continue. `browser.status` exposes host and extension versions and, for incompatible skew, instructs the user to update the older side. The popup shows one amber warning only for incompatible skew.
 
-## 13. npm packaging, runtime Node floor, and `--install` (2026-07-10)
+## 15. npm packaging, runtime Node floor, and `--install` (2026-07-10)
 
 The host publishes to npm as **`newton-browser`** (the `browser-bridge`/`browser-bridge-mcp` names were already occupied by unrelated projects). The bin is also `newton-browser`, so `npx -y newton-browser` both installs and launches.
 
@@ -220,7 +220,7 @@ Runtime vs. development Node floors are split deliberately:
 
 The planning logic (`planClientInstall`) is IO-free and unit-tested for all clients across Windows, macOS, and Linux path conventions.
 
-## 14. Readable-text observations, and no arbitrary JavaScript (2026-07-10)
+## 16. Readable-text observations, and no arbitrary JavaScript (2026-07-10)
 
 ### `browser.observe` text mode (WS9.1)
 
@@ -232,7 +232,7 @@ The raw text crosses the loopback relay and is redacted host-side by `redactBrow
 
 Newton Browser will not expose a general JavaScript-evaluation or expression tool. Every mutation must route through a typed action so the safety floor's classification (`read_only`/`agentic`/`approval_required`/`blocked`, and the commit boundary) is sound. An eval tool would let a caller perform navigation, form submission, network writes, and DOM mutation without any of that classification, converting the floor from a guarantee into a suggestion. This is a deliberate capability gap, not an oversight. It may be revisited only as a sandboxed, provably read-only expression evaluator with its own contract; unrestricted evaluation is out of scope permanently.
 
-## 15. JavaScript dialog accept/dismiss (WS9.4, 2026-07-10)
+## 17. JavaScript dialog accept/dismiss (WS9.4, 2026-07-10)
 
 Newton Browser now answers page-initiated JavaScript dialogs instead of returning a
 blanket unsupported result. Two typed act kinds are added: `dialog_accept` (with an
@@ -251,7 +251,7 @@ navigation or network write is caught exactly like an agentic click. Newton Brow
 not auto-answer dialogs; the agent decides. The legacy `handle_dialog` kind returns the
 typed `use_dialog_accept_or_dismiss` pointing at the new kinds.
 
-## 16. Owned-tab viewport resize (WS9.6, 2026-07-10)
+## 18. Owned-tab viewport resize (WS9.6, 2026-07-10)
 
 A `resize` act kind sets the owned tab's viewport via `viewport: { width, height }`
 (CDP `Emulation.setDeviceMetricsOverride`, deviceScaleFactor 1, non-mobile). It is
@@ -263,7 +263,7 @@ navigation), so the caller's chosen size is not silently reverted. Floor class i
 `agentic` (a layout change, not a commit). The per-shot screenshot `device` preset is
 unchanged and independent.
 
-## 17. Host-side observation redaction is wired into the result path (2026-07-10)
+## 19. Host-side observation redaction is wired into the result path (2026-07-10)
 
 Secret/PII redaction of observation results (`redactBrowserResult`) runs in the host
 before results reach the MCP client, closing BB-035. The driver produces raw accessible
@@ -276,7 +276,7 @@ because image pixels cannot be un-leaked once transmitted. Redaction is guarded 
 three observation kinds so finalize acknowledgements and other control results pass
 through unchanged.
 
-## 18. Batch fill_form via host-side expansion (WS9.8, 2026-07-10)
+## 20. Batch fill_form via host-side expansion (WS9.8, 2026-07-10)
 
 `fill_form` lets one MCP call fill an ordered `fields` array. It is expanded host-side
 into sequential single `fill` dispatches, each receiving the full existing per-field
@@ -289,7 +289,7 @@ security-critical floor path is reused unchanged and the whole feature is determ
 testable; the saving is one MCP round-trip per form, not per relay hop. `fields` values
 are redacted to `[REDACTED]` in action artifacts.
 
-## 19. Read-only console and network inspection (WS9.2 / WS9.3, 2026-07-10)
+## 21. Read-only console and network inspection (WS9.2 / WS9.3, 2026-07-10)
 
 Two read-only tools expose per-session diagnostics the driver buffers from CDP:
 
@@ -308,7 +308,7 @@ Two read-only tools expose per-session diagnostics the driver buffers from CDP:
 Both are `read_only` at the floor. The buffers live on the driver and populate from the
 existing debugger event stream (the `Log` domain is now enabled alongside Network/Runtime).
 
-## 20. Screenshot region and JPEG encoding (WS10.2 / WS10.3, 2026-07-10)
+## 22. Screenshot region and JPEG encoding (WS10.2 / WS10.3, 2026-07-10)
 
 `browser.screenshot` gains a `region: {x,y,width,height}` option that maps to the
 existing, tested CDP clip path so a caller can capture just the area it needs (smaller
@@ -320,7 +320,7 @@ masking are unchanged; the delivery path now carries the correct `image/png` or
 p95 targets (WS10.4) are measurement tasks deferred to live runs, since they require real
 pages and timing rather than deterministic fixtures.
 
-## 21. Multi-tab sessions deferred to live iteration (WS9.5, 2026-07-10)
+## 23. Multi-tab sessions deferred to live iteration (WS9.5, 2026-07-10)
 
 Multi-tab sessions — tracking pages a session's owned tab opens (window.open,
 target=_blank), origin-gating popups, and addressing child tabs from
@@ -334,7 +334,7 @@ a focused, live-verified effort. The `newTarget` reconciliation signal already h
 agentic action when a popup appears, so today a new tab is surfaced (not silently
 ignored); it simply is not yet independently drivable. Tracked in `ROADMAP.md`.
 
-## 22. Incognito owned-tab sessions (2026-07-11)
+## 24. Incognito owned-tab sessions (2026-07-11)
 
 `browser.session.start` accepts `incognito: true` (owned-group tab mode only; ignored
 for current-tab). The owned tab is created in an incognito window — an existing one is
@@ -346,3 +346,18 @@ untrusted browsing). It requires the extension to be allowed in incognito
 creation fails with a typed `incognito_not_allowed` so the caller can tell the user
 exactly what to enable. Debugger attach, the safety floor, origin scoping, and redaction
 are unchanged in incognito.
+
+## 25. Remaining 0.4 convenience surfaces deferred (2026-07-11)
+
+The 0.4 release ships the proven primitives and defers three convenience surfaces:
+
+- element-target screenshot capture; callers use a fresh observation plus an explicit
+  `region` crop;
+- duplicating `pendingDialog` into `browser.status`; the authoritative dialog state
+  remains on full/diff observations for the target session;
+- the `browser.session.start` `viewport` convenience option; callers use the owned-tab
+  `resize` action immediately after session start.
+
+These deferrals do not weaken origin scoping, redaction, the action floor, or dialog
+control. They are recorded in `ROADMAP.md` for post-0.4 consideration. Owner approval to
+defer all three was recorded on 2026-07-11 so the release scope remains stable.

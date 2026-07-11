@@ -40,4 +40,11 @@ jobs:
           --title "Newton Browser ${GITHUB_REF_NAME#v}"
           --notes-file release-notes.md
       - name: Publish npm package
-        run: pnpm --filter newton-browser publish --access public --provenance --no-git-checks
+        shell: bash
+        run: |
+          version="$(node -p "require('./apps/mcp-server/package.json').version")"
+          if npm view "newton-browser@${version}" version >/dev/null 2>&1; then
+            echo "newton-browser@${version} is already published; skipping duplicate publish."
+          else
+            pnpm --filter newton-browser publish --access public --provenance --no-git-checks
+          fi

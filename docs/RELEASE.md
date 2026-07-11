@@ -21,8 +21,13 @@ Before handing artifacts to another machine, compare the checksum, inspect both 
 
 Do not tag or publish while any critical evidence row is open, skipped, or unexplained.
 
+Final 0.4 candidate evidence (2026-07-11): the unshortened packed release gate passed
+three consecutive times after incognito support and release-scope closure—381.5s,
+380.7s, and 380.5s—with all 11 stages green and zero cross-session results, deadlocks,
+or orphan relay ports. See QA-REL-001 in `test/evidence/qa-ledger.md`.
+
 ## CI and release automation
 
 `.github/workflows/ci.yml` runs lint, typecheck, tests, build, and the quick smoke suite on Ubuntu and Windows with Node 24. It separately runs the packed `release:check` gate and verifies the MCP tarball on Node 20, 22, and 24.
 
-`.github/workflows/release.yml` runs the full packed release gate for a `v*` tag, rebuilds the signed extension artifact and MCP tarball, creates a GitHub Release using that version's `CHANGELOG.md` section, and publishes npm from the protected `release` environment. The repository administrator must configure that environment and its required reviewer before a publish can proceed.
+`.github/workflows/release.yml` runs the full packed release gate for a `v*` tag, rebuilds the signed extension artifact and MCP tarball, creates a GitHub Release using that version's `CHANGELOG.md` section, and publishes npm from the protected `release` environment. If the exact package version was already published manually from the verified tarball, the workflow treats it as satisfied and skips a duplicate publish. The repository administrator must configure that environment and its required reviewer before a publish can proceed.

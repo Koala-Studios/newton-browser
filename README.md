@@ -14,6 +14,8 @@ Newton Browser was created to give agents a browser-control tool that is **agent
 ## Why Newton Browser?
 
 - **Use your real browser profile.** Work with the sessions you are already signed into instead of a separate automation profile.
+- **Use incognito when privacy matters.** Owned sessions can open in an incognito
+  window so public-site QA and screenshots do not inherit profile logins or storage.
 - **Keep control traffic local.** The MCP host communicates over stdio, and the extension relay binds only to `127.0.0.1`.
 - **Scope every session.** Each session requires one exact HTTP(S) origin plus any explicitly allowed origins.
 - **Keep tabs isolated.** Owned tabs are the default; current-tab control must be requested explicitly.
@@ -156,6 +158,10 @@ Every session requires an exact origin. A typical tool sequence is:
 
 `owned_group` is the safe default. Current-tab control is explicit and only succeeds when the current tab's live origin matches the session grant.
 
+For an isolated owned tab, add `"incognito": true`. Chrome or Edge must have
+**Allow in incognito** enabled for the Newton Browser extension; otherwise session start
+returns `incognito_not_allowed`.
+
 See the [tool reference](skills/newton-browser/references/tool-reference.md) for the complete tool list and action kinds.
 
 ## Current limitations
@@ -163,7 +169,8 @@ See the [tool reference](skills/newton-browser/references/tool-reference.md) for
 - Chrome and Edge are supported; Firefox and Safari are not.
 - The extension must currently be loaded unpacked.
 - The MCP host must currently be built from source or installed from a release tarball.
-- JavaScript dialog control is not supported; accept or dismiss blocking dialogs manually.
+- Multi-tab sessions are not yet supported; a popup/new-target signal halts the action
+  instead of silently transferring control.
 - Newton Browser does not bypass CAPTCHAs, authentication challenges, origin grants, or its sensitive-data floor.
 - A session cannot silently follow focus to another tab or origin.
 

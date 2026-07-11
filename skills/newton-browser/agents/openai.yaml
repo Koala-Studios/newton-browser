@@ -1,4 +1,4 @@
 interface:
   display_name: "Newton Browser"
-  short_description: "Control an authenticated browser through MCP"
-  default_prompt: "Use $newton-browser to inspect and operate this site in a new owned tab within the user's existing authenticated browser profile."
+  short_description: "Control a real browser safely through MCP"
+  default_prompt: "Use $newton-browser to inspect this site in an owned tab, choosing incognito when profile isolation is appropriate."

@@ -16,6 +16,7 @@ await Promise.all([16, 32].flatMap((size) => [
 ]));
 
 if (process.argv.includes("--contact-sheet")) await renderContactSheet();
+if (process.argv.includes("--promo-tile")) await renderPromoTile();
 process.stdout.write(`${JSON.stringify({ ok: true, icons: output.map(({ name }) => name) })}\n`);
 
 async function writePng(file, image) {
@@ -80,4 +81,24 @@ async function renderContactSheet() {
     composites.push({ input: rendered, left: left + 59, top: 430 });
   }
   await sharp({ create: { width: 768, height: 476, channels: 4, background: "#FFFFFF" } }).composite(composites).png().toFile(destination);
+}
+
+async function renderPromoTile() {
+  const destination = path.join(root, "artifacts", "store", "newton-browser-promo-440x280.png");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const background = Buffer.from(`<svg width="440" height="280" xmlns="http://www.w3.org/2000/svg">
+    <rect width="440" height="280" fill="#F7FAFF"/>
+    <rect x="24" y="24" width="392" height="232" rx="24" fill="#FFFFFF" stroke="#DCE7F5"/>
+    <text x="174" y="124" font-family="Arial, sans-serif" font-size="29" font-weight="700" fill="#10213D">Newton Browser</text>
+    <text x="174" y="157" font-family="Arial, sans-serif" font-size="15" fill="#52637D">Local browser control for MCP</text>
+  </svg>`);
+  const icon = await sharp(path.join(icons, "icon-128.png"))
+    .resize(112, 112, { fit: "contain" })
+    .flatten({ background: "#FFFFFF" })
+    .png()
+    .toBuffer();
+  await sharp({ create: { width: 440, height: 280, channels: 4, background: "#F7FAFF" } })
+    .composite([{ input: background, left: 0, top: 0 }, { input: icon, left: 48, top: 84 }])
+    .png({ compressionLevel: 9, adaptiveFiltering: false })
+    .toFile(destination);
 }

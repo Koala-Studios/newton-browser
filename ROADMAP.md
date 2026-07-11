@@ -15,6 +15,7 @@ plan and `docs/PROGRESS_LEDGER.md` for current status.
 - Capability additions: `browser.observe` text mode; JavaScript dialog accept/dismiss;
   owned-tab viewport `resize`; batch `fill_form`; read-only `browser.console` and
   `browser.network`; screenshot region capture and JPEG/quality encoding.
+- Privacy-preserving owned sessions with `browser.session.start({ incognito: true })`.
 - Security: host-side redaction of observation results wired into the live path
   (BB-035).
 
@@ -26,6 +27,10 @@ plan and `docs/PROGRESS_LEDGER.md` for current status.
 - **Observation token budget and cold-start p95 targets (WS10.1 / WS10.4).** Measured
   against real heavy pages; formalize caps and idle-wake handling.
 - **session.start `viewport` convenience option** (a counterpart to the `resize` act kind).
+- **Element-target screenshots.** Resolve a fresh element ref into a bounded screenshot
+  crop; 0.4 callers use the existing `region` option.
+- **Dialog state on `browser.status`.** Observations remain authoritative in 0.4;
+  consider a bounded per-session status summary when the session model expands.
 - **Drag-and-drop**, **session recording / GIF**, and **PDF export** act kinds.
 - **A sandboxed, read-only expression evaluator** — only if it can be designed without
   weakening the typed action floor (see "not planned").
@@ -35,7 +40,7 @@ plan and `docs/PROGRESS_LEDGER.md` for current status.
 
 - **Firefox support.** No `chrome.debugger` equivalent, and out of scope by decision.
 - **Arbitrary JavaScript execution** (`eval`-style tool). It would bypass the typed
-  action floor that defines the product's safety model (DECISIONS §14).
+  action floor that defines the product's safety model (DECISIONS §16).
 - **Any telemetry, analytics, crash reporting, or remote service.** Newton Browser is
   local-only by design.
 

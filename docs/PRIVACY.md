@@ -28,6 +28,9 @@ It has no backend.
 - **Local settings.** The extension stores a small amount of state in
   `chrome.storage.local`: your connection settings and, only if you enable the optional
   hardened pairing mode, a pairing secret. This never leaves the browser profile.
+- **Incognito sessions.** When explicitly requested, an owned tab opens in an incognito
+  window and does not inherit the normal profile's cookies or storage. The extension
+  must be allowed in incognito by the user; Newton Browser never enables that setting.
 - **Screenshots you save.** If you ask for a screenshot delivered to a file, it is written
   only to the absolute directory you specify.
 

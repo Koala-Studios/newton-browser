@@ -22,6 +22,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Batch `fill_form` act kind with per-field floor and stop-on-first-failure.
 - Read-only `browser.console` and `browser.network` tools (headers never exposed; network bodies origin-gated).
 - Screenshot `region` capture and `format:"jpeg"`/`quality` encoding.
+- Privacy-preserving owned sessions with `browser.session.start({ incognito: true })`,
+  including typed `incognito_not_allowed` guidance when extension access is disabled.
 
 ### Fixed
 

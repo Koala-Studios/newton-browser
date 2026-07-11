@@ -40,6 +40,8 @@ Built local-first:
   grant; the agent cannot wander to other sites.
 - **Owned tabs by default.** The agent works in its own tabs; controlling your current
   tab must be requested explicitly.
+- **Optional incognito isolation.** Public-site QA and screenshots can use an owned
+  incognito tab so profile cookies and storage are not present.
 - **A safety floor.** Credentials, one-time codes, payment fields, and government-id
   fields are blocked before any keystroke; likely secrets are redacted out of what the
   agent sees.
@@ -54,7 +56,8 @@ Open source (MIT): https://github.com/Koala-Studios/newton-browser
   operates no remote endpoint. Note: Chrome shows an "extension is debugging this
   browser" info bar during active sessions — this is expected.
 - **`tabs` / `tabGroups`** — Create, group, and finalize the agent's owned tabs and
-  track session tab lifecycle.
+  track session tab lifecycle, including placing an explicitly requested isolated
+  session in an incognito window.
 - **`scripting`** — Inject the observation/overlay helpers used to build the compact
   accessibility snapshot and the driving indicator.
 - **`storage`** — Persist local connection settings and, only in optional hardened

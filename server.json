@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.koala-studios/newton-browser",
+  "description": "Local-only Chrome and Edge control for MCP clients through an origin-scoped extension.",
+  "repository": {
+    "url": "https://github.com/Koala-Studios/newton-browser",
+    "source": "github"
+  },
+  "version": "0.4.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "newton-browser",
+      "version": "0.4.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

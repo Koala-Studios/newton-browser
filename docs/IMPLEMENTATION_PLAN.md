@@ -3,6 +3,12 @@
 Status: approved plan, ready for execution. Owner decisions already made are recorded in
 "Locked decisions" below and are not open for re-litigation by the executing worker.
 
+Release-scope note (2026-07-11): the owner approved deferring element-target screenshot
+capture, duplicating pending dialog state into `browser.status`, and the
+`browser.session.start` viewport convenience option beyond 0.4. Region capture,
+observation `pendingDialog`, and the owned-tab `resize` action are the shipped 0.4
+contracts. See `docs/DECISIONS.md` §25 and `ROADMAP.md`.
+
 This document is written for an autonomous worker (agent) executing in this repository.
 It defines every workstream needed to take Browser Bridge from a source-install preview
 to an installable product: license, icons, npm publication, CI and GitHub releases,

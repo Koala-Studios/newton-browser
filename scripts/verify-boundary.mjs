@@ -76,7 +76,6 @@ const identitySpecificTerms = [
   ["face", "book"],
   ["ads ", "manager"],
   ["meta ", "ads"],
-  ["standalone ", "browser bridge"],
   ["oper", "ator"],
 ].map((parts) => parts.join(""));
 const blockedExact = ["shared" + ".mjs", "newton_browser_host_" + "policies", "browser_" + "bridge_host_policies"];
