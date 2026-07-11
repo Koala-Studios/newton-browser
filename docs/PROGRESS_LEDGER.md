@@ -12,24 +12,24 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS0 | Rename → newton-browser | ✅ | rename sweep; DECISIONS §12; residual cosmetic notes below |
 | WS1 | MIT license | ✅ | `LICENSE`; `license` in all 5 package.json; `7bc9da6` |
 | WS2 | Icons + toolbar states | ✅ | `2c55f7c`, `59aac3f`, `bd3bfcd`; manifest wired; owner approved the current contact sheet 2026-07-11 |
-| WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24, full release gate (run 29147904773). Fixed BB-036..BB-040. |
+| WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24; protected v0.4.0 release workflow GREEN (run 29159340143). Fixed BB-036..BB-043. |
 | WS4 | npm packaging + Node floor + `--install` | ✅ | metadata; Node 20 runtime floor reconciled; `--install` + tests; DECISIONS §15 |
-| WS5 | Store submissions | 🚧 `[H4]` | privacy/listing/justifications, ZIP, approved icon, 440×280 promo tile, and logged-out Wikipedia + incognito GitHub driving shots done; onboarding/popup shots, account access, and submit remain |
+| WS5 | Store submissions | 🚧 `[H4]` | privacy/listing/justifications, verified ZIP, approved icon, 440×280 promo tile, and logged-out Wikipedia + incognito GitHub driving shots done; owner must sign in to the Chrome Web Store developer account, then upload/listing/submission can continue |
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
 | WS9 | Capability gaps (0.4 scope) | ✅ | text/dialogs/resize/fill/console/network done and live-proved; multi-tab and status dialog summary deferred (DECISIONS §§23,25) |
 | WS10 | Performance / observation budgets (0.4 scope) | ✅ | region + JPEG/quality shipped (DECISIONS §22); element-target capture and formal obs/cold-start budgets deferred (DECISIONS §25) |
-| WS11 | Release 0.4.0 | 🔶 | versions bumped to 0.4.0; artifact + tarball built; release environment created with required reviewer; npm authenticated; final publish/tag in progress |
-| WS12 | Discovery | 🔶 | ROADMAP, PRIVACY, owner-approved static no-tracking landing page, registry-valid `server.json`, and GitHub Actions Pages source configured; first deployment and registry submissions remain |
+| WS11 | Release 0.4.0 | ✅ | npm 0.4.0 public; annotated `v0.4.0` tag; protected release run 29159340143 green; GitHub Release public with tarball, extension ZIP, and SHA-256 asset |
+| WS12 | Discovery | 🔶 | ROADMAP, PRIVACY, owner-approved static no-tracking landing page, registry-valid `server.json`, and live GitHub Pages deployment complete; registry submissions remain |
 
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 131/131 pass (build, typecheck, lint, pack:check all green)
+- `pnpm test` — ✅ 133/133 pass (build, typecheck, lint, pack:check all green)
 - `pnpm release:check` — ✅ three consecutive final passes after incognito/scope closure
   (381.5s / 380.7s / 380.5s; zero cross-results, deadlocks, or orphan ports)
-- `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
+- `pnpm lint` (boundary) — ✅ green
 
 ## WS9 breakdown
 
@@ -54,8 +54,8 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
 
 ## npm
 
-- `newton-browser` name claimed on npm (0.0.1 placeholder published 2026-07-10).
-  Real 0.4.0 publish happens in WS11 (overwrite, never unpublish).
+- `newton-browser@0.4.0` is public on npm. The protected release workflow verified the
+  packed artifacts and correctly skipped a duplicate publish.
 
 ## Log
 
@@ -148,3 +148,14 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
 - 2026-07-11 — CI run 29157179006 caught BB-041: a release-progress note named an
   unrelated product repository and correctly failed the standalone boundary on Linux and
   Windows. Removed the non-product note; the existing boundary gate is the regression.
+- 2026-07-11 — Published `newton-browser@0.4.0`, pushed annotated tag `v0.4.0`, and
+  completed protected release run 29159340143. The public GitHub Release contains the
+  package tarball, extension ZIP, and ZIP SHA-256 asset; the npm idempotency step skipped
+  the already-published version. BB-042 moved RSS accounting after an exercised warmup
+  without changing the 96 MiB limit; BB-043 included that warmup in the child timeout.
+  Hosted evidence: 459,020 warmup operations, 4,662,434 measured operations, zero
+  cross-results/deadlocks, and 13,266,944 bytes RSS growth.
+- 2026-07-11 — GitHub Pages is live at `https://koala-studios.github.io/newton-browser/`.
+  Chrome Web Store submission is waiting only for owner sign-in: the official dashboard
+  redirects this Chrome profile to Google authentication, which browser automation must
+  not complete with credentials or 2FA.
