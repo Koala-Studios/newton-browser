@@ -18,7 +18,7 @@ All tools use the local transport and explicit session IDs.
 
 ## Action kinds
 
-`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`, `dialog_dismiss`, and `resize`.
+`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`, `dialog_dismiss`, `resize`, and `fill_form`.
 
 `resize` sets the owned tab's viewport via `viewport: { width, height }` (owned tabs only; bounded to 200–3840 × 200–2160) and the size persists across a debugger re-attach.
 

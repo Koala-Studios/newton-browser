@@ -30,6 +30,12 @@ Chrome and Edge can remain enabled together. The host atomically assigns a sessi
 | `stale_target` / `target_moved` | Take a fresh observation and use a new ref. |
 | `ambiguous` | Use a fresh exact ref or narrower accessible target. |
 | `blocked_by_floor` | Do not bypass the floor; have the user complete sensitive input when necessary. |
+| `use_dialog_accept_or_dismiss` | The legacy `handle_dialog` kind was used; send `dialog_accept` (optionally `promptText`) or `dialog_dismiss` instead. |
+| `no_dialog_open` | A dialog action was sent with no dialog pending; observe and continue normally. |
+| `resize_needs_owned_tab` | `resize` targets a current (user) tab; only owned tabs may be resized. |
+| `fill_form_requires_fields` / `fill_form_field_incomplete` | Provide a non-empty `fields` array; on partial completion, inspect the per-field summary and `stoppedAt` before re-issuing only the remaining fields. |
+| `unknown_request_id` / `body_unavailable` | The network body is gone or was never buffered; re-list requests and use a fresh `requestId`. |
+| `versionSkew: "incompatible"` on status | Host and extension are on different minor versions; relay the status `nextAction` (update the npm package or the extension). |
 
 ## Process and tab cleanup
 
