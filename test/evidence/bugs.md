@@ -347,3 +347,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: exercise the packed bin through npx with `--print-config generic` (unambiguous, not an npx flag) and assert the emitted config is version-pinned; surface stdout on failure. pack:check remains the authoritative tarball-execution gate (it installs via npm and runs the bin via node, green on Linux Node 20/22/24).
 - Regression: `smoke:matrix` green on Windows; Linux CI on the fix commit confirms.
 - Status: closed pending green CI.
+
+## BB-040 — Release smoke read ZIPs with `tar`, which GNU tar rejects on Linux
+
+- Minimal repro: `pnpm smoke:matrix` / `pnpm smoke:clean-user` on Linux (release:check).
+- Root cause: matrix.mjs listed the extension ZIP with `tar -tf`, and clean-user.mjs extracted it with `tar -xf`. bsdtar (Windows/macOS) reads ZIPs, but GNU tar (Linux runner) does not — it fails with "This does not look like a tar archive". Passed locally on Windows.
+- Fix: replace both with a dependency-free Node ZIP central-directory reader (`zipEntryNames`) and assert the expected entries are present. No external archive tool involved.
+- Regression: both smokes green on Windows after the change; Linux CI on the fix commit confirms.
+- Status: closed pending green CI.

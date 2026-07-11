@@ -51,7 +51,10 @@ if (expected !== actual) throw new Error("extension checksum mismatch");
 run(process.execPath, ["scripts/build-extension-artifact.mjs"]);
 const rebuilt = createHash("sha256").update(fs.readFileSync(zip)).digest("hex");
 if (rebuilt !== actual) throw new Error("extension artifact is not deterministic");
-const archive = run("tar", ["-tf", zip]).stdout;
+// List the extension ZIP with a small cross-platform reader. `tar -tf` reads ZIPs with
+// bsdtar (Windows/macOS) but GNU tar (Linux) rejects them ("not a tar archive"), so
+// parse the ZIP central directory in Node instead.
+const archive = zipEntryNames(zip);
 for (const file of ["manifest.json", "dist/src/service-worker.js", "dist/src/vendor/newton-browser-driver/driver.js"]) if (!archive.includes(file)) throw new Error(`extension archive missing ${file}`);
 for (const example of ["codex.toml", "claude-desktop.json", "claude-code.json", "generic.json"]) {
   if (!fs.readFileSync(path.join("examples", "mcp", example), "utf8").includes(`newton-browser-${version}.tgz`)) throw new Error(`${example} is not artifact-version-pinned`);
@@ -62,6 +65,25 @@ const browsers = process.platform === "win32" ? {
   edge: fileVersion("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"),
 } : { chrome: "not-probed", edge: "not-probed" };
 process.stdout.write(`${JSON.stringify({ ok: true, node: currentVersion, node24: node24Version, clients: ["codex", "claude-desktop", "claude-code", "generic"], browsers })}\n`);
+
+// List the filenames in a ZIP by parsing its central directory. Cross-platform and
+// dependency-free, unlike shelling out to `tar`/`unzip` (which vary by OS).
+function zipEntryNames(zipPath) {
+  const buf = fs.readFileSync(zipPath);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i -= 1) { if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error(`not a zip archive: ${zipPath}`);
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  const names = [];
+  for (let n = 0; n < count; n += 1) {
+    if (buf.readUInt32LE(off) !== 0x02014b50) throw new Error("corrupt zip central directory");
+    const nameLen = buf.readUInt16LE(off + 28);
+    names.push(buf.toString("utf8", off + 46, off + 46 + nameLen));
+    off += 46 + nameLen + buf.readUInt16LE(off + 30) + buf.readUInt16LE(off + 32);
+  }
+  return names;
+}
 
 // Resolve node's bundled npx CLI cross-platform (beside node.exe on Windows;
 // ../lib/node_modules/npm on Linux/macOS).

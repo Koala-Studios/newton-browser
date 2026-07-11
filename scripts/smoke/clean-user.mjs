@@ -30,9 +30,10 @@ try {
   if (!doctor.ok || doctor.ready !== false || doctor.authMode !== "local_trust" || doctor.pairingState !== "not_required" || "pairingSecret" in doctor) throw new Error("clean-user zero-touch doctor failed");
   if (!doctor.checks?.node?.ok || !doctor.checks?.config?.ok || !doctor.checks?.loopback?.ok || !doctor.checks?.protocol?.ok || doctor.checks?.transportAuth?.mode !== "local_trust" || doctor.checks?.extension?.state !== "no_running_host") throw new Error("clean-user doctor checks are incomplete");
   if (!fs.existsSync(path.join(env.NEWTON_BROWSER_CONFIG_DIR, "pairing.json"))) throw new Error("clean-user diagnostic credential missing");
-  const extract = path.join(isolated, "extension");
-  run("tar", ["-xf", extensionZip, "-C", mkdir(extract)], isolated, env, false);
-  if (!fs.existsSync(path.join(extract, "manifest.json"))) throw new Error("clean-user extension extraction failed");
+  // Verify the extension artifact is a well-formed ZIP containing the manifest. We list
+  // the central directory in Node rather than shelling to `tar -xf` (GNU tar on Linux
+  // cannot read ZIPs).
+  if (!zipEntryNames(extensionZip).includes("manifest.json")) throw new Error("clean-user extension artifact missing manifest.json");
   run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", env.NEWTON_BROWSER_CONFIG_DIR, "--port", "18651"], isolated, env, false);
   process.stdout.write(`${JSON.stringify({ ok: true, isolatedProfile: true, sourceCheckoutCwd: false, globalInstall: false, zeroTouch: true, artifacts: 2 })}\n`);
 } finally {
@@ -40,6 +41,24 @@ try {
 }
 
 function mkdir(directory) { fs.mkdirSync(directory, { recursive: true }); return directory; }
+// List the filenames in a ZIP by parsing its central directory (cross-platform,
+// dependency-free — GNU tar on Linux cannot read ZIPs).
+function zipEntryNames(zipPath) {
+  const buf = fs.readFileSync(zipPath);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i -= 1) { if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error(`not a zip archive: ${zipPath}`);
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  const names = [];
+  for (let n = 0; n < count; n += 1) {
+    if (buf.readUInt32LE(off) !== 0x02014b50) throw new Error("corrupt zip central directory");
+    const nameLen = buf.readUInt16LE(off + 28);
+    names.push(buf.toString("utf8", off + 46, off + 46 + nameLen));
+    off += 46 + nameLen + buf.readUInt16LE(off + 30) + buf.readUInt16LE(off + 32);
+  }
+  return names;
+}
 // Resolve node's bundled npm CLI cross-platform (npm sits beside node.exe on Windows,
 // under ../lib/node_modules/npm on Linux/macOS).
 function nodeCli(name) {
