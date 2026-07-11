@@ -339,3 +339,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: a `nodeCli(name)` resolver in each script checks both the Windows and POSIX candidate locations and uses whichever exists.
 - Regression: pack:check green on Windows after the change; Linux CI on the fix commit is the cross-platform regression check.
 - Status: closed pending green CI.
+
+## BB-039 — Release matrix asserted npx tarball output was exactly the version
+
+- Minimal repro: `pnpm smoke:matrix` on Linux CI (release:check stage).
+- Root cause: the matrix smoke asserted `npx --yes --package <tarball> newton-browser --version` stdout, trimmed, equals the version. `npx --package <local-tarball>` installs the tarball on first run and can emit an npm notice to stdout alongside the bin's `--version` output, so the exact-equality check failed on Linux (it happened to be clean on Windows). npx exited 0, so it was a strict-match failure, not an execution failure.
+- Fix: match the version among the output lines (`some(line => line.trim() === version)`) instead of exact-equality, and surface the actual stdout on failure so a genuine "packed bin did not run" case is debuggable.
+- Regression: `smoke:matrix` green on Windows; Linux CI on the fix commit confirms.
+- Status: closed pending green CI.

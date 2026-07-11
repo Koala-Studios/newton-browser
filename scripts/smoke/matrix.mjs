@@ -16,7 +16,14 @@ const currentVersion = run(process.execPath, ["--version"]).stdout.trim();
 const node24Version = run("npx", ["--yes", "node@24", "--version"]).stdout.trim();
 if (!/^v24\./.test(node24Version)) throw new Error(`Node 24 probe failed: ${node24Version}`);
 if (run("npx", ["--yes", "node@24", entry, "--version"]).stdout.trim() !== version) throw new Error("packed executable is not Node 24 compatible");
-if (run("npx", ["--yes", "--package", tarball, "newton-browser", "--version"]).stdout.trim() !== version) throw new Error("private tarball config command failed");
+// `npx --package <local-tarball> <bin>` installs the tarball on first run and can emit
+// an npm notice to stdout alongside the bin's output, so match the version among the
+// output lines rather than assuming stdout is exactly the version. Surface stdout if it
+// is genuinely absent (a real "the packed bin did not run" failure).
+const tarballVersionOut = run("npx", ["--yes", "--package", tarball, "newton-browser", "--version"]).stdout;
+if (!tarballVersionOut.split(/\r?\n/).some((line) => line.trim() === version)) {
+  throw new Error(`private tarball config command failed (stdout: ${JSON.stringify(tarballVersionOut)})`);
+}
 
 for (const target of ["codex", "claude-desktop", "claude-code", "generic"]) {
   const output = run(process.execPath, [entry, "--print-config", target]).stdout;
