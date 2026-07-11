@@ -58,6 +58,10 @@ class NewtonBrowserDriver {
     // A page-initiated JS dialog blocking the renderer (WS9.4), or null. Set on
     // Page.javascriptDialogOpening and cleared when handled/closed.
     this.pendingDialog = null;
+    // Owned-tab viewport override requested via `resize` (WS9.6), or null. Re-applied
+    // after a debugger re-attach so a cross-process navigation does not silently
+    // revert the caller's chosen size.
+    this.sessionViewport = null;
   }
 
   isAttachedTo(tabId) {
@@ -81,6 +85,10 @@ class NewtonBrowserDriver {
     // Child frames / popups attach to the same session (§7.5).
     await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: false }).catch(() => {});
     await this.calibrate();
+    // Re-apply a caller-chosen viewport (WS9.6) that a re-attach would otherwise drop.
+    if (this.sessionViewport) {
+      await this.cdp("Emulation.setDeviceMetricsOverride", { width: this.sessionViewport.width, height: this.sessionViewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+    }
     await this.reassertOverlay();
   }
 
@@ -437,7 +445,24 @@ class NewtonBrowserDriver {
     if (kind === "clear") return this.clear(action);
     if (kind === "set_files") return this.setFiles(action);
     if (kind === "dialog_accept" || kind === "dialog_dismiss") return this.handleDialog(kind, action);
+    if (kind === "resize") return this.resizeViewport(action);
     return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+  }
+
+  // Set the owned tab's viewport (WS9.6). Owned-tab only — resizing distorts the
+  // page layout, so we never silently reflow the user's own current tab. The
+  // override persists on the driver and is re-applied on re-attach.
+  async resizeViewport(action) {
+    if (!this.ownsTab) return this.withObservationMeta("failed", {}, await this.observe({}), "resize_needs_owned_tab");
+    const viewport = action?.viewport;
+    if (!viewport || typeof viewport.width !== "number" || typeof viewport.height !== "number") {
+      return this.withObservationMeta("failed", {}, await this.observe({}), "invalid_viewport");
+    }
+    this.sessionViewport = { width: viewport.width, height: viewport.height };
+    await this.cdp("Emulation.setDeviceMetricsOverride", { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+    await this.settleShort();
+    const observation = await this.observe({});
+    return this.withObservationMeta("verified", { viewport: `${viewport.width}x${viewport.height}` }, observation);
   }
 
   // Accept or dismiss a page-initiated JavaScript dialog (WS9.4). The renderer is

@@ -616,6 +616,44 @@ test("driver dialog_dismiss rejects the dialog and a no-op is typed when none is
   assert.deepEqual(calls.find((c) => c.method === "Page.handleJavaScriptDialog").params, { accept: false });
 });
 
+test("driver resize applies an owned-tab viewport and persists it across re-attach", async () => {
+  const driver = createNewtonBrowserDriver({ ownsTab: true });
+  const calls = [];
+  driver.cdp = async (method, params) => { calls.push({ method, params }); return {}; };
+  driver.settleShort = async () => {};
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
+  const result = await driver.executeAction({ kind: "resize", viewport: { width: 1024, height: 768 } });
+  assert.equal(result.status, "verified");
+  assert.equal(result.changed.viewport, "1024x768");
+  assert.deepEqual(driver.sessionViewport, { width: 1024, height: 768 });
+  const metrics = calls.find((c) => c.method === "Emulation.setDeviceMetricsOverride");
+  assert.equal(metrics.params.width, 1024);
+  assert.equal(metrics.params.height, 768);
+
+  // A re-attach must re-apply the stored viewport.
+  const originalChrome = globalThis.chrome;
+  globalThis.chrome = { debugger: { async attach() {}, async detach() {} }, runtime: { lastError: null } };
+  try {
+    calls.length = 0;
+    driver.calibrate = async () => {};
+    driver.reassertOverlay = async () => {};
+    await driver.attach(21);
+    assert.ok(calls.some((c) => c.method === "Emulation.setDeviceMetricsOverride" && c.params.width === 1024));
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("driver resize refuses a current (non-owned) tab", async () => {
+  const driver = createNewtonBrowserDriver({ ownsTab: false });
+  driver.cdp = async () => { throw new Error("should not dispatch"); };
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
+  const result = await driver.executeAction({ kind: "resize", viewport: { width: 800, height: 600 } });
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason, "resize_needs_owned_tab");
+  assert.equal(driver.sessionViewport, null);
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,

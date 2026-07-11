@@ -20,6 +20,7 @@ export const BROWSER_ACTION_KINDS = [
   "wait_for",
   "dialog_accept",
   "dialog_dismiss",
+  "resize",
 ] as const;
 
 export type BrowserActionKind = (typeof BROWSER_ACTION_KINDS)[number];
@@ -127,6 +128,9 @@ export type BrowserAction = {
   // Text supplied to a `dialog_accept` on a JavaScript prompt() dialog (WS9.4).
   // Ignored for alert/confirm/beforeunload dialogs and for dialog_dismiss.
   promptText?: string;
+  // Owned-tab viewport for the `resize` act kind (WS9.6). Applied via CDP device
+  // metrics and re-applied if the debugger re-attaches. Owned tabs only.
+  viewport?: { width: number; height: number };
 };
 
 // A page-initiated JavaScript dialog awaiting a decision (WS9.4). Surfaced in

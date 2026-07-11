@@ -17,6 +17,7 @@ type BrowserActionFieldSpec =
   | { kind: "filePaths"; cap: number; itemCap: number }
   | { kind: "sensitiveZones"; cap: number; itemCap: number }
   | { kind: "enum"; values: readonly string[] }
+  | { kind: "viewport" }
   | { kind: "clip" };
 
 export const BROWSER_ACTION_FIELD_SPECS = {
@@ -51,6 +52,7 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   mode: { kind: "enum", values: ["full", "diff", "text"] },
   maxChars: { kind: "int", min: 200, max: 200_000 },
   promptText: { kind: "text", cap: TEXT_CAP },
+  viewport: { kind: "viewport" },
 } as const satisfies Record<string, BrowserActionFieldSpec>;
 
 export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;
@@ -82,7 +84,19 @@ function parseBrowserActionField(raw: unknown, spec: BrowserActionFieldSpec): un
   if (spec.kind === "filePaths") return filePathArray(raw, spec.cap, spec.itemCap);
   if (spec.kind === "sensitiveZones") return sensitiveZoneArray(raw, spec.cap, spec.itemCap);
   if (spec.kind === "enum") return typeof raw === "string" && spec.values.includes(raw) ? raw : undefined;
+  if (spec.kind === "viewport") return parseViewport(raw);
   return parseClip(raw);
+}
+
+// Owned-tab viewport for `resize` (WS9.6). Bounded to sane device sizes so a caller
+// cannot request a multi-thousand-pixel surface that wedges the serial capture pump.
+function parseViewport(raw: unknown): { width: number; height: number } | undefined {
+  const input = objectRecord(raw);
+  if (!input) return undefined;
+  const width = boundedInt(input.width, 200, 3840);
+  const height = boundedInt(input.height, 200, 2160);
+  if (width === undefined || height === undefined) return undefined;
+  return { width, height };
 }
 
 export function parseBrowserTarget(raw: unknown): BrowserTarget | undefined {

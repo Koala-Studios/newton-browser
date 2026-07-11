@@ -250,3 +250,15 @@ clear a blocking dialog. Post-action reconciliation is unchanged: an accept that
 navigation or network write is caught exactly like an agentic click. Newton Browser does
 not auto-answer dialogs; the agent decides. The legacy `handle_dialog` kind returns the
 typed `use_dialog_accept_or_dismiss` pointing at the new kinds.
+
+## 16. Owned-tab viewport resize (WS9.6, 2026-07-10)
+
+A `resize` act kind sets the owned tab's viewport via `viewport: { width, height }`
+(CDP `Emulation.setDeviceMetricsOverride`, deviceScaleFactor 1, non-mobile). It is
+owned-tab only — a current (user) tab is never silently reflowed, returning typed
+`resize_needs_owned_tab`. Sizes are bounded to 200–3840 × 200–2160 so a caller cannot
+request a surface large enough to wedge the serial capture pump. The override is stored
+on the driver and re-applied after a debugger re-attach (e.g. a cross-process
+navigation), so the caller's chosen size is not silently reverted. Floor class is
+`agentic` (a layout change, not a commit). The per-shot screenshot `device` preset is
+unchanged and independent.

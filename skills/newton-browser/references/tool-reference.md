@@ -16,7 +16,9 @@ All tools use the local transport and explicit session IDs.
 
 ## Action kinds
 
-`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`, and `dialog_dismiss`.
+`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`, `dialog_dismiss`, and `resize`.
+
+`resize` sets the owned tab's viewport via `viewport: { width, height }` (owned tabs only; bounded to 200–3840 × 200–2160) and the size persists across a debugger re-attach.
 
 When a page opens a JavaScript dialog (`alert`/`confirm`/`prompt`/`beforeunload`), the renderer blocks until it is answered and the open dialog is reported as `pendingDialog` on observations. Respond with `dialog_accept` (optionally `promptText` for a `prompt`) or `dialog_dismiss`. These are `agentic`; post-action reconciliation still catches any navigation or network write the accept triggers.
 

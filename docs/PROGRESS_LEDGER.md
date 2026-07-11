@@ -18,7 +18,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
-| WS9 | Capability gaps (new tools) | 🔶 | 9.1 text observe + 9.7 eval-exclusion done; 9.2–9.6, 9.8 remaining |
+| WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.7/9.4/9.6 done; 9.2, 9.3, 9.5, 9.8 remaining |
 | WS10 | Performance / observation budgets | ⛔ | not started (needs live measurement) |
 | WS11 | Release 0.4.0 | ⛔ `[H5]` | versions still 0.3.0 (correct until WS11); depends on WS9/WS10 + npm creds |
 | WS12 | Discovery (ROADMAP/PRIVACY/landing) | ⛔ | not started |
@@ -37,7 +37,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | 9.7 | eval exclusion (decision) | ✅ committed | DECISIONS §14 |
 | 9.4 | dialog accept/dismiss | ✅ committed | CDP `Page.handleJavaScriptDialog`; `pendingDialog` on observations; DECISIONS §15; deterministic tests. Live evidence row still pending. |
 | 9.8 | `fill_form` batch fill | ⛔ | needs per-field floor expansion (security-sensitive — the host floor is currently one-action-per-call) |
-| 9.6 | viewport / `resize` | ⛔ | session-persistent viewport state + re-apply on attach |
+| 9.6 | viewport / `resize` | ✅ committed | owned-tab `resize` act kind, persists across re-attach, bounded; DECISIONS §16. session.start `viewport` convenience option deferred. Live evidence row pending. |
 | 9.2 | `browser.console` | ⛔ | new MCP tool + CDP console ring buffer in driver/extension |
 | 9.3 | `browser.network` | ⛔ | new MCP tool + CDP network ring buffer; origin-gated bodies, header exclusion |
 | 9.5 | multi-tab sessions | ⛔ | CDP target tracking; most invasive |
@@ -79,3 +79,6 @@ browser, which needs the human.
   driver dialog tracking, redacted `pendingDialog` on observations, floor = agentic,
   legacy `handle_dialog` → `use_dialog_accept_or_dismiss`. DECISIONS §15. Gate green,
   114/114 tests. Live Chrome/Edge evidence row still pending human (extension load).
+- 2026-07-10 — WS9.6 resize implemented: owned-tab `resize` act kind, persists
+  across debugger re-attach, bounded viewport, floor agentic. DECISIONS §16. Gate
+  green, 116/116. Live evidence row pending human.
