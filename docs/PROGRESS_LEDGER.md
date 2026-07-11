@@ -35,8 +35,8 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 |------|-----------|--------|---------------------|
 | 9.1 | `observe` text mode | ✅ committed | read-only; done to full quality with redaction + tests |
 | 9.7 | eval exclusion (decision) | ✅ committed | DECISIONS §14 |
+| 9.4 | dialog accept/dismiss | ✅ committed | CDP `Page.handleJavaScriptDialog`; `pendingDialog` on observations; DECISIONS §15; deterministic tests. Live evidence row still pending. |
 | 9.8 | `fill_form` batch fill | ⛔ | needs per-field floor expansion (security-sensitive — the host floor is currently one-action-per-call) |
-| 9.4 | dialog accept/dismiss | ⛔ | replaces `unsupported_dialog_control`; needs CDP `Page.handleJavaScriptDialog` + live evidence |
 | 9.6 | viewport / `resize` | ⛔ | session-persistent viewport state + re-apply on attach |
 | 9.2 | `browser.console` | ⛔ | new MCP tool + CDP console ring buffer in driver/extension |
 | 9.3 | `browser.network` | ⛔ | new MCP tool + CDP network ring buffer; origin-gated bodies, header exclusion |
@@ -52,6 +52,13 @@ browser, which needs the human.
   (constant is now `NB_DRIVE_BEGIN`).
 - `scripts/verify-boundary.mjs` — stale `"browser bridge"` guard term (matches nothing).
 - `test/fixtures/` — `bb_auth_fixture` keys are self-consistent internal test naming.
+- `docs/DECISIONS.md` — duplicate section numbers (two §13, two §14) from an earlier
+  worker append; renumber in a docs pass. New entries continue from §15.
+
+## npm
+
+- `newton-browser` name claimed on npm (0.0.1 placeholder published 2026-07-10).
+  Real 0.4.0 publish happens in WS11 (overwrite, never unpublish).
 
 ## Log
 
@@ -67,3 +74,8 @@ browser, which needs the human.
   (9.2/9.3 new tools + CDP ring buffers, 9.4 dialogs, 9.5 multi-tab, 9.6 viewport,
   9.8 fill_form floor expansion) each need heavier infra, security-sensitive floor
   design, and/or live-browser evidence. WS10/WS11 depend on them; WS11 also needs H5.
+- 2026-07-10 — npm name `newton-browser` claimed (0.0.1 placeholder, user-published).
+- 2026-07-10 — WS9.4 dialogs implemented: `dialog_accept`/`dialog_dismiss` act kinds,
+  driver dialog tracking, redacted `pendingDialog` on observations, floor = agentic,
+  legacy `handle_dialog` → `use_dialog_accept_or_dismiss`. DECISIONS §15. Gate green,
+  114/114 tests. Live Chrome/Edge evidence row still pending human (extension load).

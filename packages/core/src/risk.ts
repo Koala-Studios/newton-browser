@@ -15,7 +15,12 @@ import {
 } from "./host-policy.ts";
 
 const READ_ONLY_ACTIONS = new Set(["observe", "screenshot"]);
-const AGENTIC_ACTIONS = new Set(["scroll", "wait_for", "hover", "move", "back", "forward", "reload"]);
+// Dialog accept/dismiss (WS9.4) respond to a page-initiated JavaScript dialog. They
+// are agentic and never blocked-class: the dialog exists because of an action the
+// agent already took, and leaving it unhandled wedges the renderer. Post-action
+// reconciliation still runs, so an accept that triggers a navigation/network write
+// is caught by the driver like any other agentic click.
+const AGENTIC_ACTIONS = new Set(["scroll", "wait_for", "hover", "move", "back", "forward", "reload", "dialog_accept", "dialog_dismiss"]);
 const MUTATING_ACTIONS = new Set(["click", "fill", "type", "select", "navigate", "press", "clear", "back", "forward", "reload"]);
 const FILL_ACTIONS = new Set(["fill", "type", "select", "clear", "set_files"]);
 const SECRET_HINT = /password|passcode|secret|token|api[_ -]?key|credential|private[_ -]?key|otp|2fa|one[_ -]?time|verification code|security code/i;

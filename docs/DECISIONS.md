@@ -231,3 +231,22 @@ The raw text crosses the loopback relay and is redacted host-side by `redactBrow
 ### No arbitrary JavaScript evaluation tool (WS9.7)
 
 Newton Browser will not expose a general JavaScript-evaluation or expression tool. Every mutation must route through a typed action so the safety floor's classification (`read_only`/`agentic`/`approval_required`/`blocked`, and the commit boundary) is sound. An eval tool would let a caller perform navigation, form submission, network writes, and DOM mutation without any of that classification, converting the floor from a guarantee into a suggestion. This is a deliberate capability gap, not an oversight. It may be revisited only as a sandboxed, provably read-only expression evaluator with its own contract; unrestricted evaluation is out of scope permanently.
+
+## 15. JavaScript dialog accept/dismiss (WS9.4, 2026-07-10)
+
+Newton Browser now answers page-initiated JavaScript dialogs instead of returning a
+blanket unsupported result. Two typed act kinds are added: `dialog_accept` (with an
+optional `promptText` applied only to `prompt()` dialogs) and `dialog_dismiss`. They map
+to CDP `Page.handleJavaScriptDialog`. The driver tracks an open dialog from
+`Page.javascriptDialogOpening` / `Page.javascriptDialogClosed` independently of the
+per-action signal window, because a dialog blocks the renderer until answered, and
+surfaces it as `pendingDialog` on observations (message and default prompt pass the
+observation-text redaction, so a dialog cannot leak a card/SSN the field passes miss).
+
+Floor: both kinds are `agentic` and can never be `blocked`-class — the dialog exists
+because of an action the agent already took, and leaving it open wedges the page. They
+remain available even when actuation is disabled, so an observe-only session can still
+clear a blocking dialog. Post-action reconciliation is unchanged: an accept that fires a
+navigation or network write is caught exactly like an agentic click. Newton Browser does
+not auto-answer dialogs; the agent decides. The legacy `handle_dialog` kind returns the
+typed `use_dialog_accept_or_dismiss` pointing at the new kinds.

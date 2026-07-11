@@ -18,6 +18,8 @@ export const BROWSER_ACTION_KINDS = [
   "hover",
   "move",
   "wait_for",
+  "dialog_accept",
+  "dialog_dismiss",
 ] as const;
 
 export type BrowserActionKind = (typeof BROWSER_ACTION_KINDS)[number];
@@ -122,6 +124,18 @@ export type BrowserAction = {
   mode?: "full" | "diff" | "text";
   // Character cap for `mode: "text"` observations.
   maxChars?: number;
+  // Text supplied to a `dialog_accept` on a JavaScript prompt() dialog (WS9.4).
+  // Ignored for alert/confirm/beforeunload dialogs and for dialog_dismiss.
+  promptText?: string;
+};
+
+// A page-initiated JavaScript dialog awaiting a decision (WS9.4). Surfaced in
+// observation/status so an agent can see it must accept or dismiss before the
+// renderer will respond again. The message is redacted like other page text.
+export type BrowserPendingDialog = {
+  dialogType: "alert" | "confirm" | "prompt" | "beforeunload";
+  message: string;
+  defaultPrompt?: string;
 };
 
 export type BrowserTabRef = {
@@ -191,6 +205,8 @@ export type BrowserObservationResult = {
   verified?: boolean;
   reason?: string;
   changed?: Record<string, unknown>;
+  // Set when a page-initiated JavaScript dialog is blocking the renderer (WS9.4).
+  pendingDialog?: BrowserPendingDialog;
 };
 
 export type BrowserScreenshotResult = {

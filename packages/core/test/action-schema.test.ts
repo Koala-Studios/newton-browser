@@ -52,6 +52,7 @@ test("action schema fields survive parse and redact", () => {
     clip: { x: 1.2, y: 2.6, width: 300.2, height: 200.8 },
     mode: "diff",
     maxChars: 5000,
+    promptText: "Ada",
     unknown: "drop me",
   });
   const redacted = redactBrowserAction(parsed);

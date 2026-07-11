@@ -50,6 +50,7 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   clip: { kind: "clip" },
   mode: { kind: "enum", values: ["full", "diff", "text"] },
   maxChars: { kind: "int", min: 200, max: 200_000 },
+  promptText: { kind: "text", cap: TEXT_CAP },
 } as const satisfies Record<string, BrowserActionFieldSpec>;
 
 export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;

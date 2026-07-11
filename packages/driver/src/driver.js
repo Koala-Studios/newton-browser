@@ -55,6 +55,9 @@ class NewtonBrowserDriver {
     this.lastScrollY = 0;
     this.ownedNodeCache = new Map(); // backendNodeId -> isOwnedOverlayNode (per document)
     this.activeActionSignals = null;
+    // A page-initiated JS dialog blocking the renderer (WS9.4), or null. Set on
+    // Page.javascriptDialogOpening and cleared when handled/closed.
+    this.pendingDialog = null;
   }
 
   isAttachedTo(tabId) {
@@ -111,6 +114,14 @@ class NewtonBrowserDriver {
   }
 
   recordDebuggerEvent(method, params = {}) {
+    // Dialog open/close is tracked persistently (not just inside an action window)
+    // because a JS dialog blocks the renderer until it is handled (WS9.4).
+    if (method === "Page.javascriptDialogOpening") {
+      this.pendingDialog = normalizePendingDialog(params);
+    }
+    if (method === "Page.javascriptDialogClosed") {
+      this.pendingDialog = null;
+    }
     const signals = this.activeActionSignals;
     if (!signals) return;
     if (method === "Network.requestWillBeSent" && isNetworkWrite(params?.request)) {
@@ -425,7 +436,37 @@ class NewtonBrowserDriver {
     if (kind === "select") return this.select(action);
     if (kind === "clear") return this.clear(action);
     if (kind === "set_files") return this.setFiles(action);
+    if (kind === "dialog_accept" || kind === "dialog_dismiss") return this.handleDialog(kind, action);
     return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+  }
+
+  // Accept or dismiss a page-initiated JavaScript dialog (WS9.4). The renderer is
+  // blocked while a dialog is open, so we resolve it via CDP FIRST and only then
+  // observe. `promptText` is applied to prompt() dialogs on accept and ignored
+  // otherwise. With no dialog open this is a typed no-op, not an error the agent
+  // must recover from.
+  async handleDialog(kind, action) {
+    if (!this.pendingDialog) {
+      return this.withObservationMeta("failed", {}, await this.observe({}), "no_dialog_open");
+    }
+    const accept = kind === "dialog_accept";
+    const dialog = this.pendingDialog;
+    const params = { accept };
+    if (accept && dialog.dialogType === "prompt") {
+      params.promptText = String(action?.promptText ?? dialog.defaultPrompt ?? "");
+    }
+    const signalWindow = this.beginActionSignals();
+    try {
+      await this.cdp("Page.handleJavaScriptDialog", params);
+      this.pendingDialog = null;
+      await this.waitForSettle();
+      const signals = signalWindow.finish();
+      const observation = await this.observe({});
+      const changed = { dialog: accept ? "accepted" : "dismissed", ...reconciliationChanges(signals) };
+      return this.withObservationMeta("verified", changed, observation);
+    } finally {
+      signalWindow.finish();
+    }
   }
 
   async navigate(action) {
@@ -1292,6 +1333,9 @@ class NewtonBrowserDriver {
         verified,
         ...(reason ? { reason } : {}),
         ...(changed && Object.keys(changed).length > 0 ? { changed } : {}),
+        // Surface a still-open dialog so the agent knows it must accept/dismiss
+        // before the renderer will respond again (WS9.4).
+        ...(this.pendingDialog ? { pendingDialog: this.pendingDialog } : {}),
       },
     };
   }
@@ -1459,6 +1503,19 @@ function diffElement(before, after) {
 function isNetworkWrite(request) {
   const method = String(request?.method ?? "").toUpperCase();
   return Boolean(method && !["GET", "HEAD", "OPTIONS"].includes(method));
+}
+
+// Shape a Page.javascriptDialogOpening payload into the tracked pending-dialog
+// record (WS9.4). The message is truncated defensively; final redaction happens
+// in the host before the message leaves the relay.
+function normalizePendingDialog(params = {}) {
+  const type = String(params?.type ?? "alert");
+  const dialogType = ["alert", "confirm", "prompt", "beforeunload"].includes(type) ? type : "alert";
+  const record = { dialogType, message: String(params?.message ?? "").slice(0, 1000) };
+  if (dialogType === "prompt" && typeof params?.defaultPrompt === "string") {
+    record.defaultPrompt = params.defaultPrompt.slice(0, 1000);
+  }
+  return record;
 }
 
 function reconciliationChanges(signals) {

@@ -16,7 +16,9 @@ All tools use the local transport and explicit session IDs.
 
 ## Action kinds
 
-`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, and `set_files`.
+`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`, and `dialog_dismiss`.
+
+When a page opens a JavaScript dialog (`alert`/`confirm`/`prompt`/`beforeunload`), the renderer blocks until it is answered and the open dialog is reported as `pendingDialog` on observations. Respond with `dialog_accept` (optionally `promptText` for a `prompt`) or `dialog_dismiss`. These are `agentic`; post-action reconciliation still catches any navigation or network write the accept triggers.
 
 Every act result includes:
 

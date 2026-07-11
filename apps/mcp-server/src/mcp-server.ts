@@ -166,9 +166,9 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
     if (name === "browser.act" && isObject(action) && action.kind === "handle_dialog") {
       return toolJson({
         ok: false,
-        errorCode: "unsupported_dialog_control",
-        message: "JavaScript dialog control is not supported; dismiss or accept the dialog in the browser.",
-        decision: { class: "blocked", commitBoundary: "none", reasons: ["unsupported_dialog_control"] },
+        errorCode: "use_dialog_accept_or_dismiss",
+        message: "Use action kind \"dialog_accept\" (optionally with promptText) or \"dialog_dismiss\" to respond to a JavaScript dialog.",
+        decision: { class: "blocked", commitBoundary: "none", reasons: ["use_dialog_accept_or_dismiss"] },
         transport,
       }, true);
     }

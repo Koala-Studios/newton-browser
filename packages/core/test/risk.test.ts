@@ -29,6 +29,13 @@ test("non-committing work never prompts", () => {
   assert.equal(evaluateBrowserFloor({ action: { kind: "click", text: "Open menu" }, origin: "https://example.com", policy: allowed }).class, "agentic");
 });
 
+test("dialog accept/dismiss are agentic and never blocked", () => {
+  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_accept" }, origin: "https://example.com", policy: allowed }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_dismiss" }, origin: "https://example.com", policy: allowed }).class, "agentic");
+  // Even with actuation disabled, resolving a page-initiated dialog stays available.
+  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_accept" }, origin: "https://example.com", policy: allowed, actuationEnabled: false }).class, "agentic");
+});
+
 test("credential/secret fields are blocked and never typed", () => {
   assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "Password" }, origin: "https://example.com", policy: allowed }).class, "blocked");
   assert.equal(evaluateBrowserFloor({ action: { kind: "type", selector: "#api-key" }, origin: "https://example.com", policy: allowed }).class, "blocked");

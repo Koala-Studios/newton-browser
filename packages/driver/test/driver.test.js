@@ -564,6 +564,58 @@ test("driver observe mode:text does not consult the accessibility tree", async (
   assert.equal(result.truncated, false);
 });
 
+test("driver tracks a pending dialog and surfaces it in observation metadata", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
+  driver.recordDebuggerEvent("Page.javascriptDialogOpening", { type: "confirm", message: "Delete this item?" });
+  assert.deepEqual(driver.pendingDialog, { dialogType: "confirm", message: "Delete this item?" });
+  const meta = driver.withObservationMeta("verified", {}, await driver.observe({}));
+  assert.deepEqual(meta.observation.pendingDialog, { dialogType: "confirm", message: "Delete this item?" });
+});
+
+test("driver dialog_accept resolves the dialog via CDP and clears pending state", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.cdp = async (method, params) => { calls.push({ method, params }); return {}; };
+  driver.waitForSettle = async () => {};
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
+  driver.recordDebuggerEvent("Page.javascriptDialogOpening", { type: "confirm", message: "Proceed?" });
+  const result = await driver.executeAction({ kind: "dialog_accept" });
+  assert.equal(result.status, "verified");
+  assert.equal(result.changed.dialog, "accepted");
+  assert.equal(driver.pendingDialog, null);
+  assert.deepEqual(calls.find((c) => c.method === "Page.handleJavaScriptDialog").params, { accept: true });
+  assert.equal(result.observation.pendingDialog, undefined);
+});
+
+test("driver dialog_accept forwards promptText for a prompt dialog", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.cdp = async (method, params) => { calls.push({ method, params }); return {}; };
+  driver.waitForSettle = async () => {};
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
+  driver.recordDebuggerEvent("Page.javascriptDialogOpening", { type: "prompt", message: "Your name?", defaultPrompt: "Anon" });
+  await driver.executeAction({ kind: "dialog_accept", promptText: "Ada" });
+  assert.deepEqual(calls.find((c) => c.method === "Page.handleJavaScriptDialog").params, { accept: true, promptText: "Ada" });
+});
+
+test("driver dialog_dismiss rejects the dialog and a no-op is typed when none is open", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.cdp = async (method, params) => { calls.push({ method, params }); return {}; };
+  driver.waitForSettle = async () => {};
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
+  const none = await driver.executeAction({ kind: "dialog_dismiss" });
+  assert.equal(none.status, "failed");
+  assert.equal(none.reason, "no_dialog_open");
+  assert.equal(calls.length, 0);
+  driver.recordDebuggerEvent("Page.javascriptDialogOpening", { type: "alert", message: "Saved" });
+  const result = await driver.executeAction({ kind: "dialog_dismiss" });
+  assert.equal(result.status, "verified");
+  assert.equal(result.changed.dialog, "dismissed");
+  assert.deepEqual(calls.find((c) => c.method === "Page.handleJavaScriptDialog").params, { accept: false });
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,

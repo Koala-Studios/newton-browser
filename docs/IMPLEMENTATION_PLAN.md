@@ -451,7 +451,7 @@ tools, surveyed 2026-07):
 | Page text extraction | via snapshot | ✅ get_page_text | ❌ | **9.1** |
 | Console messages | ✅ | ✅ | ❌ | **9.2** |
 | Network request list + body | ✅ | ✅ | ❌ | **9.3** |
-| JS dialog handling | ✅ handle_dialog | ✅ | ❌ typed unsupported | **9.4** |
+| JS dialog handling | ✅ handle_dialog | ✅ | ✅ dialog_accept/dismiss (WS9.4) | done |
 | Multi-tab in one task | ✅ browser_tabs | ✅ tabs_* | ❌ one tab per session | **9.5** |
 | Viewport/device control | ✅ resize | ✅ resize_window | screenshot-only `device` | **9.6** |
 | Batch form fill | ✅ fill_form | ✅ form_input | one action per call | **9.8** |

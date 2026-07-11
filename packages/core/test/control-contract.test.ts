@@ -58,3 +58,32 @@ test("compact observations accept bbox arrays from the extension but do not expo
   assert.deepEqual(result.nodes[0]?.bbox, { x: 10, y: 21, width: 100, height: 31 });
   assert.equal("rawHtml" in (result.nodes[0] as Record<string, unknown>), false);
 });
+
+test("a pending dialog is surfaced on observations with its message secret-masked", () => {
+  const result = redactBrowserResult({
+    kind: "observation",
+    mode: "cdp",
+    origin: "https://example.com",
+    title: "Example",
+    nodes: [],
+    nodeCount: 0,
+    truncated: false,
+    capturedAt: "2026-06-26T00:00:00.000Z",
+    pendingDialog: { dialogType: "confirm", message: "Charge card 4111 1111 1111 1111 now?" },
+  });
+  assert.equal(result?.kind, "observation");
+  if (result?.kind !== "observation") throw new Error("expected observation");
+  const pending = (result as Record<string, unknown>).pendingDialog as { dialogType: string; message: string };
+  assert.equal(pending.dialogType, "confirm");
+  assert.equal(pending.message.includes("4111"), false);
+  assert.ok(pending.message.includes("[REDACTED_CARD]"));
+});
+
+test("an unknown pendingDialog shape is dropped rather than passed through", () => {
+  const result = redactBrowserResult({
+    kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example",
+    nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-06-26T00:00:00.000Z",
+    pendingDialog: { dialogType: "evil", message: "x" },
+  }) as Record<string, unknown>;
+  assert.equal("pendingDialog" in result, false);
+});

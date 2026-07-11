@@ -30,6 +30,24 @@ function redactObservationText(value: string): string {
     .replace(/\b(?:\d[ -]?){13,19}\b/g, (match) => (/\d{13,19}/.test(match.replace(/[ -]/g, "")) ? "[REDACTED_CARD]" : match));
 }
 
+// Redact a pending JS dialog (WS9.4) for inclusion in an observation. The message
+// and default prompt are page-authored text and pass the observation-text redaction
+// (card/SSN masking) so a dialog can never leak a secret the field passes miss.
+function redactPendingDialog(value: unknown): { pendingDialog: { dialogType: "alert" | "confirm" | "prompt" | "beforeunload"; message: string; defaultPrompt?: string } } | Record<string, never> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const type = String(raw.dialogType ?? "");
+  if (!["alert", "confirm", "prompt", "beforeunload"].includes(type)) return {};
+  const dialogType = type as "alert" | "confirm" | "prompt" | "beforeunload";
+  return {
+    pendingDialog: {
+      dialogType,
+      message: redactObservationText(String(raw.message ?? "")).slice(0, TEXT_CAP),
+      ...(typeof raw.defaultPrompt === "string" ? { defaultPrompt: redactObservationText(raw.defaultPrompt).slice(0, TEXT_CAP) } : {}),
+    },
+  };
+}
+
 function redactSensitiveValue(name: string, value: string): string {
   if (SENSITIVE_FIELD_NAME.test(name) || SENSITIVE_FIELD_NAME.test(value)) return "[REDACTED]";
   const stripped = value.replace(/[ -]/g, "");
@@ -182,6 +200,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
       ...(input.changed && typeof input.changed === "object" && !Array.isArray(input.changed) ? { changed: redactBrowserChanged(input.changed as Record<string, unknown>) } : {}),
+      ...redactPendingDialog(input.pendingDialog),
     };
   }
   if (input.kind === "observation_text") {
@@ -217,6 +236,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
       ...(input.changed && typeof input.changed === "object" && !Array.isArray(input.changed) ? { changed: redactBrowserChanged(input.changed as Record<string, unknown>) } : {}),
+      ...redactPendingDialog(input.pendingDialog),
     };
   }
   return {

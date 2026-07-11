@@ -11,7 +11,7 @@
 - `result_too_large`: use screenshot `delivery:"image"` or `delivery:"file"`; inline delivery is deliberately bounded.
 - `invalid_file_path`, `file_type_not_allowed`, `file_too_large`, or `file_total_too_large`: use exact non-symlink absolute paths to allowed image/video files within the documented caps.
 - `hidden_file_input_requires_ref`: observe immediately before acting and pass the hidden input's fresh `ref`.
-- `unsupported_dialog_control`: accept or dismiss the JavaScript dialog manually. Newton Browser does not automate dialogs.
+- pending JavaScript dialog: an open `alert`/`confirm`/`prompt`/`beforeunload` dialog blocks the page and is reported as `pendingDialog` on observations. Answer it with the `dialog_accept` (optionally `promptText`) or `dialog_dismiss` act kind. The legacy `handle_dialog` kind returns `use_dialog_accept_or_dismiss`.
 - `blocked_by_floor`: inspect decision reasons. Sensitive-field blocks mean no keystrokes were sent. A post-action network-write block can occur after input dispatch; observe before retrying.
 - stale or ambiguous target: re-observe after rerender/navigation and use the new ref. Never reuse a ref across a known SPA replacement.
 
