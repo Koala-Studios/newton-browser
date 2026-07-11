@@ -371,3 +371,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: exercise both workers for 30 seconds before forcing GC and recording the RSS baseline; keep the measured five-minute workload and the original 96 MiB ceiling unchanged. Report warmup operations and label the baseline explicitly.
 - Regression: `test/fixtures/stress-warmup.test.ts` runs the real stress harness with short bounded phases and asserts that both workers execute warmup operations before a `post_warmup` RSS baseline and measured operations.
 - Status: fixed locally; release workflow recheck pending.
+
+## BB-043 — Stress child timeout excluded the new warmup phase
+
+- Minimal repro: run release workflow 29159033955 after BB-042; the stress child reaches the end of its five-minute measurement but `spawnSync` terminates it with `ETIMEDOUT` at 330 seconds.
+- Root cause: `chaos.mjs` budgeted `measurement + 30 seconds`. BB-042 added a 30-second exercised warmup without adding it to the parent timeout, leaving no shutdown/reporting headroom.
+- Fix: calculate the child timeout as `measurement + warmup + 30 seconds`, retaining the existing 120-second minimum for short diagnostic runs.
+- Regression: `test/fixtures/stress-timing.test.ts` verifies default, configured, and short-run timeout budgets through the same exported calculator used by the chaos harness.
+- Status: fixed locally; release workflow recheck pending.
