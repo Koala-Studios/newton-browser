@@ -28,7 +28,7 @@ test("MCP negotiates required protocol versions and lists release tools", async 
 
   const tools = await handleMcpMessage(bridge, { jsonrpc: "2.0", id: 3, method: "tools/list" });
   const names = ((tools?.result as any).tools as Array<{ name: string }>).map((tool) => tool.name);
-  for (const name of ["browser.status", "browser.session.start", "browser.observe", "browser.act", "browser.screenshot", "browser.tabs.list", "browser.session.stop", "browser.stop_all"]) {
+  for (const name of ["browser.status", "browser.session.start", "browser.observe", "browser.act", "browser.screenshot", "browser.console", "browser.network", "browser.tabs.list", "browser.session.stop", "browser.stop_all"]) {
     assert.ok(names.includes(name), name);
   }
 });
@@ -231,6 +231,58 @@ test("fill_form stops at a sensitive field before dispatching it", async () => {
     assert.equal(result.json.stoppedAt, 1);
     assert.equal(result.json.fields[1].status, "blocked");
     assert.equal(dispatched, 1, "only the first (safe) field is dispatched; the batch halts before the password");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("browser.console returns the buffered log, secret-redacted", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
+    const callPromise = toolCall(bridge, "browser.console", { sessionId, level: "error" });
+    const command = await commandPromise;
+    assert.equal(command.command.action.kind, "console");
+    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+      kind: "console_log", origin: "https://example.com", entries: [{ level: "error", text: "Failed with card 4111 1111 1111 1111", at: "2026-07-10T00:00:00.000Z" }],
+      count: 1, dropped: 0, capturedAt: "2026-07-10T00:00:00.000Z",
+    } } });
+    const result = await callPromise;
+    assert.equal(result.isError, false);
+    assert.equal(result.json.result.kind, "console_log");
+    assert.equal(result.json.result.entries[0].text.includes("4111"), false);
+    assert.ok(result.json.result.entries[0].text.includes("[REDACTED_CARD]"));
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("browser.network lists requests and never returns headers", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
+    const callPromise = toolCall(bridge, "browser.network", { sessionId });
+    const command = await commandPromise;
+    assert.equal(command.command.action.kind, "network");
+    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+      kind: "network_log", origin: "https://example.com", entries: [{ requestId: "r1", method: "POST", url: "https://example.com/api", status: 200, at: "2026-07-10T00:00:00.000Z" }],
+      count: 1, dropped: 0, capturedAt: "2026-07-10T00:00:00.000Z",
+    } } });
+    const result = await callPromise;
+    assert.equal(result.isError, false);
+    assert.equal(result.json.result.entries[0].method, "POST");
+    assert.equal(result.json.result.entries[0].status, 200);
+    assert.equal("headers" in result.json.result.entries[0], false);
   } finally {
     socket.close();
     await bridge.close();

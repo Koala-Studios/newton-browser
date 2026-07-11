@@ -288,3 +288,22 @@ a standalone fill. Host expansion (rather than a driver batch command) was chose
 security-critical floor path is reused unchanged and the whole feature is deterministically
 testable; the saving is one MCP round-trip per form, not per relay hop. `fields` values
 are redacted to `[REDACTED]` in action artifacts.
+
+## 19. Read-only console and network inspection (WS9.2 / WS9.3, 2026-07-10)
+
+Two read-only tools expose per-session diagnostics the driver buffers from CDP:
+
+- `browser.console` returns buffered `Runtime.consoleAPICalled`, `Runtime.exceptionThrown`,
+  and `Log.entryAdded` output as a bounded ring buffer (500 entries), filterable by level
+  and pattern, with an optional `clear`. Only rendered text, level, and source are kept —
+  never raw argument objects — and text passes the observation-text redaction.
+- `browser.network` returns buffered request metadata (method, URL, status, resource type,
+  encoded size) as a 500-entry ring. Request/response **headers are never buffered or
+  returned**, because they carry cookies and authorization tokens. Passing `requestId`
+  fetches one response body via `Network.getResponseBody`, but only when that request's
+  URL origin is within the session's `allowedOrigins`; a cross-origin body is refused with
+  `origin_not_granted` and is never even fetched. Bodies are capped and text bodies pass
+  the card/SSN masking pass.
+
+Both are `read_only` at the floor. The buffers live on the driver and populate from the
+existing debugger event stream (the `Log` domain is now enabled alongside Network/Runtime).

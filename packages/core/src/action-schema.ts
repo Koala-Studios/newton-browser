@@ -55,6 +55,12 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   promptText: { kind: "text", cap: TEXT_CAP },
   viewport: { kind: "viewport" },
   fields: { kind: "formFields", cap: 32 },
+  level: { kind: "enum", values: ["log", "info", "warn", "error", "debug"] },
+  pattern: { kind: "text", cap: TEXT_CAP },
+  limit: { kind: "int", min: 1, max: 500 },
+  clear: { kind: "bool" },
+  urlPattern: { kind: "text", cap: URL_CAP },
+  requestId: { kind: "text", cap: TEXT_CAP },
 } as const satisfies Record<string, BrowserActionFieldSpec>;
 
 export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;

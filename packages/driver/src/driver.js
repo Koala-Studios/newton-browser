@@ -11,7 +11,10 @@
 // fire-and-forget and NEVER gates execution (§5.1).
 
 const CDP_VERSION = "1.3";
-const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Input", "Network"];
+const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Input", "Network", "Log"];
+const CONSOLE_BUFFER_MAX = 500;
+const NETWORK_BUFFER_MAX = 500;
+const NETWORK_BODY_MAX_CHARS = 512_000;
 const ACTIONABLE_ROLES = new Set([
   "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch",
   "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "slider", "spinbutton",
@@ -62,6 +65,15 @@ class NewtonBrowserDriver {
     // after a debugger re-attach so a cross-process navigation does not silently
     // revert the caller's chosen size.
     this.sessionViewport = null;
+    // Read-only console (WS9.2) and network (WS9.3) ring buffers. Populated from CDP
+    // events; bounded so a chatty page cannot grow them without bound. `dropped`
+    // counts entries evicted since the last read. Network HEADERS are never buffered.
+    this.consoleBuffer = [];
+    this.consoleDropped = 0;
+    this.networkBuffer = new Map(); // requestId -> entry (insertion-ordered)
+    this.networkDropped = 0;
+    // Session origin grant, set by the controller. Gates network-body fetches.
+    this.allowedOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
   }
 
   isAttachedTo(tabId) {
@@ -129,6 +141,30 @@ class NewtonBrowserDriver {
     }
     if (method === "Page.javascriptDialogClosed") {
       this.pendingDialog = null;
+    }
+    // Console ring buffer (WS9.2).
+    if (method === "Runtime.consoleAPICalled") {
+      this.pushConsole({ level: consoleLevelFor(params?.type), text: consoleArgsText(params?.args), at: new Date().toISOString() });
+    }
+    if (method === "Runtime.exceptionThrown") {
+      const detail = params?.exceptionDetails;
+      this.pushConsole({ level: "error", text: detail?.exception?.description || detail?.text || "Uncaught exception", source: "exception", at: new Date().toISOString() });
+    }
+    if (method === "Log.entryAdded" && params?.entry) {
+      this.pushConsole({ level: consoleLevelFor(params.entry.level), text: String(params.entry.text ?? ""), source: params.entry.source, at: new Date().toISOString() });
+    }
+    // Network ring buffer (WS9.3) — metadata only, never headers.
+    if (method === "Network.requestWillBeSent" && params?.requestId) {
+      this.pushNetwork(params.requestId, { requestId: params.requestId, method: String(params.request?.method ?? "GET"), url: String(params.request?.url ?? ""), resourceType: params.type, at: new Date().toISOString() });
+    }
+    if (method === "Network.responseReceived" && params?.requestId) {
+      this.updateNetwork(params.requestId, { status: params.response?.status, mimeType: params.response?.mimeType, resourceType: params.type });
+    }
+    if (method === "Network.loadingFinished" && params?.requestId) {
+      this.updateNetwork(params.requestId, { bytes: params.encodedDataLength });
+    }
+    if (method === "Network.loadingFailed" && params?.requestId) {
+      this.updateNetwork(params.requestId, { failed: true });
     }
     const signals = this.activeActionSignals;
     if (!signals) return;
@@ -446,7 +482,70 @@ class NewtonBrowserDriver {
     if (kind === "set_files") return this.setFiles(action);
     if (kind === "dialog_accept" || kind === "dialog_dismiss") return this.handleDialog(kind, action);
     if (kind === "resize") return this.resizeViewport(action);
+    if (kind === "console") return { status: "verified", verified: true, changed: {}, observation: this.getConsole(action) };
+    if (kind === "network") return { status: "verified", verified: true, changed: {}, observation: await this.getNetwork(action) };
     return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+  }
+
+  // ── Console / network read-only buffers (WS9.2 / WS9.3) ─────────────────────
+  pushConsole(entry) {
+    if (!entry.text) return;
+    entry.text = String(entry.text).slice(0, 2000);
+    this.consoleBuffer.push(entry);
+    while (this.consoleBuffer.length > CONSOLE_BUFFER_MAX) { this.consoleBuffer.shift(); this.consoleDropped += 1; }
+  }
+
+  pushNetwork(requestId, entry) {
+    if (!this.networkBuffer.has(requestId)) {
+      while (this.networkBuffer.size >= NETWORK_BUFFER_MAX) {
+        const oldest = this.networkBuffer.keys().next().value;
+        this.networkBuffer.delete(oldest);
+        this.networkDropped += 1;
+      }
+    }
+    this.networkBuffer.set(requestId, { ...this.networkBuffer.get(requestId), ...entry });
+  }
+
+  updateNetwork(requestId, patch) {
+    const existing = this.networkBuffer.get(requestId);
+    if (existing) this.networkBuffer.set(requestId, { ...existing, ...patch });
+  }
+
+  getConsole(action = {}) {
+    const level = typeof action.level === "string" ? action.level : null;
+    const pattern = typeof action.pattern === "string" ? action.pattern.toLowerCase() : null;
+    const limit = Number.isInteger(action.limit) ? action.limit : 100;
+    let entries = this.consoleBuffer.filter((entry) =>
+      (!level || entry.level === level) && (!pattern || String(entry.text).toLowerCase().includes(pattern)));
+    entries = entries.slice(-limit);
+    const dropped = this.consoleDropped;
+    if (action.clear) { this.consoleBuffer = []; this.consoleDropped = 0; }
+    return { kind: "console_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped, capturedAt: new Date().toISOString() };
+  }
+
+  async getNetwork(action = {}) {
+    if (typeof action.requestId === "string" && action.requestId) return this.getNetworkBody(action.requestId);
+    const urlPattern = typeof action.urlPattern === "string" ? action.urlPattern.toLowerCase() : null;
+    const limit = Number.isInteger(action.limit) ? action.limit : 100;
+    let entries = [...this.networkBuffer.values()].filter((entry) => !urlPattern || String(entry.url).toLowerCase().includes(urlPattern));
+    entries = entries.slice(-limit);
+    return { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
+  }
+
+  // Fetch one response body — only when its URL origin is within the session grant.
+  // Response HEADERS are never returned. Bodies are capped; over-cap is truncated.
+  async getNetworkBody(requestId) {
+    const entry = this.networkBuffer.get(requestId);
+    const base = { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries: [], count: 0, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
+    if (!entry) return { ...base, body: null, reason: "unknown_request_id" };
+    if (this.allowedOrigins.length > 0 && !this.allowedOrigins.includes(safeOrigin(entry.url))) {
+      return { ...base, body: null, reason: "origin_not_granted" };
+    }
+    const response = await this.cdp("Network.getResponseBody", { requestId }).catch(() => null);
+    if (!response) return { ...base, body: null, reason: "body_unavailable" };
+    const raw = String(response.body ?? "");
+    const truncated = raw.length > NETWORK_BODY_MAX_CHARS;
+    return { ...base, body: { requestId, url: entry.url, base64Encoded: Boolean(response.base64Encoded), data: raw.slice(0, NETWORK_BODY_MAX_CHARS), truncated } };
   }
 
   // Set the owned tab's viewport (WS9.6). Owned-tab only — resizing distorts the
@@ -1528,6 +1627,29 @@ function diffElement(before, after) {
 function isNetworkWrite(request) {
   const method = String(request?.method ?? "").toUpperCase();
   return Boolean(method && !["GET", "HEAD", "OPTIONS"].includes(method));
+}
+
+// Map a CDP console/log type to a bounded level enum (WS9.2).
+function consoleLevelFor(type) {
+  const t = String(type ?? "log");
+  if (t === "warning" || t === "warn") return "warn";
+  if (t === "error" || t === "assert") return "error";
+  if (t === "info") return "info";
+  if (t === "debug" || t === "verbose") return "debug";
+  return "log";
+}
+
+// Render Runtime.consoleAPICalled args into a single line without executing getters
+// or pulling object internals. Only primitive previews and CDP descriptions are used.
+function consoleArgsText(args) {
+  if (!Array.isArray(args)) return "";
+  return args.map((arg) => {
+    if (arg == null) return "";
+    if (arg.value !== undefined) return String(arg.value);
+    if (arg.description !== undefined) return String(arg.description);
+    if (arg.unserializableValue !== undefined) return String(arg.unserializableValue);
+    return arg.type ? `[${arg.type}]` : "";
+  }).join(" ").trim().slice(0, 2000);
 }
 
 // Shape a Page.javascriptDialogOpening payload into the tracked pending-dialog

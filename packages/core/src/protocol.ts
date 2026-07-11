@@ -22,6 +22,8 @@ export const BROWSER_ACTION_KINDS = [
   "dialog_dismiss",
   "resize",
   "fill_form",
+  "console",
+  "network",
 ] as const;
 
 export type BrowserActionKind = (typeof BROWSER_ACTION_KINDS)[number];
@@ -137,6 +139,15 @@ export type BrowserAction = {
   // sequential fills, each with the full per-field floor, stopping at the first
   // block/failure. Values are redacted in artifacts like any fill value.
   fields?: BrowserFormField[];
+  // Filters for the read-only `console` act kind (WS9.2).
+  level?: string;
+  pattern?: string;
+  limit?: number;
+  clear?: boolean;
+  // Filters for the read-only `network` act kind (WS9.3). `requestId` switches from
+  // listing request metadata to fetching one response body (origin-gated).
+  urlPattern?: string;
+  requestId?: string;
 };
 
 export type BrowserFormField = {
@@ -285,7 +296,53 @@ export type BrowserObservationText = {
   reason?: string;
 };
 
-export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | { kind: "ack"; message: string };
+// Buffered console output (WS9.2). Read-only; entries are secret-redacted before
+// they reach the client. Headers and raw argument objects are never included —
+// only the rendered text, level, and source.
+export type BrowserConsoleEntry = {
+  level: "log" | "info" | "warn" | "error" | "debug";
+  text: string;
+  source?: string;
+  at: string;
+};
+
+export type BrowserConsoleLog = {
+  kind: "console_log";
+  origin: string;
+  entries: BrowserConsoleEntry[];
+  count: number;
+  dropped: number;
+  capturedAt: string;
+};
+
+// Buffered network request metadata (WS9.3). Request/response HEADERS are never
+// buffered or returned (they carry cookies and auth tokens). A body is returned
+// only for a request whose URL origin is within the session grant.
+export type BrowserNetworkEntry = {
+  requestId: string;
+  method: string;
+  url: string;
+  status?: number;
+  resourceType?: string;
+  mimeType?: string;
+  bytes?: number;
+  failed?: boolean;
+  at: string;
+};
+
+export type BrowserNetworkLog = {
+  kind: "network_log";
+  origin: string;
+  entries: BrowserNetworkEntry[];
+  count: number;
+  dropped: number;
+  capturedAt: string;
+  // Present only for a body fetch by requestId.
+  body?: { requestId: string; url: string; base64Encoded: boolean; data: string; truncated: boolean } | null;
+  reason?: string;
+};
+
+export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | BrowserConsoleLog | BrowserNetworkLog | { kind: "ack"; message: string };
 
 export type BrowserControlStatus = {
   ok: boolean;

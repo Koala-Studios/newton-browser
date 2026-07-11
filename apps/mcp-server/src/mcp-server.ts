@@ -158,6 +158,18 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
     return toolJson({ stopped: true, transport });
   }
 
+  if (name === "browser.console" || name === "browser.network") {
+    const sessionId = requiredString(args.sessionId, "sessionId");
+    const session = bridge.listSessions().find((candidate) => candidate.sessionId === sessionId);
+    if (!session) return toolError("unknown_session", "The session does not exist.");
+    const action = name === "browser.console"
+      ? { kind: "console", level: args.level, pattern: args.pattern, limit: clampNumber(args.limit, 100, 1, 500), clear: args.clear === true }
+      : { kind: "network", urlPattern: args.urlPattern, requestId: args.requestId, limit: clampNumber(args.limit, 100, 1, 500) };
+    const event = await bridge.dispatch(sessionId, action as never);
+    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, transport }, true);
+    return toolJson({ ok: true, result: redactObservationResult(event.result), transport });
+  }
+
   if (["browser.observe", "browser.screenshot", "browser.act"].includes(name)) {
     const sessionId = requiredString(args.sessionId, "sessionId");
     const session = bridge.listSessions().find((candidate) => candidate.sessionId === sessionId);
@@ -369,6 +381,12 @@ function toolList(): Array<Record<string, unknown>> {
       device: { type: "string", enum: ["mobile", "desktop"] },
       waitMs: { type: "number" },
     }, ["sessionId"]),
+    tool("browser.console", "Read the session tab's buffered console output (read-only). Filter by level/pattern; clear:true empties the buffer. Headers and raw objects are never included.", {
+      transport, sessionId: { type: "string" }, level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string" }, limit: { type: "number" }, clear: { type: "boolean" },
+    }, ["sessionId"]),
+    tool("browser.network", "List the session tab's buffered network request metadata (read-only, no headers). Pass requestId to fetch one response body, returned only when its URL origin is within the session grant.", {
+      transport, sessionId: { type: "string" }, urlPattern: { type: "string" }, requestId: { type: "string" }, limit: { type: "number" },
+    }, ["sessionId"]),
     tool("browser.tabs.list", "List this host's local sessions.", { transport }),
     tool("browser.tabs.finalize", "Close, retain, or hand off one session tab.", {
       transport,
@@ -401,7 +419,7 @@ function toolError(code: string, message: string, detail: Record<string, unknown
 function redactObservationResult(result: unknown): any {
   if (result && typeof result === "object" && !Array.isArray(result)) {
     const kind = (result as Record<string, unknown>).kind;
-    if (kind === "observation" || kind === "observation_delta" || kind === "observation_text") {
+    if (kind === "observation" || kind === "observation_delta" || kind === "observation_text" || kind === "console_log" || kind === "network_log") {
       return redactBrowserResult(result) ?? result;
     }
   }

@@ -14,7 +14,7 @@ import {
   type BrowserHostPolicyManifest,
 } from "./host-policy.ts";
 
-const READ_ONLY_ACTIONS = new Set(["observe", "screenshot"]);
+const READ_ONLY_ACTIONS = new Set(["observe", "screenshot", "console", "network"]);
 // Dialog accept/dismiss (WS9.4) respond to a page-initiated JavaScript dialog. They
 // are agentic and never blocked-class: the dialog exists because of an action the
 // agent already took, and leaving it unhandled wedges the renderer. Post-action

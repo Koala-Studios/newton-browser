@@ -449,8 +449,8 @@ tools, surveyed 2026-07):
 | Accessibility observation | ✅ snapshot | ✅ read_page | ✅ observe (full/diff) | parity — keep |
 | Screenshot | ✅ | ✅ (+zoom region) | ✅ (image/file/inline) | region/element capture → WS10 |
 | Page text extraction | via snapshot | ✅ get_page_text | ❌ | **9.1** |
-| Console messages | ✅ | ✅ | ❌ | **9.2** |
-| Network request list + body | ✅ | ✅ | ❌ | **9.3** |
+| Console messages | ✅ | ✅ | ✅ browser.console (WS9.2) | done |
+| Network request list + body | ✅ | ✅ | ✅ browser.network (WS9.3) | done |
 | JS dialog handling | ✅ handle_dialog | ✅ | ✅ dialog_accept/dismiss (WS9.4) | done |
 | Multi-tab in one task | ✅ browser_tabs | ✅ tabs_* | ❌ one tab per session | **9.5** |
 | Viewport/device control | ✅ resize | ✅ resize_window | ✅ resize act kind (WS9.6) | done |

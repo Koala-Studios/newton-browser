@@ -155,6 +155,12 @@ export function summarizeBrowserResult(result: NewtonBrowserResult | null): Reco
       ...(result.reason ? { reason: redactText(result.reason).slice(0, TEXT_CAP) } : {}),
     };
   }
+  if (result.kind === "console_log") {
+    return { kind: result.kind, origin: redactBrowserOrigin(result.origin), count: result.count, dropped: result.dropped, capturedAt: result.capturedAt };
+  }
+  if (result.kind === "network_log") {
+    return { kind: result.kind, origin: redactBrowserOrigin(result.origin), count: result.count, dropped: result.dropped, hasBody: Boolean(result.body), capturedAt: result.capturedAt };
+  }
   return { kind: result.kind, message: redactText(result.message).slice(0, TEXT_CAP) };
 }
 
@@ -246,9 +252,81 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ...redactPendingDialog(input.pendingDialog),
     };
   }
+  if (input.kind === "console_log") {
+    const entries = Array.isArray(input.entries) ? input.entries.flatMap((entry) => normalizeConsoleEntry(entry)).slice(0, 500) : [];
+    return {
+      kind: "console_log",
+      origin: redactBrowserOrigin(input.origin),
+      entries,
+      count: entries.length,
+      dropped: typeof input.dropped === "number" ? Math.max(0, Math.trunc(input.dropped)) : 0,
+      capturedAt: isoOrNow(input.capturedAt),
+    } as unknown as NewtonBrowserResult;
+  }
+  if (input.kind === "network_log") {
+    const entries = Array.isArray(input.entries) ? input.entries.flatMap((entry) => normalizeNetworkEntry(entry)).slice(0, 500) : [];
+    const body = input.body && typeof input.body === "object" && !Array.isArray(input.body)
+      ? redactNetworkBody(input.body as Record<string, unknown>)
+      : input.body === null ? null : undefined;
+    return {
+      kind: "network_log",
+      origin: redactBrowserOrigin(input.origin),
+      entries,
+      count: entries.length,
+      dropped: typeof input.dropped === "number" ? Math.max(0, Math.trunc(input.dropped)) : 0,
+      capturedAt: isoOrNow(input.capturedAt),
+      ...(body !== undefined ? { body } : {}),
+      ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
+    } as unknown as NewtonBrowserResult;
+  }
   return {
     kind: "ack",
     message: redactText(String(input.message ?? "ok")).slice(0, TEXT_CAP),
+  };
+}
+
+const CONSOLE_LEVELS = new Set(["log", "info", "warn", "error", "debug"]);
+
+function normalizeConsoleEntry(entry: unknown): Array<Record<string, unknown>> {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+  const raw = entry as Record<string, unknown>;
+  const level = CONSOLE_LEVELS.has(String(raw.level)) ? String(raw.level) : "log";
+  return [{
+    level,
+    text: redactObservationText(String(raw.text ?? "")).slice(0, TEXT_CAP),
+    ...(typeof raw.source === "string" && raw.source.trim() ? { source: raw.source.slice(0, 80) } : {}),
+    at: isoOrNow(raw.at),
+  }];
+}
+
+function normalizeNetworkEntry(entry: unknown): Array<Record<string, unknown>> {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+  const raw = entry as Record<string, unknown>;
+  if (typeof raw.url !== "string") return [];
+  return [{
+    requestId: String(raw.requestId ?? "").slice(0, 120),
+    method: String(raw.method ?? "GET").slice(0, 12).toUpperCase(),
+    url: redactBrowserUrl(String(raw.url)),
+    ...(typeof raw.status === "number" ? { status: Math.trunc(raw.status) } : {}),
+    ...(typeof raw.resourceType === "string" ? { resourceType: raw.resourceType.slice(0, 40) } : {}),
+    ...(typeof raw.mimeType === "string" ? { mimeType: raw.mimeType.slice(0, 80) } : {}),
+    ...(typeof raw.bytes === "number" ? { bytes: Math.max(0, Math.trunc(raw.bytes)) } : {}),
+    ...(raw.failed === true ? { failed: true } : {}),
+    at: isoOrNow(raw.at),
+  }];
+}
+
+function redactNetworkBody(body: Record<string, unknown>): Record<string, unknown> {
+  const base64Encoded = body.base64Encoded === true;
+  const data = String(body.data ?? "");
+  return {
+    requestId: String(body.requestId ?? "").slice(0, 120),
+    url: redactBrowserUrl(String(body.url ?? "")),
+    base64Encoded,
+    // Non-binary bodies pass the observation-text pass (card/SSN masking). Binary
+    // (base64) bodies are opaque and left as-is, bounded by the driver's cap.
+    data: base64Encoded ? data : redactObservationText(data),
+    truncated: body.truncated === true,
   };
 }
 

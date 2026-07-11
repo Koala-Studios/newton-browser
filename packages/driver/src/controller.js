@@ -22,6 +22,9 @@ class SessionController {
     this.driver = driver;
     this.driver.accent = accent ?? null;
     this.driver.ownsTab = Boolean(ownsTab);
+    // Give the driver the origin grant so a network-body fetch (WS9.3) can refuse a
+    // cross-origin request's body.
+    this.driver.allowedOrigins = this.allowedOrigins;
     this.streaming = false;
     this.unsubscribe = null;
     this.reattaching = false;

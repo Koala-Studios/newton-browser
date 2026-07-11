@@ -55,6 +55,12 @@ test("action schema fields survive parse and redact", () => {
     promptText: "Ada",
     viewport: { width: 1024, height: 768 },
     fields: [{ label: "Email", value: "a@b.com" }],
+    level: "error",
+    pattern: "boom",
+    limit: 50,
+    clear: true,
+    urlPattern: "/api",
+    requestId: "r1",
     unknown: "drop me",
   });
   const redacted = redactBrowserAction(parsed);

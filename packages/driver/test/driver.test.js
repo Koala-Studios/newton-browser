@@ -654,6 +654,65 @@ test("driver resize refuses a current (non-owned) tab", async () => {
   assert.equal(driver.sessionViewport, null);
 });
 
+test("driver buffers console output and filters by level and pattern", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.lastObserveUrl = "https://example.com/";
+  driver.recordDebuggerEvent("Runtime.consoleAPICalled", { type: "log", args: [{ value: "hello world" }] });
+  driver.recordDebuggerEvent("Runtime.consoleAPICalled", { type: "warning", args: [{ value: "careful now" }] });
+  driver.recordDebuggerEvent("Runtime.exceptionThrown", { exceptionDetails: { exception: { description: "TypeError: boom" } } });
+  const all = driver.getConsole({});
+  assert.equal(all.kind, "console_log");
+  assert.equal(all.entries.length, 3);
+  const errorsOnly = driver.getConsole({ level: "error" });
+  assert.equal(errorsOnly.entries.length, 1);
+  assert.match(errorsOnly.entries[0].text, /TypeError/);
+  const matched = driver.getConsole({ pattern: "careful" });
+  assert.equal(matched.entries.length, 1);
+  assert.equal(matched.entries[0].level, "warn");
+  const cleared = driver.getConsole({ clear: true });
+  assert.equal(cleared.entries.length, 3);
+  assert.equal(driver.getConsole({}).entries.length, 0);
+});
+
+test("driver buffers network request metadata without headers", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.lastObserveUrl = "https://example.com/";
+  driver.recordDebuggerEvent("Network.requestWillBeSent", { requestId: "r1", request: { method: "POST", url: "https://example.com/api/save", headers: { authorization: "Bearer secret" } }, type: "XHR" });
+  driver.recordDebuggerEvent("Network.responseReceived", { requestId: "r1", response: { status: 200, mimeType: "application/json" } });
+  driver.recordDebuggerEvent("Network.loadingFinished", { requestId: "r1", encodedDataLength: 1234 });
+  const list = await driver.getNetwork({});
+  assert.equal(list.kind, "network_log");
+  assert.equal(list.entries.length, 1);
+  const entry = list.entries[0];
+  assert.equal(entry.method, "POST");
+  assert.equal(entry.status, 200);
+  assert.equal(entry.bytes, 1234);
+  assert.equal("headers" in entry, false, "network entries must never carry headers");
+  assert.equal(JSON.stringify(entry).includes("Bearer"), false);
+});
+
+test("driver network body fetch is refused for a cross-origin request", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  driver.lastObserveUrl = "https://example.com/";
+  let cdpCalled = false;
+  driver.cdp = async () => { cdpCalled = true; return { body: "leak", base64Encoded: false }; };
+  driver.recordDebuggerEvent("Network.requestWillBeSent", { requestId: "r9", request: { method: "GET", url: "https://tracker.example.net/pixel" }, type: "Image" });
+  const result = await driver.getNetwork({ requestId: "r9" });
+  assert.equal(result.body, null);
+  assert.equal(result.reason, "origin_not_granted");
+  assert.equal(cdpCalled, false, "a cross-origin body must not even be fetched");
+});
+
+test("driver network body fetch returns a same-origin body", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  driver.lastObserveUrl = "https://example.com/";
+  driver.cdp = async (method) => (method === "Network.getResponseBody" ? { body: "{\"ok\":true}", base64Encoded: false } : {});
+  driver.recordDebuggerEvent("Network.requestWillBeSent", { requestId: "r2", request: { method: "GET", url: "https://example.com/api/data" }, type: "XHR" });
+  const result = await driver.getNetwork({ requestId: "r2" });
+  assert.equal(result.body.data, "{\"ok\":true}");
+  assert.equal(result.body.base64Encoded, false);
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,

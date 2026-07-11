@@ -18,7 +18,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
-| WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.4/9.6/9.7/9.8 done; 9.2, 9.3, 9.5 remaining. Plus BB-035 redaction fix. |
+| WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.2/9.3/9.4/9.6/9.7/9.8 done; 9.5 (multi-tab) remaining. Plus BB-035 redaction fix. |
 | WS10 | Performance / observation budgets | ⛔ | not started (needs live measurement) |
 | WS11 | Release 0.4.0 | ⛔ `[H5]` | versions still 0.3.0 (correct until WS11); depends on WS9/WS10 + npm creds |
 | WS12 | Discovery (ROADMAP/PRIVACY/landing) | ⛔ | not started |
@@ -26,7 +26,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 120/120 pass
+- `pnpm test` — ✅ 126/126 pass
 - `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
 
 ## WS9 breakdown
@@ -38,8 +38,8 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | 9.4 | dialog accept/dismiss | ✅ committed | CDP `Page.handleJavaScriptDialog`; `pendingDialog` on observations; DECISIONS §15; deterministic tests. Live evidence row still pending. |
 | 9.8 | `fill_form` batch fill | ✅ committed | host-side expansion into sequential fills; per-field floor; stops at sensitive field; DECISIONS §18. Live evidence row pending. |
 | 9.6 | viewport / `resize` | ✅ committed | owned-tab `resize` act kind, persists across re-attach, bounded; DECISIONS §16. session.start `viewport` convenience option deferred. Live evidence row pending. |
-| 9.2 | `browser.console` | ⛔ | new MCP tool + CDP console ring buffer in driver/extension |
-| 9.3 | `browser.network` | ⛔ | new MCP tool + CDP network ring buffer; origin-gated bodies, header exclusion |
+| 9.2 | `browser.console` | ✅ committed | driver ring buffer (Runtime/Log), read-only tool, redaction, tests; DECISIONS §19. Live evidence pending. |
+| 9.3 | `browser.network` | ✅ committed | driver ring buffer, list + origin-gated body, headers excluded, tests; DECISIONS §19. Live evidence pending. |
 | 9.5 | multi-tab sessions | ⛔ | CDP target tracking; most invasive |
 
 All remaining WS9 items also require live Chrome/Edge evidence rows in `qa-ledger.md`
