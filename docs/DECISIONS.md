@@ -275,3 +275,16 @@ extension (sensitive-zone masking before capture, non-inline bytes dropped pre-r
 because image pixels cannot be un-leaked once transmitted. Redaction is guarded to the
 three observation kinds so finalize acknowledgements and other control results pass
 through unchanged.
+
+## 18. Batch fill_form via host-side expansion (WS9.8, 2026-07-10)
+
+`fill_form` lets one MCP call fill an ordered `fields` array. It is expanded host-side
+into sequential single `fill` dispatches, each receiving the full existing per-field
+floor (host hints plus driver-resolved facts) and the same value redaction as any fill.
+The batch stops at the first blocked or failed field and returns a per-field summary
+with `stoppedAt`; a sensitive field (credential/OTP/payment/government-id) halts the
+batch *before* that field is dispatched, so no keystrokes reach it — identical safety to
+a standalone fill. Host expansion (rather than a driver batch command) was chosen so the
+security-critical floor path is reused unchanged and the whole feature is deterministically
+testable; the saving is one MCP round-trip per form, not per relay hop. `fields` values
+are redacted to `[REDACTED]` in action artifacts.

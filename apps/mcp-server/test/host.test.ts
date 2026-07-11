@@ -174,6 +174,69 @@ test("mode:text observations mask card/SSN sequences before reaching the client"
   }
 });
 
+test("fill_form fills fields sequentially in one call", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    // Echo every fill command back as a verified observation.
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.type !== "bridge_command") return;
+      void extensionRequest(socket, "postResult", { event: { commandId: message.command.commandId, ok: true, result: {
+        kind: "observation", mode: "cdp", origin: "https://example.com", title: "Form", nodes: [], nodeCount: 0,
+        truncated: false, capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
+      } } });
+    });
+    const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "fill_form", fields: [
+      { label: "First name", value: "Ada" },
+      { label: "Last name", value: "Lovelace" },
+    ] } });
+    assert.equal(result.isError, false);
+    assert.equal(result.json.ok, true);
+    assert.equal(result.json.filled, 2);
+    assert.deepEqual(result.json.fields.map((f: any) => f.status), ["verified", "verified"]);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("fill_form stops at a sensitive field before dispatching it", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    let dispatched = 0;
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.type !== "bridge_command") return;
+      dispatched += 1;
+      void extensionRequest(socket, "postResult", { event: { commandId: message.command.commandId, ok: true, result: {
+        kind: "observation", mode: "cdp", origin: "https://example.com", title: "Form", nodes: [], nodeCount: 0,
+        truncated: false, capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
+      } } });
+    });
+    const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "fill_form", fields: [
+      { label: "Username", value: "ada" },
+      { label: "Password", value: "hunter2" },
+      { label: "Bio", value: "never reached" },
+    ] } });
+    assert.equal(result.isError, true);
+    assert.equal(result.json.errorCode, "blocked_by_floor");
+    assert.equal(result.json.stoppedAt, 1);
+    assert.equal(result.json.fields[1].status, "blocked");
+    assert.equal(dispatched, 1, "only the first (safe) field is dispatched; the batch halts before the password");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
 test("pairing rejects normal webpage origins and invalid proofs", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);

@@ -20,6 +20,8 @@ All tools use the local transport and explicit session IDs.
 
 `resize` sets the owned tab's viewport via `viewport: { width, height }` (owned tabs only; bounded to 200–3840 × 200–2160) and the size persists across a debugger re-attach.
 
+`fill_form` fills an ordered `fields` array (each entry is a fill target plus `value`) in one call. Each field passes the full per-field floor; the batch stops at the first blocked or failed field and returns a per-field `fields` summary with `stoppedAt`. A sensitive field (password/OTP/payment) halts the batch before it is dispatched.
+
 When a page opens a JavaScript dialog (`alert`/`confirm`/`prompt`/`beforeunload`), the renderer blocks until it is answered and the open dialog is reported as `pendingDialog` on observations. Respond with `dialog_accept` (optionally `promptText` for a `prompt`) or `dialog_dismiss`. These are `agentic`; post-action reconciliation still catches any navigation or network write the accept triggers.
 
 Every act result includes:

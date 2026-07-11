@@ -18,6 +18,7 @@ type BrowserActionFieldSpec =
   | { kind: "sensitiveZones"; cap: number; itemCap: number }
   | { kind: "enum"; values: readonly string[] }
   | { kind: "viewport" }
+  | { kind: "formFields"; cap: number }
   | { kind: "clip" };
 
 export const BROWSER_ACTION_FIELD_SPECS = {
@@ -53,6 +54,7 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   maxChars: { kind: "int", min: 200, max: 200_000 },
   promptText: { kind: "text", cap: TEXT_CAP },
   viewport: { kind: "viewport" },
+  fields: { kind: "formFields", cap: 32 },
 } as const satisfies Record<string, BrowserActionFieldSpec>;
 
 export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;
@@ -85,7 +87,31 @@ function parseBrowserActionField(raw: unknown, spec: BrowserActionFieldSpec): un
   if (spec.kind === "sensitiveZones") return sensitiveZoneArray(raw, spec.cap, spec.itemCap);
   if (spec.kind === "enum") return typeof raw === "string" && spec.values.includes(raw) ? raw : undefined;
   if (spec.kind === "viewport") return parseViewport(raw);
+  if (spec.kind === "formFields") return parseFormFields(raw, spec.cap);
   return parseClip(raw);
+}
+
+// Ordered fill_form fields (WS9.8). Each entry keeps a resolvable target plus its
+// value; entries with neither a target nor targeting hint are dropped so a malformed
+// field cannot silently fill the wrong control.
+function parseFormFields(raw: unknown, cap: number): unknown {
+  if (!Array.isArray(raw)) return undefined;
+  const fields = raw.slice(0, cap).flatMap((entry) => {
+    const input = objectRecord(entry);
+    if (!input) return [];
+    const target = parseBrowserTarget(input);
+    const field: Record<string, unknown> = {};
+    if (target) field.target = target;
+    for (const key of ["ref", "role", "name", "label", "placeholder", "testId", "selector"] as const) {
+      const value = boundedString(input[key], TEXT_CAP);
+      if (value) field[key] = value;
+    }
+    const value = optionalString(input.value);
+    if (value !== undefined) field.value = value;
+    const hasTarget = target || field.ref || field.role || field.label || field.placeholder || field.testId || field.selector;
+    return hasTarget ? [field] : [];
+  });
+  return fields.length > 0 ? fields : undefined;
 }
 
 // Owned-tab viewport for `resize` (WS9.6). Bounded to sane device sizes so a caller

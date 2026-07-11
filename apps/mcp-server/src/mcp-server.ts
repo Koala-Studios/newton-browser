@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, redactBrowserResult, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
+import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
 
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
 import type { NewtonBrowserHost } from "./bridge.ts";
@@ -172,6 +172,9 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
         transport,
       }, true);
     }
+    if (name === "browser.act" && isObject(action) && action.kind === "fill_form") {
+      return await runFillForm(bridge, sessionId, session, action, transport);
+    }
     const verdict = evaluateHostFloor({ session, action });
     if (!verdict.relay) return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision), transport }, true);
     const event = await bridge.dispatch(sessionId, verdict.action);
@@ -191,6 +194,49 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
     return toolJson({ ok: true, result: redactObservationResult(event.result), transport });
   }
   return toolError("unknown_tool", `Unknown tool: ${name}`);
+}
+
+// fill_form (WS9.8): one MCP call fills an ordered set of fields. The batch is
+// expanded host-side into sequential single fills, each getting the full per-field
+// floor (host hints + driver resolved facts) and redaction. It stops at the first
+// blocked or failed field and reports a per-field summary, so a sensitive field in
+// the middle of a form halts the batch exactly like a standalone fill would.
+async function runFillForm(
+  bridge: NewtonBrowserHost,
+  sessionId: string,
+  session: unknown,
+  action: Record<string, unknown>,
+  transport: BrowserControlTransportMode,
+): Promise<ToolCallResult> {
+  const parsed = parseBrowserAction(action);
+  const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
+  if (fields.length === 0) return toolError("fill_form_requires_fields", "fill_form needs a non-empty fields array, each with a target and value.");
+  const results: Array<{ index: number; status: string; reason?: string }> = [];
+  let strongest: BrowserFloorDecision | undefined;
+  let lastObservation: unknown;
+  for (let index = 0; index < fields.length; index += 1) {
+    const fillAction = { kind: "fill", ...fields[index] };
+    const verdict = evaluateHostFloor({ session: session as never, action: fillAction });
+    strongest = strongest ? strongestDecision(strongest, verdict.decision) : verdict.decision;
+    if (!verdict.relay) {
+      results.push({ index, status: "blocked", reason: verdict.decision.reasons.at(-1) ?? "blocked_by_floor" });
+      return toolJson({ ok: false, errorCode: "blocked_by_floor", stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
+    }
+    const event = await bridge.dispatch(sessionId, verdict.action);
+    if (!event.ok) {
+      results.push({ index, status: "failed", reason: event.errorCode });
+      return toolJson({ ok: false, errorCode: event.errorCode, stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
+    }
+    strongest = event.decision ? strongestDecision(strongest, event.decision) : strongest;
+    const result = isObject(event.result) ? event.result : {};
+    lastObservation = redactObservationResult(event.result);
+    const status = typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified";
+    results.push({ index, status, ...(typeof result.reason === "string" ? { reason: result.reason } : {}) });
+    if (status !== "verified" && status !== "dispatched_unverified") {
+      return toolJson({ ok: false, errorCode: "fill_form_field_incomplete", stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
+    }
+  }
+  return toolJson({ ok: true, actionStatus: "verified", filled: results.length, fields: results, decision: publicDecision(strongest), observation: lastObservation, transport });
 }
 
 function actionForTool(name: string, args: Record<string, unknown>): unknown {

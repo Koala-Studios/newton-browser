@@ -21,6 +21,7 @@ export const BROWSER_ACTION_KINDS = [
   "dialog_accept",
   "dialog_dismiss",
   "resize",
+  "fill_form",
 ] as const;
 
 export type BrowserActionKind = (typeof BROWSER_ACTION_KINDS)[number];
@@ -131,6 +132,23 @@ export type BrowserAction = {
   // Owned-tab viewport for the `resize` act kind (WS9.6). Applied via CDP device
   // metrics and re-applied if the debugger re-attaches. Owned tabs only.
   viewport?: { width: number; height: number };
+  // Ordered fields for the `fill_form` act kind (WS9.8). Each entry carries the same
+  // targeting hints as a fill plus its value. The host expands the batch into
+  // sequential fills, each with the full per-field floor, stopping at the first
+  // block/failure. Values are redacted in artifacts like any fill value.
+  fields?: BrowserFormField[];
+};
+
+export type BrowserFormField = {
+  target?: BrowserTarget;
+  ref?: string;
+  role?: string;
+  name?: string;
+  label?: string;
+  placeholder?: string;
+  testId?: string;
+  selector?: string;
+  value?: string;
 };
 
 // A page-initiated JavaScript dialog awaiting a decision (WS9.4). Surfaced in

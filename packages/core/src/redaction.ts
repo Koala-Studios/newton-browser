@@ -81,6 +81,13 @@ export function redactBrowserAction(action: BrowserAction): BrowserAction {
       writable[key] = value.map((item) => String(item).split(/[\\/]/).at(-1) || "[FILE]").slice(0, spec.cap);
     } else if (spec.kind === "sensitiveZones" && Array.isArray(value)) {
       writable[key] = value;
+    } else if (spec.kind === "formFields" && Array.isArray(value)) {
+      // fill_form values are secrets-in-waiting like any fill value: redact each.
+      writable[key] = value.map((field) => {
+        const record = field && typeof field === "object" && !Array.isArray(field) ? { ...(field as Record<string, unknown>) } : {};
+        if ("value" in record) record.value = "[REDACTED]";
+        return record;
+      });
     } else {
       writable[key] = value;
     }

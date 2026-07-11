@@ -454,7 +454,7 @@ tools, surveyed 2026-07):
 | JS dialog handling | ✅ handle_dialog | ✅ | ✅ dialog_accept/dismiss (WS9.4) | done |
 | Multi-tab in one task | ✅ browser_tabs | ✅ tabs_* | ❌ one tab per session | **9.5** |
 | Viewport/device control | ✅ resize | ✅ resize_window | ✅ resize act kind (WS9.6) | done |
-| Batch form fill | ✅ fill_form | ✅ form_input | one action per call | **9.8** |
+| Batch form fill | ✅ fill_form | ✅ form_input | ✅ fill_form act kind (WS9.8) | done |
 | Arbitrary JS eval | ✅ run_code_unsafe | ✅ javascript_tool | ❌ | **excluded by design — 9.7** |
 | Drag and drop | ✅ | ❌ | ❌ | deferred (note in ROADMAP) |
 | File upload | ✅ | ✅ | ✅ set_files | parity — keep |
