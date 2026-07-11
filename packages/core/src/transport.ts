@@ -20,6 +20,9 @@ export type BridgeSessionInit = {
   instanceLabel?: string;
   ownedTabId?: number;
   tabGroupId?: number;
+  // Open the owned tab in an incognito window (WS: incognito sessions). Owned-group
+  // only; ignored for current-tab. Requires the extension to be allowed in incognito.
+  incognito?: boolean;
 };
 
 export type BridgeSessionInfo = {
@@ -34,6 +37,7 @@ export type BridgeSessionInfo = {
   liveOrigin?: string | null;
   goal?: string;
   instanceLabel?: string;
+  incognito?: boolean;
 };
 
 export type BridgeFloorInput = {

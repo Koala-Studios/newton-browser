@@ -333,3 +333,16 @@ that the rest of 0.4.0 depends on with an un-live-testable rewrite, WS9.5 is sch
 a focused, live-verified effort. The `newTarget` reconciliation signal already halts an
 agentic action when a popup appears, so today a new tab is surfaced (not silently
 ignored); it simply is not yet independently drivable. Tracked in `ROADMAP.md`.
+
+## 22. Incognito owned-tab sessions (2026-07-11)
+
+`browser.session.start` accepts `incognito: true` (owned-group tab mode only; ignored
+for current-tab). The owned tab is created in an incognito window — an existing one is
+reused, otherwise a fresh incognito window is opened — so the driven tab never touches
+the user's authenticated profile cookies or storage. This is the privacy-preserving way
+to drive popular sites without the user's logged-in state (e.g. for screenshots or
+untrusted browsing). It requires the extension to be allowed in incognito
+(chrome://extensions → Newton → Details → Allow in incognito); when it is not, tab
+creation fails with a typed `incognito_not_allowed` so the caller can tell the user
+exactly what to enable. Debugger attach, the safety floor, origin scoping, and redaction
+are unchanged in incognito.

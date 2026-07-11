@@ -1,9 +1,30 @@
+// Find an existing incognito window or open one. Throws a typed error when the
+// extension is not allowed in incognito (the user must enable it in chrome://extensions),
+// so the host can tell the caller exactly what to do instead of failing opaquely.
+async function ensureIncognitoWindow(chromeApi) {
+  const windows = await (chromeApi.windows?.getAll?.({}) ?? Promise.resolve([])).catch(() => []);
+  const existing = Array.isArray(windows) ? windows.find((window) => window?.incognito && window?.type !== "devtools") : null;
+  if (existing && Number.isInteger(existing.id)) return existing.id;
+  if (!chromeApi.windows?.create) throw new Error("incognito_not_supported");
+  try {
+    const created = await chromeApi.windows.create({ incognito: true });
+    if (!created || !Number.isInteger(created.id)) throw new Error("incognito_not_allowed");
+    return created.id;
+  } catch {
+    throw new Error("incognito_not_allowed");
+  }
+}
+
 export function createChromeTabsPort(chromeApi = globalThis.chrome) {
   if (!chromeApi) throw new Error("chrome API is required");
   return {
-    async createOwnedTab(origin, color, title) {
+    async createOwnedTab(origin, color, title, options = {}) {
       const url = typeof origin === "string" && /^https?:\/\//i.test(origin) ? origin : "about:blank";
-      const tab = await chromeApi.tabs.create({ url, active: false });
+      // Incognito sessions open the owned tab in an incognito window so the tab never
+      // touches the user's authenticated profile cookies/storage. Requires the
+      // extension to be allowed in incognito; otherwise a typed error surfaces.
+      const windowId = options.incognito ? await ensureIncognitoWindow(chromeApi) : null;
+      const tab = await chromeApi.tabs.create({ url, active: false, ...(windowId !== null ? { windowId } : {}) });
       let groupId = null;
       try {
         groupId = await chromeApi.tabs.group({ tabIds: [tab.id] });

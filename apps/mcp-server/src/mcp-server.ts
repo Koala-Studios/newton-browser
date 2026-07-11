@@ -125,6 +125,7 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       goal: typeof args.goal === "string" ? args.goal.slice(0, 240) : "",
       tabMode: args.tabMode === "current" ? "current" : "owned_group",
       instanceLabel: typeof args.instanceLabel === "string" ? args.instanceLabel.slice(0, 120) : "mcp",
+      ...(args.incognito === true && args.tabMode !== "current" ? { incognito: true } : {}),
     });
     try {
       const session = await bridge.waitForSessionReady(created.sessionId);
@@ -375,6 +376,7 @@ function toolList(): Array<Record<string, unknown>> {
       goal: { type: "string" },
       tabMode: { type: "string", enum: ["owned_group", "current"] },
       instanceLabel: { type: "string" },
+      incognito: { type: "boolean" },
     }, ["origin"]),
     tool("browser.observe", "Observe the current session tab. mode:\"text\" returns bounded, redacted readable page text instead of the accessibility tree.", { transport, sessionId: { type: "string" }, mode: { type: "string", enum: ["full", "diff", "text"] }, maxNodes: { type: "number" }, maxChars: { type: "number" } }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", { transport, sessionId: { type: "string" }, action: { type: "object" } }, ["sessionId", "action"]),

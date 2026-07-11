@@ -84,6 +84,7 @@ export function createNewtonBrowserHost(options: {
         liveOrigin: null,
         goal: init.goal ?? "",
         instanceLabel: init.instanceLabel ?? "",
+        ...(init.incognito ? { incognito: true } : {}),
       });
       sessionActivity.set(sessionId, Date.now());
       broadcastSessionsChanged();

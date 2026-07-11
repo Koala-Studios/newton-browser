@@ -293,7 +293,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         if (typeof activeTabId !== "number") return;
         tabId = activeTabId;
       } else {
-        const acquired = await tabs.createOwnedTab(origin, theme.color, groupTitle({ goal: session.goal, instanceLabel: session.instanceLabel, origin }));
+        const acquired = await tabs.createOwnedTab(origin, theme.color, groupTitle({ goal: session.goal, instanceLabel: session.instanceLabel, origin }), { incognito: session.incognito === true });
         tabId = acquired.tabId;
         tabGroupId = acquired.groupId ?? null;
       }

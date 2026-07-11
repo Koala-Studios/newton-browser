@@ -5,7 +5,7 @@ All tools use the local transport and explicit session IDs.
 ## Tools
 
 - `browser.status`: report auth mode, extension, host, protocol, session, and limit readiness without opening a tab.
-- `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab, reconcile its live origin, and return a ready session.
+- `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab, reconcile its live origin, and return a ready session. Pass `incognito: true` (owned-group only) to open the tab in an incognito window so no profile login is used; requires the extension to be allowed in incognito.
 - `browser.observe`: return a full compact accessibility observation, a diff, or (with `mode: "text"`) bounded, secret-redacted readable page text. Use text mode to read prose/articles; use full/diff to target controls.
 - `browser.act`: execute one typed action and return the deterministic floor decision with the result.
 - `browser.screenshot`: deliver evidence through an MCP image block, caller-designated file, or bounded inline fallback. Optional `region: {x,y,width,height}` captures just that area; `format:"jpeg"` with `quality` (default 70) trades fidelity for a much smaller payload (PNG default).

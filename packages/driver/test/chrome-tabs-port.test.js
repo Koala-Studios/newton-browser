@@ -51,6 +51,58 @@ test("chrome tabs port creates owned tabs without taking the user's active tab",
   assert.deepEqual(updates, [{ groupId: 201, input: { title: "QA", color: "blue" } }]);
 });
 
+test("incognito owned tabs open in an incognito window, reusing an existing one", async () => {
+  const creates = [];
+  const windowCreates = [];
+  const port = createChromeTabsPort({
+    tabs: {
+      async create(input) { creates.push(input); return { id: 55 }; },
+      async group() { return 66; },
+      async remove() {}, async get() { return { id: 55 }; },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    tabGroups: { async update() {} },
+    windows: {
+      async getAll() { return [{ id: 7, incognito: false, type: "normal" }, { id: 9, incognito: true, type: "normal" }]; },
+      async create(input) { windowCreates.push(input); return { id: 999 }; },
+    },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  const result = await port.createOwnedTab("https://example.com", "blue", "QA", { incognito: true });
+  assert.deepEqual(result, { tabId: 55, groupId: 66 });
+  assert.equal(creates[0].windowId, 9, "reuses the existing incognito window");
+  assert.equal(windowCreates.length, 0, "does not open a second incognito window when one exists");
+});
+
+test("incognito owned tabs open a new incognito window when none exists", async () => {
+  const creates = [];
+  const port = createChromeTabsPort({
+    tabs: {
+      async create(input) { creates.push(input); return { id: 1 }; },
+      async group() { return 2; }, async remove() {}, async get() { return { id: 1 }; },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    tabGroups: { async update() {} },
+    windows: { async getAll() { return [{ id: 1, incognito: false, type: "normal" }]; }, async create() { return { id: 42 }; } },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  await port.createOwnedTab("https://example.com", "blue", "QA", { incognito: true });
+  assert.equal(creates[0].windowId, 42, "creates and uses a fresh incognito window");
+});
+
+test("incognito owned tabs surface incognito_not_allowed when the extension is blocked", async () => {
+  const port = createChromeTabsPort({
+    tabs: {
+      async create() { return { id: 1 }; }, async group() { return 2; }, async remove() {}, async get() { return { id: 1 }; },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    tabGroups: { async update() {} },
+    windows: { async getAll() { return []; }, async create() { throw new Error("Incognito mode is not allowed"); } },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  await assert.rejects(port.createOwnedTab("https://example.com", "blue", "QA", { incognito: true }), /incognito_not_allowed/);
+});
+
 test("chrome tabs port hands a retained tab back without touching close or deliverable tabs", async () => {
   const ungrouped = [];
   const updated = [];
