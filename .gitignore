@@ -7,3 +7,6 @@ artifacts/
 *.sha256
 .newton-browser/
 test/evidence/runs/
+
+# Local dev MCP wiring (machine-specific absolute paths)
+.mcp.json
