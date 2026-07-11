@@ -5,6 +5,7 @@ import { WebSocket } from "../../apps/mcp-server/node_modules/ws/wrapper.mjs";
 import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 
 const durationMs = Number(process.env.NEWTON_BROWSER_STRESS_MS ?? 300_000);
+const warmupMs = Number(process.env.NEWTON_BROWSER_STRESS_WARMUP_MS ?? 30_000);
 const rssLimitBytes = Number(process.env.NEWTON_BROWSER_STRESS_RSS_LIMIT_MB ?? 96) * 1024 * 1024;
 const bridge = createNewtonBrowserHost({ authMode: "local_trust", browserTarget: "auto" });
 let socket;
@@ -15,14 +16,17 @@ try {
   await saturationProbe();
 
   const sessions = await Promise.all(["worker-a", "worker-b"].map((worker, index) => readySession(worker, index)));
+  let warmupOperations = 0;
+  let operations = 0;
+  let crossResults = 0;
+  const warmupDeadline = Date.now() + warmupMs;
+  await Promise.all(sessions.map(({ sessionId, worker }) => runWorker(sessionId, worker, warmupDeadline, "warmup")));
   if (global.gc) global.gc();
   const rssStart = process.memoryUsage().rss;
   let rssMax = rssStart;
-  let operations = 0;
-  let crossResults = 0;
   const deadline = Date.now() + durationMs;
 
-  await Promise.all(sessions.map(({ sessionId, worker }) => runWorker(sessionId, worker)));
+  await Promise.all(sessions.map(({ sessionId, worker }) => runWorker(sessionId, worker, deadline, "measured")));
   if (global.gc) global.gc();
   await new Promise((resolve) => setTimeout(resolve, 50));
   const rssEnd = process.memoryUsage().rss;
@@ -35,24 +39,27 @@ try {
   process.stdout.write(`${JSON.stringify({
     ok: true,
     durationMs,
+    warmupMs,
+    warmupOperations,
     workers: sessions.map((item) => item.worker),
     operations,
     crossResults,
     deadlocks: 0,
-    rss: { start: rssStart, max: rssMax, end: rssEnd, growth: rssGrowth, limit: rssLimitBytes },
+    rss: { baseline: "post_warmup", start: rssStart, max: rssMax, end: rssEnd, growth: rssGrowth, limit: rssLimitBytes },
   })}\n`);
 
-  async function runWorker(sessionId, worker) {
+  async function runWorker(sessionId, worker, endAt, phase) {
     let sequence = 0;
-    while (Date.now() < deadline) {
+    while (Date.now() < endAt) {
       sequence += 1;
       const result = await bridge.dispatch(sessionId, { kind: "observe", query: worker, sequence }, 5000);
       assert(result.ok === true, `${worker} dispatch failed: ${JSON.stringify(result)}`);
       const payload = result.result ?? {};
       if (payload.sessionId !== sessionId || payload.worker !== worker || payload.sequence !== sequence) crossResults += 1;
-      operations += 1;
+      if (phase === "warmup") warmupOperations += 1;
+      else operations += 1;
       if (sequence % 100 === 0) {
-        rssMax = Math.max(rssMax, process.memoryUsage().rss);
+        if (phase === "measured") rssMax = Math.max(rssMax, process.memoryUsage().rss);
         await new Promise((resolve) => setImmediate(resolve));
       }
     }

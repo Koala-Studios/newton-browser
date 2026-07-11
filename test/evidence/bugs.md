@@ -363,3 +363,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: remove the unrelated repository/cache note and describe only the standalone skill's authoritative distribution state.
 - Regression: the existing `scripts/verify-boundary.mjs` committed-file scan deterministically reproduces the failure and passes after the note is removed; CI run 29157179006 is the failing evidence and the next main-branch CI run is the cross-platform closure check.
 - Status: closed locally; CI recheck pending.
+
+## BB-042 — Stress RSS baseline included runtime warmup allocation
+
+- Minimal repro: run the tagged `v0.4.0` release workflow on the hosted Linux Node 24 runner; the five-minute workload completed more than three million operations with zero cross-session results or deadlocks, but reported 111,284,224 bytes of RSS growth against the 100,663,296-byte ceiling.
+- Root cause: the harness sampled its RSS baseline immediately after session setup, before exercising the steady-state dispatch path. JIT compilation, WebSocket/runtime initialization, and allocator arena growth during the first measured operations were therefore classified as five-minute retained growth. Repeated local release gates passed because their runtime/allocator warm state differed, making the baseline environment-sensitive rather than a stable leak measurement.
+- Fix: exercise both workers for 30 seconds before forcing GC and recording the RSS baseline; keep the measured five-minute workload and the original 96 MiB ceiling unchanged. Report warmup operations and label the baseline explicitly.
+- Regression: `test/fixtures/stress-warmup.test.ts` runs the real stress harness with short bounded phases and asserts that both workers execute warmup operations before a `post_warmup` RSS baseline and measured operations.
+- Status: fixed locally; release workflow recheck pending.
