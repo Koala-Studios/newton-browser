@@ -52,8 +52,20 @@ function run(command, args, { cwd = root, capture = false } = {}) {
 
 function packageManagerCommand(command, args) {
   if (command === "pnpm" && process.env.npm_execpath) return { command: process.execPath, args: [process.env.npm_execpath, ...args] };
-  if (command === "npm") return { command: process.execPath, args: [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), ...args] };
+  if (command === "npm") return { command: process.execPath, args: [nodeCli("npm-cli.js"), ...args] };
   return { command, args };
+}
+
+// Resolve node's bundled npm/npx CLI cross-platform. On Windows npm sits beside
+// node.exe (node_modules/npm); on Linux/macOS node is in bin/ and npm is in
+// ../lib/node_modules/npm. Check both and fall back to the first candidate.
+function nodeCli(name) {
+  const bin = path.dirname(process.execPath);
+  const candidates = [
+    path.join(bin, "node_modules", "npm", "bin", name),
+    path.join(bin, "..", "lib", "node_modules", "npm", "bin", name),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 function cleanPackageManagerEnv() {

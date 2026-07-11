@@ -23,7 +23,7 @@ const env = {
 try {
   fs.mkdirSync(install, { recursive: true });
   fs.writeFileSync(path.join(install, "package.json"), '{"name":"clean-user-proof","private":true}');
-  run(process.execPath, [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "install", "--ignore-scripts", tarball], install, cleanPackageManagerEnv(env), false);
+  run(process.execPath, [nodeCli("npm-cli.js"), "install", "--ignore-scripts", tarball], install, cleanPackageManagerEnv(env), false);
   const entry = path.join(install, "node_modules", "newton-browser", "dist", "index.js");
   if (run(process.execPath, [entry, "--version"], isolated, env, true).stdout.trim() !== version) throw new Error("clean-user version mismatch");
   const doctor = JSON.parse(run(process.execPath, [entry, "--doctor"], isolated, env, true).stdout);
@@ -40,6 +40,13 @@ try {
 }
 
 function mkdir(directory) { fs.mkdirSync(directory, { recursive: true }); return directory; }
+// Resolve node's bundled npm CLI cross-platform (npm sits beside node.exe on Windows,
+// under ../lib/node_modules/npm on Linux/macOS).
+function nodeCli(name) {
+  const bin = path.dirname(process.execPath);
+  const candidates = [path.join(bin, "node_modules", "npm", "bin", name), path.join(bin, "..", "lib", "node_modules", "npm", "bin", name)];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
 function cleanPackageManagerEnv(input) { const output = { ...input, npm_config_update_notifier: "false" }; delete output.npm_config_verify_deps_before_run; return output; }
 function run(command, args, cwd, environment, capture) {
   const result = spawnSync(command, args, { cwd, env: environment, encoding: "utf8", stdio: capture ? "pipe" : "inherit", windowsHide: true, timeout: 120_000 });

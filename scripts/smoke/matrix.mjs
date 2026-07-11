@@ -57,6 +57,14 @@ const browsers = process.platform === "win32" ? {
 } : { chrome: "not-probed", edge: "not-probed" };
 process.stdout.write(`${JSON.stringify({ ok: true, node: currentVersion, node24: node24Version, clients: ["codex", "claude-desktop", "claude-code", "generic"], browsers })}\n`);
 
+// Resolve node's bundled npx CLI cross-platform (beside node.exe on Windows;
+// ../lib/node_modules/npm on Linux/macOS).
+function nodeCli(name) {
+  const bin = path.dirname(process.execPath);
+  const candidates = [path.join(bin, "node_modules", "npm", "bin", name), path.join(bin, "..", "lib", "node_modules", "npm", "bin", name)];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
 function fileVersion(file) {
   if (!fs.existsSync(file)) return "not-installed";
   return run("powershell.exe", ["-NoProfile", "-Command", `(Get-Item -LiteralPath '${file.replaceAll("'", "''")}').VersionInfo.FileVersion`]).stdout.trim();
@@ -64,7 +72,7 @@ function fileVersion(file) {
 
 function run(command, args, { env = process.env } = {}) {
   const executable = command === "npx" ? process.execPath : command;
-  const commandArgs = command === "npx" ? [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js"), ...args] : args;
+  const commandArgs = command === "npx" ? [nodeCli("npx-cli.js"), ...args] : args;
   const result = spawnSync(executable, commandArgs, { cwd: root, env, encoding: "utf8", stdio: "pipe", windowsHide: true, timeout: 120_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed (${result.status}): ${result.stderr}`);

@@ -29,7 +29,12 @@ try {
   fs.rmSync(temp, { recursive: true, force: true });
 }
 
-function npmCli() { return path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"); }
+function npmCli() {
+  // npm sits beside node.exe on Windows, under ../lib/node_modules/npm on Linux/macOS.
+  const bin = path.dirname(process.execPath);
+  const candidates = [path.join(bin, "node_modules", "npm", "bin", "npm-cli.js"), path.join(bin, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
 function cleanPackageManagerEnv() { const env = { ...process.env, npm_config_update_notifier: "false" }; delete env.npm_config_verify_deps_before_run; return env; }
 function run(command, args, cwd, env) {
   return new Promise((resolve, reject) => {

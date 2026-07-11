@@ -8,7 +8,7 @@ const extensionArtifact = path.resolve(`artifacts/newton-browser-extension-${ver
 if (!fs.existsSync(extensionArtifact) || !fs.readFileSync(extensionArtifact).includes(Buffer.from("onboarding.html"))) {
   throw new Error("packed extension artifact is missing onboarding.html");
 }
-const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");
+const npxCli = nodeCli("npx-cli.js");
 const child = spawn(process.execPath, [npxCli, "--yes", "--package", tarball, "newton-browser"], {
   cwd: process.cwd(),
   env: cleanEnvironment(),
@@ -73,6 +73,14 @@ async function request(method, params, responseTimeoutMs = 10_000) {
   ]);
   waiters.delete(requestId);
   return responses.get(requestId);
+}
+
+// Resolve node's bundled npx CLI cross-platform (beside node.exe on Windows;
+// ../lib/node_modules/npm on Linux/macOS).
+function nodeCli(name) {
+  const bin = path.dirname(process.execPath);
+  const candidates = [path.join(bin, "node_modules", "npm", "bin", name), path.join(bin, "..", "lib", "node_modules", "npm", "bin", name)];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 function cleanEnvironment() {
