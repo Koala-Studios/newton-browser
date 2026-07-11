@@ -343,7 +343,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 ## BB-039 — Release matrix asserted npx tarball output was exactly the version
 
 - Minimal repro: `pnpm smoke:matrix` on Linux CI (release:check stage).
-- Root cause: the matrix smoke asserted `npx --yes --package <tarball> newton-browser --version` stdout, trimmed, equals the version. `npx --package <local-tarball>` installs the tarball on first run and can emit an npm notice to stdout alongside the bin's `--version` output, so the exact-equality check failed on Linux (it happened to be clean on Windows). npx exited 0, so it was a strict-match failure, not an execution failure.
-- Fix: match the version among the output lines (`some(line => line.trim() === version)`) instead of exact-equality, and surface the actual stdout on failure so a genuine "packed bin did not run" case is debuggable.
+- Root cause: the matrix smoke ran `npx --yes --package <tarball> newton-browser --version` and asserted stdout equalled the version. Some npm builds (Linux CI runner) intercept a bare `--version` as npx's own flag and never forward it to the bin, so stdout was empty (npx exited 0). It happened to forward correctly on the local Windows npm build. A CI diagnostic confirmed `stdout: ""`.
+- Fix: exercise the packed bin through npx with `--print-config generic` (unambiguous, not an npx flag) and assert the emitted config is version-pinned; surface stdout on failure. pack:check remains the authoritative tarball-execution gate (it installs via npm and runs the bin via node, green on Linux Node 20/22/24).
 - Regression: `smoke:matrix` green on Windows; Linux CI on the fix commit confirms.
 - Status: closed pending green CI.
