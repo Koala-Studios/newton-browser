@@ -26,7 +26,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 127/127 pass
+- `pnpm test` — ✅ 127/127 pass (build, typecheck, lint all green)
 - `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
 
 ## WS9 breakdown
@@ -82,3 +82,16 @@ browser, which needs the human.
 - 2026-07-10 — WS9.6 resize implemented: owned-tab `resize` act kind, persists
   across debugger re-attach, bounded viewport, floor agentic. DECISIONS §16. Gate
   green, 116/116. Live evidence row pending human.
+- 2026-07-10 — BB-035 (critical): wired host-side observation redaction into the live
+  result path; it was exported/tested but never invoked, so values + mode:text page text
+  reached the client unredacted. End-to-end host tests added. DECISIONS §17, bugs BB-035.
+- 2026-07-10 — WS9.8 fill_form (`56f0489`): host-side batch expansion, per-field floor,
+  stop-on-sensitive-field. DECISIONS §18.
+- 2026-07-10 — WS9.2/9.3 (`da1648e`): read-only browser.console + browser.network with
+  driver ring buffers, header exclusion, origin-gated bodies. DECISIONS §19.
+- 2026-07-10 — WS10.2/10.3 (`e94ceb2`): screenshot region + jpeg/quality. DECISIONS §20.
+- 2026-07-10 — WS5/WS12/WS11 docs (`c96f49a`): PRIVACY.md, store listing + permission
+  justifications, ROADMAP.md, 0.4 CHANGELOG. WS9.5 deferred to live (DECISIONS §21).
+- 2026-07-10 — Headless build phase complete. Full gate green: build, typecheck, lint,
+  127/127 tests. Remaining work is live-verification (all WS9/WS10 evidence rows, 9.5
+  multi-tab) and human checkpoints H3/H4/H5/H6. 11 MCP tools exposed.
