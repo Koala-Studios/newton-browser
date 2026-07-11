@@ -355,3 +355,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: replace both with a dependency-free Node ZIP central-directory reader (`zipEntryNames`) and assert the expected entries are present. No external archive tool involved.
 - Regression: both smokes green on Windows after the change; Linux CI on the fix commit confirms.
 - Status: closed (CI green on 7aa57d2).
+
+## BB-041 — Release ledger reintroduced an unrelated product name
+
+- Minimal repro: commit the release-progress ledger containing the external plugin/cache note, then run `pnpm lint` or CI from a clean checkout.
+- Root cause: the progress ledger recorded implementation history from an unrelated product repository. The standalone boundary correctly rejects that identity-specific term. The pre-commit local gate was run before the note became part of the committed-file scan, while CI evaluated the clean committed tree and failed consistently on Linux and Windows.
+- Fix: remove the unrelated repository/cache note and describe only the standalone skill's authoritative distribution state.
+- Regression: the existing `scripts/verify-boundary.mjs` committed-file scan deterministically reproduces the failure and passes after the note is removed; CI run 29157179006 is the failing evidence and the next main-branch CI run is the cross-platform closure check.
+- Status: closed locally; CI recheck pending.

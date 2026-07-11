@@ -133,17 +133,18 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
   operations per run, zero cross-results/deadlocks/orphan ports, all 11 stages green.
 - 2026-07-11 — Discovery prep completed: static tracker-free `site/`, store promo tile,
   and `server.json`; official `mcp-publisher` 1.7.9 validation passed without publishing.
-- 2026-07-11 — Canonical and Newton Brain source copies of the overhauled
-  `newton-browser` skill validated successfully, and the full Newton plugin validator
-  passed. Installed cache refresh remains blocked because the local Newton Brain plugin
-  source contains extensive unrelated uncommitted changes that must not be bundled
-  implicitly.
+- 2026-07-11 — The overhauled standalone `newton-browser` skill and all bundled
+  references validated successfully. The standalone repository is the authoritative
+  distribution source.
 - 2026-07-11 — Owner accepted the final static landing page. Read-only release-host audit
   found no GitHub environments, Pages source branch set to `None`, no remote tags, and no
   local npm authentication. These remain explicit human/approval gates rather than code
   defects.
-- 2026-07-11 — Owner authorized public release actions and authenticated npm as
-  `koalastudios`. Created the protected GitHub `release` environment with `frankev6` as
-  required reviewer, configured Pages for GitHub Actions, and added a static-site workflow
-  for `site/` without changing the approved page. Final clean-port release gate passed in
+- 2026-07-11 — Owner authorized public release actions and authenticated the npm owner
+  account. Created the protected GitHub `release` environment with the owner as required
+  reviewer, configured Pages for GitHub Actions, and added a static-site workflow for
+  `site/` without changing the approved page. Final clean-port release gate passed in
   381.9s with 3,186,018 stress operations and zero cross-results, deadlocks, or orphan ports.
+- 2026-07-11 — CI run 29157179006 caught BB-041: a release-progress note named an
+  unrelated product repository and correctly failed the standalone boundary on Linux and
+  Windows. Removed the non-product note; the existing boundary gate is the regression.
