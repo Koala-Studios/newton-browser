@@ -359,14 +359,16 @@ class NewtonBrowserDriver {
   // an optional pre-capture wait, and mobile/desktop device renders. Masks
   // sensitive zones before capture; returns an inline base64 image only when the
   // caller asked (bounded + stripped from persistence by redaction).
-  async screenshot({ sensitiveZones = [], fullPage = false, waitMs, device, clip, inline = false } = {}) {
+  async screenshot({ sensitiveZones = [], fullPage = false, waitMs, device, clip, inline = false, format = "png", quality } = {}) {
     const emulation = await this.applyDeviceEmulation(device);
     const restoreDevice = emulation.restore;
+    const imageFormat = format === "jpeg" ? "jpeg" : "png";
     try {
       const wait = Math.max(0, Math.min(Number(waitMs) || 0, MAX_SCREENSHOT_WAIT_MS));
       if (wait > 0) { await this.waitForSettle().catch(() => {}); await delay(wait); }
       await this.maskZones(sensitiveZones);
-      const params = { format: "png" };
+      const params = { format: imageFormat };
+      if (imageFormat === "jpeg") params.quality = Math.max(1, Math.min(Number.isFinite(quality) ? Math.trunc(quality) : 70, 100));
       let truncated = false;
       if (clip && Number.isFinite(clip.width) && Number.isFinite(clip.height) && clip.width > 0 && clip.height > 0) {
         params.clip = { x: Math.max(0, clip.x || 0), y: Math.max(0, clip.y || 0), width: Math.min(clip.width, MAX_SHOT_PX), height: Math.min(clip.height, MAX_SHOT_PX), scale: 1 };
@@ -415,7 +417,7 @@ class NewtonBrowserDriver {
       // multi-MB base64 would be POSTed across the network just to be stripped by
       // redaction. Drop an over-cap inline image here too (before the POST) so it
       // never wastes a slow round-trip; the caller sees truncated.
-      const dataUrl = shot?.data ? `data:image/png;base64,${shot.data}` : null;
+      const dataUrl = shot?.data ? `data:image/${imageFormat};base64,${shot.data}` : null;
       const inlineTooBig = Boolean(inline && dataUrl && dataUrl.length > INLINE_IMAGE_MAX_CHARS);
       const includeInline = Boolean(inline && dataUrl && !inlineTooBig);
       return {
@@ -468,7 +470,7 @@ class NewtonBrowserDriver {
   async executeAction(action) {
     const kind = action?.kind;
     if (kind === "observe") return this.withObservationMeta("verified", {}, await this.observe({ maxNodes: action.maxNodes, query: action.query, mode: action.mode }));
-    if (kind === "screenshot") return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({ sensitiveZones: action.sensitiveZones, fullPage: action.fullPage, waitMs: action.waitMs, device: action.device, clip: action.clip, inline: action.inline }) };
+    if (kind === "screenshot") return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({ sensitiveZones: action.sensitiveZones, fullPage: action.fullPage, waitMs: action.waitMs, device: action.device, clip: action.clip, inline: action.inline, format: action.format, quality: action.quality }) };
     if (kind === "navigate") return this.navigate(action);
     if (kind === "back" || kind === "forward" || kind === "reload") return this.historyAction(kind);
     if (kind === "scroll") return this.scroll(action);

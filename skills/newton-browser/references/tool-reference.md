@@ -8,7 +8,7 @@ All tools use the local transport and explicit session IDs.
 - `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab, reconcile its live origin, and return a ready session.
 - `browser.observe`: return a full compact accessibility observation, a diff, or (with `mode: "text"`) bounded, secret-redacted readable page text. Use text mode to read prose/articles; use full/diff to target controls.
 - `browser.act`: execute one typed action and return the deterministic floor decision with the result.
-- `browser.screenshot`: deliver PNG evidence through an MCP image block, caller-designated file, or bounded inline fallback.
+- `browser.screenshot`: deliver evidence through an MCP image block, caller-designated file, or bounded inline fallback. Optional `region: {x,y,width,height}` captures just that area; `format:"jpeg"` with `quality` (default 70) trades fidelity for a much smaller payload (PNG default).
 - `browser.console`: read the session tab's buffered console output (read-only). Filter by `level`/`pattern`; `clear:true` empties the buffer. Rendered text only — never raw objects or headers; secret-redacted.
 - `browser.network`: list the session tab's buffered request metadata (read-only, method/url/status/type/size — never headers). Pass `requestId` to fetch one response body, returned only when its URL origin is within the session grant and bounded/redacted.
 - `browser.tabs.list`: list only this host's session state.

@@ -259,12 +259,18 @@ function actionForTool(name: string, args: Record<string, unknown>): unknown {
     return { kind: "observe", mode: args.mode === "diff" ? "diff" : "full", maxNodes: clampNumber(args.maxNodes, 80, 1, 250) };
   }
   if (name === "browser.screenshot") {
+    const region = isObject(args.region) ? args.region : null;
+    const clip = region && ["x", "y", "width", "height"].every((key) => Number.isFinite(Number(region[key])))
+      ? { x: Number(region.x), y: Number(region.y), width: Number(region.width), height: Number(region.height) }
+      : undefined;
     return {
       kind: "screenshot",
       fullPage: Boolean(args.fullPage),
       inline: true,
       device: args.device === "mobile" ? "mobile" : args.device === "desktop" ? "desktop" : undefined,
       waitMs: clampNumber(args.waitMs, 0, 0, 10_000),
+      ...(clip ? { clip } : {}),
+      ...(args.format === "jpeg" ? { format: "jpeg", quality: clampNumber(args.quality, 70, 1, 100) } : {}),
     };
   }
   return isObject(args.action) ? args.action : {};
@@ -312,9 +318,10 @@ function hasAllowedFileSignature(file: string, extension: string): boolean {
 
 function screenshotToolResult(raw: unknown, decision: BrowserFloorDecision, args: Record<string, unknown>): ToolCallResult {
   if (!isObject(raw) || typeof raw.dataUrl !== "string") return toolError("screenshot_unavailable", "The extension returned no screenshot bytes.");
-  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(raw.dataUrl);
-  if (!match?.[1]) return toolError("invalid_screenshot", "The extension returned malformed screenshot bytes.");
-  const buffer = Buffer.from(match[1], "base64");
+  const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(raw.dataUrl);
+  if (!match?.[2]) return toolError("invalid_screenshot", "The extension returned malformed screenshot bytes.");
+  const imageMime = `image/${match[1]}`;
+  const buffer = Buffer.from(match[2], "base64");
   if (buffer.length > SCREENSHOT_BYTES_CAP) return toolError("result_too_large", "Screenshot exceeds the 16 MiB result bound.", { recommendedDelivery: "file" });
   const metadata = { ...raw } as Record<string, unknown>;
   delete metadata.dataUrl;
@@ -322,31 +329,31 @@ function screenshotToolResult(raw: unknown, decision: BrowserFloorDecision, args
   const delivery = args.delivery === "file" || args.delivery === "inline" ? args.delivery : "image";
   const common = { ok: true, delivery, decision: publicDecision(decision), ...metadata };
   if (delivery === "image") {
-    return { content: [{ type: "text", text: JSON.stringify(common) }, { type: "image", data: match[1], mimeType: "image/png" }] };
+    return { content: [{ type: "text", text: JSON.stringify(common) }, { type: "image", data: match[2], mimeType: imageMime }] };
   }
   if (delivery === "inline") {
     if (raw.dataUrl.length > INLINE_SCREENSHOT_CAP) return toolError("result_too_large", "Inline screenshot exceeds the 1,000,000 character bound.", { recommendedDelivery: "image" });
     return toolJson({ ...common, dataUrl: raw.dataUrl });
   }
   try {
-    return toolJson(writeScreenshotFile(buffer, common, args));
+    return toolJson(writeScreenshotFile(buffer, common, args, match[1] === "jpeg" ? "jpg" : "png"));
   } catch (error) {
     return toolError(errorCode(error), error instanceof Error ? error.message : String(error));
   }
 }
 
-function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, args: Record<string, unknown>) {
+function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, args: Record<string, unknown>, ext = "png") {
   const rawDirectory = requiredString(args.outputDirectory, "outputDirectory");
   if (!path.isAbsolute(rawDirectory)) throw new Error("output_directory_must_be_absolute");
   const directory = path.resolve(rawDirectory);
   fs.mkdirSync(directory, { recursive: true });
   const requested = typeof args.filename === "string" ? path.basename(args.filename.trim()) : "";
-  const base = requested && /^[A-Za-z0-9._-]+\.png$/i.test(requested)
+  const base = requested && new RegExp(`^[A-Za-z0-9._-]+\\.${ext}$`, "i").test(requested)
     ? requested
-    : `newton-browser-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+    : `newton-browser-${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
   let output = path.join(directory, base);
   if (path.dirname(output) !== directory) throw new Error("invalid_output_filename");
-  if (fs.existsSync(output)) output = path.join(directory, `${path.parse(base).name}-${Date.now()}.png`);
+  if (fs.existsSync(output)) output = path.join(directory, `${path.parse(base).name}-${Date.now()}.${ext}`);
   fs.writeFileSync(output, buffer, { flag: "wx", mode: 0o600 });
   return {
     ...metadata,
@@ -380,6 +387,9 @@ function toolList(): Array<Record<string, unknown>> {
       fullPage: { type: "boolean" },
       device: { type: "string", enum: ["mobile", "desktop"] },
       waitMs: { type: "number" },
+      region: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" } } },
+      format: { type: "string", enum: ["png", "jpeg"] },
+      quality: { type: "number" },
     }, ["sessionId"]),
     tool("browser.console", "Read the session tab's buffered console output (read-only). Filter by level/pattern; clear:true empties the buffer. Headers and raw objects are never included.", {
       transport, sessionId: { type: "string" }, level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string" }, limit: { type: "number" }, clear: { type: "boolean" },

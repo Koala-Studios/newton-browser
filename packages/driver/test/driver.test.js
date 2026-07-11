@@ -713,6 +713,24 @@ test("driver network body fetch returns a same-origin body", async () => {
   assert.equal(result.body.base64Encoded, false);
 });
 
+test("driver screenshot honors jpeg format and quality", async () => {
+  const driver = createNewtonBrowserDriver();
+  let captureParams = null;
+  driver.applyDeviceEmulation = async () => ({ restore: async () => {}, clip: null });
+  driver.maskZones = async () => {};
+  driver.unmaskZones = async () => {};
+  driver.evalNumber = async () => 100;
+  driver.evalString = async (expression) => (expression === "location.href" ? "https://example.com/" : "Example");
+  driver.cdp = async (method, params) => {
+    if (method === "Page.captureScreenshot") { captureParams = params; return { data: "ZmFrZQ==" }; }
+    return {};
+  };
+  const shot = await driver.screenshot({ format: "jpeg", quality: 55, inline: true });
+  assert.equal(captureParams.format, "jpeg");
+  assert.equal(captureParams.quality, 55);
+  assert.match(shot.dataUrl, /^data:image\/jpeg;base64,/);
+});
+
 function axNode(backendNodeId, role, name) {
   return {
     backendDOMNodeId: backendNodeId,

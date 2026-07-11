@@ -123,6 +123,10 @@ export type BrowserAction = {
   waitMs?: number;
   inline?: boolean;
   clip?: { x: number; y: number; width: number; height: number };
+  // Screenshot encoding (WS10.3): JPEG at a quality trades evidence fidelity for a
+  // much smaller payload to the model. PNG is the default.
+  format?: "png" | "jpeg";
+  quality?: number;
   // Observation mode (Proposal 29 / D6): "diff" returns added/removed/updated;
   // "text" (WS9.1) returns bounded, redacted readable page text.
   mode?: "full" | "diff" | "text";

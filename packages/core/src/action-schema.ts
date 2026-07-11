@@ -61,6 +61,8 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   clear: { kind: "bool" },
   urlPattern: { kind: "text", cap: URL_CAP },
   requestId: { kind: "text", cap: TEXT_CAP },
+  format: { kind: "enum", values: ["png", "jpeg"] },
+  quality: { kind: "int", min: 1, max: 100 },
 } as const satisfies Record<string, BrowserActionFieldSpec>;
 
 export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;

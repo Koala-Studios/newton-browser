@@ -61,6 +61,8 @@ test("action schema fields survive parse and redact", () => {
     clear: true,
     urlPattern: "/api",
     requestId: "r1",
+    format: "jpeg",
+    quality: 70,
     unknown: "drop me",
   });
   const redacted = redactBrowserAction(parsed);

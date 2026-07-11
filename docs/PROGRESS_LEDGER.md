@@ -19,14 +19,14 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
 | WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.2/9.3/9.4/9.6/9.7/9.8 done; 9.5 (multi-tab) remaining. Plus BB-035 redaction fix. |
-| WS10 | Performance / observation budgets | ⛔ | not started (needs live measurement) |
+| WS10 | Performance / observation budgets | 🔶 | 10.2 region + 10.3 jpeg/quality done (DECISIONS §20); 10.1 obs-budget + 10.4 cold-start are live-measurement, deferred |
 | WS11 | Release 0.4.0 | ⛔ `[H5]` | versions still 0.3.0 (correct until WS11); depends on WS9/WS10 + npm creds |
 | WS12 | Discovery (ROADMAP/PRIVACY/landing) | ⛔ | not started |
 
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 126/126 pass
+- `pnpm test` — ✅ 127/127 pass
 - `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
 
 ## WS9 breakdown

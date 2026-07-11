@@ -307,3 +307,15 @@ Two read-only tools expose per-session diagnostics the driver buffers from CDP:
 
 Both are `read_only` at the floor. The buffers live on the driver and populate from the
 existing debugger event stream (the `Log` domain is now enabled alongside Network/Runtime).
+
+## 20. Screenshot region and JPEG encoding (WS10.2 / WS10.3, 2026-07-10)
+
+`browser.screenshot` gains a `region: {x,y,width,height}` option that maps to the
+existing, tested CDP clip path so a caller can capture just the area it needs (smaller
+payload, less masking surface), and `format:"jpeg"` with `quality` (default 70, PNG
+remains default) for a token-grade capture that is typically several times smaller than
+PNG for the model. The host image/file/inline delivery, size caps, and sensitive-zone
+masking are unchanged; the delivery path now carries the correct `image/png` or
+`image/jpeg` mime and file extension. The observation token budget (WS10.1) and cold-start
+p95 targets (WS10.4) are measurement tasks deferred to live runs, since they require real
+pages and timing rather than deterministic fixtures.
