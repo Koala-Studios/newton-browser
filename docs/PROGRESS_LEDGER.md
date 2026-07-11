@@ -116,3 +116,12 @@ browser, which needs the human.
   BB-036 (set_files redaction regression), BB-037 (typecheck-before-build order),
   BB-038 (Windows-only npm/npx path resolution), BB-039 (npx local-tarball quirk),
   BB-040 (GNU tar can't read ZIPs). WS3 now truly validated, not just authored.
+- 2026-07-11 — Incognito owned-tab sessions added (`0a38e06`): browser.session.start
+  incognito:true opens the owned tab in an incognito window (reuse-or-create), typed
+  incognito_not_allowed when the extension isn't permitted in incognito. Threaded through
+  session types/host/bindExternalSession/createOwnedTab. Tabs-port tests. DECISIONS §22.
+  Needs the user to enable "Allow in incognito" + reload ext + restart the MCP host to use.
+- 2026-07-11 — Live QA evidence recorded (QA-LIVE-001/002): all 0.4 features verified in
+  real Chrome; store screenshot captured on Wikipedia (logged-out) and normalized to the
+  CWS 1280x800 format at artifacts/store/. Store screenshots on more popular sites pending
+  incognito enablement; onboarding/popup shots need manual capture (extension pages).
