@@ -330,7 +330,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: `@newton-browser/core` resolves its type declarations and runtime entry from `dist` (package `exports`/`types`), but the CI validation job, `release-check.mjs`, and `pack-check.mjs` all ran `typecheck`/`test`/`build:mcp` before the workspace (core) was built. It passed locally only because developers had a warm `dist`. The first real CI run surfaced it: typecheck failed with `TS2307: Cannot find module '@newton-browser/core'`, and `build:mcp` failed in esbuild resolving core.
 - Fix: run `build` (and, in pack-check, `build:core`) before any step that consumes core's dist — CI validation order, `release-check.mjs` stage order, and `pack-check.mjs`.
 - Regression: reproduced fix in a clean clone — build→lint→typecheck→test (128/128) and `pack:check` both green. The CI run on the fix commit is the live regression check.
-- Status: closed pending green CI.
+- Status: closed (CI green on 7aa57d2).
 
 ## BB-038 — Packed gates resolved node's npm/npx CLI at a Windows-only path
 
@@ -338,7 +338,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: pack-check.mjs and the clean-user/matrix/multi-client/extension-readiness smoke scripts located node's bundled npm/npx as `<dirname(node)>/node_modules/npm/bin/*-cli.js`. That path is correct only on Windows (npm beside node.exe); on Linux/macOS node lives in `bin/` and npm in `../lib/node_modules/npm`, so the spawn failed with an ENOENT and the gate errored. It passed locally on Windows and only surfaced on Linux CI.
 - Fix: a `nodeCli(name)` resolver in each script checks both the Windows and POSIX candidate locations and uses whichever exists.
 - Regression: pack:check green on Windows after the change; Linux CI on the fix commit is the cross-platform regression check.
-- Status: closed pending green CI.
+- Status: closed (CI green on 7aa57d2).
 
 ## BB-039 — Release matrix asserted npx tarball output was exactly the version
 
@@ -346,7 +346,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: the matrix smoke ran `npx --yes --package <tarball> newton-browser --version` and asserted stdout equalled the version. Some npm builds (Linux CI runner) intercept a bare `--version` as npx's own flag and never forward it to the bin, so stdout was empty (npx exited 0). It happened to forward correctly on the local Windows npm build. A CI diagnostic confirmed `stdout: ""`.
 - Fix: exercise the packed bin through npx with `--print-config generic` (unambiguous, not an npx flag) and assert the emitted config is version-pinned; surface stdout on failure. pack:check remains the authoritative tarball-execution gate (it installs via npm and runs the bin via node, green on Linux Node 20/22/24).
 - Regression: `smoke:matrix` green on Windows; Linux CI on the fix commit confirms.
-- Status: closed pending green CI.
+- Status: closed (CI green on 7aa57d2).
 
 ## BB-040 — Release smoke read ZIPs with `tar`, which GNU tar rejects on Linux
 
@@ -354,4 +354,4 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: matrix.mjs listed the extension ZIP with `tar -tf`, and clean-user.mjs extracted it with `tar -xf`. bsdtar (Windows/macOS) reads ZIPs, but GNU tar (Linux runner) does not — it fails with "This does not look like a tar archive". Passed locally on Windows.
 - Fix: replace both with a dependency-free Node ZIP central-directory reader (`zipEntryNames`) and assert the expected entries are present. No external archive tool involved.
 - Regression: both smokes green on Windows after the change; Linux CI on the fix commit confirms.
-- Status: closed pending green CI.
+- Status: closed (CI green on 7aa57d2).

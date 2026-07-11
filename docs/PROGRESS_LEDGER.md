@@ -12,7 +12,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS0 | Rename → newton-browser | ✅ | rename sweep; DECISIONS §12; residual cosmetic notes below |
 | WS1 | MIT license | ✅ | `LICENSE`; `license` in all 5 package.json; `7bc9da6` |
 | WS2 | Icons + toolbar states | ✅ | `2c55f7c`, `59aac3f`, `bd3bfcd`; manifest `icons`/`default_icon` wired |
-| WS3 | CI + release workflows | ✅ | `b5e5bea`, `c780698`; `.github/workflows/ci.yml`, `release.yml` |
+| WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24, full release gate (run 29147904773). Fixed BB-036..BB-040. |
 | WS4 | npm packaging + Node floor + `--install` | ✅ | metadata; Node 20 runtime floor reconciled; `--install` + tests; DECISIONS §13 |
 | WS5 | Store submissions | 🚧 `[H4]` | PRIVACY.md + listing copy + permission justifications done (docs/store/); screenshots/accounts/submit need human |
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
@@ -110,3 +110,9 @@ browser, which needs the human.
   typecheck/test/build:mcp before building @newton-browser/core, which resolves types
   from dist. Fixed order in ci.yml, release-check.mjs, pack-check.mjs; proven in a clean
   clone (128/128 + pack:check green). Pushed for live CI re-check.
+- 2026-07-11 — CI GREEN end-to-end (run 29147904773, commit 7aa57d2): both-OS
+  validation, Node 20/22/24 packed runtime, and the full packed release gate all pass.
+  First-ever CI execution surfaced 5 real cross-platform/order bugs, all fixed:
+  BB-036 (set_files redaction regression), BB-037 (typecheck-before-build order),
+  BB-038 (Windows-only npm/npx path resolution), BB-039 (npx local-tarball quirk),
+  BB-040 (GNU tar can't read ZIPs). WS3 now truly validated, not just authored.
