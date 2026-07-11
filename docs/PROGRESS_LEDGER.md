@@ -14,14 +14,14 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS2 | Icons + toolbar states | ✅ | `2c55f7c`, `59aac3f`, `bd3bfcd`; manifest `icons`/`default_icon` wired |
 | WS3 | CI + release workflows | ✅ | `b5e5bea`, `c780698`; `.github/workflows/ci.yml`, `release.yml` |
 | WS4 | npm packaging + Node floor + `--install` | ✅ | metadata; Node 20 runtime floor reconciled; `--install` + tests; DECISIONS §13 |
-| WS5 | Store submissions | 🚧 `[H4]` | worker-preparable assets pending; accounts need human |
+| WS5 | Store submissions | 🚧 `[H4]` | PRIVACY.md + listing copy + permission justifications done (docs/store/); screenshots/accounts/submit need human |
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
-| WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.2/9.3/9.4/9.6/9.7/9.8 done; 9.5 (multi-tab) remaining. Plus BB-035 redaction fix. |
+| WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.2/9.3/9.4/9.6/9.7/9.8 done; 9.5 multi-tab deferred to live (DECISIONS §21). Plus BB-035. |
 | WS10 | Performance / observation budgets | 🔶 | 10.2 region + 10.3 jpeg/quality done (DECISIONS §20); 10.1 obs-budget + 10.4 cold-start are live-measurement, deferred |
 | WS11 | Release 0.4.0 | ⛔ `[H5]` | versions still 0.3.0 (correct until WS11); depends on WS9/WS10 + npm creds |
-| WS12 | Discovery (ROADMAP/PRIVACY/landing) | ⛔ | not started |
+| WS12 | Discovery (ROADMAP/PRIVACY/landing) | 🔶 | ROADMAP.md + PRIVACY.md done; landing page + registry submissions need human (H6) |
 
 ## Gate status
 
@@ -40,7 +40,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | 9.6 | viewport / `resize` | ✅ committed | owned-tab `resize` act kind, persists across re-attach, bounded; DECISIONS §16. session.start `viewport` convenience option deferred. Live evidence row pending. |
 | 9.2 | `browser.console` | ✅ committed | driver ring buffer (Runtime/Log), read-only tool, redaction, tests; DECISIONS §19. Live evidence pending. |
 | 9.3 | `browser.network` | ✅ committed | driver ring buffer, list + origin-gated body, headers excluded, tests; DECISIONS §19. Live evidence pending. |
-| 9.5 | multi-tab sessions | ⛔ | CDP target tracking; most invasive |
+| 9.5 | multi-tab sessions | ⏸ deferred | architectural (one-driver-per-tab today); needs live multi-target iteration. DECISIONS §21, ROADMAP. |
 
 All remaining WS9 items also require live Chrome/Edge evidence rows in `qa-ledger.md`
 per the release-gate convention — the extension must be loaded unpacked in a real

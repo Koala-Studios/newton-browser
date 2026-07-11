@@ -3,7 +3,7 @@
    cosmetic only — it never blocks an action. Accent is driven by a single custom
    property (--nb-accent, an "r, g, b" triplet) so the rim glow, cursor halo,
    ripple, and field ring stay consistent and are trivially re-themeable; a
-   per-session tab-group color can override it via BB_DRIVE_BEGIN. */
+   per-session tab-group color can override it via NB_DRIVE_BEGIN. */
 
 #newton-browser-drive-overlay {
   --nb-accent: 31, 111, 235;

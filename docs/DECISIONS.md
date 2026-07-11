@@ -319,3 +319,17 @@ masking are unchanged; the delivery path now carries the correct `image/png` or
 `image/jpeg` mime and file extension. The observation token budget (WS10.1) and cold-start
 p95 targets (WS10.4) are measurement tasks deferred to live runs, since they require real
 pages and timing rather than deterministic fixtures.
+
+## 21. Multi-tab sessions deferred to live iteration (WS9.5, 2026-07-10)
+
+Multi-tab sessions — tracking pages a session's owned tab opens (window.open,
+target=_blank), origin-gating popups, and addressing child tabs from
+observe/act/screenshot — are deferred past 0.4.0. The current model binds one attached
+tab per session throughout the driver, controller, floor, and finalize paths; extending
+it to route commands across multiple concurrent CDP targets is an architectural change
+whose correctness (target attach ordering, popup lifecycle, per-tab origin reconciliation)
+can only be validated against a real browser. Rather than destabilize the single-tab core
+that the rest of 0.4.0 depends on with an un-live-testable rewrite, WS9.5 is scheduled as
+a focused, live-verified effort. The `newTarget` reconciliation signal already halts an
+agentic action when a popup appears, so today a new tab is surfaced (not silently
+ignored); it simply is not yet independently drivable. Tracked in `ROADMAP.md`.
