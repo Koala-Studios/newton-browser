@@ -26,7 +26,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 107/107 pass
+- `pnpm test` — ✅ 116/116 pass
 - `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
 
 ## WS9 breakdown
