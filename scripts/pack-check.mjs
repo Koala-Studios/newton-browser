@@ -10,6 +10,9 @@ const tarball = path.join(artifacts, `newton-browser-${version}.tgz`);
 fs.mkdirSync(artifacts, { recursive: true });
 fs.rmSync(tarball, { force: true });
 
+// Build core first: the mcp bundle resolves @newton-browser/core through its package
+// exports (dist), which do not exist on a clean checkout until core is built.
+run("pnpm", ["build:core"]);
 run("pnpm", ["build:mcp"]);
 run("pnpm", ["pack", "--pack-destination", artifacts], { cwd: path.join(root, "apps", "mcp-server") });
 if (!fs.existsSync(tarball)) throw new Error(`missing packed artifact: ${tarball}`);

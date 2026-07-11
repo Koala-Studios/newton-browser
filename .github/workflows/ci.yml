@@ -26,10 +26,12 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Build first: @newton-browser/core resolves its types from dist, so tsc and the
+      # node --test suite (which import the package by name) need it built beforehand.
+      - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm build
       - run: pnpm smoke:quick
 
   release-check:

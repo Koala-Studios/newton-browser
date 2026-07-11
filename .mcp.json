@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "newton-browser": {
+      "command": "node",
+      "args": ["C:/DEV/newton-browser/apps/mcp-server/dist/index.js"]
+    }
+  }
+}

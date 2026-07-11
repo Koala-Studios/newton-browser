@@ -100,3 +100,13 @@ browser, which needs the human.
   `changed.files` (set_files delta) because redactBrowserChanged ignored non-primitive
   values — only the packed-stdio smoke test caught it. Added a unit regression test.
   Full gate + pack:check green at 0.4.0. Store artifact: newton-browser-extension-0.4.0.zip.
+- 2026-07-11 — LIVE QA (extension loaded, host 0.4.0 ↔ ext 0.4.0, chrome): verified
+  session start/attach/origin-reconcile, observe full+text, screenshot file+JPEG q70,
+  console, network list + origin-gated body (cross-origin refused / same-origin allowed),
+  dialog_accept (sync-dialog unblock), fill_form safe batch + sensitive-field halt
+  (payment_or_pii_field, no keystrokes), resize 1280x800, overlay "driving" indicator.
+  Store screenshot captured (artifacts/store/newton-driving-example.png).
+- 2026-07-11 — First CI run went red (BB-037): validation/release-check/pack-check ran
+  typecheck/test/build:mcp before building @newton-browser/core, which resolves types
+  from dist. Fixed order in ci.yml, release-check.mjs, pack-check.mjs; proven in a clean
+  clone (128/128 + pack:check green). Pushed for live CI re-check.

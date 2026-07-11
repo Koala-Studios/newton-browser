@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 import net from "node:net";
 
-for (const command of ["lint", "typecheck", "test", "build", "extension:artifact", "pack:check", "smoke:quick", "smoke:matrix", "smoke:chaos", "smoke:multi-client", "smoke:clean-user"]) {
+// `build` runs before `typecheck`/`test`: @newton-browser/core resolves its types and
+// runtime entry from dist, so tsc and the by-name package imports in the test suite
+// need the workspace built first.
+for (const command of ["build", "lint", "typecheck", "test", "extension:artifact", "pack:check", "smoke:quick", "smoke:matrix", "smoke:chaos", "smoke:multi-client", "smoke:clean-user"]) {
   const executable = process.env.npm_execpath ? process.execPath : "pnpm";
   const args = process.env.npm_execpath ? [process.env.npm_execpath, command] : [command];
   const timeout = command === "smoke:chaos" ? 420_000 : 300_000;
