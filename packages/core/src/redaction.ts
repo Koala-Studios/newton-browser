@@ -446,6 +446,15 @@ function redactBrowserChanged(value: Record<string, unknown>): Record<string, un
       output[safeKey] = safeKey === "value" || safeKey === "text"
         ? redactSensitiveValue("", raw)
         : redactText(raw).slice(0, TEXT_CAP);
+    } else if (safeKey === "files" && Array.isArray(raw)) {
+      // A set_files delta reports the sanitized basenames that were set. Preserve
+      // it as `{ filename }` only — the driver already stripped directories, and we
+      // never surface absolute paths.
+      output.files = raw.slice(0, 8).flatMap((entry) => {
+        const record = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : null;
+        const filename = record && typeof record.filename === "string" ? record.filename : typeof entry === "string" ? entry : null;
+        return filename ? [{ filename: redactText(String(filename).split(/[\\/]/).at(-1) ?? "").slice(0, TEXT_CAP) }] : [];
+      });
     }
   }
   return output;

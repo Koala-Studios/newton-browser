@@ -315,3 +315,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: wire `redactBrowserResult` into the host result path (`redactObservationResult` in `mcp-server.ts`) for `observation`, `observation_delta`, and `observation_text` results, before they reach the client. Guarded so non-observation control results (finalize acks, transport test shapes) pass through untouched. The host is the exfiltration boundary; the loopback relay stays same-machine/same-user.
 - Regression: `apps/mcp-server/test/host.test.ts` — "observation results are secret-redacted before reaching the MCP client" and "mode:text observations mask card/SSN sequences before reaching the client" drive a real MCP tool call through a live fake extension and assert masking end to end.
 - Status: closed. Live cross-browser evidence row still pending (extension loaded unpacked).
+
+## BB-036 — Result redaction dropped the set_files changed.files delta
+
+- Minimal repro: run a `set_files` action and read `result.changed.files` (exercised by `scripts/smoke/packed-stdio.mjs`).
+- Root cause: wiring host-side redaction (BB-035) routed act results through `redactBrowserChanged`, which only preserved boolean/number/string delta values and silently dropped any array/object — so the `files` array (sanitized upload basenames) vanished, and `changed.files[0].filename` became undefined.
+- Fix: `redactBrowserChanged` now preserves a `files` delta as `{ filename }` entries (basename only, redacted; absolute paths never surface).
+- Regression: `packages/core/test/control-contract.test.ts` — "a set_files delta keeps sanitized filenames through result redaction"; plus the existing packed-stdio smoke assertion.
+- Status: closed.

@@ -9,7 +9,7 @@ const fixture = await startFixtureServers({ port: 18251, crossOriginPort: 18252 
 const browserTarget = process.env.NEWTON_BROWSER_QA_OWNER === "chrome" ? "chrome" : "edge";
 const requestedClients = String(process.env.NEWTON_BROWSER_REAL_CLIENTS ?? "codex,claude").split(",").map((value) => value.trim().toLowerCase()).filter((value) => ["codex", "claude"].includes(value));
 if (requestedClients.length === 0) throw new Error("NEWTON_BROWSER_REAL_CLIENTS must include codex or claude");
-const tarball = path.resolve("artifacts/newton-browser-0.3.0.tgz");
+const tarball = path.resolve("artifacts/newton-browser-0.4.0.tgz");
 const transcriptPath = path.resolve(`artifacts/real-client-transcripts-${browserTarget}-${requestedClients.join("-")}.json`);
 const mcpConfigPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-real-clients-")), "mcp.json");
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";

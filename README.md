@@ -9,7 +9,7 @@ Newton Browser connects an MCP client such as Codex or Claude to a local Chromiu
 Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
 
 > [!IMPORTANT]
-> Newton Browser 0.3.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
+> Newton Browser 0.4.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
 
 ## Why Newton Browser?
 

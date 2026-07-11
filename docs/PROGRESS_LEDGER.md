@@ -20,13 +20,13 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
 | WS9 | Capability gaps (new tools) | 🔶 | 9.1/9.2/9.3/9.4/9.6/9.7/9.8 done; 9.5 multi-tab deferred to live (DECISIONS §21). Plus BB-035. |
 | WS10 | Performance / observation budgets | 🔶 | 10.2 region + 10.3 jpeg/quality done (DECISIONS §20); 10.1 obs-budget + 10.4 cold-start are live-measurement, deferred |
-| WS11 | Release 0.4.0 | ⛔ `[H5]` | versions still 0.3.0 (correct until WS11); depends on WS9/WS10 + npm creds |
+| WS11 | Release 0.4.0 | 🔶 `[H5]` | versions bumped to 0.4.0; artifact + tarball built; pack:check green. npm publish + tag need human. |
 | WS12 | Discovery (ROADMAP/PRIVACY/landing) | 🔶 | ROADMAP.md + PRIVACY.md done; landing page + registry submissions need human (H6) |
 
 ## Gate status
 
 - `pnpm typecheck` — ✅ green
-- `pnpm test` — ✅ 127/127 pass (build, typecheck, lint all green)
+- `pnpm test` — ✅ 128/128 pass (build, typecheck, lint, pack:check all green)
 - `pnpm lint` (boundary) — ✅ green (Node floor reconciled to `>=20.0.0`)
 
 ## WS9 breakdown
@@ -95,3 +95,8 @@ browser, which needs the human.
 - 2026-07-10 — Headless build phase complete. Full gate green: build, typecheck, lint,
   127/127 tests. Remaining work is live-verification (all WS9/WS10 evidence rows, 9.5
   multi-tab) and human checkpoints H3/H4/H5/H6. 11 MCP tools exposed.
+- 2026-07-11 — Bumped all versions 0.3.0 → 0.4.0 (manifests, host constant, docs,
+  examples, CHANGELOG). Fixed a BB-035 fallout regression: result redaction dropped
+  `changed.files` (set_files delta) because redactBrowserChanged ignored non-primitive
+  values — only the packed-stdio smoke test caught it. Added a unit regression test.
+  Full gate + pack:check green at 0.4.0. Store artifact: newton-browser-extension-0.4.0.zip.

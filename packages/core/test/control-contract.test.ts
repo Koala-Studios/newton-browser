@@ -79,6 +79,19 @@ test("a pending dialog is surfaced on observations with its message secret-maske
   assert.ok(pending.message.includes("[REDACTED_CARD]"));
 });
 
+test("a set_files delta keeps sanitized filenames through result redaction", () => {
+  const result = redactBrowserResult({
+    kind: "observation", mode: "cdp", origin: "https://example.com", title: "Upload",
+    nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-06-26T00:00:00.000Z",
+    actionStatus: "verified", verified: true,
+    changed: { files: [{ filename: "asset.png", path: "C:/secret/asset.png" }] },
+  }) as Record<string, unknown>;
+  const changed = (result as { changed?: Record<string, unknown> }).changed ?? {};
+  const files = changed.files as Array<{ filename: string }>;
+  assert.equal(files[0].filename, "asset.png");
+  assert.equal("path" in files[0], false, "absolute paths must never survive redaction");
+});
+
 test("an unknown pendingDialog shape is dropped rather than passed through", () => {
   const result = redactBrowserResult({
     kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example",

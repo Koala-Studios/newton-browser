@@ -1,6 +1,6 @@
 # Release
 
-Newton Browser 0.3.0 is developed in a public repository and currently distributed from source or locally built artifacts. GitHub Actions runs validation on every pull request and main-branch push, including the packed release gate. npm publication, browser-store submission, and GitHub release publication remain separate approval gates.
+Newton Browser 0.4.0 is developed in a public repository and currently distributed from source or locally built artifacts. GitHub Actions runs validation on every pull request and main-branch push, including the packed release gate. npm publication, browser-store submission, and GitHub release publication remain separate approval gates.
 
 Run from a clean checkout with Node 24 or newer:
 
@@ -13,9 +13,9 @@ The gate runs boundary, type, unit/contract, build, deterministic extension arti
 
 Expected release artifacts:
 
-- `artifacts/newton-browser-0.3.0.tgz`
-- `artifacts/newton-browser-extension-0.3.0.zip`
-- `artifacts/newton-browser-extension-0.3.0.zip.sha256`
+- `artifacts/newton-browser-0.4.0.tgz`
+- `artifacts/newton-browser-extension-0.4.0.zip`
+- `artifacts/newton-browser-extension-0.4.0.zip.sha256`
 
 Before handing artifacts to another machine, compare the checksum, inspect both archive listings, run the clean-user procedure in `INSTALL.md`, and record exact versions/results in `test/evidence/qa-ledger.md`. Real-browser rows require Chrome and Edge stable with the unpacked release artifact, retained authentication, inactive owned-tab creation, current-tab scope, screenshot display, file acceptance, and cleanup.
 
