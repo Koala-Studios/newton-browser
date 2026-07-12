@@ -1,6 +1,6 @@
 # Release
 
-Newton Browser 0.4.0 is developed in a public repository and currently distributed from source or locally built artifacts. GitHub Actions runs validation on every pull request and main-branch push, including the packed release gate. npm publication, browser-store submission, and GitHub release publication remain separate approval gates.
+Newton Browser 0.4.0 is public on npm and as a tagged GitHub Release. The Chrome Web Store package has been submitted and is pending review. Edge Add-ons submission is explicitly deferred until the Chrome listing is live. MCP registry and community-directory submissions are planned in `docs/DISCOVERY_PLAN.md`.
 
 Run from a clean checkout with Node 24 or newer:
 
@@ -26,8 +26,23 @@ three consecutive times after incognito support and release-scope closure—381.
 380.7s, and 380.5s—with all 11 stages green and zero cross-session results, deadlocks,
 or orphan relay ports. See QA-REL-001 in `test/evidence/qa-ledger.md`.
 
+The protected public release run 29159340143 passed on Linux with 459,020 warmup
+operations, 4,662,434 measured operations, zero cross-session results or deadlocks,
+and 13,266,944 bytes of RSS growth against the unchanged 96 MiB limit. It created the
+public GitHub Release assets and correctly skipped duplicate npm publication because
+the verified 0.4.0 tarball was already public. See QA-REL-003.
+
 ## CI and release automation
 
 `.github/workflows/ci.yml` runs lint, typecheck, tests, build, and the quick smoke suite on Ubuntu and Windows with Node 24. It separately runs the packed `release:check` gate and verifies the MCP tarball on Node 20, 22, and 24.
 
 `.github/workflows/release.yml` runs the full packed release gate for a `v*` tag, rebuilds the signed extension artifact and MCP tarball, creates a GitHub Release using that version's `CHANGELOG.md` section, and publishes npm from the protected `release` environment. If the exact package version was already published manually from the verified tarball, the workflow treats it as satisfied and skips a duplicate publish. The repository administrator must configure that environment and its required reviewer before a publish can proceed.
+
+## Public distribution
+
+- npm: `newton-browser@0.4.0`
+- GitHub tag and release: `v0.4.0`
+- Landing page: `https://koala-studios.github.io/newton-browser/`
+- Chrome Web Store: submitted for review on 2026-07-11
+- Edge Add-ons: deferred until the Chrome listing is live
+- MCP registries/directories: prepared, not yet submitted; see `DISCOVERY_PLAN.md`

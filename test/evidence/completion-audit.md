@@ -2,6 +2,9 @@
 
 Audit date: 2026-07-10. Status values are `proved`, `partial`, `pending-real`, or `not-approved`. A green narrow test is not used to claim a broader real-browser requirement.
 
+> Historical extraction audit. The current public-release state and later 0.4 live
+> evidence are authoritative in `docs/PROGRESS_LEDGER.md` and `qa-ledger.md`.
+
 ## B0 — Bootstrap and contract lock
 
 | item | requirement | status | authoritative evidence |
@@ -101,3 +104,11 @@ Optional live advertising workflow proof is `not-approved` and is not a release 
 ## Current release conclusion
 
 B0 contracts and repository implementation through B6 are implemented, and three consecutive exhaustive release gates are green on `305bd51`. Chrome, Edge, current-tab focus escape, three-session isolation, subagent inheritance, actual clients, packed distribution, cold start, lifecycle chaos, and cleanup are proved. Two environmental acceptance rows remain unproven: a full workspace run with the extraction source literally unavailable, and an actual second Windows account/machine. On 2026-07-10 the user explicitly declined both environment mutations and authorized the remaining local release work to proceed. They are excluded from execution by user disposition, not claimed complete, and do not authorize any extraction-source severance work.
+
+## Post-release addendum (2026-07-11)
+
+Version 0.4.0 is public on npm and GitHub. The protected release run 29159340143 passed
+the full packed gate and produced the public tarball, extension ZIP, and checksum. Chrome
+Web Store submission is pending review; Edge Add-ons is explicitly deferred until Chrome
+is live. The two declined environment mutations remain historical non-requirements and do
+not block the shipped release. Discovery execution is tracked in `docs/DISCOVERY_PLAN.md`.

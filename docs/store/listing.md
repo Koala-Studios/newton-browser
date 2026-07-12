@@ -71,8 +71,11 @@ Open source (MIT): https://github.com/Koala-Studios/newton-browser
 
 ## Data-use disclosures
 
-- Does this item collect user data? The **extension** collects none and transmits none.
-  Page content observed during a session is returned to the user's own local MCP client;
-  what happens next is governed by that client and its model provider, not by Newton
-  Browser. Disclose "No" for data sold/transferred; disclose that no data is collected
-  by the extension itself.
+- Google treats local page capture and processing as user-data handling. Disclose
+  **Website content**, **Web history**, and **User activity** for the page structures,
+  screenshots, session URLs/origins, bounded network metadata, and action results handled
+  during an explicit session. Select **App functionality** as the only use.
+- Certify that Newton Browser does not sell data, use it for advertising, allow publisher
+  personnel to read it, or use it for unrelated purposes. Browser data travels only over
+  loopback to the user's own configured MCP client; any later model-provider transfer is
+  controlled by that client rather than a Newton Browser service.

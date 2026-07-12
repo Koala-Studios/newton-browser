@@ -4,7 +4,11 @@ Newton Browser is local, agent-agnostic browser control for MCP clients. This ro
 directional, not a commitment. See `docs/IMPLEMENTATION_PLAN.md` for the detailed 0.4
 plan and `docs/PROGRESS_LEDGER.md` for current status.
 
-## Shipped toward 0.4.0
+## Shipped in 0.4.0
+
+Version 0.4.0 is public on npm and GitHub. The Chrome Web Store listing is under review;
+Edge Add-ons submission is deferred until Chrome is live. Discovery registry work is
+tracked in `docs/DISCOVERY_PLAN.md`.
 
 - Renamed to Newton Browser; MIT licensed.
 - Icons and connection-state toolbar icon; first-run onboarding page; minimal

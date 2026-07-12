@@ -152,11 +152,11 @@ Locked package names:
 
 Public package exports point to compiled JavaScript under `dist/`; no package bin or export points at TypeScript. Release artifact names are:
 
-- `newton-browser-0.3.0.tgz`
-- `newton-browser-extension-0.3.0.zip`
-- `newton-browser-extension-0.3.0.zip.sha256`
+- `newton-browser-0.4.0.tgz`
+- `newton-browser-extension-0.4.0.zip`
+- `newton-browser-extension-0.4.0.zip.sha256`
 
-The repository is public as of 2026-07-10. The owner explicitly approved the MIT License on 2026-07-10 and confirmed the copyright holder as `Koala Studios`; the repository's `LICENSE` is therefore `Copyright (c) 2026 Koala Studios`. npm publication and browser-store submission remain separate approval gates.
+The repository is public as of 2026-07-10. The owner explicitly approved the MIT License on 2026-07-10 and confirmed the copyright holder as `Koala Studios`; the repository's `LICENSE` is therefore `Copyright (c) 2026 Koala Studios`. Version 0.4.0 is public on npm and GitHub, the Chrome Web Store package is under review, and Edge Add-ons submission is deferred until the Chrome listing is live.
 
 ## 10. Boundary and stale concepts
 

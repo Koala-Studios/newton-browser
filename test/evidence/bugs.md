@@ -36,7 +36,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: create owned tabs inactive; CDP remains attached directly to the tab.
 - Regression: `packages/driver/test/chrome-tabs-port.test.js`.
 - Fix commit: `94de2f0`.
-- Status: closed pending live Chrome confirmation.
+- Status: closed; live Chrome and Edge owned-tab focus isolation proved by QA-B6-012 and QA-B6-014.
 
 ## BB-005 — Read-only session could bind outside its origin grant after focus change
 
@@ -54,7 +54,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: bounded port-range binding, `ws`, HMAC challenge-response, direct pending-session metadata, queue/result bounds, typed collision/disconnect errors, and no wildcard health CORS.
 - Regression: `apps/mcp-server/test/host.test.ts` multi-host, auth, and >64 KiB cases.
 - Fix commit: `94de2f0`, completed by `0fd3bc8`.
-- Status: closed for deterministic host coverage; real extension multi-host proof remains a release gate.
+- Status: closed; deterministic coverage plus packed multi-host and real simultaneous-browser ownership evidence passed.
 
 ## BB-007 — Packed executable still imported workspace core
 
@@ -117,7 +117,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: append exact DOM-discovered file inputs to observations, retaining a stable backend-node ref while omitting a bbox for hidden inputs.
 - Regression: `packages/driver/test/driver.test.js` hidden file-input observation and fresh-ref enforcement.
 - Fix commit: `e25893a`.
-- Status: closed pending live Chrome confirmation.
+- Status: closed; live Chrome and Edge file-input acceptance proved by QA-B6-012.
 
 ## BB-014 — Extension ZIP writer emitted a signed external-attributes value
 
@@ -314,7 +314,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: `redactBrowserResult` (and the whole secret/PII redaction layer) was exported and unit-tested but never invoked in the live pipeline. The driver populated `node.value` from the accessibility tree and returned full page innerText raw; neither the extension nor the host called redaction, so sensitive values reached the MCP client (the model) unredacted. The driver comment claimed "secret-redacted host-side by redactBrowserResult" but no such call existed.
 - Fix: wire `redactBrowserResult` into the host result path (`redactObservationResult` in `mcp-server.ts`) for `observation`, `observation_delta`, and `observation_text` results, before they reach the client. Guarded so non-observation control results (finalize acks, transport test shapes) pass through untouched. The host is the exfiltration boundary; the loopback relay stays same-machine/same-user.
 - Regression: `apps/mcp-server/test/host.test.ts` — "observation results are secret-redacted before reaching the MCP client" and "mode:text observations mask card/SSN sequences before reaching the client" drive a real MCP tool call through a live fake extension and assert masking end to end.
-- Status: closed. Live cross-browser evidence row still pending (extension loaded unpacked).
+- Status: closed; QA-LIVE-001 and the final packed release gate proved host-side redaction in the shipped path.
 
 ## BB-036 — Result redaction dropped the set_files changed.files delta
 
@@ -362,7 +362,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: the progress ledger recorded implementation history from an unrelated product repository. The standalone boundary correctly rejects that identity-specific term. The pre-commit local gate was run before the note became part of the committed-file scan, while CI evaluated the clean committed tree and failed consistently on Linux and Windows.
 - Fix: remove the unrelated repository/cache note and describe only the standalone skill's authoritative distribution state.
 - Regression: the existing `scripts/verify-boundary.mjs` committed-file scan deterministically reproduces the failure and passes after the note is removed; CI run 29157179006 is the failing evidence and the next main-branch CI run is the cross-platform closure check.
-- Status: closed locally; CI recheck pending.
+- Status: closed; CI run 29157320734 passed after the boundary correction.
 
 ## BB-042 — Stress RSS baseline included runtime warmup allocation
 
@@ -370,7 +370,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: the harness sampled its RSS baseline immediately after session setup, before exercising the steady-state dispatch path. JIT compilation, WebSocket/runtime initialization, and allocator arena growth during the first measured operations were therefore classified as five-minute retained growth. Repeated local release gates passed because their runtime/allocator warm state differed, making the baseline environment-sensitive rather than a stable leak measurement.
 - Fix: exercise both workers for 30 seconds before forcing GC and recording the RSS baseline; keep the measured five-minute workload and the original 96 MiB ceiling unchanged. Report warmup operations and label the baseline explicitly.
 - Regression: `test/fixtures/stress-warmup.test.ts` runs the real stress harness with short bounded phases and asserts that both workers execute warmup operations before a `post_warmup` RSS baseline and measured operations.
-- Status: fixed locally; release workflow recheck pending.
+- Status: closed; protected release run 29159340143 measured 13,266,944 bytes of post-warmup RSS growth against the unchanged 96 MiB limit.
 
 ## BB-043 — Stress child timeout excluded the new warmup phase
 
@@ -378,4 +378,4 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: `chaos.mjs` budgeted `measurement + 30 seconds`. BB-042 added a 30-second exercised warmup without adding it to the parent timeout, leaving no shutdown/reporting headroom.
 - Fix: calculate the child timeout as `measurement + warmup + 30 seconds`, retaining the existing 120-second minimum for short diagnostic runs.
 - Regression: `test/fixtures/stress-timing.test.ts` verifies default, configured, and short-run timeout budgets through the same exported calculator used by the chaos harness.
-- Status: fixed locally; release workflow recheck pending.
+- Status: closed; protected release run 29159340143 completed the full warmup, measurement, reporting, and release workflow successfully.

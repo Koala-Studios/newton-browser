@@ -2,6 +2,42 @@
 
 Every configured client starts an independent `newton-browser` process over stdio. Each process binds one free loopback port, so multiple clients can run concurrently without a shared daemon.
 
+## Published package
+
+Use the version-pinned public npm package for normal client configuration.
+
+Codex:
+
+```toml
+[mcp_servers.newton-browser]
+command = "npx"
+args = ["-y", "newton-browser@0.4.0"]
+startup_timeout_sec = 45
+tool_timeout_sec = 150
+```
+
+Claude Desktop or Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "newton-browser": {
+      "command": "npx",
+      "args": ["-y", "newton-browser@0.4.0"]
+    }
+  }
+}
+```
+
+Generic stdio client:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "newton-browser@0.4.0"]
+}
+```
+
 ## Source checkout
 
 After `pnpm build`, point the client directly at the compiled entry point.
@@ -50,7 +86,7 @@ The generated artifact config command is:
 newton-browser --print-config codex|claude-desktop|claude-code|generic
 ```
 
-Set `NEWTON_BROWSER_PACKAGE_SPEC` to the absolute tarball before generating a config. The default registry-package form is reserved for a future npm publication and is not currently installable.
+Set `NEWTON_BROWSER_PACKAGE_SPEC` to an absolute tarball path only when validating or installing a local release artifact. Without that override, generated configs use the published, version-pinned npm package.
 
 ## Client notes
 

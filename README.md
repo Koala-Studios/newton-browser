@@ -2,6 +2,10 @@
 
 Local browser control for MCP clients using your existing Chrome or Edge profile.
 
+[![CI](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/newton-browser.svg)](https://www.npmjs.com/package/newton-browser)
+[![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.0)
+
 Newton Browser connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, daemon, database, telemetry pipeline, or cloud relay.
 
 ## Purpose
@@ -9,7 +13,7 @@ Newton Browser connects an MCP client such as Codex or Claude to a local Chromiu
 Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
 
 > [!IMPORTANT]
-> Newton Browser 0.4.0 is an early public preview. Install it from source and load the extension unpacked. The MCP package is not yet published to npm, and the extension is not yet listed in a browser store.
+> Newton Browser 0.4.0 is an early public preview. The MCP package is public on npm and the release artifacts are available on GitHub. The Chrome Web Store listing is under review; until it is live, load the released extension artifact unpacked. Edge Add-ons submission is intentionally deferred until the Chrome listing is live.
 
 ## Why Newton Browser?
 
@@ -40,16 +44,18 @@ The MCP client starts its own host process. The extension discovers local hosts 
 ## Requirements
 
 - Node.js 20 or newer to run the host; Node.js 24 or newer to develop the repository
-- pnpm 10.8.0
-- Git
 - Google Chrome or Microsoft Edge with Developer mode available
 - An MCP client that supports local stdio servers
 
-The repository is designed to work on Windows, macOS, and Linux. The current release evidence is strongest on Windows with Chrome and Edge.
+Source development additionally requires Node.js 24 or newer, pnpm 10.8.0, and Git. The project is designed to work on Windows, macOS, and Linux. The current release evidence is strongest on Windows with Chrome and Edge.
 
 ## Quick start
 
-### 1. Clone and build
+### 1. Get the extension
+
+Download `newton-browser-extension-0.4.0.zip` from the [v0.4.0 GitHub Release](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.0) and extract it to a permanent local directory.
+
+Contributors can instead build the same extension from source:
 
 ```bash
 git clone https://github.com/Koala-Studios/newton-browser.git
@@ -68,7 +74,7 @@ In Chrome:
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Select **Load unpacked**.
-4. Choose the repository's `apps/extension` directory.
+4. Choose the extracted release directory, or the repository's `apps/extension` directory for a source build.
 
 In Edge, use `edge://extensions` and follow the same steps. The selected directory must contain `manifest.json`; do not select the generated `dist` directory itself.
 
@@ -79,13 +85,7 @@ The default `local_trust` mode requires no pairing key or popup action.
 Use the published host through npx:
 
 ```text
-npx -y newton-browser
-```
-
-On Windows, JSON and double-quoted TOML strings must escape backslashes, for example:
-
-```text
-C:\\DEV\\newton-browser\\apps\\mcp-server\\dist\\index.js
+npx -y newton-browser@0.4.0
 ```
 
 #### Codex
@@ -94,8 +94,8 @@ Add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.newton-browser]
-command = "node"
-args = ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
+command = "npx"
+args = ["-y", "newton-browser@0.4.0"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -110,8 +110,8 @@ Merge this server into the client's MCP configuration:
 {
   "mcpServers": {
     "newton-browser": {
-      "command": "node",
-      "args": ["/absolute/path/to/newton-browser/apps/mcp-server/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "newton-browser@0.4.0"]
     }
   }
 }
@@ -130,7 +130,7 @@ browser.status
 A working setup reports `ready: true` and `extensionConnected: true`. The optional doctor command provides typed setup diagnostics:
 
 ```bash
-node /absolute/path/to/newton-browser/apps/mcp-server/dist/index.js --doctor
+npx -y newton-browser@0.4.0 --doctor
 ```
 
 If the client is not running yet, `ready: false` with `nextAction: "start_or_restart_mcp_client_then_check_browser_status"` is expected.
@@ -167,8 +167,7 @@ See the [tool reference](skills/newton-browser/references/tool-reference.md) for
 ## Current limitations
 
 - Chrome and Edge are supported; Firefox and Safari are not.
-- The extension must currently be loaded unpacked.
-- The MCP host must currently be built from source or installed from a release tarball.
+- Until the Chrome Web Store review completes, the extension must be loaded unpacked from the released ZIP or a source build.
 - Multi-tab sessions are not yet supported; a popup/new-target signal halts the action
   instead of silently transferring control.
 - Newton Browser does not bypass CAPTCHAs, authentication challenges, origin grants, or its sensitive-data floor.
@@ -256,8 +255,11 @@ test/                 Fixtures and recorded verification evidence
 - [Tool reference](skills/newton-browser/references/tool-reference.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Security model](docs/SECURITY.md)
+- [Privacy policy](docs/PRIVACY.md)
 - [Architecture and contract decisions](docs/DECISIONS.md)
 - [Release process](docs/RELEASE.md)
+- [Discovery submission plan](docs/DISCOVERY_PLAN.md)
+- [Roadmap](ROADMAP.md)
 
 ## Contributing and support
 

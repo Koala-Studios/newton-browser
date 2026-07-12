@@ -14,14 +14,14 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS2 | Icons + toolbar states | ✅ | `2c55f7c`, `59aac3f`, `bd3bfcd`; manifest wired; owner approved the current contact sheet 2026-07-11 |
 | WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24; protected v0.4.0 release workflow GREEN (run 29159340143). Fixed BB-036..BB-043. |
 | WS4 | npm packaging + Node floor + `--install` | ✅ | metadata; Node 20 runtime floor reconciled; `--install` + tests; DECISIONS §15 |
-| WS5 | Store submission | ✅ | v0.4.0 ZIP, listing, privacy disclosures, approved icon, 440×280 promo tile, and two 1280×800 screenshots submitted to the Chrome Web Store; pending Google review |
+| WS5 | Browser stores | 🔶 | Chrome Web Store v0.4.0 submitted and pending review; Edge Add-ons explicitly deferred until the Chrome listing is live |
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
 | WS9 | Capability gaps (0.4 scope) | ✅ | text/dialogs/resize/fill/console/network done and live-proved; multi-tab and status dialog summary deferred (DECISIONS §§23,25) |
 | WS10 | Performance / observation budgets (0.4 scope) | ✅ | region + JPEG/quality shipped (DECISIONS §22); element-target capture and formal obs/cold-start budgets deferred (DECISIONS §25) |
 | WS11 | Release 0.4.0 | ✅ | npm 0.4.0 public; annotated `v0.4.0` tag; protected release run 29159340143 green; GitHub Release public with tarball, extension ZIP, and SHA-256 asset |
-| WS12 | Discovery | 🔶 | ROADMAP, PRIVACY, owner-approved static no-tracking landing page, registry-valid `server.json`, and live GitHub Pages deployment complete; registry submissions remain |
+| WS12 | Discovery | 🔶 | ROADMAP, PRIVACY, live GitHub Pages, and registry-valid `server.json` complete; ordered Newton Browser submission strategy recorded in `docs/DISCOVERY_PLAN.md`; registry submissions remain |
 
 ## Gate status
 
@@ -159,4 +159,10 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
   The owner completed the credentialed Chrome Web Store dashboard steps and submitted
   Newton Browser 0.4.0 for review with the verified release ZIP, store icon, promo tile,
   two exact-size screenshots, listing copy, privacy disclosures, and public distribution.
-  WS5 is complete; publication now depends on Google's review decision.
+  Chrome submission is complete and now depends on Google's review decision. The owner
+  explicitly deferred Edge Add-ons submission until the Chrome listing is live, so WS5
+  remains in progress without blocking the Chrome release.
+- 2026-07-11 — Post-release documentation reconciled with the public npm/GitHub release,
+  Chrome review state, and Edge deferral. Added `docs/DISCOVERY_PLAN.md`: official MCP
+  Registry first, downstream-ingestion check, then Newton Browser-assisted Glama,
+  PulseMCP, MCP.so, and compatibility-gated Smithery submissions.
