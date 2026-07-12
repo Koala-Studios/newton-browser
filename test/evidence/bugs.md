@@ -387,7 +387,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: release 0.4.1 with `io.github.Koala-Studios/newton-browser` in both `server.json` and npm package metadata, preserving the exact GitHub owner casing.
 - Regression: `apps/mcp-server/test/registry-metadata.test.ts` and `scripts/verify-boundary.mjs` require exact server/package name and version agreement and derive the required namespace prefix from the canonical repository owner casing.
 - Evidence: official Registry issue #689 and the rejected 403/400 publisher responses recorded in `test/evidence/discovery-ledger.md`.
-- Status: fixed in public npm 0.4.1; official Registry publication pending.
+- Status: closed; fixed in public npm 0.4.1 and verified in the active official Registry record.
 
 ## BB-045 — Partial release retries could not reconcile an existing GitHub Release
 

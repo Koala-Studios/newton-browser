@@ -21,7 +21,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS9 | Capability gaps (0.4 scope) | ✅ | text/dialogs/resize/fill/console/network done and live-proved; multi-tab and status dialog summary deferred (DECISIONS §§23,25) |
 | WS10 | Performance / observation budgets (0.4 scope) | ✅ | region + JPEG/quality shipped (DECISIONS §22); element-target capture and formal obs/cold-start budgets deferred (DECISIONS §25) |
 | WS11 | Release 0.4.x | ✅ | npm/GitHub 0.4.1 public; three consecutive local release gates and hosted release gate passed; workflow npm-auth failure recovered with the verified tarball |
-| WS12 | Discovery | 🔶 | ROADMAP, PRIVACY, live GitHub Pages, and registry-valid `server.json` complete; ordered Newton Browser submission strategy recorded in `docs/DISCOVERY_PLAN.md`; registry submissions remain |
+| WS12 | Discovery | 🔶 | Official MCP Registry 0.4.1 record is active/latest and logged-out verified; downstream ingestion check is due after 2026-07-14 05:07 UTC before community submissions |
 
 ## Gate status
 
@@ -178,3 +178,9 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
   verified tarball. The owner-authenticated recovery published `newton-browser@0.4.1`;
   public metadata contains `io.github.Koala-Studios/newton-browser`, and the pinned npx
   binary reports 0.4.1.
+- 2026-07-12 — Published `io.github.Koala-Studios/newton-browser` 0.4.1 to the official
+  MCP Registry. A fresh logged-out Newton Browser session verified one active/latest API
+  record with the canonical repository, npm 0.4.1 package, and stdio transport. The
+  required 48-hour downstream-ingestion check is due after 2026-07-14 05:07 UTC; Glama,
+  PulseMCP, MCP.so, and compatibility-gated Smithery remain intentionally untouched until
+  then to avoid duplicates.

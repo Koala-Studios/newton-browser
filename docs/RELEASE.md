@@ -50,4 +50,7 @@ the verified 0.4.0 tarball was already public. See QA-REL-003.
 - Landing page: `https://koala-studios.github.io/newton-browser/`
 - Chrome Web Store: submitted for review on 2026-07-11
 - Edge Add-ons: deferred until the Chrome listing is live
-- MCP registries/directories: prepared, not yet submitted; see `DISCOVERY_PLAN.md`
+- Official MCP Registry: active/latest 0.4.1 record at
+  `io.github.Koala-Studios/newton-browser`
+- Community directories: waiting for the required 48-hour ingestion window; see
+  `DISCOVERY_PLAN.md`
