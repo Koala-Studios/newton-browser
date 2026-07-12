@@ -29,16 +29,28 @@ jobs:
       - run: pnpm extension:artifact
       - run: pnpm pack:check
       - run: node scripts/extract-changelog-section.mjs "$GITHUB_REF_NAME" > release-notes.md
-      - name: Create GitHub Release
+      - name: Create or reconcile GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          artifacts/newton-browser-*.tgz
-          artifacts/newton-browser-extension-*.zip
-          artifacts/newton-browser-extension-*.zip.sha256
-          --title "Newton Browser ${GITHUB_REF_NAME#v}"
-          --notes-file release-notes.md
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Newton Browser ${GITHUB_REF_NAME#v}" \
+              --notes-file release-notes.md
+            gh release upload "$GITHUB_REF_NAME" \
+              artifacts/newton-browser-*.tgz \
+              artifacts/newton-browser-extension-*.zip \
+              artifacts/newton-browser-extension-*.zip.sha256 \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              artifacts/newton-browser-*.tgz \
+              artifacts/newton-browser-extension-*.zip \
+              artifacts/newton-browser-extension-*.zip.sha256 \
+              --title "Newton Browser ${GITHUB_REF_NAME#v}" \
+              --notes-file release-notes.md
+          fi
       - name: Publish npm package
         shell: bash
         run: |
@@ -46,5 +58,5 @@ jobs:
           if npm view "newton-browser@${version}" version >/dev/null 2>&1; then
             echo "newton-browser@${version} is already published; skipping duplicate publish."
           else
-            pnpm --filter newton-browser publish --access public --provenance --no-git-checks
+            npm publish "artifacts/newton-browser-${version}.tgz" --access public --provenance
           fi

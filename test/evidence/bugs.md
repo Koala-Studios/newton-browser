@@ -388,3 +388,12 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: `apps/mcp-server/test/registry-metadata.test.ts` and `scripts/verify-boundary.mjs` require exact server/package name and version agreement and derive the required namespace prefix from the canonical repository owner casing.
 - Evidence: official Registry issue #689 and the rejected 403/400 publisher responses recorded in `test/evidence/discovery-ledger.md`.
 - Status: fixed locally; public 0.4.1 release and Registry publication pending.
+
+## BB-045 — Partial release retries could not reconcile an existing GitHub Release
+
+- Minimal repro: push `v0.4.1`; allow the protected workflow to pass all verification and create the GitHub Release, then let npm publication fail authorization. Re-running the job executes `gh release create` again before reaching the idempotent npm check.
+- Root cause: npm publication was idempotent, but GitHub Release creation was not. The workflow also published from the workspace through pnpm instead of explicitly selecting the tarball already proved by `pack:check`.
+- Fix: reconcile an existing release by editing its notes and uploading verified assets with `--clobber`; publish the exact versioned artifact through npm.
+- Regression: `test/fixtures/release-workflow.test.ts` asserts the existing-release branch, clobber upload, and exact tarball publication path.
+- Evidence: GitHub Actions run 29178530777; all verification and release-creation steps passed, while only npm publication failed with E404.
+- Status: fixed locally; future tag workflow pending verification.
