@@ -14,7 +14,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS2 | Icons + toolbar states | ✅ | `2c55f7c`, `59aac3f`, `bd3bfcd`; manifest wired; owner approved the current contact sheet 2026-07-11 |
 | WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24; protected v0.4.0 release workflow GREEN (run 29159340143). Fixed BB-036..BB-043. |
 | WS4 | npm packaging + Node floor + `--install` | ✅ | metadata; Node 20 runtime floor reconciled; `--install` + tests; DECISIONS §15 |
-| WS5 | Store submissions | 🚧 `[H4]` | privacy/listing/justifications, verified ZIP, approved icon, 440×280 promo tile, and logged-out Wikipedia + incognito GitHub driving shots done; owner must sign in to the Chrome Web Store developer account, then upload/listing/submission can continue |
+| WS5 | Store submission | ✅ | v0.4.0 ZIP, listing, privacy disclosures, approved icon, 440×280 promo tile, and two 1280×800 screenshots submitted to the Chrome Web Store; pending Google review |
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
@@ -156,6 +156,7 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
   Hosted evidence: 459,020 warmup operations, 4,662,434 measured operations, zero
   cross-results/deadlocks, and 13,266,944 bytes RSS growth.
 - 2026-07-11 — GitHub Pages is live at `https://koala-studios.github.io/newton-browser/`.
-  Chrome Web Store submission is waiting only for owner sign-in: the official dashboard
-  redirects this Chrome profile to Google authentication, which browser automation must
-  not complete with credentials or 2FA.
+  The owner completed the credentialed Chrome Web Store dashboard steps and submitted
+  Newton Browser 0.4.0 for review with the verified release ZIP, store icon, promo tile,
+  two exact-size screenshots, listing copy, privacy disclosures, and public distribution.
+  WS5 is complete; publication now depends on Google's review decision.
