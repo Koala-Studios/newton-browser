@@ -6,7 +6,7 @@
 2. Add a version-pinned stdio host to the MCP client, for example:
 
    ```json
-   { "command": "npx", "args": ["-y", "newton-browser@0.4.0"] }
+   { "command": "npx", "args": ["-y", "newton-browser@0.4.1"] }
    ```
 
    During source development, point the client at the built

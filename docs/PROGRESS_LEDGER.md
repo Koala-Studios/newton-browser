@@ -20,7 +20,7 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
 | WS9 | Capability gaps (0.4 scope) | ✅ | text/dialogs/resize/fill/console/network done and live-proved; multi-tab and status dialog summary deferred (DECISIONS §§23,25) |
 | WS10 | Performance / observation budgets (0.4 scope) | ✅ | region + JPEG/quality shipped (DECISIONS §22); element-target capture and formal obs/cold-start budgets deferred (DECISIONS §25) |
-| WS11 | Release 0.4.0 | ✅ | npm 0.4.0 public; annotated `v0.4.0` tag; protected release run 29159340143 green; GitHub Release public with tarball, extension ZIP, and SHA-256 asset |
+| WS11 | Release 0.4.x | ✅ | npm 0.4.0 public; 0.4.1 Registry-casing patch candidate passed three consecutive full release gates and is approved for public release |
 | WS12 | Discovery | 🔶 | ROADMAP, PRIVACY, live GitHub Pages, and registry-valid `server.json` complete; ordered Newton Browser submission strategy recorded in `docs/DISCOVERY_PLAN.md`; registry submissions remain |
 
 ## Gate status
@@ -166,3 +166,9 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
   Chrome review state, and Edge deferral. Added `docs/DISCOVERY_PLAN.md`: official MCP
   Registry first, downstream-ingestion check, then Newton Browser-assisted Glama,
   PulseMCP, MCP.so, and compatibility-gated Smithery submissions.
+- 2026-07-11 — Official Registry publication exposed BB-044: GitHub namespace
+  authorization preserves the canonical `Koala-Studios` casing, while immutable npm
+  0.4.0 metadata used lowercase. Prepared 0.4.1 with matching Registry/npm metadata and
+  a deterministic casing regression. Three consecutive release gates passed in 418.7s,
+  410.4s, and 411.6s with 9,032,054 combined operations, zero cross-results/deadlocks,
+  identical artifact checksums, and zero orphan ports.

@@ -1,6 +1,6 @@
 {
   "name": "newton-browser",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "license": "MIT",
   "type": "module",
   "description": "Local stdio MCP host and localhost WebSocket relay for the Newton Browser extension.",
@@ -13,7 +13,7 @@
   },
   "bugs": "https://github.com/Koala-Studios/newton-browser/issues",
   "keywords": ["mcp", "mcp-server", "browser", "chrome", "edge", "automation", "agent"],
-  "mcpName": "io.github.koala-studios/newton-browser",
+  "mcpName": "io.github.Koala-Studios/newton-browser",
   "engines": {
     "node": ">=20.0.0"
   },

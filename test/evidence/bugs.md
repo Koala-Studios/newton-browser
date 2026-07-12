@@ -379,3 +379,12 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: calculate the child timeout as `measurement + warmup + 30 seconds`, retaining the existing 120-second minimum for short diagnostic runs.
 - Regression: `test/fixtures/stress-timing.test.ts` verifies default, configured, and short-run timeout budgets through the same exported calculator used by the chaos harness.
 - Status: closed; protected release run 29159340143 completed the full warmup, measurement, reporting, and release workflow successfully.
+
+## BB-044 — Registry namespace casing disagreed with immutable npm ownership metadata
+
+- Minimal repro: authenticate `mcp-publisher` with the public `Koala-Studios` organization membership and publish `io.github.koala-studios/newton-browser` from `newton-browser@0.4.0`; the Registry grants `io.github.Koala-Studios/*` and rejects the lowercase identifier. Changing only `server.json` then fails npm ownership validation because the published package contains the lowercase `mcpName`.
+- Root cause: release metadata normalized the GitHub organization to lowercase, while the official Registry's open issue #689 documents case-sensitive GitHub namespace authorization using the account's canonical display casing. npm package contents are immutable after publication, so 0.4.0 cannot be corrected in place.
+- Fix: release 0.4.1 with `io.github.Koala-Studios/newton-browser` in both `server.json` and npm package metadata, preserving the exact GitHub owner casing.
+- Regression: `apps/mcp-server/test/registry-metadata.test.ts` and `scripts/verify-boundary.mjs` require exact server/package name and version agreement and derive the required namespace prefix from the canonical repository owner casing.
+- Evidence: official Registry issue #689 and the rejected 403/400 publisher responses recorded in `test/evidence/discovery-ledger.md`.
+- Status: fixed locally; public 0.4.1 release and Registry publication pending.

@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-11
+
+### Fixed
+
+- Match the official MCP Registry namespace to GitHub's canonical organization casing
+  (`io.github.Koala-Studios/newton-browser`) so GitHub ownership and npm package
+  verification agree during publication.
+
 ## [0.4.0] - 2026-07-11
 
 ### Added

@@ -105,7 +105,7 @@ covers the whole rename).
 | Per-user config dir | `newton-browser` (XDG/platform equivalents) |
 | Skill | `skills/newton-browser`, skill `name: newton-browser` |
 | Release artifacts | `newton-browser-<v>.tgz`, `newton-browser-extension-<v>.zip` (+ `.sha256`) |
-| MCP registry `mcpName` | `io.github.koala-studios/newton-browser` |
+| MCP registry `mcpName` | `io.github.Koala-Studios/newton-browser` |
 
 MCP tool names (`browser.*`) are **unchanged** — they are generic, already correct,
 and renaming them would break recorded client transcripts for no benefit.
@@ -258,7 +258,7 @@ absolute paths.
 - **4.2 Package metadata.** In `apps/mcp-server/package.json`: `license`,
   `repository` (with `directory`), `homepage`, `bugs`, `keywords`
   (`mcp`, `mcp-server`, `browser`, `chrome`, `edge`, `automation`, `agent`), `author`,
-  and `mcpName` (`io.github.koala-studios/newton-browser` — required later by the MCP
+  and `mcpName` (`io.github.Koala-Studios/newton-browser` — required later by the MCP
   registry, WS12). Add a dedicated `apps/mcp-server/README.md` written for the npm
   page: what it is, the extension prerequisite, the three client config blocks, and a
   link back to the repo. Confirm via `pnpm pack:check` that `files` ships only `dist`,

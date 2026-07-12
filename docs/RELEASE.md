@@ -1,6 +1,6 @@
 # Release
 
-Newton Browser 0.4.0 is public on npm and as a tagged GitHub Release. The Chrome Web Store package has been submitted and is pending review. Edge Add-ons submission is explicitly deferred until the Chrome listing is live. MCP registry and community-directory submissions are planned in `docs/DISCOVERY_PLAN.md`.
+Newton Browser 0.4.1 is the metadata-only MCP Registry casing patch for the public 0.4 line. The Chrome Web Store 0.4.0 package has been submitted and is pending review. Edge Add-ons submission is explicitly deferred until the Chrome listing is live. MCP registry and community-directory submissions are tracked in `docs/DISCOVERY_PLAN.md`.
 
 Run from a clean checkout with Node 24 or newer:
 
@@ -13,9 +13,9 @@ The gate runs boundary, type, unit/contract, build, deterministic extension arti
 
 Expected release artifacts:
 
-- `artifacts/newton-browser-0.4.0.tgz`
-- `artifacts/newton-browser-extension-0.4.0.zip`
-- `artifacts/newton-browser-extension-0.4.0.zip.sha256`
+- `artifacts/newton-browser-0.4.1.tgz`
+- `artifacts/newton-browser-extension-0.4.1.zip`
+- `artifacts/newton-browser-extension-0.4.1.zip.sha256`
 
 Before handing artifacts to another machine, compare the checksum, inspect both archive listings, run the clean-user procedure in `INSTALL.md`, and record exact versions/results in `test/evidence/qa-ledger.md`. Real-browser rows require Chrome and Edge stable with the unpacked release artifact, retained authentication, inactive owned-tab creation, current-tab scope, screenshot display, file acceptance, and cleanup.
 
@@ -25,6 +25,11 @@ Final 0.4 candidate evidence (2026-07-11): the unshortened packed release gate p
 three consecutive times after incognito support and release-scope closure—381.5s,
 380.7s, and 380.5s—with all 11 stages green and zero cross-session results, deadlocks,
 or orphan relay ports. See QA-REL-001 in `test/evidence/qa-ledger.md`.
+
+The 0.4.1 Registry-casing patch candidate passed the same unshortened gate three
+consecutive times in 418.7s, 410.4s, and 411.6s. All 11 stages passed each time with
+9,032,054 combined measured operations, zero cross-session results or deadlocks,
+identical release-artifact checksums, and zero orphan relay ports. See QA-REL-004.
 
 The protected public release run 29159340143 passed on Linux with 459,020 warmup
 operations, 4,662,434 measured operations, zero cross-session results or deadlocks,
@@ -40,8 +45,8 @@ the verified 0.4.0 tarball was already public. See QA-REL-003.
 
 ## Public distribution
 
-- npm: `newton-browser@0.4.0`
-- GitHub tag and release: `v0.4.0`
+- npm: `newton-browser@0.4.1`
+- GitHub tag and release: `v0.4.1`
 - Landing page: `https://koala-studios.github.io/newton-browser/`
 - Chrome Web Store: submitted for review on 2026-07-11
 - Edge Add-ons: deferred until the Chrome listing is live

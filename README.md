@@ -4,7 +4,7 @@ Local browser control for MCP clients using your existing Chrome or Edge profile
 
 [![CI](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/newton-browser.svg)](https://www.npmjs.com/package/newton-browser)
-[![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.0)
+[![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1)
 
 Newton Browser connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, daemon, database, telemetry pipeline, or cloud relay.
 
@@ -13,7 +13,7 @@ Newton Browser connects an MCP client such as Codex or Claude to a local Chromiu
 Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
 
 > [!IMPORTANT]
-> Newton Browser 0.4.0 is an early public preview. The MCP package is public on npm and the release artifacts are available on GitHub. The Chrome Web Store listing is under review; until it is live, load the released extension artifact unpacked. Edge Add-ons submission is intentionally deferred until the Chrome listing is live.
+> Newton Browser 0.4.1 is an early public preview. The MCP package is public on npm and the release artifacts are available on GitHub. The Chrome Web Store listing for 0.4.0 is under review; until it is live, load the released extension artifact unpacked. Edge Add-ons submission is intentionally deferred until the Chrome listing is live.
 
 ## Why Newton Browser?
 
@@ -53,7 +53,7 @@ Source development additionally requires Node.js 24 or newer, pnpm 10.8.0, and G
 
 ### 1. Get the extension
 
-Download `newton-browser-extension-0.4.0.zip` from the [v0.4.0 GitHub Release](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.0) and extract it to a permanent local directory.
+Download `newton-browser-extension-0.4.1.zip` from the [v0.4.1 GitHub Release](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1) and extract it to a permanent local directory.
 
 Contributors can instead build the same extension from source:
 
@@ -85,7 +85,7 @@ The default `local_trust` mode requires no pairing key or popup action.
 Use the published host through npx:
 
 ```text
-npx -y newton-browser@0.4.0
+npx -y newton-browser@0.4.1
 ```
 
 #### Codex
@@ -95,7 +95,7 @@ Add this to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.newton-browser]
 command = "npx"
-args = ["-y", "newton-browser@0.4.0"]
+args = ["-y", "newton-browser@0.4.1"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -111,7 +111,7 @@ Merge this server into the client's MCP configuration:
   "mcpServers": {
     "newton-browser": {
       "command": "npx",
-      "args": ["-y", "newton-browser@0.4.0"]
+      "args": ["-y", "newton-browser@0.4.1"]
     }
   }
 }
@@ -130,7 +130,7 @@ browser.status
 A working setup reports `ready: true` and `extensionConnected: true`. The optional doctor command provides typed setup diagnostics:
 
 ```bash
-npx -y newton-browser@0.4.0 --doctor
+npx -y newton-browser@0.4.1 --doctor
 ```
 
 If the client is not running yet, `ready: false` with `nextAction: "start_or_restart_mcp_client_then_check_browser_status"` is expected.

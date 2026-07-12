@@ -1,5 +1,5 @@
 [mcp_servers.newton-browser]
 command = "npx"
-args = ["--yes", "--package", "C:\\NewtonBrowser\\newton-browser-0.4.0.tgz", "newton-browser"]
+args = ["--yes", "--package", "C:\\NewtonBrowser\\newton-browser-0.4.1.tgz", "newton-browser"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150

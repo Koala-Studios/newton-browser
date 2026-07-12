@@ -1,6 +1,7 @@
 # Discovery Submission Plan
 
-Newton Browser 0.4.0 is public on npm and GitHub. This plan covers discovery listings
+Newton Browser 0.4.1 is the registry-casing patch release for the public 0.4 line. This
+plan covers discovery listings
 without changing the product's local-only architecture. Submission work uses the
 standalone Newton Browser `browser.*` tools for signed-in web dashboards and public
 verification. The official MCP Registry remains a CLI publish flow; Newton Browser is
@@ -8,11 +9,11 @@ used for its GitHub authentication handoff and for browser verification.
 
 ## Outcomes
 
-- Establish `io.github.koala-studios/newton-browser` in the official MCP Registry as
+- Establish `io.github.Koala-Studios/newton-browser` in the official MCP Registry as
   the canonical machine-readable record.
 - Obtain accurate directory listings without creating a hosted relay, managed proxy,
   analytics tunnel, or remote Newton Browser service.
-- Publish one consistent install path: `npx -y newton-browser@0.4.0`.
+- Publish one consistent install path: `npx -y newton-browser@0.4.1`.
 - Record every listing URL, submission receipt, owner handoff, and verification result.
 
 ## Locked metadata
@@ -20,10 +21,10 @@ used for its GitHub authentication handoff and for browser verification.
 | Field | Value |
 | --- | --- |
 | Name | Newton Browser |
-| Registry name | `io.github.koala-studios/newton-browser` |
-| Version | `0.4.0` |
-| Package | `newton-browser@0.4.0` |
-| Command | `npx -y newton-browser@0.4.0` |
+| Registry name | `io.github.Koala-Studios/newton-browser` |
+| Version | `0.4.1` |
+| Package | `newton-browser@0.4.1` |
+| Command | `npx -y newton-browser@0.4.1` |
 | Repository | `https://github.com/Koala-Studios/newton-browser` |
 | Homepage | `https://koala-studios.github.io/newton-browser/` |
 | Privacy | `https://github.com/Koala-Studios/newton-browser/blob/main/docs/PRIVACY.md` |
@@ -39,12 +40,12 @@ a directory accept the package.
 
 ### Wave 0 — Preflight
 
-1. Confirm npm `newton-browser@0.4.0`, GitHub release `v0.4.0`, the landing page, privacy
+1. Confirm npm `newton-browser@0.4.1`, GitHub release `v0.4.1`, the landing page, privacy
    policy, and repository are publicly readable.
 2. Run `pnpm lint`, validate `server.json` with the current `mcp-publisher`, and inspect
    the generated install command.
-3. Call `browser.status`; continue only with host/extension 0.4.0, `ready:true`, and no
-   version skew. Close unintended existing sessions.
+3. Call `browser.status`; continue only with a matched released host/extension pair,
+   `ready:true`, and no version skew. Close unintended existing sessions.
 4. Create `test/evidence/discovery-ledger.md` when execution begins. Record target,
    account/namespace, submission URL, commit boundary, receipt, public listing URL,
    logged-out verification, and follow-up date.
@@ -58,7 +59,7 @@ The official registry is authoritative and should precede community directories.
    use a Newton Browser owned session on `https://github.com` to inspect it, then hand the
    tab to the owner for any account choice, credential, or verification-code entry.
 3. Confirm the authenticated identity can publish the
-   `io.github.koala-studios/newton-browser` namespace.
+   `io.github.Koala-Studios/newton-browser` namespace.
 4. Run `mcp-publisher publish server.json` only after authentication succeeds.
 5. Verify the exact version through the registry API and a logged-out Newton Browser
    session. Check name, version, repository, npm package, stdio transport, and install
@@ -70,7 +71,7 @@ Reference: `https://modelcontextprotocol.io/registry/quickstart`.
 
 Wait 48 hours after the official publish, then use separate logged-out Newton Browser
 sessions to search Glama, PulseMCP, Smithery, and MCP.so for both `Newton Browser` and
-`io.github.koala-studios/newton-browser`.
+`io.github.Koala-Studios/newton-browser`.
 
 - If a correct listing was automatically ingested, claim it when supported instead of
   creating a duplicate.
@@ -144,7 +145,7 @@ For every dashboard:
 Every listing must:
 
 - identify the server as local stdio, not remote HTTP;
-- show `npx -y newton-browser@0.4.0` or an equivalent version-pinned config;
+- show `npx -y newton-browser@0.4.1` or an equivalent version-pinned config;
 - state that the Chrome/Edge extension is required;
 - link the canonical repository, homepage, privacy policy, MIT license, and release;
 - describe origin-scoped owned tabs, parallel agents, harness independence, token-efficient
@@ -162,4 +163,3 @@ Discovery is complete when:
 - every public listing has a logged-out verification row and canonical URL;
 - README badges/links are updated with stable registry URLs;
 - `docs/PROGRESS_LEDGER.md` marks WS12 complete.
-

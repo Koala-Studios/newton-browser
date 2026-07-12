@@ -40,6 +40,7 @@ if (corePackage?.exports?.["."]?.import !== "./dist/index.js") {
   failures.push("packages/core/package.json: public import must point at compiled dist/index.js");
 }
 const hostPackage = readJson("apps/mcp-server/package.json");
+const serverRecord = readJson("server.json");
 if (hostPackage?.bin?.["newton-browser"] !== "./dist/index.js") {
   failures.push("apps/mcp-server/package.json: bin must point at compiled dist/index.js");
 }
@@ -48,6 +49,13 @@ if (!hostPackage?.devDependencies?.["@newton-browser/core"]) {
 }
 if (hostPackage?.dependencies?.["@newton-browser/core"]) {
   failures.push("apps/mcp-server/package.json: packed executable must bundle core instead of depending on the workspace package");
+}
+if (serverRecord?.name !== hostPackage?.mcpName) {
+  failures.push("server.json: name must exactly match apps/mcp-server/package.json mcpName");
+}
+const repositoryOwner = hostPackage?.repository?.url?.match(/github\.com[/:]([^/]+)\//)?.[1];
+if (!repositoryOwner || !hostPackage?.mcpName?.startsWith(`io.github.${repositoryOwner}/`)) {
+  failures.push("apps/mcp-server/package.json: mcpName must preserve the canonical GitHub owner casing");
 }
 
 const hostSources = ["apps/mcp-server/src/mcp-server.ts", "apps/mcp-server/src/bridge.ts", "apps/mcp-server/src/floor-gate.ts"]
