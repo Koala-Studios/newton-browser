@@ -9,6 +9,6 @@ test("release workflow reconciles partial releases and publishes the verified ta
   assert.match(workflow, /gh release upload "\$GITHUB_REF_NAME"[\s\S]+--clobber/);
   assert.match(
     workflow,
-    /npm publish "artifacts\/newton-browser-\$\{version\}\.tgz" --access public --provenance/,
+    /npm publish "\.\/artifacts\/newton-browser-\$\{version\}\.tgz" --access public --provenance/,
   );
 });

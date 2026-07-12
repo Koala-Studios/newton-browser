@@ -58,5 +58,5 @@ jobs:
           if npm view "newton-browser@${version}" version >/dev/null 2>&1; then
             echo "newton-browser@${version} is already published; skipping duplicate publish."
           else
-            npm publish "artifacts/newton-browser-${version}.tgz" --access public --provenance
+            npm publish "./artifacts/newton-browser-${version}.tgz" --access public --provenance
           fi
