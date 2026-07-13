@@ -5,6 +5,7 @@ Local browser control for MCP clients using your existing Chrome or Edge profile
 [![CI](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/newton-browser.svg)](https://www.npmjs.com/package/newton-browser)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-0.4.1-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Koala-Studios%2Fnewton-browser)
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hjhanngbpeafifandahdemfcalfniijn?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn)
 [![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1)
 
 Newton Browser connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, daemon, database, telemetry pipeline, or cloud relay.
@@ -14,7 +15,7 @@ Newton Browser connects an MCP client such as Codex or Claude to a local Chromiu
 Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
 
 > [!IMPORTANT]
-> Newton Browser 0.4.1 is an early public preview. The MCP package is public on npm and the release artifacts are available on GitHub. The Chrome Web Store listing for 0.4.0 is under review; until it is live, load the released extension artifact unpacked. Edge Add-ons submission is intentionally deferred until the Chrome listing is live.
+> Newton Browser 0.4.1 is an early public preview. The MCP package is public on npm, the release artifacts are available on GitHub, and the [Chrome Web Store listing](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn) is live. The former Chrome-review gate on Edge Add-ons is cleared; the Edge listing has not yet been submitted.
 
 ## Why Newton Browser?
 
@@ -54,7 +55,9 @@ Source development additionally requires Node.js 24 or newer, pnpm 10.8.0, and G
 
 ### 1. Get the extension
 
-Download `newton-browser-extension-0.4.1.zip` from the [v0.4.1 GitHub Release](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1) and extract it to a permanent local directory.
+Chrome users can install Newton Browser directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn).
+
+For a manual install, Edge, or the exact 0.4.1 package, download `newton-browser-extension-0.4.1.zip` from the [v0.4.1 GitHub Release](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1) and extract it to a permanent local directory.
 
 Contributors can instead build the same extension from source:
 
@@ -68,7 +71,9 @@ pnpm build
 
 `pnpm build` compiles the shared packages and MCP host, then writes the extension runtime under `apps/extension/dist`.
 
-### 2. Load the extension
+### 2. Install or load the extension
+
+If you installed from the Chrome Web Store, continue to step 3. For a manual installation:
 
 In Chrome:
 
@@ -168,7 +173,7 @@ See the [tool reference](skills/newton-browser/references/tool-reference.md) for
 ## Current limitations
 
 - Chrome and Edge are supported; Firefox and Safari are not.
-- Until the Chrome Web Store review completes, the extension must be loaded unpacked from the released ZIP or a source build.
+- The Edge Add-ons listing is not yet published; Edge users must load the released ZIP unpacked or use a source build.
 - Multi-tab sessions are not yet supported; a popup/new-target signal halts the action
   instead of silently transferring control.
 - Newton Browser does not bypass CAPTCHAs, authentication challenges, origin grants, or its sensitive-data floor.

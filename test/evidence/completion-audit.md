@@ -108,7 +108,8 @@ B0 contracts and repository implementation through B6 are implemented, and three
 ## Post-release addendum (2026-07-11)
 
 Version 0.4.0 is public on npm and GitHub. The protected release run 29159340143 passed
-the full packed gate and produced the public tarball, extension ZIP, and checksum. Chrome
-Web Store submission is pending review; Edge Add-ons is explicitly deferred until Chrome
-is live. The two declined environment mutations remain historical non-requirements and do
-not block the shipped release. Discovery execution is tracked in `docs/DISCOVERY_PLAN.md`.
+the full packed gate and produced the public tarball, extension ZIP, and checksum. The
+Chrome Web Store listing was accepted and became public on 2026-07-13. The former Chrome
+review condition on Edge Add-ons is therefore cleared; Edge submission remains outstanding.
+The two declined environment mutations remain historical non-requirements and do not block
+the shipped release. Discovery execution is tracked in `docs/DISCOVERY_PLAN.md`.

@@ -395,5 +395,5 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Root cause: npm publication was idempotent, but GitHub Release creation was not. The workflow also published from the workspace through pnpm instead of explicitly selecting the tarball already proved by `pack:check`.
 - Fix: reconcile an existing release by editing its notes and uploading verified assets with `--clobber`; publish the exact versioned artifact through npm using an explicit `./artifacts/` filesystem path.
 - Regression: `test/fixtures/release-workflow.test.ts` asserts the existing-release branch, clobber upload, and exact tarball publication path.
-- Evidence: GitHub Actions run 29178530777; all verification and release-creation steps passed, while only npm publication failed with E404.
-- Status: fixed locally; 0.4.1 was recovered by publishing the verified tarball through the authenticated npm owner session, and the future tag workflow remains pending verification.
+- Evidence: GitHub Actions run 29178530777 reproduced the partial release. Tag-targeted recovery run 29182201160 on commit `114be08` passed all 11 release stages, reconciled the existing v0.4.1 release assets, and correctly skipped npm because 0.4.1 was already public.
+- Status: closed; the manual `workflow_dispatch` recovery path is verified on the affected v0.4.1 release.

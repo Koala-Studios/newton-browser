@@ -12,9 +12,9 @@ Legend: ✅ done · 🔶 in progress · ⛔ not started · 🚧 blocked on human
 | WS0 | Rename → newton-browser | ✅ | rename sweep; DECISIONS §12; residual cosmetic notes below |
 | WS1 | MIT license | ✅ | `LICENSE`; `license` in all 5 package.json; `7bc9da6` |
 | WS2 | Icons + toolbar states | ✅ | `2c55f7c`, `59aac3f`, `bd3bfcd`; manifest wired; owner approved the current contact sheet 2026-07-11 |
-| WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24; protected v0.4.0 release workflow GREEN (run 29159340143). Fixed BB-036..BB-043. |
+| WS3 | CI + release workflows | ✅ | CI GREEN on Linux+Windows, Node 20/22/24; protected v0.4.0 release run 29159340143 and v0.4.1 recovery run 29182201160 GREEN. Fixed BB-036..BB-043 and BB-045. |
 | WS4 | npm packaging + Node floor + `--install` | ✅ | metadata; Node 20 runtime floor reconciled; `--install` + tests; DECISIONS §15 |
-| WS5 | Browser stores | 🔶 | Chrome Web Store v0.4.0 submitted and pending review; Edge Add-ons explicitly deferred until the Chrome listing is live |
+| WS5 | Browser stores | 🔶 | Chrome Web Store v0.4.0 accepted and live; the former Chrome-review gate on Edge Add-ons is cleared, with Edge submission still outstanding |
 | WS6 | First-run onboarding page | ✅ | `cf52dbb`, `de5124b`; `apps/extension/onboarding.{html,js}` |
 | WS7 | Minimal popup sessions | ✅ | `4b03650`, `0e3b238`; session list + Stop-all |
 | WS8 | Version-skew handling | ✅ | `3a14386`, `9abcbea`; `classifyVersionSkew`, status reports versions |
@@ -54,8 +54,9 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
 
 ## npm
 
-- `newton-browser@0.4.0` is public on npm. The protected release workflow verified the
-  packed artifacts and correctly skipped a duplicate publish.
+- `newton-browser@0.4.1` is public on npm. The tag-targeted recovery workflow verified
+  the packed artifacts, reconciled the existing GitHub Release, and correctly skipped a
+  duplicate npm publish.
 
 ## Log
 
@@ -184,3 +185,10 @@ convenience-only status/viewport additions are explicit post-0.4 deferrals.
   required 48-hour downstream-ingestion check is due after 2026-07-14 05:07 UTC; Glama,
   PulseMCP, MCP.so, and compatibility-gated Smithery remain intentionally untouched until
   then to avoid duplicates.
+- 2026-07-13 — Chrome Web Store accepted Newton Browser and published the 0.4.0 listing
+  at `https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn`.
+  The owner-confirmed acceptance clears the condition that deferred Edge Add-ons; Edge
+  remains outstanding rather than blocked. Added the store link to the GitHub README and
+  landing page. The exact public v0.4.1 extension asset was downloaded for the next store
+  upload and verified as MV3 version 0.4.1 with GitHub SHA-256
+  `1a028f143d0ea9e5d35df0482d4beffb484b37a7a4a641dc8fae83ea669fb6b2`.

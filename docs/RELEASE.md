@@ -1,6 +1,6 @@
 # Release
 
-Newton Browser 0.4.1 is the metadata-only MCP Registry casing patch for the public 0.4 line. The Chrome Web Store 0.4.0 package has been submitted and is pending review. Edge Add-ons submission is explicitly deferred until the Chrome listing is live. MCP registry and community-directory submissions are tracked in `docs/DISCOVERY_PLAN.md`.
+Newton Browser 0.4.1 is the metadata-only MCP Registry casing patch for the public 0.4 line. The Chrome Web Store 0.4.0 listing is accepted and live. The former Chrome-review condition on Edge Add-ons is satisfied; Edge submission remains outstanding. MCP registry and community-directory submissions are tracked in `docs/DISCOVERY_PLAN.md`.
 
 Run from a clean checkout with Node 24 or newer:
 
@@ -41,15 +41,16 @@ the verified 0.4.0 tarball was already public. See QA-REL-003.
 
 `.github/workflows/ci.yml` runs lint, typecheck, tests, build, and the quick smoke suite on Ubuntu and Windows with Node 24. It separately runs the packed `release:check` gate and verifies the MCP tarball on Node 20, 22, and 24.
 
-`.github/workflows/release.yml` runs the full packed release gate for a `v*` tag, rebuilds the signed extension artifact and MCP tarball, creates a GitHub Release using that version's `CHANGELOG.md` section, and publishes npm from the protected `release` environment. If the exact package version was already published manually from the verified tarball, the workflow treats it as satisfied and skips a duplicate publish. The repository administrator must configure that environment and its required reviewer before a publish can proceed.
+`.github/workflows/release.yml` runs the full packed release gate for a `v*` tag, rebuilds the signed extension artifact and MCP tarball, creates a GitHub Release using that version's `CHANGELOG.md` section, and publishes npm from the protected `release` environment. A manual dispatch with an exact existing tag checks out that immutable tag and reconciles its release assets, which provides a safe recovery path after a partial release. If the exact package version was already published manually from the verified tarball, the workflow treats it as satisfied and skips a duplicate publish. The repository administrator must configure that environment and its required reviewer before a publish can proceed. The recovery path passed against v0.4.1 in run 29182201160.
 
 ## Public distribution
 
 - npm: `newton-browser@0.4.1`
 - GitHub tag and release: `v0.4.1`
 - Landing page: `https://koala-studios.github.io/newton-browser/`
-- Chrome Web Store: submitted for review on 2026-07-11
-- Edge Add-ons: deferred until the Chrome listing is live
+- Chrome Web Store: accepted and live at
+  `https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn`
+- Edge Add-ons: Chrome-review gate cleared; submission outstanding
 - Official MCP Registry: active/latest 0.4.1 record at
   `io.github.Koala-Studios/newton-browser`
 - Community directories: waiting for the required 48-hour ingestion window; see
