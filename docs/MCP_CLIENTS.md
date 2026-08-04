@@ -18,7 +18,7 @@ Codex:
 ```toml
 [mcp_servers.newton-browser]
 command = "npx"
-args = ["-y", "newton-browser@0.4.2"]
+args = ["-y", "newton-browser@0.4.1"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -30,7 +30,7 @@ Claude Desktop or Claude Code:
   "mcpServers": {
     "newton-browser": {
       "command": "npx",
-      "args": ["-y", "newton-browser@0.4.2"]
+      "args": ["-y", "newton-browser@0.4.1"]
     }
   }
 }
@@ -41,7 +41,7 @@ Generic stdio client:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "newton-browser@0.4.2"]
+  "args": ["-y", "newton-browser@0.4.1"]
 }
 ```
 
