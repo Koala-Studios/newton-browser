@@ -1,4 +1,4 @@
 {
   "command": "npx",
-  "args": ["--yes", "--package", "C:\\NewtonBrowser\\newton-browser-0.4.3.tgz", "newton-browser"]
+  "args": ["--yes", "--package", "C:\\NewtonBrowser\\newton-browser-0.4.4.tgz", "newton-browser"]
 }

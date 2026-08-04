@@ -7,7 +7,14 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import type { NewtonBrowserHost } from "../src/bridge.ts";
-import { prepareSocketPath, startPersistentMcpDaemon } from "../src/persistent-mcp.ts";
+import { boundedIdleMs, prepareSocketPath, startPersistentMcpDaemon } from "../src/persistent-mcp.ts";
+
+test("persistent MCP idle bounds preserve approval-gated worker continuity", () => {
+  assert.equal(boundedIdleMs(undefined), 60_000);
+  assert.equal(boundedIdleMs("5000"), 10_000);
+  assert.equal(boundedIdleMs(String(7 * 24 * 60 * 60_000)), 7 * 24 * 60 * 60_000);
+  assert.equal(boundedIdleMs(String(60 * 24 * 60 * 60_000)), 30 * 24 * 60 * 60_000);
+});
 
 test("persistent MCP daemon preserves sessions across clients and rejects concurrent clients", { skip: process.platform === "win32" }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-daemon-"));

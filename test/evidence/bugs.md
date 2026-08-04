@@ -1,5 +1,19 @@
 # Browser Bridge Defect Ledger
 
+## BB-047 — Approval pauses expired the authenticated persistent host
+
+- Minimal repro: start a persistent MCP host for an approval-gated worker, disconnect
+  its MCP client, wait longer than one hour, then resume the worker. The daemon exits
+  at the hard one-hour clamp and the running extension no longer owns that host.
+- Root cause: `NEWTON_BROWSER_DAEMON_IDLE_MS` was clamped to one hour even though the
+  caller explicitly owns daemon cleanup and a human approval pause can legitimately
+  exceed one hour.
+- Fix: allow an explicit idle window up to 30 days while retaining the 10-second floor,
+  one-minute default, empty-session requirement, and explicit shutdown semantics.
+- Regression: `persistent MCP idle bounds preserve approval-gated worker continuity`
+  verifies the default, floor, seven-day accepted value, and 30-day ceiling.
+- Status: 0.4.4 release gates passed three consecutive times; deployed worker proof pending.
+
 All defects below have deterministic regression coverage. Foundation defects BB-001 through BB-009 and BB-011 through BB-012 were fixed in `94de2f0`; BB-006 received its final bounds/fragmentation closure in `0fd3bc8`.
 
 ## BB-046 — Global executable symlink bypassed the compiled entrypoint

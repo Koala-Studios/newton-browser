@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-04
+
+### Fixed
+
+- Allow explicit persistent-MCP idle windows up to 30 days so approval-gated worker
+  runs retain the same authenticated Browser host across human decision pauses.
+  Explicit daemon shutdown still owns cleanup.
+
 ## [0.4.3] - 2026-08-04
 
 ### Fixed

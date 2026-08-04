@@ -124,9 +124,9 @@ function ownedByCurrentUser(stat: fs.Stats): boolean {
   return typeof process.getuid !== "function" || stat.uid === process.getuid();
 }
 
-function boundedIdleMs(value: string | undefined): number {
+export function boundedIdleMs(value: string | undefined): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(10_000, Math.min(60 * 60_000, Math.trunc(parsed))) : 60_000;
+  return Number.isFinite(parsed) ? Math.max(10_000, Math.min(30 * 24 * 60 * 60_000, Math.trunc(parsed))) : 60_000;
 }
 
 function boundedOrphanSessionTtlMs(value: string | undefined): number {

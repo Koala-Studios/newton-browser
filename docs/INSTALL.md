@@ -73,24 +73,24 @@ node /absolute/path/to/newton-browser/apps/mcp-server/dist/index.js --doctor
 
 When a GitHub release provides the following files, you can install without keeping a source checkout:
 
-- `newton-browser-0.4.3.tgz`
-- `newton-browser-extension-0.4.3.zip`
-- `newton-browser-extension-0.4.3.zip.sha256`
+- `newton-browser-0.4.4.tgz`
+- `newton-browser-extension-0.4.4.zip`
+- `newton-browser-extension-0.4.4.zip.sha256`
 
 Keep all three files together and verify the extension checksum before extracting it.
 
 PowerShell:
 
 ```powershell
-$expected = (Get-Content .\newton-browser-extension-0.4.3.zip.sha256).Split()[0]
-$actual = (Get-FileHash .\newton-browser-extension-0.4.3.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$expected = (Get-Content .\newton-browser-extension-0.4.4.zip.sha256).Split()[0]
+$actual = (Get-FileHash .\newton-browser-extension-0.4.4.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "Newton Browser extension checksum mismatch" }
 ```
 
 macOS or Linux:
 
 ```bash
-sha256sum --check newton-browser-extension-0.4.3.zip.sha256
+sha256sum --check newton-browser-extension-0.4.4.zip.sha256
 ```
 
 Extract the ZIP and load the extracted directory through the browser's **Load unpacked** flow. Then copy the matching example from `examples/mcp`, replace its tarball path with the absolute path on your machine, and restart the MCP client.
