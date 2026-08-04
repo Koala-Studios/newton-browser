@@ -4,9 +4,9 @@ Local browser control for MCP clients using your existing Chrome or Edge profile
 
 [![CI](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/newton-browser.svg)](https://www.npmjs.com/package/newton-browser)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-0.4.2-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Koala-Studios%2Fnewton-browser)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-0.4.1-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Koala-Studios%2Fnewton-browser)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hjhanngbpeafifandahdemfcalfniijn?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn)
-[![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1)
+[![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases)
 
 Newton Browser connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, required system daemon, database, telemetry pipeline, or cloud relay.
 
@@ -15,7 +15,7 @@ Newton Browser connects an MCP client such as Codex or Claude to a local Chromiu
 Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
 
 > [!IMPORTANT]
-> Newton Browser 0.4.2 is an early public preview. The MCP package is public on npm, the release artifacts are available on GitHub, and the [Chrome Web Store listing](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn) is live. The former Chrome-review gate on Edge Add-ons is cleared; the Edge listing has not yet been submitted.
+> Newton Browser is an early public preview. Version 0.4.1 is the current npm and MCP Registry release; newer deployment builds are distributed as verified GitHub Release artifacts until npm publication is reconciled. The [Chrome Web Store listing](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn) is live. The former Chrome-review gate on Edge Add-ons is cleared; the Edge listing has not yet been submitted.
 
 ## Why Newton Browser?
 

@@ -3,7 +3,7 @@ import net from "node:net";
 import { configDirectory, doctorToken, loadBrowserTarget, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
 import { INSTALL_CLIENTS, type InstallClient, runInstall, serverInvocation } from "./install.ts";
 
-export const NEWTON_BROWSER_VERSION = "0.4.2";
+export const NEWTON_BROWSER_VERSION = "0.4.3";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
 
 // Runtime floor for the published package. The dev workspace still requires Node 24

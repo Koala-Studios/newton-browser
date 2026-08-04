@@ -1,6 +1,6 @@
 {
   "name": "newton-browser",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "license": "MIT",
   "type": "module",
   "description": "Local stdio MCP host and localhost WebSocket relay for the Newton Browser extension.",

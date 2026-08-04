@@ -1,10 +1,11 @@
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { handleUtilityCommand } from "./cli.ts";
 import { startNewtonBrowserMcpServer } from "./mcp-server.ts";
 import { runPersistentMcpClient, runPersistentMcpDaemon } from "./persistent-mcp.ts";
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   const daemonIndex = process.argv.indexOf("--daemon-socket");
   const clientIndex = process.argv.indexOf("--connect-socket");
   if (daemonIndex >= 0 && clientIndex >= 0) throw new Error("persistent_mcp_mode_conflict");
@@ -27,5 +28,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       host: "127.0.0.1",
     });
   }
+  }
+}
+
+function isMainModule(moduleUrl: string, argvEntry: string | undefined): boolean {
+  if (!argvEntry) return false;
+  try {
+    return moduleUrl === pathToFileURL(fs.realpathSync(argvEntry)).href;
+  } catch {
+    return moduleUrl === pathToFileURL(argvEntry).href;
   }
 }

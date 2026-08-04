@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-04
+
+### Fixed
+
+- Resolve a global executable's symlink before deciding whether the compiled entrypoint
+  is the main module. Global installs now run utility commands and persistent Unix-socket
+  daemon mode instead of exiting successfully without starting.
+
 ## [0.4.2] - 2026-08-03
 
 ### Added

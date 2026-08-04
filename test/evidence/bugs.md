@@ -2,6 +2,18 @@
 
 All defects below have deterministic regression coverage. Foundation defects BB-001 through BB-009 and BB-011 through BB-012 were fixed in `94de2f0`; BB-006 received its final bounds/fragmentation closure in `0fd3bc8`.
 
+## BB-046 — Global executable symlink bypassed the compiled entrypoint
+
+- Minimal repro: install the 0.4.2 tarball globally, then run `newton-browser --version`
+  or `newton-browser --daemon-socket /tmp/newton-browser.sock`; both exit zero without
+  output or a socket.
+- Root cause: the compiled entrypoint compared `import.meta.url` with the unresolved
+  global-bin symlink in `process.argv[1]`, so the main-module guard evaluated false.
+- Fix: resolve the executable path through `realpathSync` before comparing URLs.
+- Regression: `pack:check` runs the packed entry through a symlinked package path and
+  requires the exact package version; deployed Linux QA must also observe a real daemon socket.
+- Status: fixed in 0.4.3; release and deployed runtime evidence pending.
+
 ## BB-001 — Core declaration build missing type import
 
 - Minimal repro: run `pnpm build:core` after extraction.

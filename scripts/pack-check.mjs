@@ -31,6 +31,10 @@ try {
   const entry = path.join(temp, "node_modules", "newton-browser", "dist", "index.js");
   const versionResult = run(process.execPath, [entry, "--version"], { cwd: temp, capture: true }).stdout.trim();
   if (versionResult !== version) throw new Error(`packed version mismatch: ${versionResult}`);
+  const linkedPackage = path.join(temp, "linked-newton-browser");
+  fs.symlinkSync(path.dirname(path.dirname(entry)), linkedPackage, process.platform === "win32" ? "junction" : "dir");
+  const linkedVersion = run(process.execPath, [path.join(linkedPackage, "dist", "index.js"), "--version"], { cwd: temp, capture: true }).stdout.trim();
+  if (linkedVersion !== version) throw new Error(`symlinked packed version mismatch: ${linkedVersion}`);
   const doctorResult = run(process.execPath, [entry, "--doctor"], { cwd: temp, capture: true }).stdout.trim();
   const doctor = JSON.parse(doctorResult);
   if (doctor?.checks?.node?.ok !== true || doctor?.version !== version) throw new Error("packed doctor report is invalid");
@@ -40,7 +44,7 @@ try {
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }
-process.stdout.write(`${JSON.stringify({ ok: true, tarball, files: listing.length, installPathWithSpaces: true })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, tarball, files: listing.length, installPathWithSpaces: true, symlinkedEntrypoint: true })}\n`);
 
 function run(command, args, { cwd = root, capture = false } = {}) {
   const manager = packageManagerCommand(command, args);
