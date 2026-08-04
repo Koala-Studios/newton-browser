@@ -18,6 +18,18 @@ Optional `paired` mode requires a challenge-response proof derived from a per-us
 
 `--doctor` discovers incumbent hosts through a loopback-only `/doctor-status` endpoint authenticated by an internally derived diagnostic token in both modes. The endpoint has no permissive CORS header and never returns the secret. An unauthenticated request receives only `authentication_failed`.
 
+An optional deployment observer is disabled by default. When both
+`NEWTON_BROWSER_OBSERVER_REGISTRY_DIR` and a high-entropy
+`NEWTON_BROWSER_OBSERVER_TOKEN` are supplied, the host writes a mode-0600 local
+registry record containing only its process/port and bounded session metadata.
+Its loopback-only status and exact-session focus endpoints require the observer
+token. They do not expose page content, session grants, pairing material, or
+session ownership, and another machine cannot reach them directly.
+The same authenticated observer may submit one resolved secret to one exact
+fresh field reference. This private endpoint is absent from the MCP tool
+catalog, returns only `{filled:true}`, preserves exact session/origin checks,
+and does not change the ordinary action floor's credential/OTP blocking.
+
 Every session has a required exact HTTP(S) origin grant. The extension reconciles the attached tab's live origin before binding and before every command. Moving focus cannot retarget a session, and one host cannot address another host's session. Page text is untrusted data and never authorization.
 
 When Chrome and Edge are both enabled, the host atomically grants each session to one eligible browser client. Only that owner can attach, subscribe, stop, or answer commands; standby browsers receive no session commands. Owner disconnect releases the claim, clears browser-local tab identifiers, and fails any in-flight command closed before a standby may bind a new tab. Optional `browserTarget` selection can restrict eligibility to Chrome or Edge without disabling the other extension.

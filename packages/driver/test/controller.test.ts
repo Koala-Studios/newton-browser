@@ -60,7 +60,12 @@ test("BridgeRuntime drives a click command through a fake transport", async () =
     async resolveEvidence() {
       return { resolved: { origin: "https://example.com", accessibleName: "Open" }, signals: {} };
     },
-    async executeAction(action: { kind?: string }) {
+    async executeAction(action: { kind?: string; target?: { ref?: string }; value?: string }) {
+      if (action.kind === "fill") {
+        assert.equal(action.target?.ref, "ref_otp");
+        assert.equal(action.value, "123456");
+        return { status: "verified", verified: true, changed: { filled: true } };
+      }
       assert.equal(action.kind, "click");
       return {
         status: "verified",
@@ -100,7 +105,14 @@ test("BridgeRuntime drives a click command through a fake transport", async () =
     action: { kind: "click", target: { ref: "e1" } },
   });
 
-  assert.deepEqual(events.map((event) => event.eventType), ["running"]);
+  await commandHandler?.({
+    commandId: "c2",
+    sessionId: "s1",
+    actionKind: "__trusted_fill",
+    action: { kind: "__trusted_fill", target: { ref: "ref_otp" }, value: "123456" },
+  });
+
+  assert.deepEqual(events.map((event) => event.eventType), ["running", "running"]);
   assert.deepEqual(results, [{
     commandId: "c1",
     ok: true,
@@ -125,7 +137,8 @@ test("BridgeRuntime drives a click command through a fake transport", async () =
       verified: true,
       changed: { clicked: true },
     },
-  }]);
+  }, { commandId: "c2", ok: true, result: { filled: true } }]);
+  assert.doesNotMatch(JSON.stringify(results), /123456/u);
 });
 
 test("BridgeRuntime treats approval-required floor decisions as non-blocking metadata", async () => {
@@ -601,6 +614,31 @@ test("BridgeRuntime finalizes owned and current tabs with explicit close, delive
     assert.deepEqual(stopped, ["s-finalize"]);
     assert.equal(results[0].result.tabKept, scenario.kept);
   }
+});
+
+test("BridgeRuntime focuses an exact session tab without detaching or finalizing it", async () => {
+  const focused: number[] = [];
+  const results: any[] = [];
+  let handler: ((command: any) => Promise<void> | void) | null = null;
+  const runtime = createBridgeRuntime({
+    transport: {
+      async createSession() { return { sessionId: "s-focus" }; }, async attachTab() {},
+      subscribe(_sessionId: string, callback: (command: any) => Promise<void> | void) { handler = callback; return () => {}; },
+      async listSessions() { return []; }, async postEvent() {}, async postResult(result: any) { results.push(result); },
+      async stopSession() {}, async stopAll() {},
+    },
+    evaluateFloor() { return null; },
+    tabs: {
+      async createOwnedTab() { return { tabId: 41, groupId: 7 }; }, async removeTab() {},
+      async getTab() { return { id: 41, url: "https://example.com" }; }, async focusTab(tabId: number) { focused.push(tabId); },
+    },
+    driverFactory: () => ({ attached: false, async attach() { this.attached = true; }, async detach() {}, isAttachedTo() { return true; }, async reassertOverlay() {} }),
+  });
+  await runtime.startSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+  await handler?.({ commandId: "focus-1", sessionId: "s-focus", actionKind: "__focus", action: { kind: "__focus" } });
+  assert.deepEqual(focused, [41]);
+  assert.equal(results[0].result.focused, true);
+  assert.equal(runtime.snapshot().count, 1);
 });
 
 test("BridgeRuntime host reconciliation closes only sessions missing from the aggregate live set", async () => {

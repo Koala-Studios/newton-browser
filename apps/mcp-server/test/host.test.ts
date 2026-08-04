@@ -65,6 +65,46 @@ test("session start requires an exact origin and waits for authenticated extensi
   }
 });
 
+test("observer registry exposes only authenticated session metadata", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-observer-"));
+  const token = "observer_" + "x".repeat(40);
+  const bridge = createNewtonBrowserHost({
+    authMode: "paired",
+    pairingSecret: PAIRING_SECRET,
+    observerRegistryDirectory: directory,
+    observerToken: token,
+  });
+  try {
+    const address = await bridge.listen(0);
+    const { sessionId } = bridge.createSession({
+      origin: "https://example.com",
+      allowedOrigins: ["https://example.com"],
+      tabMode: "owned_group",
+      instanceLabel: "run_123",
+    });
+    const registry = JSON.parse(fs.readFileSync(path.join(directory, `${bridge.hostInstanceId}.json`), "utf8"));
+    assert.equal(registry.port, address.port);
+    assert.deepEqual(registry.sessions.map((session: any) => session.instanceLabel), ["run_123"]);
+    assert.doesNotMatch(JSON.stringify(registry), /token|allowedOrigins|goal/iu);
+
+    const denied = await fetch(`http://127.0.0.1:${address.port}/observer-status`);
+    assert.equal(denied.status, 403);
+    const status = await fetch(`http://127.0.0.1:${address.port}/observer-status`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(status.status, 200);
+    assert.equal((await status.json() as any).sessions[0].sessionId, sessionId);
+    const deniedFill = await fetch(`http://127.0.0.1:${address.port}/observer-trusted-fill`, { method: "POST", body: JSON.stringify({ sessionId, ref: "ref_1", value: "123456" }) });
+    assert.equal(deniedFill.status, 403);
+    const invalidFill = await fetch(`http://127.0.0.1:${address.port}/observer-trusted-fill`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, ref: "invalid", value: "123456" }),
+    });
+    assert.equal(invalidFill.status, 400);
+  } finally {
+    await bridge.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("host floor blocks sensitive fields before dispatch", () => {
   const bridge = testBridge();
   const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });

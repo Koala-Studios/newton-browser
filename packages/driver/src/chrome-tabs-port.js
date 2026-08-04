@@ -43,6 +43,12 @@ export function createChromeTabsPort(chromeApi = globalThis.chrome) {
       return chromeApi.tabs.get(tabId);
     },
 
+    async focusTab(tabId) {
+      const tab = await chromeApi.tabs.get(tabId);
+      if (Number.isInteger(tab?.windowId)) await chromeApi.windows?.update?.(tab.windowId, { focused: true }).catch(() => {});
+      await chromeApi.tabs.update(tabId, { active: true });
+    },
+
     async finalizeTab(tabId, disposition) {
       if (disposition !== "handoff") return;
       await chromeApi.tabs.ungroup?.(tabId).catch(() => {});

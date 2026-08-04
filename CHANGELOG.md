@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-03
+
+### Added
+
+- Optional local observer registry with authenticated session-status and exact-tab
+  focus endpoints for private embedded viewers. The registry exposes only bounded
+  session metadata and remains disabled unless both its directory and token are set.
+- A deployment-supplied instance label can bind every session from one MCP host to
+  its originating worker run without changing the public MCP tool contract.
+- Explicit Unix-socket daemon/client modes let an orchestrator preserve one local
+  browser host and its owned sessions across sequential MCP client reconnects.
+  The socket is private, single-client, and refuses unsafe stale paths.
+- An authenticated observer can apply one already-resolved secret to one exact
+  fresh field reference without exposing the value through the public MCP tool
+  catalog or weakening ordinary credential/OTP blocking.
+
+### Security
+
+- Observer endpoints stay loopback-only, require a separate high-entropy bearer
+  token, never expose page content or grants, and do not transfer session ownership.
+
 ## [0.4.1] - 2026-07-11
 
 ### Fixed

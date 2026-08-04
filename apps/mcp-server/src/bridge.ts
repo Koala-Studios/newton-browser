@@ -1,5 +1,7 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 
 import type { BridgeCommand, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@newton-browser/core";
 import { WebSocket, WebSocketServer } from "ws";
@@ -45,6 +47,8 @@ export function createNewtonBrowserHost(options: {
   browserTarget?: BrowserTarget;
   pairingSecret?: string;
   hostInstanceId?: string;
+  observerRegistryDirectory?: string;
+  observerToken?: string;
   limits?: Partial<typeof DEFAULT_LIMITS>;
 } = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) };
@@ -52,6 +56,10 @@ export function createNewtonBrowserHost(options: {
   const browserTarget = options.browserTarget ?? loadBrowserTarget();
   const pairingSecret = options.pairingSecret ?? loadOrCreatePairingConfig().secret;
   const hostInstanceId = options.hostInstanceId ?? randomUUID();
+  const observerRegistryDirectory = options.observerRegistryDirectory?.trim() ? path.resolve(options.observerRegistryDirectory) : null;
+  const observerToken = options.observerToken?.trim() || null;
+  if ((observerRegistryDirectory && !observerToken) || (!observerRegistryDirectory && observerToken)) throw new Error("observer_configuration_incomplete");
+  if (observerToken && observerToken.length < 32) throw new Error("observer_token_too_short");
   const sessions = new Map<string, BridgeSessionInfo>();
   const sessionOwners = new Map<string, string>();
   const clients = new Map<string, HostClient>();
@@ -205,6 +213,7 @@ export function createNewtonBrowserHost(options: {
           server = started.server;
           webSockets = started.webSockets;
           boundPort = started.port;
+          persistObserverState();
           return { port: started.port, host, hostInstanceId };
         } catch (error) {
           lastError = error;
@@ -232,6 +241,7 @@ export function createNewtonBrowserHost(options: {
       if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
       server = null;
       boundPort = null;
+      removeObserverState();
     },
   };
 
@@ -249,6 +259,43 @@ export function createNewtonBrowserHost(options: {
           return;
         }
         response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end(JSON.stringify({ ok: true, ...api.getStatus() }));
+        return;
+      }
+      const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      if (["/observer-status", "/observer-focus", "/observer-trusted-fill"].includes(requestUrl.pathname)) {
+        if (!validObserverRequest(request.headers.authorization)) {
+          response.writeHead(403, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end('{"ok":false,"errorCode":"authentication_failed"}');
+          return;
+        }
+        if (requestUrl.pathname === "/observer-status" && request.method === "GET") {
+          response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end(JSON.stringify(observerSnapshot()));
+          return;
+        }
+        if (requestUrl.pathname === "/observer-focus" && request.method === "POST") {
+          const sessionId = requestUrl.searchParams.get("sessionId") ?? "";
+          void api.dispatch(sessionId, { kind: "__focus" } as never).then((event) => {
+            const status = event.ok ? 200 : 409;
+            response.writeHead(status, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end(JSON.stringify(event.ok ? { ok: true, result: event.result } : { ok: false, errorCode: event.errorCode }));
+          });
+          return;
+        }
+        if (requestUrl.pathname === "/observer-trusted-fill" && request.method === "POST") {
+          void readObserverBody(request).then((body) => {
+            const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+            const ref = typeof body.ref === "string" ? body.ref : "";
+            const value = typeof body.value === "string" ? body.value : "";
+            if (!sessionId || !/^ref_[A-Za-z0-9_-]{1,180}$/u.test(ref) || !value || value.length > 512) {
+              response.writeHead(400, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end('{"ok":false,"errorCode":"trusted_fill_invalid"}');
+              return;
+            }
+            return api.dispatch(sessionId, { kind: "__trusted_fill", target: { ref }, value } as never).then((event) => {
+              const status = event.ok ? 200 : 409;
+              response.writeHead(status, { "Cache-Control": "no-store", "Content-Type": "application/json" }).end(JSON.stringify(event.ok ? { ok: true, result: { filled: true } } : { ok: false, errorCode: event.errorCode }));
+            });
+          }).catch(() => response.writeHead(400, { "Cache-Control": "no-store" }).end());
+          return;
+        }
+        response.writeHead(405, { "Cache-Control": "no-store" }).end();
         return;
       }
       response.writeHead(404).end();
@@ -544,6 +591,46 @@ export function createNewtonBrowserHost(options: {
 
   function broadcastSessionsChanged(): void {
     broadcast({ type: "sessions_changed", hostInstanceId, sessions: api.listSessions() });
+    persistObserverState();
+  }
+
+  function observerSnapshot() {
+    return {
+      ok: true,
+      hostInstanceId,
+      port: boundPort,
+      processId: process.pid,
+      updatedAt: new Date().toISOString(),
+      sessions: api.listSessions().map((session) => ({
+        sessionId: session.sessionId,
+        instanceLabel: session.instanceLabel ?? "",
+        origin: session.origin,
+        liveOrigin: session.liveOrigin ?? null,
+        attached: session.attached === true,
+        incognito: session.incognito === true,
+      })),
+    };
+  }
+
+  function validObserverRequest(header: unknown): boolean {
+    if (!observerToken || typeof header !== "string" || !header.startsWith("Bearer ")) return false;
+    const actual = Buffer.from(header.slice(7));
+    const expected = Buffer.from(observerToken);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+
+  function persistObserverState(): void {
+    if (!observerRegistryDirectory || !observerToken || boundPort === null) return;
+    fs.mkdirSync(observerRegistryDirectory, { recursive: true, mode: 0o700 });
+    const target = path.join(observerRegistryDirectory, `${hostInstanceId}.json`);
+    const temporary = `${target}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(observerSnapshot())}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporary, target);
+  }
+
+  function removeObserverState(): void {
+    if (!observerRegistryDirectory) return;
+    fs.rmSync(path.join(observerRegistryDirectory, `${hostInstanceId}.json`), { force: true });
   }
 
   function send(client: HostClient, message: unknown): void {
@@ -565,6 +652,20 @@ export function createNewtonBrowserHost(options: {
       return false;
     }
     return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+
+  async function readObserverBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buffer.length;
+      if (size > 8 * 1024) throw new Error("observer_body_too_large");
+      chunks.push(buffer);
+    }
+    const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("observer_body_invalid");
+    return value as Record<string, unknown>;
   }
 
   function readySession(sessionId: string): BridgeSessionInfo | null {

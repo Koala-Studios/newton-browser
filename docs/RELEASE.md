@@ -1,6 +1,6 @@
 # Release
 
-Newton Browser 0.4.1 is the metadata-only MCP Registry casing patch for the public 0.4 line. The Chrome Web Store 0.4.0 listing is accepted and live. The former Chrome-review condition on Edge Add-ons is satisfied; Edge submission remains outstanding. MCP registry and community-directory submissions are tracked in `docs/DISCOVERY_PLAN.md`.
+Newton Browser 0.4.2 adds an optional authenticated local observer contract for private embedded viewers while preserving the independent loopback-only MCP boundary. The Chrome Web Store 0.4.0 listing is accepted and live. The former Chrome-review condition on Edge Add-ons is satisfied; Edge submission remains outstanding. MCP registry and community-directory submissions are tracked in `docs/DISCOVERY_PLAN.md`.
 
 Run from a clean checkout with Node 24 or newer:
 
@@ -13,9 +13,9 @@ The gate runs boundary, type, unit/contract, build, deterministic extension arti
 
 Expected release artifacts:
 
-- `artifacts/newton-browser-0.4.1.tgz`
-- `artifacts/newton-browser-extension-0.4.1.zip`
-- `artifacts/newton-browser-extension-0.4.1.zip.sha256`
+- `artifacts/newton-browser-0.4.2.tgz`
+- `artifacts/newton-browser-extension-0.4.2.zip`
+- `artifacts/newton-browser-extension-0.4.2.zip.sha256`
 
 Before handing artifacts to another machine, compare the checksum, inspect both archive listings, run the clean-user procedure in `INSTALL.md`, and record exact versions/results in `test/evidence/qa-ledger.md`. Real-browser rows require Chrome and Edge stable with the unpacked release artifact, retained authentication, inactive owned-tab creation, current-tab scope, screenshot display, file acceptance, and cleanup.
 
@@ -45,8 +45,8 @@ the verified 0.4.0 tarball was already public. See QA-REL-003.
 
 ## Public distribution
 
-- npm: `newton-browser@0.4.1`
-- GitHub tag and release: `v0.4.1`
+- npm: `newton-browser@0.4.2`
+- GitHub tag and release: `v0.4.2`
 - Landing page: `https://koala-studios.github.io/newton-browser/`
 - Chrome Web Store: accepted and live at
   `https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn`

@@ -368,6 +368,24 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         await transport.stopSession(controller.sessionId).catch(() => {});
         return;
       }
+      if (action.kind === "__focus") {
+        await tabs.focusTab?.(controller.tabId);
+        await transport.postResult({ commandId, ok: true, result: { focused: true, tabId: controller.tabId } }).catch(() => {});
+        return;
+      }
+      if (action.kind === "__trusted_fill") {
+        await controller.driver.executeAction({ kind: "fill", target: action.target, value: action.value });
+        const postFillOrigin = await liveTabOrigin(controller.tabId);
+        if (!controller.allowedOrigins.includes(postFillOrigin)) {
+          await transport.postResult({ commandId, ok: false, errorCode: "origin_not_granted" }).catch(() => {});
+          await finalizeLocal(controller, "close").catch(() => {});
+          await transport.stopSession(controller.sessionId).catch(() => {});
+          return;
+        }
+        await transport.postResult({ commandId, ok: true, result: { filled: true } }).catch(() => {});
+        await emit({ type: "activity", commandId, actionKind: "trusted_fill", status: "verified", changed: { filled: true } });
+        return;
+      }
       const verdict = await preDispatchFloor(controller, action).catch(() => null);
       if (verdict?.stop === "blocked") {
         await transport.postResult({ commandId, ok: false, errorCode: "blocked_by_floor", decision: verdict.decision }).catch(() => {});

@@ -129,3 +129,18 @@ test("chrome tabs port hands a retained tab back without touching close or deliv
   assert.deepEqual(ungrouped, [12]);
   assert.deepEqual(updated, [{ tabId: 12, input: { active: true } }]);
 });
+
+test("chrome tabs port can focus one exact owned session tab for a local observer", async () => {
+  const calls = [];
+  const port = createChromeTabsPort({
+    tabs: {
+      async get() { return { id: 9, windowId: 4 }; },
+      async update(tabId, input) { calls.push(["tab", tabId, input]); },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    windows: { async update(windowId, input) { calls.push(["window", windowId, input]); } },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  await port.focusTab(9);
+  assert.deepEqual(calls, [["window", 4, { focused: true }], ["tab", 9, { active: true }]]);
+});

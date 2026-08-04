@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Readable, Writable } from "node:stream";
 
 import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
 
@@ -25,6 +26,8 @@ export async function startNewtonBrowserMcpServer(input: { bridge?: NewtonBrowse
   const readinessTimeoutMs = Number(process.env.NEWTON_BROWSER_READINESS_TIMEOUT_MS);
   const bridge = input.bridge ?? createNewtonBrowserHost({
     ...(Number.isFinite(readinessTimeoutMs) ? { limits: { readinessTimeoutMs: Math.max(50, readinessTimeoutMs) } } : {}),
+    observerRegistryDirectory: process.env.NEWTON_BROWSER_OBSERVER_REGISTRY_DIR,
+    observerToken: process.env.NEWTON_BROWSER_OBSERVER_TOKEN,
   });
   let startupErrorCode: string | undefined;
   try {
@@ -34,22 +37,28 @@ export async function startNewtonBrowserMcpServer(input: { bridge?: NewtonBrowse
     if (code !== "host_collision") throw error;
     startupErrorCode = code;
   }
+  await serveNewtonBrowserMcpConnection({ bridge, readable: process.stdin, writable: process.stdout, startupErrorCode });
+  bridge.stopAll();
+  await bridge.close();
+}
+
+export async function serveNewtonBrowserMcpConnection(input: {
+  bridge: NewtonBrowserHost;
+  readable: Readable;
+  writable: Writable;
+  startupErrorCode?: string;
+}): Promise<void> {
   await new Promise<void>((resolve) => {
     const parser = new McpFrameParser(async (message, mode) => {
-      const response = await handleMcpMessage(bridge, message, { startupErrorCode });
-      if (response) writeMessage(response, mode);
+      const response = await handleMcpMessage(input.bridge, message, { startupErrorCode: input.startupErrorCode });
+      if (response) writeMessage(input.writable, response, mode);
     }, (error, mode) => {
-      writeMessage(errorResponse(null, -32700, "Malformed MCP frame.", { errorCode: "malformed_frame", detail: error.message }), mode);
+      writeMessage(input.writable, errorResponse(null, -32700, "Malformed MCP frame.", { errorCode: "malformed_frame", detail: error.message }), mode);
     });
-    process.stdin.on("data", (chunk) => parser.push(Buffer.from(chunk)));
-    process.stdin.on("end", () => {
-      void (async () => {
-        bridge.stopAll();
-        await bridge.close();
-        resolve();
-      })();
-    });
-    process.stdin.resume();
+    input.readable.on("data", (chunk) => parser.push(Buffer.from(chunk)));
+    input.readable.once("end", resolve);
+    input.readable.once("close", resolve);
+    input.readable.resume();
   });
 }
 
@@ -124,7 +133,8 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       allowedOrigins,
       goal: typeof args.goal === "string" ? args.goal.slice(0, 240) : "",
       tabMode: args.tabMode === "current" ? "current" : "owned_group",
-      instanceLabel: typeof args.instanceLabel === "string" ? args.instanceLabel.slice(0, 120) : "mcp",
+      instanceLabel: process.env.NEWTON_BROWSER_INSTANCE_LABEL?.trim().slice(0, 120)
+        || (typeof args.instanceLabel === "string" ? args.instanceLabel.slice(0, 120) : "mcp"),
       ...(args.incognito === true && args.tabMode !== "current" ? { incognito: true } : {}),
     });
     try {
@@ -480,9 +490,9 @@ function resolveTransport(value: unknown): BrowserControlTransportMode {
     : "invalid" as BrowserControlTransportMode;
 }
 
-function writeMessage(message: JsonRpcResponse, mode: MessageMode): void {
+function writeMessage(writable: Writable, message: JsonRpcResponse, mode: MessageMode): void {
   const body = JSON.stringify(message);
-  process.stdout.write(mode === "json-line" ? `${body}\n` : `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  writable.write(mode === "json-line" ? `${body}\n` : `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
 }
 
 class McpFrameParser {

@@ -1,6 +1,6 @@
 {
   "name": "@newton-browser/driver",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "license": "MIT",
   "type": "module",
   "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Newton Browser.",

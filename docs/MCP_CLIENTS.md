@@ -2,6 +2,13 @@
 
 Every configured client starts an independent `newton-browser` process over stdio. Each process binds one free loopback port, so multiple clients can run concurrently without a shared daemon.
 
+An orchestrator that deliberately needs session continuity across short-lived MCP
+clients may start `newton-browser --daemon-socket /private/path/browser.sock` and
+configure each sequential client with `newton-browser --connect-socket
+/private/path/browser.sock`. This mode is Unix-only, accepts one MCP client at a
+time, preserves the host's sessions between reconnects, and requires a private
+caller-owned directory. Ordinary desktop clients should continue using stdio.
+
 ## Published package
 
 Use the version-pinned public npm package for normal client configuration.
@@ -11,7 +18,7 @@ Codex:
 ```toml
 [mcp_servers.newton-browser]
 command = "npx"
-args = ["-y", "newton-browser@0.4.1"]
+args = ["-y", "newton-browser@0.4.2"]
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -23,7 +30,7 @@ Claude Desktop or Claude Code:
   "mcpServers": {
     "newton-browser": {
       "command": "npx",
-      "args": ["-y", "newton-browser@0.4.1"]
+      "args": ["-y", "newton-browser@0.4.2"]
     }
   }
 }
@@ -34,7 +41,7 @@ Generic stdio client:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "newton-browser@0.4.1"]
+  "args": ["-y", "newton-browser@0.4.2"]
 }
 ```
 
