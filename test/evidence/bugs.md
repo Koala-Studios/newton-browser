@@ -12,7 +12,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: resolve the executable path through `realpathSync` before comparing URLs.
 - Regression: `pack:check` runs the packed entry through a symlinked package path and
   requires the exact package version; deployed Linux QA must also observe a real daemon socket.
-- Status: fixed in 0.4.3; release and deployed runtime evidence pending.
+- Status: 0.4.3 release gates passed three consecutive times; deployed runtime evidence pending.
 
 ## BB-001 — Core declaration build missing type import
 
