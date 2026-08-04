@@ -142,5 +142,53 @@ test("chrome tabs port can focus one exact owned session tab for a local observe
     debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
   });
   await port.focusTab(9);
-  assert.deepEqual(calls, [["window", 4, { focused: true }], ["tab", 9, { active: true }]]);
+  assert.deepEqual(calls, [["tab", 9, { active: true }], ["window", 4, { focused: true }]]);
+});
+
+test("chrome tabs port focuses the window without mutating an already active tab", async () => {
+  const calls = [];
+  const port = createChromeTabsPort({
+    tabs: {
+      async get() { return { id: 9, windowId: 4, active: true }; },
+      async update(tabId, input) { calls.push(["tab", tabId, input]); },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    windows: { async update(windowId, input) { calls.push(["window", windowId, input]); } },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  await port.focusTab(9);
+  assert.deepEqual(calls, [["window", 4, { focused: true }]]);
+});
+
+test("chrome tabs port accepts a concurrent activation after Chrome rejects the redundant update", async () => {
+  const calls = [];
+  let reads = 0;
+  const port = createChromeTabsPort({
+    tabs: {
+      async get() {
+        reads += 1;
+        return { id: 9, windowId: 4, active: reads > 1 };
+      },
+      async update() { throw new Error("Tabs cannot be edited right now (user may be dragging a tab)."); },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    windows: { async update(windowId, input) { calls.push(["window", windowId, input]); } },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  await port.focusTab(9);
+  assert.equal(reads, 2);
+  assert.deepEqual(calls, [["window", 4, { focused: true }]]);
+});
+
+test("chrome tabs port preserves a focus failure when the target tab did not become active", async () => {
+  const port = createChromeTabsPort({
+    tabs: {
+      async get() { return { id: 9, windowId: 4, active: false }; },
+      async update() { throw new Error("Tabs cannot be edited right now (user may be dragging a tab)."); },
+      onRemoved: { addListener() {}, removeListener() {} },
+    },
+    windows: { async update() {} },
+    debugger: { onEvent: { addListener() {}, removeListener() {} }, onDetach: { addListener() {}, removeListener() {} } },
+  });
+  await assert.rejects(port.focusTab(9), /Tabs cannot be edited right now/);
 });

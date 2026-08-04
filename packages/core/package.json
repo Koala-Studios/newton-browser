@@ -1,6 +1,6 @@
 {
   "name": "@newton-browser/core",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "license": "MIT",
   "type": "module",
   "description": "Local-first browser-control contracts, action schema, redaction, host policy, and deterministic safety floor.",

@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-08-04
+
+### Fixed
+
+- Focus an observed session without mutating its tab when that tab is already
+  active. If Chrome rejects an activation during a concurrent focus change, accept
+  it only when a fresh tab read proves that the exact target became active.
+
 ## [0.4.4] - 2026-08-04
 
 ### Fixed

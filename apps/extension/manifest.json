@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Newton Browser",
   "short_name": "Newton",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Local browser control bridge for agents.",
   "action": {
     "default_title": "Newton Browser",

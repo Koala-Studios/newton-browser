@@ -45,8 +45,15 @@ export function createChromeTabsPort(chromeApi = globalThis.chrome) {
 
     async focusTab(tabId) {
       const tab = await chromeApi.tabs.get(tabId);
+      if (!tab?.active) {
+        try {
+          await chromeApi.tabs.update(tabId, { active: true });
+        } catch (error) {
+          const current = await chromeApi.tabs.get(tabId);
+          if (!current?.active) throw error;
+        }
+      }
       if (Number.isInteger(tab?.windowId)) await chromeApi.windows?.update?.(tab.windowId, { focused: true }).catch(() => {});
-      await chromeApi.tabs.update(tabId, { active: true });
     },
 
     async finalizeTab(tabId, disposition) {

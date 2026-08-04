@@ -1,5 +1,21 @@
 # Browser Bridge Defect Ledger
 
+## BB-048 — Observer focus redundantly mutated an already-active tab
+
+- Minimal repro: retain an owned session for human review, then call the authenticated
+  observer focus endpoint while its exact Chrome tab is already active. Chrome rejects
+  the unnecessary update with `tabs_cannot_be_edited_right_now_user_may_be_dragging_a_tab_`.
+- Root cause: `focusTab` always called `tabs.update({ active: true })`, even when the
+  exact target was already active, and focused the window before attempting the tab
+  mutation.
+- Fix: skip activation for an already-active target, activate before focusing its
+  window when activation is needed, and accept a concurrent activation race only when
+  a fresh read proves that the exact target became active.
+- Regression: focused tab-port tests cover already-active focus, concurrent activation,
+  and preservation of genuine focus failures.
+- Status: 0.4.5 release gates passed three consecutive times; deployed live-session
+  proof pending.
+
 ## BB-047 — Approval pauses expired the authenticated persistent host
 
 - Minimal repro: start a persistent MCP host for an approval-gated worker, disconnect
