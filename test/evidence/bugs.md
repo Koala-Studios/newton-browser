@@ -439,3 +439,36 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: `test/fixtures/release-workflow.test.ts` asserts the existing-release branch, clobber upload, and exact tarball publication path.
 - Evidence: GitHub Actions run 29178530777 reproduced the partial release. Tag-targeted recovery run 29182201160 on commit `114be08` passed all 11 release stages, reconciled the existing v0.4.1 release assets, and correctly skipped npm because 0.4.1 was already public.
 - Status: closed; the manual `workflow_dispatch` recovery path is verified on the affected v0.4.1 release.
+
+## BB-049 — Same-session commands could execute concurrently
+
+- Minimal repro: dispatch two mutating commands to one subscribed session before the first controller callback settles; the old relay sent both and the controller invoked both callbacks directly.
+- Root cause: global pending limits existed, but neither relay nor controller had a per-session in-flight owner, FIFO queue, or closing barrier. The driver therefore shared command-local reconciliation state across overlapping mutations.
+- Fix: add bounded per-session host queues and controller `SessionCommandPump` instances, preserve concurrency between distinct sessions, and make finalization close queued work before cleanup.
+- Regression: `apps/mcp-server/test/host.test.ts` proves FIFO within a session, concurrency across sessions, item/byte caps, and terminal release of the next command; `packages/driver/test/controller.test.ts` and `packages/driver/test/session-command-pump.test.js` independently prove the same execution and finalize invariants; `scripts/smoke/stress.mjs` now fails on any same-session overlap.
+- Evidence: root `pnpm test` on 2026-08-09 passed 279/279 runnable tests; a bounded stress run completed 1,674 measured operations with zero same-session overlaps, cross-session result leaks, or deadlocks.
+- Status: source regression closed; packed/live AIP-01 release evidence remains pending.
+
+## BB-050 — Command timeouts could not state whether retry was safe
+
+- Minimal repro: time out one command while it is still queued and another after it has been sent; the former host path returned one generic timeout and deleted pending identity, so a caller could not distinguish a safe retry from a possibly executed mutation.
+- Root cause: relay commands lacked epochs/sequences and the host had no sent-state ledger, late-result tombstone, or idempotency generation guard.
+- Fix: return host-owned `sessionEpoch`, `sequence`, `outcome`, and `retrySafe`; retain bounded late-result identity; accept a late terminal result only for its exact generation; add the bounded per-session idempotency ledger and public `browser.act.idempotencyKey`.
+- Regression: host tests cover queued `not_started`, sent `outcome_unknown`, late completion, stale epochs/sequences, dedupe/conflict/TTL/cap behavior, and the case where a late old generation attempts to overwrite a newer ledger entry. The public MCP regression proves duplicate dispatch occurs once and conflicting reuse is prevented.
+- Status: source regression closed; packed/live AIP-01 release evidence remains pending.
+
+## BB-051 — Owner replacement could preserve stale authority
+
+- Minimal repro: attach two eligible browser clients to one logical session, replace or disconnect the owner, then submit a result from the former owner or reuse attachment state for a different logical identity.
+- Root cause: owner transfer and attachment continuity were not fenced by the same session generation contract, so stale result authority and stale tab binding could outlive the owner that established them.
+- Fix: fence result acceptance by owner plus epoch/sequence, retain attachment continuity only for the same logical owner identity, and clear it when identity changes.
+- Regression: `apps/mcp-server/test/host.test.ts` proves atomic claiming, non-owner rejection, old-owner fencing, same-identity continuity, and different-identity binding removal.
+- Status: source regression closed; lifecycle failure-matrix and live restart evidence continue under AIP-02.
+
+## BB-052 — MCP sources bypassed the core package boundary
+
+- Minimal repro: run `pnpm boundary:check` after the reviewed output/idempotency integration; it reports `MCP server contains a cross-package relative source escape`.
+- Root cause: two implementation slices imported core source files by relative filesystem path instead of consuming the public `@newton-browser/core` export, making packed resolution depend on workspace layout.
+- Fix: import redaction, protocol, and idempotency validation through the compiled core package entrypoint.
+- Regression: the existing standalone boundary scanner rejects cross-package source escapes; `pnpm lint`, `pnpm typecheck`, and the complete source suite pass after correction.
+- Status: closed before the affected integration slice was accepted.

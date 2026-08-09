@@ -361,3 +361,24 @@ The 0.4 release ships the proven primitives and defers three convenience surface
 These deferrals do not weaken origin scoping, redaction, the action floor, or dialog
 control. They are recorded in `ROADMAP.md` for post-0.4 consideration. Owner approval to
 defer all three was recorded on 2026-07-11 so the release scope remains stable.
+
+## 26. Per-session ordering, fencing, and retry truth (2026-08-09)
+
+Commands are serialized independently per browser session. One session therefore has at
+most one running command, while separate sessions remain concurrent. Every relay command
+and terminal result carries a host-owned session epoch and monotonic sequence. A stale
+owner, epoch, or sequence cannot settle current work, and finalization establishes a
+closing barrier before cleanup begins.
+
+Mutation callers may provide an 8-128 character URL-safe `idempotencyKey`. The host hashes
+the normalized action, joins an identical in-flight call, replays its bounded terminal
+result for ten minutes, and rejects reuse with a different action as
+`idempotency_conflict`. `fill_form` derives a stable private key per field so a replay does
+not repeat fields already represented by the same request.
+
+Retry advice is based on execution state, not transport success: queued work that was
+never sent is `not_started` and retry-safe; a pre-dispatch refusal is `prevented` and
+retry-safe; a terminal controller response is `completed` and not automatically retried;
+sent work without a terminal response is `outcome_unknown` and not automatically retried.
+Late results are matched only to their exact command generation and cannot overwrite a
+newer idempotency entry.
