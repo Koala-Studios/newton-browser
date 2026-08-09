@@ -429,3 +429,27 @@ Cost gates serialize the actual public envelope and use the pinned development-o
 adaptive model logic exists in the runtime. The checked-in representative fixture must
 remain within the Plan 06 catalog, compact/JSON observation, action, and workflow token
 budgets on Windows and Linux.
+
+## 29. Versioned compact MCP contract and opaque-body refusal (2026-08-09)
+
+The MCP contract is versioned independently as `1.0`. Initialization and full status
+publish that version, initialization warns that page-derived content is untrusted, and
+every public tool carries reviewed read-only, destructive, idempotent, and open-world
+hints. Public observations, console records, network records, and page-derived action
+deltas inherit host-authored provenance bound to their origin and session epoch. Driver
+or page fields cannot forge a decision, next action, warning, or trust label.
+
+Action validation is generated from one exact per-kind field table and runs before relay
+dispatch. The public schema carries that table in compact `x-newtonVariants`,
+`x-newtonRequired`, and `x-newtonTargetRequired` metadata while standard JSON Schema
+retains the union field types, ref pattern, enum constraints, and unknown-field ban. A
+fully expanded 23-way `oneOf` made the measured catalog 5,287 tokens and was rejected;
+the compact generated form keeps the complete catalog plus server instructions at 2,818
+`o200k_base` tokens while the host remains the authoritative strict validator.
+
+Only granted-origin, supported textual response bodies may cross the MCP boundary, and
+they still pass secret/card/identifier redaction. Base64, binary MIME, malformed UTF-8,
+compressed, and otherwise opaque bodies are omitted. Their bounded metadata may include
+MIME type, declared encoding, byte count, and SHA-256, never raw bytes. Screenshot
+results always state `mask_applied`, `mask_not_configured`, or `mask_not_applicable`; a
+configured mask failure prevents capture instead of returning unmasked bytes.

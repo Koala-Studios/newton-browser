@@ -4,6 +4,7 @@ import {
   redactJson,
   redactText,
   type NewtonBrowserResult,
+  type PageProvenance,
 } from "@newton-browser/core";
 
 export type ObservationOutputFormat = "compact" | "json";
@@ -46,7 +47,7 @@ export type AgentActionOutcome = (typeof PLAN_ACTION_OUTCOMES)[number];
 const PLAN_ACTION_OUTCOME_SET = new Set<AgentActionOutcome>(PLAN_ACTION_OUTCOMES);
 
 type AgentActionDecision = { code: string; reason?: string };
-type AgentActionProvenance = { trust: "untrusted_page_content"; origin: string; sessionEpoch: number };
+type AgentActionProvenance = Pick<PageProvenance, "trust" | "origin" | "sessionEpoch">;
 export type ObservationProjectionBase = {
   trust: "untrusted_page_content";
   origin: string;

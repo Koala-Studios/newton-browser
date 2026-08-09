@@ -39,7 +39,7 @@ copyFile(path.join(driverRoot, "overlay.js"), path.join(distRoot, "src", "overla
 copyFile(path.join(driverRoot, "overlay.css"), path.join(distRoot, "src", "overlay.css"));
 
 const distCoreRoot = path.join(distRoot, "src", "vendor", "newton-browser-core");
-for (const file of ["protocol.ts", "transport.ts", "action-schema.ts", "text-redaction.ts", "redaction.ts", "host-policy.ts", "risk.ts"]) {
+for (const file of ["protocol.ts", "transport.ts", "action-json-schema.ts", "action-schema.ts", "text-redaction.ts", "redaction.ts", "host-policy.ts", "risk.ts"]) {
   const source = fs.readFileSync(path.join(coreRoot, file), "utf8");
   const transformed = stripTypeScriptTypes(source, { mode: "transform" })
     .replaceAll(".ts\";", ".js\";")

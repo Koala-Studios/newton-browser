@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
-import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BridgeResultEvent, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
+import { BROWSER_ACTION_JSON_SCHEMA, BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BridgeResultEvent, type BrowserControlTransportMode, type BrowserFloorDecision, type PageProvenance } from "@newton-browser/core";
 
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
 import type { NewtonBrowserHost } from "./bridge.ts";
@@ -11,6 +11,7 @@ import { createNewtonBrowserHost } from "./bridge.ts";
 import { McpFrameParser, McpFrameParseError, type McpMessageMode } from "./mcp-frame-parser.ts";
 import { evaluateHostFloor } from "./floor-gate.ts";
 import { normalizeAgentActionResult, projectObservation, type AgentObservationOptionsInput } from "./agent-output.ts";
+import { annotationsForTool, MCP_SERVER_INSTRUCTIONS, NEWTON_BROWSER_CONTRACT_VERSION } from "./mcp-contract.ts";
 
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = { jsonrpc: "2.0"; id?: JsonRpcId; method?: string; params?: Record<string, unknown> };
@@ -144,7 +145,9 @@ export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonR
     return response(id, {
       protocolVersion: selected,
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "newton-browser", version: NEWTON_BROWSER_VERSION },
+      serverInfo: { name: "newton-browser", version: NEWTON_BROWSER_VERSION, contractVersion: NEWTON_BROWSER_CONTRACT_VERSION },
+      instructions: MCP_SERVER_INSTRUCTIONS,
+      contractVersion: NEWTON_BROWSER_CONTRACT_VERSION,
     });
   }
   if (message.method === "ping") return response(id, {});
@@ -181,6 +184,7 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       ready: status.extensionConnected,
       version: NEWTON_BROWSER_VERSION,
       protocolVersions: SUPPORTED_MCP_PROTOCOLS,
+      contractVersion: NEWTON_BROWSER_CONTRACT_VERSION,
       ...status,
       paired: status.authMode === "paired" && status.extensionConnected,
       zeroTouch: status.authMode === "local_trust",
@@ -292,7 +296,10 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       : { kind: "network", urlPattern: args.urlPattern, requestId: args.requestId, limit: clampNumber(args.limit, 100, 1, 500) };
     const event = await bridge.dispatch(sessionId, action as never);
     if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event), transport }, true);
-    return toolJson({ ok: true, result: redactObservationResult(event.result), ...publicCommandMetadata(event), transport });
+    const result = redactObservationResult(event.result);
+    const resultOrigin = isObject(result) && typeof result.origin === "string" ? result.origin : session.liveOrigin ?? session.origin;
+    const capturedAt = isObject(result) && typeof result.capturedAt === "string" ? result.capturedAt : undefined;
+    return toolJson({ ok: true, result, provenance: publicPageProvenance(event, resultOrigin, capturedAt), ...publicCommandMetadata(event), transport });
   }
 
   if (["browser.observe", "browser.screenshot", "browser.act"].includes(name)) {
@@ -342,15 +349,26 @@ function observationEnvelope(event: Extract<BridgeResultEvent, { ok: true }>, ar
     return { ok: false, errorCode: projected.errorCode, reason: projected.reason, ...publicCommandMetadata(event) };
   }
   const { projection } = projected;
+  const provenance = publicPageProvenance(event, projection.origin, projection.capturedAt);
   if (projection.format === "compact") {
     return {
       ok: true,
       output: projection.output ?? "",
       ...(projection.budget.truncated ? { budget: projection.budget } : {}),
+      provenance,
       ...publicCommandMetadata(event),
     };
   }
-  return { ok: true, result: projection, ...publicCommandMetadata(event) };
+  return { ok: true, result: projection, provenance, ...publicCommandMetadata(event) };
+}
+
+function publicPageProvenance(event: BridgeResultEvent, origin: string, capturedAt?: string): PageProvenance {
+  return {
+    trust: "untrusted_page_content" as const,
+    origin,
+    sessionEpoch: event.sessionEpoch,
+    ...(capturedAt ? { capturedAt } : {}),
+  };
 }
 
 function agentActionEnvelope(event: BridgeResultEvent, decision: BrowserFloorDecision, session: unknown) {
@@ -468,7 +486,7 @@ function actionForTool(name: string, args: Record<string, unknown>): unknown {
       kind: "screenshot",
       fullPage: Boolean(args.fullPage),
       inline: true,
-      device: args.device === "mobile" ? "mobile" : args.device === "desktop" ? "desktop" : undefined,
+      ...(args.device === "mobile" || args.device === "desktop" ? { device: args.device } : {}),
       waitMs: clampNumber(args.waitMs, 0, 0, 10_000),
       ...(clip ? { clip } : {}),
       ...(args.format === "jpeg" ? { format: "jpeg", quality: clampNumber(args.quality, 70, 1, 100) } : {}),
@@ -529,6 +547,9 @@ function screenshotToolResult(event: Extract<BridgeResultEvent, { ok: true }>, d
   const metadata = { ...raw } as Record<string, unknown>;
   delete metadata.dataUrl;
   delete metadata.inline;
+  if (!new Set(["mask_applied", "mask_not_configured", "mask_not_applicable"]).has(String(metadata.maskDisposition))) {
+    metadata.maskDisposition = "mask_not_configured";
+  }
   const delivery = args.delivery === "file" || args.delivery === "inline" ? args.delivery : "image";
   const common = { ok: true, delivery, decision: publicDecision(decision), ...metadata, ...commandMetadata };
   if (delivery === "image") {
@@ -581,7 +602,7 @@ export function toolList(): Array<Record<string, unknown>> {
     maxChars: { type: "number", minimum: 200, maximum: 200_000 },
   };
   return [
-    tool("browser.status", "Report readiness. Compact is the default; request full diagnostics explicitly.", { transport, detail: { type: "string", enum: ["compact", "full"] } }),
+    tool("browser.status", "Report readiness; detail defaults to compact.", { transport, detail: { type: "string", enum: ["compact", "full"] } }),
     tool("browser.session.start", "Start and attach an origin-scoped browser session.", {
       transport,
       origin: { type: "string" },
@@ -597,11 +618,11 @@ export function toolList(): Array<Record<string, unknown>> {
         ],
       },
     }, ["origin"]),
-    tool("browser.observe", "Observe the current session tab. Compact, geometry-free output is the default; format:\"json\" is the diagnostic compatibility form.", { transport, sessionId: { type: "string" }, ...observationOutput }, ["sessionId"]),
+    tool("browser.observe", "Observe a session tab; compact geometry-free output is default.", { transport, sessionId: { type: "string" }, ...observationOutput }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", {
       transport,
       sessionId: { type: "string" },
-      action: { type: "object" },
+      action: BROWSER_ACTION_JSON_SCHEMA,
       idempotencyKey: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" },
     }, ["sessionId", "action"]),
     tool("browser.screenshot", "Capture and deliver a screenshot.", {
@@ -617,10 +638,10 @@ export function toolList(): Array<Record<string, unknown>> {
       format: { type: "string", enum: ["png", "jpeg"] },
       quality: { type: "number" },
     }, ["sessionId"]),
-    tool("browser.console", "Read the session tab's buffered console output (read-only). Filter by level/pattern; clear:true empties the buffer. Headers and raw objects are never included.", {
+    tool("browser.console", "Read or filter buffered console text; clear:true empties it.", {
       transport, sessionId: { type: "string" }, level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string" }, limit: { type: "number" }, clear: { type: "boolean" },
     }, ["sessionId"]),
-    tool("browser.network", "List the session tab's buffered network request metadata (read-only, no headers). Pass requestId to fetch one response body, returned only when its URL origin is within the session grant.", {
+    tool("browser.network", "List request metadata or fetch one granted-origin text body; never returns headers or opaque bodies.", {
       transport, sessionId: { type: "string" }, urlPattern: { type: "string" }, requestId: { type: "string" }, limit: { type: "number" },
     }, ["sessionId"]),
     tool("browser.tabs.list", "List this host's local sessions.", { transport }),
@@ -635,7 +656,7 @@ export function toolList(): Array<Record<string, unknown>> {
 }
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []): Record<string, unknown> {
-  return { name, description, inputSchema: { type: "object", properties, required, additionalProperties: false } };
+  return { name, description, annotations: annotationsForTool(name), inputSchema: { type: "object", properties, ...(required.length ? { required } : {}), additionalProperties: false } };
 }
 
 function publicCommandMetadata(event: BridgeResultEvent) {
@@ -798,5 +819,9 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 }
 
 function errorCode(error: unknown): string {
+  const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : "";
+  if (/^[a-z0-9_]{1,120}$/iu.test(code)) return code.toLowerCase();
   return String((error as Error)?.message ?? error ?? "tool_error").split(":")[0]!.replace(/[^a-z0-9_]+/gi, "_").toLowerCase();
 }

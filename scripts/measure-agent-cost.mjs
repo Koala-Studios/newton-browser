@@ -10,6 +10,7 @@ import {
   normalizeAgentActionResult,
 } from "../apps/mcp-server/src/agent-output.ts";
 import { toolList } from "../apps/mcp-server/src/mcp-server.ts";
+import { MCP_SERVER_INSTRUCTIONS } from "../apps/mcp-server/src/mcp-contract.ts";
 import { estimateTokensFromString, serializeForBudget, extractCounterMeta } from "./evals/token-budget.mjs";
 
 const PROJECT_ROOT = process.cwd();
@@ -215,15 +216,17 @@ export function readFixtures(root = DEFAULT_FIXTURE_ROOT) {
 
 function serializeObservationProjection(projection, format) {
   const metadata = { outcome: "completed", retrySafe: false, sessionEpoch: 1, sequence: 1 };
+  const provenance = { trust: "untrusted_page_content", origin: projection.origin, sessionEpoch: 1, capturedAt: projection.capturedAt };
   if (format === "compact") {
     return serializeForBudget({
       ok: true,
       output: String(projection.output ?? ""),
       ...(projection.budget?.truncated ? { budget: projection.budget } : {}),
+      provenance,
       ...metadata,
     });
   }
-  return serializeForBudget({ ok: true, result: projection, ...metadata });
+  return serializeForBudget({ ok: true, result: projection, provenance, ...metadata });
 }
 
 export function measureObservationCase(entry, tokenCounter) {
@@ -377,7 +380,7 @@ export function measureCase(entry, tokenCounter) {
   if (entry.caseType === "workflow") return measureWorkflowCase(entry, tokenCounter);
   if (entry.caseType === "deferred") return measureDeferredCase(entry);
   if (entry.caseType === "catalog") {
-    const measured = estimateTokensFromString(serializeForBudget({ tools: toolList() }), tokenCounter);
+    const measured = estimateTokensFromString(serializeForBudget({ instructions: MCP_SERVER_INSTRUCTIONS, tools: toolList() }), tokenCounter);
     const exact = measured.method === "token_counter";
     const pass = exact ? measured.count <= entry.maxTokens : undefined;
     return {

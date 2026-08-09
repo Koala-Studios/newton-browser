@@ -303,6 +303,7 @@ export type BrowserScreenshotResult = {
   device?: "mobile" | "desktop" | "viewport";
   fullPage?: boolean;
   truncated?: boolean;
+  maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable";
 };
 
 // A compact observation delta (Proposal 29 / D6): what changed since the prior
@@ -390,8 +391,20 @@ export type BrowserNetworkLog = {
   dropped: number;
   capturedAt: string;
   // Present only for a body fetch by requestId.
-  body?: { requestId: string; url: string; base64Encoded: boolean; data: string; truncated: boolean } | null;
+  body?: { requestId: string; url: string; encoding: "utf-8"; mimeType: string; data: string; byteLength: number; truncated: boolean } | null;
+  bodyDisposition?: "text_body_returned" | "opaque_body_not_returned" | "origin_not_granted" | "body_unavailable";
+  bodyMetadata?: { requestId: string; url: string; mimeType: string; declaredEncoding: string; encodedBytes: number; sha256: string };
   reason?: string;
+};
+
+// Created by the MCP host after redaction/projection. Page content and extension
+// payloads cannot select this trust label or overwrite its session binding.
+export type PageProvenance = {
+  trust: "untrusted_page_content";
+  origin: string;
+  sessionEpoch: number;
+  targetRef?: string;
+  capturedAt?: string;
 };
 
 export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | BrowserConsoleLog | BrowserNetworkLog | { kind: "ack"; message: string };

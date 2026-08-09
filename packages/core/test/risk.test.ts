@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 
 import {
   evaluateBrowserFloor,
@@ -161,10 +163,9 @@ test("redaction preserves screenshot capture options and observe mode (D5/D6)", 
   assert.equal(shot.device, "mobile");
   assert.equal(shot.waitMs, 2500);
   assert.equal(shot.inline, true);
-  // waitMs is bounded.
-  assert.equal(redactBrowserAction({ kind: "screenshot", waitMs: 999999 }).waitMs, 10_000);
-  // Bad device value is dropped.
-  assert.equal(redactBrowserAction({ kind: "screenshot", device: "watch" as never }).device, undefined);
+  // Out-of-range and unknown enum values are rejected instead of repaired silently.
+  assert.throws(() => redactBrowserAction({ kind: "screenshot", waitMs: 999999 }), /outside bounds/);
+  assert.throws(() => redactBrowserAction({ kind: "screenshot", device: "watch" as never }), /allowed value/);
   // Observe diff mode survives.
   assert.equal(redactBrowserAction({ kind: "observe", mode: "diff" }).mode, "diff");
 });
@@ -233,6 +234,64 @@ test("inline screenshot bytes ride result_json only when requested and bounded (
   assert.equal(overCap.truncated, true);
 });
 
+test("screenshot redaction always carries an explicit mask disposition", () => {
+  for (const disposition of ["mask_applied", "mask_not_configured", "mask_not_applicable"] as const) {
+    const result = redactBrowserResult({
+      kind: "screenshot", mode: "cdp", origin: "https://example.com", title: "Page",
+      maskDisposition: disposition, capturedAt: "2026-08-09T00:00:00.000Z",
+    });
+    assert.equal(result.kind, "screenshot");
+    assert.equal(result.maskDisposition, disposition);
+  }
+  const defaulted = redactBrowserResult({ kind: "screenshot", mode: "cdp", origin: "https://example.com", title: "Page", capturedAt: "2026-08-09T00:00:00.000Z" });
+  assert.equal(defaulted.kind, "screenshot");
+  assert.equal(defaulted.maskDisposition, "mask_not_configured");
+});
+
+test("opaque network fixture bodies are omitted at the host redaction boundary", () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(process.cwd(), "test", "fixtures", "privacy", "opaque-network-bodies.json"), "utf8"));
+  for (const body of fixture.cases) {
+    const result = redactBrowserResult({
+      kind: "network_log", origin: "https://example.com", entries: [], count: 0, dropped: 0,
+      capturedAt: "2026-08-09T00:00:00.000Z", body: { requestId: body.id, url: "https://example.com/api", ...body },
+    });
+    assert.equal(result.kind, "network_log");
+    assert.equal(result.body, null, body.id);
+    assert.equal(result.bodyDisposition, "opaque_body_not_returned", body.id);
+    assert.equal(JSON.stringify(result).includes(String(body.data)), false, body.id);
+  }
+});
+
+test("allowed text network bodies are redacted and opaque metadata is allowlisted", () => {
+  const text = redactBrowserResult({
+    kind: "network_log", origin: "https://example.com", entries: [], count: 0, dropped: 0,
+    capturedAt: "2026-08-09T00:00:00.000Z", bodyDisposition: "text_body_returned",
+    body: { requestId: "text-1", url: "https://example.com/api", encoding: "utf-8", mimeType: "application/json", data: "card 4111 1111 1111 1111", byteLength: 24, truncated: false },
+  });
+  assert.equal(text.kind, "network_log");
+  assert.equal(text.body?.data.includes("4111"), false);
+  assert.equal(text.body?.data.includes("[REDACTED_CARD]"), true);
+
+  const opaque = redactBrowserResult({
+    kind: "network_log", origin: "https://example.com", entries: [], count: 0, dropped: 0,
+    capturedAt: "2026-08-09T00:00:00.000Z", body: null, bodyDisposition: "opaque_body_not_returned",
+    bodyMetadata: { requestId: "opaque-1", url: "https://example.com/blob", mimeType: "application/octet-stream", declaredEncoding: "base64", encodedBytes: 42, sha256: "a".repeat(64), raw: "must-not-survive" },
+  });
+  assert.equal(opaque.kind, "network_log");
+  assert.equal(opaque.bodyMetadata?.sha256, "a".repeat(64));
+  assert.equal("raw" in (opaque.bodyMetadata ?? {}), false);
+
+  for (const body of [
+    { requestId: "legacy", url: "https://example.com/api", mimeType: "application/json", data: "legacy-secret" },
+    { requestId: "binary", url: "https://example.com/api", encoding: "utf-8", mimeType: "application/octet-stream", data: "binary-secret" },
+  ]) {
+    const denied = redactBrowserResult({ kind: "network_log", origin: "https://example.com", entries: [], count: 0, dropped: 0, capturedAt: "2026-08-09T00:00:00.000Z", body });
+    assert.equal(denied.kind, "network_log");
+    assert.equal(denied.body, null);
+    assert.equal(JSON.stringify(denied).includes(String(body.data)), false);
+  }
+});
+
 test("the model may raise risk but can never lower it", () => {
   const raised = evaluateBrowserFloor({ action: { kind: "screenshot" }, origin: "https://example.com", policy: allowed, requestedClass: "approval_required" });
   assert.equal(raised.class, "approval_required");
@@ -252,7 +311,7 @@ test("denied / ungranted origins are blocked", () => {
 });
 
 test("browser redaction removes action values and persists only summaries", () => {
-  assert.equal(redactBrowserAction({ kind: "fill", value: "secret@example.invalid" }).value, "[REDACTED]");
+  assert.equal(redactBrowserAction({ kind: "fill", target: { role: "textbox", name: "Email" }, value: "secret@example.invalid" }).value, "[REDACTED]");
   const result = redactBrowserResult({
     kind: "observation",
     mode: "passive",

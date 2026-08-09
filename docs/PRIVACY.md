@@ -33,6 +33,14 @@ It has no backend.
   must be allowed in incognito by the user; Newton Browser never enables that setting.
 - **Screenshots you save.** If you ask for a screenshot delivered to a file, it is written
   only to the absolute directory you specify.
+- **Network evidence.** Request metadata never includes headers. A response body is
+  eligible only when its URL is within the session grant and it is supported UTF-8 text;
+  it still passes secret/card/identifier redaction. Base64, binary, malformed,
+  compressed, and ungranted bodies are omitted. Newton may return only bounded MIME,
+  encoding, byte-count, and SHA-256 metadata for an omitted body.
+- **Provenance.** Page-derived observations, console text, network records, and action
+  deltas are structurally labeled `untrusted_page_content` by the local MCP host. Page
+  content cannot replace that label or author an authorization decision.
 
 ## Permissions
 
@@ -41,6 +49,11 @@ control is implemented through the Chrome DevTools Protocol, and a session may t
 HTTP(S) origin you choose at runtime. Every session is scoped to the exact origins you
 grant, and control traffic is confined to loopback. See the permission justifications in
 `docs/store/listing.md`.
+
+Screenshot results explicitly report whether configured sensitive-zone masking was
+applied. If configured masking fails, capture fails rather than returning an unmasked
+image. Newton Browser never inspects cookies, storage, saved credentials, or profile
+files to discover mask regions.
 
 ## Contact
 

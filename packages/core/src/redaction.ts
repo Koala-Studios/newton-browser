@@ -188,6 +188,9 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ...(typeof input.height === "number" ? { height: Math.max(0, Math.trunc(input.height)) } : {}),
       ...(device ? { device } : {}),
       ...(typeof input.fullPage === "boolean" ? { fullPage: input.fullPage } : {}),
+      maskDisposition: input.maskDisposition === "mask_applied" || input.maskDisposition === "mask_not_applicable"
+        ? input.maskDisposition
+        : "mask_not_configured",
       ...(overCap || input.truncated === true ? { truncated: true } : {}),
       ...(inlineOk ? { dataUrl: rawDataUrl } : {}),
       capturedAt: isoOrNow(input.capturedAt),
@@ -269,8 +272,15 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
   }
   if (input.kind === "network_log") {
     const entries = Array.isArray(input.entries) ? input.entries.flatMap((entry) => normalizeNetworkEntry(entry)).slice(0, 500) : [];
-    const body = input.body && typeof input.body === "object" && !Array.isArray(input.body)
-      ? redactNetworkBody(input.body as Record<string, unknown>)
+    const bodyRecord = input.body && typeof input.body === "object" && !Array.isArray(input.body) ? input.body as Record<string, unknown> : null;
+    const bodyMimeType = String(bodyRecord?.mimeType ?? "").toLowerCase().split(";", 1)[0] ?? "";
+    const opaqueBody = Boolean(bodyRecord && (
+      bodyRecord.base64Encoded === true
+      || bodyRecord.encoding !== "utf-8"
+      || !isSupportedNetworkTextMime(bodyMimeType)
+    ));
+    const body = bodyRecord
+      ? opaqueBody ? null : redactNetworkBody(bodyRecord)
       : input.body === null ? null : undefined;
     return {
       kind: "network_log",
@@ -280,6 +290,12 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       dropped: typeof input.dropped === "number" ? Math.max(0, Math.trunc(input.dropped)) : 0,
       capturedAt: isoOrNow(input.capturedAt),
       ...(body !== undefined ? { body } : {}),
+      ...(opaqueBody
+        ? { bodyDisposition: "opaque_body_not_returned" as const }
+        : input.bodyDisposition === "text_body_returned" || input.bodyDisposition === "opaque_body_not_returned" || input.bodyDisposition === "origin_not_granted" || input.bodyDisposition === "body_unavailable"
+        ? { bodyDisposition: input.bodyDisposition }
+        : {}),
+      ...(normalizeOpaqueBodyMetadata(input.bodyMetadata) ? { bodyMetadata: normalizeOpaqueBodyMetadata(input.bodyMetadata)! } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
     } as unknown as NewtonBrowserResult;
   }
@@ -321,16 +337,40 @@ function normalizeNetworkEntry(entry: unknown): Array<Record<string, unknown>> {
 }
 
 function redactNetworkBody(body: Record<string, unknown>): Record<string, unknown> {
-  const base64Encoded = body.base64Encoded === true;
   const data = String(body.data ?? "");
   return {
     requestId: String(body.requestId ?? "").slice(0, 120),
     url: redactBrowserUrl(String(body.url ?? "")),
-    base64Encoded,
-    // Non-binary bodies pass the observation-text pass (card/SSN masking). Binary
-    // (base64) bodies are opaque and left as-is, bounded by the driver's cap.
-    data: base64Encoded ? data : redactObservationText(data),
+    encoding: "utf-8",
+    mimeType: String(body.mimeType ?? "text/plain").slice(0, 120),
+    data: redactObservationText(data),
+    byteLength: typeof body.byteLength === "number" ? Math.max(0, Math.trunc(body.byteLength)) : Buffer.byteLength(data, "utf8"),
     truncated: body.truncated === true,
+  };
+}
+
+function isSupportedNetworkTextMime(mimeType: string): boolean {
+  return mimeType.startsWith("text/")
+    || mimeType === "application/json"
+    || mimeType.endsWith("+json")
+    || mimeType === "application/xml"
+    || mimeType.endsWith("+xml")
+    || mimeType === "application/javascript"
+    || mimeType === "application/x-www-form-urlencoded";
+}
+
+function normalizeOpaqueBodyMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const sha256 = typeof input.sha256 === "string" && /^[a-f0-9]{64}$/u.test(input.sha256) ? input.sha256 : "";
+  if (!sha256) return undefined;
+  return {
+    requestId: String(input.requestId ?? "").slice(0, 120),
+    url: redactBrowserUrl(String(input.url ?? "")),
+    mimeType: String(input.mimeType ?? "application/octet-stream").slice(0, 120),
+    declaredEncoding: String(input.declaredEncoding ?? "unknown").slice(0, 40),
+    encodedBytes: typeof input.encodedBytes === "number" ? Math.max(0, Math.trunc(input.encodedBytes)) : 0,
+    sha256,
   };
 }
 

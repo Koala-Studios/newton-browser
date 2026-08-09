@@ -9,13 +9,13 @@ test("parseBrowserAction accepts mode:text and a bounded maxChars", () => {
   assert.equal(action.maxChars, 5000);
 });
 
-test("maxChars is clamped into range", () => {
-  assert.equal(parseBrowserAction({ kind: "observe", mode: "text", maxChars: 10 }).maxChars, 200);
-  assert.equal(parseBrowserAction({ kind: "observe", mode: "text", maxChars: 9_999_999 }).maxChars, 200_000);
+test("out-of-range maxChars is rejected instead of silently repaired", () => {
+  assert.throws(() => parseBrowserAction({ kind: "observe", mode: "text", maxChars: 10 }), /outside bounds/);
+  assert.throws(() => parseBrowserAction({ kind: "observe", mode: "text", maxChars: 9_999_999 }), /outside bounds/);
 });
 
-test("an unknown mode falls back rather than passing through", () => {
-  assert.notEqual(parseBrowserAction({ kind: "observe", mode: "bogus" }).mode, "bogus");
+test("an unknown mode is rejected instead of silently falling back", () => {
+  assert.throws(() => parseBrowserAction({ kind: "observe", mode: "bogus" }), /allowed value/);
 });
 
 test("observation_text survives redaction and keeps readable prose", () => {

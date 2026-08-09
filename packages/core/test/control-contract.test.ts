@@ -19,17 +19,17 @@ test("core session-origin normalization rejects paths, credentials, and wildcard
   }
 });
 
-test("generic target descriptors are preserved without leaking fill values", () => {
+test("per-kind target descriptors are preserved without leaking fill values", () => {
   const action: BrowserAction = {
     kind: "fill",
     target: { role: "textbox", name: "Email token=secret" },
     value: "user@example.invalid",
-    waitFor: { text: "Saved", timeoutMs: 2500 },
   };
   const redacted = redactBrowserAction(action);
   assert.deepEqual(redacted.target, { role: "textbox", name: "Email token=[REDACTED]" });
   assert.equal(redacted.value, "[REDACTED]");
-  assert.deepEqual(redacted.waitFor, { text: "Saved", timeoutMs: 2500 });
+  assert.deepEqual(redactBrowserAction({ kind: "wait_for", waitFor: { text: "Saved", timeoutMs: 2500 } }).waitFor, { text: "Saved", timeoutMs: 2500 });
+  assert.throws(() => redactBrowserAction({ ...action, waitFor: { text: "Saved" } } as BrowserAction), /unsupported field/);
 });
 
 test("new target descriptors feed the safety floor", () => {

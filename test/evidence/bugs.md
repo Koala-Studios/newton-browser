@@ -533,3 +533,51 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: classify exact measurements by `method === "token_counter"`, accept bounded metadata on function counters, and measure the serialized public MCP envelopes plus the live tool catalog with pinned `js-tiktoken@1.0.21` `o200k_base`.
 - Regression: the budget script reports zero failures/deferred cases with catalog 1,369, compact 347, lean JSON 376, fill 32, click 32, and workflow 688 tokens against the approved ceilings.
 - Status: closed.
+
+## BB-060 - Malformed actions could survive catalog/runtime drift
+
+- Minimal repro: send an unknown kind, misspelled property, malformed composite ref, invalid enum, or nested unknown field to `browser.act` and inspect whether a bridge command is emitted.
+- Root cause: action parsing and the published schema were separately maintained and permissive normalization could repair or reinterpret invalid input.
+- Fix: generate the public variant/required metadata and strict runtime allowlists from the same canonical tables; reject invalid input as `invalid_arguments` before floor or bridge dispatch.
+- Regression: parity covers every action kind and focused host tests prove representative invalid payloads emit no bridge command.
+- Status: source regression closed; packed initialization/contract proof pending under AIP-07/AIP-09.
+
+## BB-061 - Encoded response bodies could bypass text redaction
+
+- Minimal repro: return a legacy or compromised network result with `body.base64Encoded:true` and secret-bearing `data`; text-oriented redaction previously treated the encoded value as ordinary text.
+- Root cause: the public body shape allowed encoded payloads without a mandatory decode/MIME decision, and the host boundary did not independently refuse opaque legacy shapes.
+- Fix: the driver returns only supported UTF-8 text; base64, binary, malformed, compressed, and ungranted bodies are null with a typed disposition and allowlisted digest metadata. The host repeats the refusal for legacy/compromised payloads.
+- Regression: the checked-in opaque-body fixture and driver/core tests prove raw payload absence; allowed text still receives card/identifier masking.
+- Status: source regression closed; packed network proof pending under AIP-07/AIP-09.
+
+## BB-062 - Screenshot mask application was ambiguous
+
+- Minimal repro: request a screenshot and infer from an omitted field whether no policy existed, masking succeeded, or configured masking failed.
+- Root cause: mask application had no mandatory public disposition and the masking helper did not propagate failure to capture.
+- Fix: every screenshot returns a typed mask disposition; configured zones must return successful mask application before capture, otherwise `mask_application_failed` aborts the screenshot.
+- Regression: driver tests cover no configuration, applied masks, and mask failure; core redaction covers all three public dispositions and a safe default.
+- Status: source regression closed; live screenshot evidence pending under AIP-07/AIP-09.
+
+## BB-063 - Default screenshot generation violated the new strict action contract
+
+- Minimal repro: call packed `browser.screenshot` without `device`; the host generated an action containing the property `device: undefined`, and strict parsing rejected it before image capture.
+- Root cause: the dedicated-tool adapter materialized an absent optional field instead of omitting it. Focused action tests did not exercise the dedicated screenshot tool's default adapter.
+- Fix: conditionally add `device` only for the two accepted values and extend both host and installed-tarball screenshot regressions.
+- Regression: the host test proves the relayed default screenshot action has no `device` key and returns explicit mask metadata; `pnpm pack:check` proves installed image/file delivery.
+- Status: closed.
+
+## BB-064 - Legacy body shapes were not opaque by default
+
+- Minimal repro: pass host redaction a network body with secret-bearing `data` but no explicit `encoding`, or with `encoding:"utf-8"` and a binary MIME type.
+- Root cause: the host refused known non-UTF-8 encodings but treated missing encoding/MIME decisions as text, leaving a compromised or older extension shape an unsafe fail-open path.
+- Fix: textual eligibility now requires both explicit `encoding:"utf-8"` and an allowlisted text/JSON/XML/JavaScript/form MIME type; every other body is null.
+- Regression: core privacy tests cover missing encoding and binary MIME in addition to the checked-in opaque-body corpus.
+- Status: closed.
+
+## BB-065 - fill_form validated nested targets but parsed the wrong object
+
+- Minimal repro: parse `{kind:"fill_form",fields:[{target:{role:"textbox",name:"Email"},value:"Ada"}]}`; validation accepted the nested target, then parsing looked for target fields on the enclosing field and discarded the entry.
+- Root cause: `parseFormFields` called `parseBrowserTarget(input)` instead of `parseBrowserTarget(input.target)`.
+- Fix: parse the validated nested target, reject mixed nested/shorthand strategies and empty values, and reject ambiguous target objects instead of silently selecting by priority.
+- Regression: canonical action tests prove nested target preservation and reject mixed strategies, empty sensitive zones, and empty field values.
+- Status: closed.

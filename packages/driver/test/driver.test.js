@@ -1062,9 +1062,31 @@ test("driver network body fetch returns a same-origin body", async () => {
   driver.lastObserveUrl = "https://example.com/";
   driver.cdp = async (method) => (method === "Network.getResponseBody" ? { body: "{\"ok\":true}", base64Encoded: false } : {});
   driver.recordDebuggerEvent("Network.requestWillBeSent", { requestId: "r2", request: { method: "GET", url: "https://example.com/api/data" }, type: "XHR" });
+  driver.recordDebuggerEvent("Network.responseReceived", { requestId: "r2", response: { status: 200, mimeType: "application/json" } });
   const result = await driver.getNetwork({ requestId: "r2" });
   assert.equal(result.body.data, "{\"ok\":true}");
-  assert.equal(result.body.base64Encoded, false);
+  assert.equal(result.body.encoding, "utf-8");
+  assert.equal(result.bodyDisposition, "text_body_returned");
+});
+
+test("driver refuses base64, binary MIME, and malformed UTF-8 bodies with digest metadata", async () => {
+  for (const fixture of [
+    { id: "base64", mimeType: "application/json", response: { body: "eyJzZWNyZXQiOiJ4In0=", base64Encoded: true }, encoding: "base64" },
+    { id: "binary", mimeType: "application/octet-stream", response: { body: "raw-binary", base64Encoded: false }, encoding: "unknown" },
+    { id: "malformed", mimeType: "text/plain", response: { body: "bad\uFFFDtext", base64Encoded: false }, encoding: "malformed_utf8" },
+  ]) {
+    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+    driver.lastObserveUrl = "https://example.com/";
+    driver.cdp = async (method) => method === "Network.getResponseBody" ? fixture.response : {};
+    driver.recordDebuggerEvent("Network.requestWillBeSent", { requestId: fixture.id, request: { method: "GET", url: `https://example.com/${fixture.id}` }, type: "XHR" });
+    driver.recordDebuggerEvent("Network.responseReceived", { requestId: fixture.id, response: { status: 200, mimeType: fixture.mimeType } });
+    const result = await driver.getNetwork({ requestId: fixture.id });
+    assert.equal(result.body, null);
+    assert.equal(result.bodyDisposition, "opaque_body_not_returned");
+    assert.equal(result.bodyMetadata.declaredEncoding, fixture.encoding);
+    assert.match(result.bodyMetadata.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(JSON.stringify(result).includes(fixture.response.body), false);
+  }
 });
 
 test("driver Fetch containment blocks ungranted effects before continuation", async () => {
@@ -1123,6 +1145,13 @@ test("driver screenshot honors jpeg format and quality", async () => {
   assert.equal(captureParams.format, "jpeg");
   assert.equal(captureParams.quality, 55);
   assert.match(shot.dataUrl, /^data:image\/jpeg;base64,/);
+  assert.equal(shot.maskDisposition, "mask_not_configured");
+
+  driver.maskZones = async () => true;
+  const masked = await driver.screenshot({ sensitiveZones: [{ selector: ".secret" }] });
+  assert.equal(masked.maskDisposition, "mask_applied");
+  driver.maskZones = async () => false;
+  await assert.rejects(driver.screenshot({ sensitiveZones: [{ selector: ".secret" }] }), /mask_application_failed/);
 });
 
 function axNode(backendNodeId, role, name) {

@@ -701,10 +701,12 @@ class NewtonBrowserDriver {
     const emulation = await this.applyDeviceEmulation(device);
     const restoreDevice = emulation.restore;
     const imageFormat = format === "jpeg" ? "jpeg" : "png";
+    const masksConfigured = Array.isArray(sensitiveZones) && sensitiveZones.length > 0;
+    const maskDisposition = masksConfigured ? "mask_applied" : "mask_not_configured";
     try {
       const wait = Math.max(0, Math.min(Number(waitMs) || 0, MAX_SCREENSHOT_WAIT_MS));
       if (wait > 0) { await this.waitForSettle().catch(() => {}); await delay(wait); }
-      await this.maskZones(sensitiveZones);
+      if (masksConfigured && !await this.maskZones(sensitiveZones)) throw new Error("mask_application_failed");
       const params = { format: imageFormat };
       if (imageFormat === "jpeg") params.quality = Math.max(1, Math.min(Number.isFinite(quality) ? Math.trunc(quality) : 70, 100));
       let truncated = false;
@@ -766,6 +768,7 @@ class NewtonBrowserDriver {
         device: device === "mobile" || device === "desktop" ? device : "viewport",
         fullPage: Boolean(fullPage),
         truncated: truncated || inlineTooBig,
+        maskDisposition,
         ...(width ? { width } : {}),
         ...(height ? { height } : {}),
         ...(includeInline ? { dataUrl, inline: true } : {}),
@@ -885,13 +888,35 @@ class NewtonBrowserDriver {
     const base = { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries: [], count: 0, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
     if (!entry) return { ...base, body: null, reason: "unknown_request_id" };
     if (this.allowedOrigins.length > 0 && !this.allowedOrigins.includes(safeOrigin(entry.url))) {
-      return { ...base, body: null, reason: "origin_not_granted" };
+      return { ...base, body: null, bodyDisposition: "origin_not_granted", reason: "origin_not_granted" };
     }
     const response = await this.cdp("Network.getResponseBody", { requestId }).catch(() => null);
-    if (!response) return { ...base, body: null, reason: "body_unavailable" };
+    if (!response) return { ...base, body: null, bodyDisposition: "body_unavailable", reason: "body_unavailable" };
     const raw = String(response.body ?? "");
+    const mimeType = String(entry.mimeType || "").toLowerCase().split(";", 1)[0];
     const truncated = raw.length > NETWORK_BODY_MAX_CHARS;
-    return { ...base, body: { requestId, url: entry.url, base64Encoded: Boolean(response.base64Encoded), data: raw.slice(0, NETWORK_BODY_MAX_CHARS), truncated } };
+    if (response.base64Encoded || !isSupportedTextMime(mimeType) || raw.includes("\uFFFD")) {
+      const bytes = bodyBytes(raw, Boolean(response.base64Encoded));
+      return {
+        ...base,
+        body: null,
+        bodyDisposition: "opaque_body_not_returned",
+        bodyMetadata: {
+          requestId,
+          url: entry.url,
+          mimeType: mimeType || "application/octet-stream",
+          declaredEncoding: response.base64Encoded ? "base64" : raw.includes("\uFFFD") ? "malformed_utf8" : "unknown",
+          encodedBytes: bytes.byteLength,
+          sha256: await sha256Hex(bytes),
+        },
+      };
+    }
+    const data = raw.slice(0, NETWORK_BODY_MAX_CHARS);
+    return {
+      ...base,
+      bodyDisposition: "text_body_returned",
+      body: { requestId, url: entry.url, encoding: "utf-8", mimeType, data, byteLength: new TextEncoder().encode(raw).byteLength, truncated },
+    };
   }
 
   // Set the owned tab's viewport (WS9.6). Owned-tab only — resizing distorts the
@@ -1685,7 +1710,8 @@ class NewtonBrowserDriver {
 
   async maskZones(zones) {
     if (!Array.isArray(zones) || zones.length === 0) return;
-    await this.sendToPage({ type: "NB_DRIVE_MASK", zones });
+    const response = await this.sendToPage({ type: "NB_DRIVE_MASK", zones });
+    return response?.ok === true;
   }
 
   async unmaskZones() {
@@ -1960,6 +1986,31 @@ function safeOrigin(url) {
   } catch {
     return "";
   }
+}
+
+function isSupportedTextMime(mimeType) {
+  return mimeType.startsWith("text/")
+    || mimeType === "application/json"
+    || mimeType.endsWith("+json")
+    || mimeType === "application/xml"
+    || mimeType.endsWith("+xml")
+    || mimeType === "application/javascript"
+    || mimeType === "application/x-www-form-urlencoded";
+}
+
+function bodyBytes(raw, base64Encoded) {
+  if (!base64Encoded) return new TextEncoder().encode(raw);
+  try {
+    const decoded = atob(raw);
+    return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  } catch {
+    return new TextEncoder().encode(raw);
+  }
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function normalizedTarget(action) {

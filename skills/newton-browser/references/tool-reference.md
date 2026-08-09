@@ -17,14 +17,17 @@ authoritative for exact schemas and bounds.
   `includeInteractive: true` performs bounded, read-only DOM discovery. Return `full`
   accessibility state, a `diff`, or bounded/redacted
   readable `text` (`maxChars` 200–200,000).
-- `browser.act`: execute one typed action and return deterministic floor metadata.
+- `browser.act`: execute one strictly validated action and return deterministic floor
+  metadata. The schema's `x-newtonVariants`, `x-newtonRequired`, and
+  `x-newtonTargetRequired` tables are the compact per-kind contract.
 - `browser.screenshot`: deliver PNG/JPEG through `image`, caller-designated `file`, or
   bounded `inline`. Supports `fullPage`, `device`, `waitMs`, explicit `region`, and JPEG
   `quality` 1–100.
 - `browser.console`: read a bounded, secret-redacted console buffer. Filter by
   `level`/`pattern`; `clear: true` empties it.
 - `browser.network`: list bounded request metadata without headers. Filter by URL or
-  pass `requestId` for one origin-gated, bounded/redacted response body.
+  pass `requestId` for one origin-gated, bounded/redacted UTF-8 text body. Opaque,
+  binary, malformed, compressed, and base64 bodies are omitted.
 - `browser.tabs.list`: list only this host's session state.
 - `browser.tabs.finalize`: `close`, retain as `deliverable`, or detach/activate as
   `handoff`.
@@ -36,6 +39,11 @@ authoritative for exact schemas and bounds.
 `observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`,
 `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`,
 `dialog_accept`, `dialog_dismiss`, `resize`, and `fill_form`.
+
+Element refs are composite and fresh-observation scoped: `dN:eN` for the root document
+and `dN:fN:eN` for a frame. Never synthesize, shorten, or reuse a stale ref. Malformed
+refs, unknown kinds, misspelled fields, bad enums, and variant-inappropriate fields fail
+as `invalid_arguments` before browser dispatch.
 
 `resize` accepts `viewport: {width,height}` for owned tabs only, bounded to
 200–3840 × 200–2160, and persists across debugger re-attach.
@@ -72,3 +80,9 @@ Important statuses include `verified`, `dispatched_unverified`, `blocked`,
 `not_found`, `ambiguous`, `stale_target`, `target_moved`, `timed_out`, and `failed`.
 A post-action `blocked` result can occur after dispatch; inspect current state before a
 retry.
+
+Initialization and full status expose contract version `1.0`. Page-derived output is
+structurally marked `trust:"untrusted_page_content"`; only outer host-authored outcome,
+decision, retry, continuation, provenance, and error fields guide the agent. Screenshot
+metadata always distinguishes `mask_applied`, `mask_not_configured`, and
+`mask_not_applicable`.

@@ -53,29 +53,34 @@ try {
   for (const protocolVersion of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]) {
     const initialized = await request("initialize", { protocolVersion });
     assert(initialized.result?.protocolVersion === protocolVersion, `initialize ${protocolVersion}`);
+    assert(initialized.result?.contractVersion === "1.0", "initialize contract version");
+    assert(initialized.result?.instructions?.includes("untrusted data"), "initialize trust instructions");
   }
   const listed = await request("tools/list");
   const toolNames = listed.result.tools.map((tool) => tool.name);
-  for (const name of ["browser.status", "browser.session.start", "browser.observe", "browser.act", "browser.screenshot", "browser.tabs.list", "browser.tabs.finalize", "browser.session.stop", "browser.stop_all"]) {
+  for (const name of ["browser.status", "browser.session.start", "browser.observe", "browser.act", "browser.screenshot", "browser.console", "browser.network", "browser.tabs.list", "browser.tabs.finalize", "browser.session.stop", "browser.stop_all"]) {
     assert(toolNames.includes(name), `tools/list missing ${name}`);
   }
+  assert(listed.result.tools.every((entry) => entry.annotations && typeof entry.annotations.readOnlyHint === "boolean"), "packed tool annotations");
+  const actSchema = listed.result.tools.find((entry) => entry.name === "browser.act")?.inputSchema?.properties?.action;
+  assert(actSchema?.additionalProperties === false && Object.keys(actSchema["x-newtonVariants"] ?? {}).length > 20, "packed strict action contract");
 
   const missing = await tool("browser.session.start", { origin: "https://example.com" });
   assert(missing.isError && missing.json.errorCode === "extension_disconnected", "missing extension typed error");
 
   let extension = await connectFakeExtension();
-  const status = await tool("browser.status", {});
+  const status = await tool("browser.status", { detail: "full" });
   assert(!status.isError && status.json.ready === true, "browser.status ready");
   assert(status.json.authMode === "local_trust" && status.json.zeroTouch === true && status.json.paired === false, "browser.status zero-touch contract");
 
   const [first, peer] = await Promise.all([startSession(), startSession()]);
   const [observation, peerObservation] = await Promise.all([
     tool("browser.observe", { sessionId: first }),
-    tool("browser.observe", { sessionId: peer }),
+    tool("browser.observe", { sessionId: peer, format: "json" }),
   ]);
-  assert(observation.json.result.kind === "observation", "observe result");
+  assert(typeof observation.json.output === "string" && observation.json.provenance?.trust === "untrusted_page_content", "compact observe result and provenance");
   assert(peerObservation.json.result.kind === "observation", "peer observe result");
-  assert(observation.json.result.nodes[0].ref !== peerObservation.json.result.nodes[0].ref, "logical workers received distinct refs");
+  assert(!observation.json.output.includes(peerObservation.json.result.nodes[0].ref), "logical workers received distinct refs");
 
   const [screenshot, peerScreenshot] = await Promise.all([
     rawTool("browser.screenshot", { sessionId: first, delivery: "image", fullPage: true }),
@@ -89,15 +94,22 @@ try {
   const fileShot = await tool("browser.screenshot", { sessionId: first, delivery: "file", outputDirectory: screenshotDirectory });
   assert(fs.existsSync(fileShot.json.path), "file screenshot exists");
 
-  const acted = await tool("browser.act", { sessionId: first, action: { kind: "scroll", value: 20 } });
-  assert(acted.json.decision?.class === "agentic" && acted.json.decision?.commitBoundary === "none", "act decision metadata");
+  const invalidAction = await tool("browser.act", { sessionId: first, action: { kind: "scroll", value: 20 } });
+  assert(invalidAction.isError && invalidAction.json.errorCode === "invalid_arguments", "strict packed action rejection");
+  const acted = await tool("browser.act", { sessionId: first, action: { kind: "scroll", y: 20 } });
+  assert(acted.json.decision?.code === "agentic" && acted.json.outcome === "completed", "act decision metadata");
   const commitShaped = await tool("browser.act", { sessionId: first, action: { kind: "click", name: "Publish" } });
-  assert(commitShaped.json.decision?.class === "approval_required" && commitShaped.json.decision?.commitBoundary === "commit", "commit-shaped act decision metadata");
+  assert(commitShaped.json.decision?.code === "approval_required", "commit-shaped act decision metadata");
+
+  const opaque = await tool("browser.network", { sessionId: first, requestId: "opaque-1" });
+  assert(opaque.json.result.body === null && opaque.json.result.bodyDisposition === "opaque_body_not_returned", "packed opaque body omitted");
+  assert(!JSON.stringify(opaque.json).includes("packed-opaque-secret"), "packed opaque bytes absent");
 
   const upload = path.join(configDirectory, "asset.png");
   fs.writeFileSync(upload, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64"));
-  const setFiles = await tool("browser.act", { sessionId: first, action: { kind: "set_files", target: { ref: "e7" }, files: [upload] } });
-  assert(setFiles.json.result.changed.files[0].filename === "asset.png", "set_files sanitized result");
+  const firstObservation = await tool("browser.observe", { sessionId: first, format: "json" });
+  const setFiles = await tool("browser.act", { sessionId: first, action: { kind: "set_files", target: { ref: firstObservation.json.result.nodes[0].ref }, files: [upload] } });
+  assert(setFiles.json.changed === true && !JSON.stringify(setFiles.json).includes(upload), "set_files sanitized result");
 
   const tabs = await tool("browser.tabs.list", {});
   const firstTab = tabs.json.sessions.find((session) => session.sessionId === first);
@@ -115,7 +127,7 @@ try {
   const second = await startSession();
   extension.disconnectOnNextCommand = true;
   const disconnected = await tool("browser.observe", { sessionId: second });
-  assert(disconnected.isError && disconnected.json.errorCode === "extension_disconnected", "mid-command disconnect typed error");
+  assert(disconnected.isError && disconnected.json.errorCode === "owner_disconnected" && disconnected.json.outcome === "outcome_unknown" && disconnected.json.retrySafe === false, "mid-command disconnect typed uncertain outcome");
   await waitUntil(() => extension.socket.readyState === WebSocket.CLOSED, "extension close");
   extension = await connectFakeExtension();
   const reconnected = await tool("browser.status", {});
@@ -129,7 +141,7 @@ try {
 
   child.stdin.write("{not-json}\n");
   const malformed = await waitForResponse("null");
-  assert(malformed.error?.data?.errorCode === "malformed_frame", "malformed frame typed error");
+  assert(malformed.error?.data?.errorCode === "invalid_json", "malformed frame typed error");
 
   extension.socket.close();
   child.stdin.end();
@@ -202,6 +214,8 @@ async function connectFakeExtension() {
       result = observationResult(message.command.sessionId, owned.tabId);
     } else if (action.kind === "screenshot") {
       result = { kind: "screenshot", mode: "cdp", origin: "https://example.com", title: `Packed smoke ${message.command.sessionId}`, width: action.fullPage ? 1440 : 1, height: action.fullPage ? 6000 : 1, fullPage: Boolean(action.fullPage), dataUrl: `data:image/png;base64,${action.fullPage ? LARGE_PNG : TINY_PNG}`, inline: true, capturedAt: new Date().toISOString() };
+    } else if (action.kind === "network") {
+      result = { kind: "network_log", origin: "https://example.com", entries: [], count: 0, dropped: 0, capturedAt: new Date().toISOString(), body: { requestId: "opaque-1", url: "https://example.com/blob", mimeType: "application/json", encoding: "base64", base64Encoded: true, data: "packed-opaque-secret" } };
     } else if (action.kind === "set_files") {
       result = { ...observationResult(message.command.sessionId, owned.tabId), actionStatus: "verified", changed: { files: [{ filename: path.basename(action.files[0]), sizeBytes: 68, mimeType: "image/png" }], fileCount: 1 } };
     } else if (action.kind === "__finalize") {
@@ -209,13 +223,19 @@ async function connectFakeExtension() {
     } else {
       result = { kind: "ack", message: "verified", actionStatus: "verified" };
     }
-    sendExtensionRequest(socket, "postResult", { event: { commandId: message.command.commandId, ok: true, result } });
+    sendExtensionRequest(socket, "postResult", { event: {
+      commandId: message.command.commandId,
+      sessionEpoch: message.command.sessionEpoch,
+      sequence: message.command.sequence,
+      ok: true,
+      result,
+    } });
   });
   return state;
 }
 
 function observationResult(sessionId = "session", tabId = 7) {
-  return { kind: "observation", mode: "cdp", origin: "https://example.com", title: `Packed smoke ${sessionId}`, nodes: [{ ref: `e${tabId}`, role: "button", name: "Example" }], nodeCount: 1, truncated: false, capturedAt: new Date().toISOString() };
+  return { kind: "observation", mode: "cdp", origin: "https://example.com", title: `Packed smoke ${sessionId}`, nodes: [{ ref: `d1:e${tabId}`, role: "button", name: "Example" }], nodeCount: 1, truncated: false, capturedAt: new Date().toISOString() };
 }
 
 function sendExtensionRequest(socket, method, params) {

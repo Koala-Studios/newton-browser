@@ -62,6 +62,7 @@ test("standalone extension build materializes package runtime into dist", () => 
   for (const file of [
     "panel.html",
     "src/service-worker.js",
+    "src/vendor/newton-browser-core/action-json-schema.js",
     "src/vendor/newton-browser-core/risk.js",
     "src/vendor/newton-browser-driver/controller.js",
     "src/vendor/newton-browser-driver/chrome-tabs-port.js",

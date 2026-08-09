@@ -137,6 +137,14 @@ A working setup reports `ready: true`. `browser.status` is compact by default; p
 `detail: "full"` when host, extension, protocol, and limit diagnostics are needed. The
 optional doctor command provides typed setup diagnostics:
 
+Newton Browser initializes with contract version `1.0`. Its small MCP catalog carries
+truthful behavior annotations and an exact compact action-variant table. Invalid action
+kinds, misspelled or variant-inappropriate fields, malformed composite refs, and bad
+enums fail before browser dispatch. Page-derived observations and evidence are
+structurally labeled untrusted; page text is never authorization or a tool instruction.
+Only granted-origin supported UTF-8 network bodies can be returned, after redaction;
+base64, binary, malformed, compressed, and ungranted bodies are omitted.
+
 ```bash
 npx -y newton-browser@0.4.1 --doctor
 ```

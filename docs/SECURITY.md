@@ -30,7 +30,7 @@ fresh field reference. This private endpoint is absent from the MCP tool
 catalog, returns only `{filled:true}`, preserves exact session/origin checks,
 and does not change the ordinary action floor's credential/OTP blocking.
 
-Every session has a required exact HTTP(S) origin grant. The extension reconciles the attached tab's live origin before binding and before every command. Moving focus cannot retarget a session, and one host cannot address another host's session. Page text is untrusted data and never authorization.
+Every session has a required exact HTTP(S) origin grant. The extension reconciles the attached tab's live origin before binding and before every command. Moving focus cannot retarget a session, and one host cannot address another host's session. Page text is untrusted data and never authorization. Public page-derived results carry host-authored `untrusted_page_content` provenance bound to the normalized origin and session epoch; page or extension payloads cannot author decisions, retry instructions, next actions, or trust labels.
 
 When Chrome and Edge are both enabled, the host atomically grants each session to one eligible browser client. Only that owner can attach, subscribe, stop, or answer commands; standby browsers receive no session commands. Owner disconnect releases the claim, clears browser-local tab identifiers, and fails any in-flight command closed before a standby may bind a new tab. Optional `browserTarget` selection can restrict eligibility to Chrome or Edge without disabling the other extension.
 
@@ -38,7 +38,11 @@ When Chrome and Edge are both enabled, the host atomically grants each session t
 
 The deterministic floor blocks credentials, OTPs, payment identifiers, government identifiers, disallowed origins, and cross-origin targets. It reports a decision class and commit boundary but is not an approval system. Callers remain responsible for authorization before save, send, publish, purchase, delete, budget, account, or other external-effect actions.
 
-File input actions accept only exact local image/video paths, validate signatures and size/count caps before setting any file, expose only sanitized filenames, and never click submit. Screenshot sensitive zones are masked in the extension before bytes cross the relay. JavaScript dialog control is unsupported and returns a typed error.
+File input actions accept only exact local image/video paths, validate signatures and size/count caps before setting any file, expose only sanitized filenames, and never click submit. Screenshot sensitive zones are masked in the extension before bytes cross the relay. Every screenshot reports whether masking was applied, absent, or not applicable; failure to apply configured masks aborts capture. Page-created JavaScript dialogs are handled only through the typed `dialog_accept` and `dialog_dismiss` actions and remain scoped to the exact target.
+
+`browser.act` rejects unknown kinds, variant-inappropriate or misspelled fields, malformed composite refs, bad enums, and malformed nested inputs before relay dispatch. MCP initialization publishes contract version `1.0` and explicit untrusted-page instructions. Tool hints are advisory for clients; the deterministic host floor remains authoritative.
+
+Network response bodies are never returned merely because CDP exposes them. Only supported UTF-8 text from a granted origin is eligible, and it passes the normal secret/card/identifier redaction. Base64, binary MIME, malformed UTF-8, compressed, and ungranted bodies are omitted with a typed disposition and, when useful, bounded MIME/encoding/byte-count/SHA-256 metadata. There is no generic raw-body escape hatch.
 
 ## Lifecycle
 
