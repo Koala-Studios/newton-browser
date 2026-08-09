@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RendererLiveness } from "../src/renderer-liveness.js";
+import { RendererLiveness } from "../dist/renderer-liveness.js";
 
 test("renderer liveness follows event-driven detach reconciliation", () => {
   const liveness = new RendererLiveness();

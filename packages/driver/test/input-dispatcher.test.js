@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DialogTracker, InputDispatcher, keyDescriptor } from "../src/input-dispatcher.js";
+import { DialogTracker, InputDispatcher, keyDescriptor } from "../dist/input-dispatcher.js";
 
 test("key descriptors cover named, function, modifier, and printable keys", () => {
   assert.deepEqual(keyDescriptor("Enter", 0), { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, modifiers: 0, text: "\r", unmodifiedText: "\r" });

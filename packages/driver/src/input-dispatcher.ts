@@ -1,10 +1,16 @@
-// @ts-check
+type ModifierKey = "Alt" | "Control" | "Meta" | "Shift";
+type MouseButton = "left" | "right" | "middle" | "back" | "forward";
+export type InputRoute = { sessionId?: string | null; timeoutMs?: number };
+type PointInput = { x?: unknown; y?: unknown };
+type CdpParams = Record<string, unknown>;
+type InputSend = (method: string, params: CdpParams, route: InputRoute) => unknown | PromiseLike<unknown>;
 
-const MODIFIER_BITS = Object.freeze({ Alt: 1, Control: 2, Meta: 4, Shift: 8 });
-const MODIFIER_KEYS = new Set(Object.keys(MODIFIER_BITS));
-const MOUSE_BUTTON_BITS = Object.freeze({ left: 1, right: 2, middle: 4, back: 8, forward: 16 });
+const MODIFIER_BITS: Readonly<Record<ModifierKey, number>> = Object.freeze({ Alt: 1, Control: 2, Meta: 4, Shift: 8 });
+const MOUSE_BUTTON_BITS: Readonly<Record<MouseButton, number>> = Object.freeze({ left: 1, right: 2, middle: 4, back: 8, forward: 16 });
 
-const NAMED_KEYS = Object.freeze({
+type NamedKey = Readonly<{ code: string; vk: number; text?: string }>;
+
+const NAMED_KEYS: Readonly<Record<string, NamedKey>> = Object.freeze({
   Enter: { code: "Enter", vk: 13, text: "\r" },
   Tab: { code: "Tab", vk: 9 },
   Escape: { code: "Escape", vk: 27 },
@@ -22,7 +28,7 @@ const NAMED_KEYS = Object.freeze({
   Space: { code: "Space", vk: 32, text: " " },
 });
 
-const KEY_ALIASES = Object.freeze({
+const KEY_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   AltGraph: "Alt",
   Cmd: "Meta",
   Command: "Meta",
@@ -38,26 +44,38 @@ const KEY_ALIASES = Object.freeze({
   " ": "Space",
 });
 
-const PRINTABLE_CODES = Object.freeze({
+const PRINTABLE_CODES: Readonly<Record<string, readonly [string, number]>> = Object.freeze({
   "-": ["Minus", 189], "=": ["Equal", 187], "[": ["BracketLeft", 219], "]": ["BracketRight", 221],
   "\\": ["Backslash", 220], ";": ["Semicolon", 186], "'": ["Quote", 222], "`": ["Backquote", 192],
   ",": ["Comma", 188], ".": ["Period", 190], "/": ["Slash", 191],
 });
 
+export type KeyDescriptor = {
+  key: string;
+  code: string;
+  windowsVirtualKeyCode: number;
+  nativeVirtualKeyCode: number;
+  modifiers: number;
+  text?: string;
+  unmodifiedText?: string;
+};
+
 export class InputDispatcher {
-  constructor(send) {
+  readonly send: InputSend;
+  private activeScope: InputScope | null = null;
+  private readonly idleWaiters = new Set<() => void>();
+
+  constructor(send: InputSend) {
     if (typeof send !== "function") throw new Error("input_send_required");
     this.send = send;
-    this.activeScope = null;
-    this.idleWaiters = new Set();
   }
 
-  async run(route, operation) {
+  async run<T>(route: InputRoute | null | undefined, operation: (input: InputScope) => T | PromiseLike<T>): Promise<T> {
     if (this.activeScope) throw new Error("input_dispatch_already_active");
     if (typeof operation !== "function") throw new Error("input_operation_required");
     const scope = new InputScope(this.send, route);
     this.activeScope = scope;
-    let failure = null;
+    let failure: unknown = null;
     try {
       return await operation(scope);
     } catch (error) {
@@ -72,29 +90,45 @@ export class InputDispatcher {
         if (failure && typeof failure === "object") {
           Object.defineProperty(failure, "inputCleanupErrors", { value: cleanupErrors, enumerable: false });
         } else {
-          const cleanupFailure = new Error("input_cleanup_failed");
-          cleanupFailure.code = "input_cleanup_failed";
-          cleanupFailure.cleanupErrors = cleanupErrors;
-          throw cleanupFailure;
+          throw Object.assign(new Error("input_cleanup_failed"), {
+            code: "input_cleanup_failed",
+            cleanupErrors,
+          });
         }
       }
     }
   }
 
-  whenIdle() {
+  whenIdle(): Promise<void> {
     if (!this.activeScope) return Promise.resolve();
     return new Promise((resolve) => this.idleWaiters.add(resolve));
   }
 }
 
+export type PendingDialog = Readonly<{
+  dialogType: string;
+  message: string;
+  defaultPrompt?: string;
+}>;
+
+type DialogEvent = { type?: unknown; message?: unknown; defaultPrompt?: unknown };
+type DialogWaiter = { commandId: string; resolve: (dialog: PendingDialog) => void };
+type DialogTarget = { pending: PendingDialog | null; waiters: Set<DialogWaiter> };
+type DialogTrackerOptions = { maxTargets?: unknown; maxWaitersPerTarget?: unknown };
+
+export type DialogRaceResult<T> = { kind: "effect"; value: T } | { kind: "dialog"; dialog: PendingDialog };
+
 export class DialogTracker {
-  constructor({ maxTargets = 64, maxWaitersPerTarget = 8 } = {}) {
+  readonly maxTargets: number;
+  readonly maxWaitersPerTarget: number;
+  private readonly targets = new Map<string, DialogTarget>();
+
+  constructor({ maxTargets = 64, maxWaitersPerTarget = 8 }: DialogTrackerOptions = {}) {
     this.maxTargets = positiveBound(maxTargets, 64);
     this.maxWaitersPerTarget = positiveBound(maxWaitersPerTarget, 8);
-    this.targets = new Map();
   }
 
-  open(targetKey, event = {}) {
+  open(targetKey: unknown, event: DialogEvent | null | undefined = {}): PendingDialog {
     const target = this.target(targetKey, true);
     target.pending = Object.freeze({
       dialogType: String(event?.type ?? "alert").slice(0, 32),
@@ -106,7 +140,7 @@ export class DialogTracker {
     return target.pending;
   }
 
-  close(targetKey) {
+  close(targetKey: unknown): boolean {
     const target = this.target(targetKey, false);
     if (!target) return false;
     target.pending = null;
@@ -114,34 +148,36 @@ export class DialogTracker {
     return true;
   }
 
-  pending(targetKey) {
+  pending(targetKey: unknown): PendingDialog | null {
     return this.target(targetKey, false)?.pending ?? null;
   }
 
-  async race(targetKey, commandId, dispatch) {
+  async race<T>(targetKey: unknown, commandId: unknown, dispatch: () => T | PromiseLike<T>): Promise<DialogRaceResult<T>> {
     if (typeof dispatch !== "function") throw new Error("input_dispatch_required");
     const target = this.target(targetKey, true);
     if (target.pending) return { kind: "dialog", dialog: target.pending };
     if (target.waiters.size >= this.maxWaitersPerTarget) throw new Error("dialog_waiter_limit");
-    let waiter;
-    const dialog = new Promise((resolve) => { waiter = { commandId: boundedCommandId(commandId), resolve }; });
-    target.waiters.add(waiter);
-    let effect;
+    const deferred = createDialogWaiter(commandId);
+    target.waiters.add(deferred.waiter);
+    let effect: Promise<T> | undefined;
     try {
       effect = Promise.resolve().then(dispatch);
-      const result = await Promise.race([
+      const result = await Promise.race<DialogRaceResult<T>>([
         effect.then((value) => ({ kind: "effect", value })),
-        dialog.then((value) => ({ kind: "dialog", dialog: value })),
+        deferred.promise.then((dialog) => ({ kind: "dialog", dialog })),
       ]);
       if (result.kind === "dialog") void effect.catch(() => {});
       return result;
     } finally {
-      target.waiters.delete(waiter);
+      target.waiters.delete(deferred.waiter);
       if (!target.pending && target.waiters.size === 0) this.targets.delete(String(targetKey));
     }
   }
 
-  target(targetKey, create) {
+  private target(targetKey: unknown, create: true): DialogTarget;
+  private target(targetKey: unknown, create: false): DialogTarget | null;
+  private target(targetKey: unknown, create: boolean): DialogTarget | null;
+  private target(targetKey: unknown, create: boolean): DialogTarget | null {
     const key = String(targetKey ?? "").trim();
     if (!key || key.length > 160) throw new Error("invalid_dialog_target");
     let target = this.targets.get(key);
@@ -155,23 +191,26 @@ export class DialogTracker {
 }
 
 class InputScope {
-  constructor(send, route) {
+  private readonly send: InputSend;
+  private readonly route: InputRoute;
+  private point = { x: 0, y: 0 };
+  private readonly pressedButtons: MouseButton[] = [];
+  private readonly pressedModifiers: ModifierKey[] = [];
+
+  constructor(send: InputSend, route: InputRoute | null | undefined) {
     this.send = send;
     this.route = route ?? {};
-    this.point = { x: 0, y: 0 };
-    this.pressedButtons = [];
-    this.pressedModifiers = [];
   }
 
-  modifierMask() {
+  modifierMask(): number {
     return this.pressedModifiers.reduce((mask, key) => mask | MODIFIER_BITS[key], 0);
   }
 
-  buttonMask() {
+  buttonMask(): number {
     return this.pressedButtons.reduce((mask, button) => mask | MOUSE_BUTTON_BITS[button], 0);
   }
 
-  async pointerMove(point) {
+  async pointerMove(point: PointInput | null | undefined): Promise<void> {
     this.point = normalizePoint(point);
     await this.send("Input.dispatchMouseEvent", {
       type: "mouseMoved", ...this.point, button: "none", buttons: this.buttonMask(),
@@ -179,7 +218,7 @@ class InputScope {
     }, this.route);
   }
 
-  async wheel(point, delta = {}) {
+  async wheel(point: PointInput | null | undefined, delta: { x?: unknown; y?: unknown } | null | undefined = {}): Promise<void> {
     const next = normalizePoint(point);
     this.point = next;
     const deltaX = Number(delta?.x ?? 0);
@@ -190,7 +229,7 @@ class InputScope {
     }, this.route);
   }
 
-  async mouseDown(button = "left", clickCount = 1) {
+  async mouseDown(button: unknown = "left", clickCount: unknown = 1): Promise<void> {
     const normalized = normalizeButton(button);
     if (this.pressedButtons.includes(normalized)) throw new Error("input_button_already_pressed");
     this.pressedButtons.push(normalized);
@@ -200,7 +239,7 @@ class InputScope {
     }, this.route);
   }
 
-  async mouseUp(button = "left", clickCount = 1) {
+  async mouseUp(button: unknown = "left", clickCount: unknown = 1): Promise<void> {
     const normalized = normalizeButton(button);
     const index = this.pressedButtons.lastIndexOf(normalized);
     if (index >= 0) this.pressedButtons.splice(index, 1);
@@ -210,13 +249,13 @@ class InputScope {
     }, this.route);
   }
 
-  async insertText(text) {
+  async insertText(text: unknown): Promise<void> {
     await this.send("Input.insertText", { text: String(text ?? "") }, this.route);
   }
 
-  async keyDown(input) {
+  async keyDown(input: unknown): Promise<KeyDescriptor> {
     const key = normalizeKey(input);
-    const modifier = MODIFIER_KEYS.has(key);
+    const modifier = isModifierKey(key);
     if (modifier && !this.pressedModifiers.includes(key)) this.pressedModifiers.push(key);
     const descriptor = keyDescriptor(key, this.modifierMask());
     const suppressText = Boolean(this.modifierMask() & (MODIFIER_BITS.Alt | MODIFIER_BITS.Control | MODIFIER_BITS.Meta));
@@ -224,15 +263,17 @@ class InputScope {
     return descriptor;
   }
 
-  async keyUp(input) {
+  async keyUp(input: unknown): Promise<void> {
     const key = normalizeKey(input);
     const descriptor = keyDescriptor(key, this.modifierMask());
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...withoutText(descriptor) }, this.route);
-    const index = this.pressedModifiers.lastIndexOf(key);
-    if (index >= 0) this.pressedModifiers.splice(index, 1);
+    if (isModifierKey(key)) {
+      const index = this.pressedModifiers.lastIndexOf(key);
+      if (index >= 0) this.pressedModifiers.splice(index, 1);
+    }
   }
 
-  async keyPress(input) {
+  async keyPress(input: unknown): Promise<void> {
     const descriptor = await this.keyDown(input);
     try {
       const suppressText = Boolean(this.modifierMask() & (MODIFIER_BITS.Alt | MODIFIER_BITS.Control | MODIFIER_BITS.Meta));
@@ -244,11 +285,11 @@ class InputScope {
     }
   }
 
-  async chord(inputs) {
+  async chord(inputs: unknown): Promise<void> {
     const keys = (Array.isArray(inputs) ? inputs : [inputs]).map(normalizeKey).filter(Boolean);
     if (keys.length === 0) throw new Error("input_keys_required");
-    const modifiers = keys.filter((key) => MODIFIER_KEYS.has(key));
-    const ordinary = keys.filter((key) => !MODIFIER_KEYS.has(key));
+    const modifiers = keys.filter(isModifierKey);
+    const ordinary = keys.filter((key) => !isModifierKey(key));
     for (const modifier of modifiers) await this.keyDown(modifier);
     try {
       if (ordinary.length === 0) return;
@@ -258,8 +299,8 @@ class InputScope {
     }
   }
 
-  async releaseAll() {
-    const errors = [];
+  async releaseAll(): Promise<unknown[]> {
+    const errors: unknown[] = [];
     for (const button of [...this.pressedButtons].reverse()) {
       try { await this.mouseUp(button); } catch (error) { errors.push(error); }
     }
@@ -272,9 +313,9 @@ class InputScope {
   }
 }
 
-export function keyDescriptor(input, modifiers = 0) {
+export function keyDescriptor(input: unknown, modifiers = 0): KeyDescriptor {
   const key = normalizeKey(input);
-  if (MODIFIER_KEYS.has(key)) {
+  if (isModifierKey(key)) {
     const vk = key === "Alt" ? 18 : key === "Control" ? 17 : key === "Meta" ? 91 : 16;
     return { key, code: `${key}Left`, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers };
   }
@@ -305,38 +346,57 @@ export function keyDescriptor(input, modifiers = 0) {
   };
 }
 
-export function normalizeKey(input) {
+export function normalizeKey(input: unknown): string {
   const raw = String(input ?? "");
   return KEY_ALIASES[raw] ?? raw;
 }
 
-function withoutText(descriptor) {
+function withoutText(descriptor: KeyDescriptor): Omit<KeyDescriptor, "text" | "unmodifiedText"> {
   const { text: _text, unmodifiedText: _unmodifiedText, ...rest } = descriptor;
   return rest;
 }
 
-function normalizePoint(point) {
+function normalizePoint(point: PointInput | null | undefined): { x: number; y: number } {
   const x = Number(point?.x);
   const y = Number(point?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("invalid_pointer_point");
   return { x, y };
 }
 
-function normalizeButton(button) {
+function normalizeButton(button: unknown): MouseButton {
   const normalized = String(button ?? "left").toLowerCase();
-  if (!Object.hasOwn(MOUSE_BUTTON_BITS, normalized)) throw new Error("unsupported_mouse_button");
-  return normalized;
+  switch (normalized) {
+    case "left":
+    case "right":
+    case "middle":
+    case "back":
+    case "forward":
+      return normalized;
+    default:
+      throw new Error("unsupported_mouse_button");
+  }
 }
 
-function boundedClickCount(value) {
+function isModifierKey(key: string): key is ModifierKey {
+  return key === "Alt" || key === "Control" || key === "Meta" || key === "Shift";
+}
+
+function boundedClickCount(value: unknown): number {
   const count = Number(value);
   return Number.isInteger(count) && count >= 1 && count <= 3 ? count : 1;
 }
 
-function positiveBound(value, fallback) {
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+function positiveBound(value: unknown, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
 }
 
-function boundedCommandId(value) {
+function boundedCommandId(value: unknown): string {
   return String(value ?? "").slice(0, 160);
+}
+
+function createDialogWaiter(commandId: unknown): { waiter: DialogWaiter; promise: Promise<PendingDialog> } {
+  let resolveDialog: ((dialog: PendingDialog) => void) | undefined;
+  const promise = new Promise<PendingDialog>((resolve) => { resolveDialog = resolve; });
+  if (!resolveDialog) throw new Error("dialog_waiter_initialization_failed");
+  return { waiter: { commandId: boundedCommandId(commandId), resolve: resolveDialog }, promise };
 }

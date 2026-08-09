@@ -1,7 +1,53 @@
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const IDENTIFIER_LIMIT = 128;
 const ORIGIN_LIMIT = 512;
-const TARGET_TYPES = new Set(["page", "iframe", "worker"]);
+type TargetType = "page" | "iframe" | "worker";
+type ErrorCode = typeof TARGET_REGISTRY_ERROR_CODES[keyof typeof TARGET_REGISTRY_ERROR_CODES];
+type TargetInput = {
+  targetId?: unknown;
+  type?: unknown;
+  parentTargetId?: unknown;
+  hostFrameId?: unknown;
+  sessionId?: unknown;
+  origin?: unknown;
+};
+type FrameInput = {
+  frameId?: unknown;
+  targetId?: unknown;
+  backendNodeId?: unknown;
+  parentFrameId?: unknown;
+  origin?: unknown;
+};
+type TargetRecord = {
+  targetId: string;
+  type: TargetType | null;
+  parentTargetId: string | null;
+  hostFrameId: string | null;
+  sessionId: string | null;
+  origin: string;
+};
+type FrameRecord = {
+  frameId: string;
+  targetId: string;
+  backendNodeId: number | null;
+  parentFrameId: string | null;
+  origin: string;
+  ordinal: number | null;
+  generation: number;
+};
+type RefRoute = {
+  documentEpoch: number;
+  targetId: string;
+  sessionId: string | null;
+  frameId: string | null;
+  frameOrdinal: number | null;
+  frameGeneration: number | null;
+  backendNodeId: number;
+  origin: string;
+};
+type RegistryOptions = { maxTargets?: number; maxFrames?: number; maxRefs?: number };
+
+const TARGET_TYPES = new Set<TargetType>(["page", "iframe", "worker"]);
 const MAIN_REF = /^d([1-9]\d*):e([1-9]\d*)$/;
 const FRAME_REF = /^d([1-9]\d*):f([1-9]\d*):e([1-9]\d*)$/;
 
@@ -23,26 +69,28 @@ export const TARGET_REGISTRY_ERROR_CODES = Object.freeze({
   TARGET_CONFLICT: "target_conflict",
   TARGET_DETACHED: "target_detached",
   TARGET_NOT_FOUND: "target_not_found",
-});
+} as const);
 
 export class TargetRegistryError extends Error {
-  constructor(code) {
+  readonly code: ErrorCode;
+
+  constructor(code: ErrorCode) {
     super("target registry protocol error");
     this.name = "TargetRegistryError";
     this.code = code;
   }
 }
 
-function fail(code) {
+function fail(code: ErrorCode): never {
   throw new TargetRegistryError(code);
 }
 
-function positiveInteger(value, code) {
-  if (!Number.isSafeInteger(value) || value <= 0) fail(code);
+function positiveInteger(value: unknown, code: ErrorCode): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) fail(code);
   return value;
 }
 
-function identifier(value, code) {
+function identifier(value: unknown, code: ErrorCode): string {
   if (
     typeof value !== "string"
     || value.length === 0
@@ -53,14 +101,14 @@ function identifier(value, code) {
   return value;
 }
 
-function optionalIdentifier(value, code) {
+function optionalIdentifier(value: unknown, code: ErrorCode): string | null {
   return value === undefined || value === null ? null : identifier(value, code);
 }
 
-function origin(value, code) {
+function origin(value: unknown, code: ErrorCode): string {
   if (value === undefined || value === null || value === "") return "";
   if (typeof value !== "string" || value.length > ORIGIN_LIMIT || CONTROL_CHARS.test(value)) fail(code);
-  let parsed;
+  let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
@@ -77,13 +125,13 @@ function origin(value, code) {
   return parsed.origin;
 }
 
-function immutable(value) {
+function immutable<T>(value: T): T {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return Object.freeze(value.map(immutable));
-  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, immutable(item)])));
+  if (Array.isArray(value)) return Object.freeze(value.map(immutable)) as T;
+  return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, item]) => [key, immutable(item)]))) as T;
 }
 
-function mergeKnown(current, incoming, code) {
+function mergeKnown<T extends string | null>(current: T, incoming: T, code: ErrorCode): T {
   if (incoming === null || incoming === "") return current;
   if (current === null || current === "") return incoming;
   if (current !== incoming) fail(code);
@@ -91,25 +139,41 @@ function mergeKnown(current, incoming, code) {
 }
 
 export class TargetRegistry {
-  constructor({ maxTargets = 128, maxFrames = 256, maxRefs = 1024 } = {}) {
+  readonly maxTargets: number;
+  readonly maxFrames: number;
+  readonly maxRefs: number;
+  documentEpoch: number;
+  mainTargetId: string | null;
+  nextFrameOrdinal: number;
+  readonly targets: Map<string, TargetRecord>;
+  readonly pendingTargets: Map<string, TargetRecord>;
+  readonly frames: Map<string, FrameRecord>;
+  readonly pendingFrames: Map<string, FrameRecord>;
+  readonly sessionToTarget: Map<string, string>;
+  readonly detachedTargets: Set<string>;
+  readonly detachedFrames: Set<string>;
+  readonly refs: Map<string, RefRoute>;
+  readonly deadRefs: Map<string, ErrorCode>;
+
+  constructor({ maxTargets = 128, maxFrames = 256, maxRefs = 1024 }: RegistryOptions = {}) {
     this.maxTargets = positiveInteger(maxTargets, TARGET_REGISTRY_ERROR_CODES.MAX_TARGETS_EXCEEDED);
     this.maxFrames = positiveInteger(maxFrames, TARGET_REGISTRY_ERROR_CODES.MAX_FRAMES_EXCEEDED);
     this.maxRefs = positiveInteger(maxRefs, TARGET_REGISTRY_ERROR_CODES.MAX_REFS_EXCEEDED);
     this.documentEpoch = 0;
     this.mainTargetId = null;
     this.nextFrameOrdinal = 1;
-    this.targets = new Map();
-    this.pendingTargets = new Map();
-    this.frames = new Map();
-    this.pendingFrames = new Map();
-    this.sessionToTarget = new Map();
-    this.detachedTargets = new Set();
-    this.detachedFrames = new Set();
-    this.refs = new Map();
-    this.deadRefs = new Map();
+    this.targets = new Map<string, TargetRecord>();
+    this.pendingTargets = new Map<string, TargetRecord>();
+    this.frames = new Map<string, FrameRecord>();
+    this.pendingFrames = new Map<string, FrameRecord>();
+    this.sessionToTarget = new Map<string, string>();
+    this.detachedTargets = new Set<string>();
+    this.detachedFrames = new Set<string>();
+    this.refs = new Map<string, RefRoute>();
+    this.deadRefs = new Map<string, ErrorCode>();
   }
 
-  parseRef(value) {
+  parseRef(value: unknown) {
     if (typeof value !== "string") fail(TARGET_REGISTRY_ERROR_CODES.INVALID_REF);
     const match = FRAME_REF.exec(value) || MAIN_REF.exec(value);
     if (!match) fail(TARGET_REGISTRY_ERROR_CODES.INVALID_REF);
@@ -119,7 +183,7 @@ export class TargetRegistry {
       : { kind: "main", documentEpoch: numbers[0], frameOrdinal: null, backendNodeId: numbers[1] };
   }
 
-  registerTarget(input = {}) {
+  registerTarget(input: TargetInput = {}) {
     const incoming = this.#targetInput(input);
     if (this.detachedTargets.has(incoming.targetId)) fail(TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT);
     const existing = this.targets.get(incoming.targetId) || this.pendingTargets.get(incoming.targetId);
@@ -133,7 +197,7 @@ export class TargetRegistry {
     return this.#publicTarget(candidate.targetId);
   }
 
-  registerSession(targetId, sessionId) {
+  registerSession(targetId: string, sessionId: string) {
     targetId = identifier(targetId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
     sessionId = identifier(sessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
     if (this.detachedTargets.has(targetId)) fail(TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
@@ -158,7 +222,7 @@ export class TargetRegistry {
     return this.#publicTarget(targetId);
   }
 
-  registerFrame(input = {}) {
+  registerFrame(input: FrameInput = {}) {
     const incoming = this.#frameInput(input);
     if (this.detachedFrames.has(incoming.frameId) || this.detachedTargets.has(incoming.targetId)) {
       fail(TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
@@ -182,7 +246,7 @@ export class TargetRegistry {
     return this.#publicFrame(candidate.frameId);
   }
 
-  targetForSession(sessionId) {
+  targetForSession(sessionId: string) {
     sessionId = identifier(sessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
     const targetId = this.sessionToTarget.get(sessionId);
     return targetId ? this.#publicTarget(targetId) : undefined;
@@ -190,7 +254,7 @@ export class TargetRegistry {
 
   listObservationRoutes() {
     const routes = [];
-    const main = this.targets.get(this.mainTargetId);
+    const main = this.mainTargetId === null ? undefined : this.targets.get(this.mainTargetId);
     if (main) routes.push({ targetId: main.targetId, sessionId: main.sessionId, frameId: null, origin: main.origin });
     for (const frame of this.frames.values()) {
       const target = this.targets.get(frame.targetId);
@@ -200,7 +264,7 @@ export class TargetRegistry {
     return immutable(routes);
   }
 
-  commitTopLevelDocument(targetId = this.mainTargetId, nextOrigin) {
+  commitTopLevelDocument(targetId: string | null = this.mainTargetId, nextOrigin?: unknown) {
     if (targetId === null) fail(TARGET_REGISTRY_ERROR_CODES.DOCUMENT_NOT_FOUND);
     const target = this.targets.get(identifier(targetId, TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND));
     if (!target) fail(TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND);
@@ -214,7 +278,7 @@ export class TargetRegistry {
     return this.#publicTarget(targetId);
   }
 
-  createRef(targetId, backendNodeId, { frameId } = {}) {
+  createRef(targetId: string, backendNodeId: number, { frameId }: { frameId?: string } = {}) {
     targetId = identifier(targetId, TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND);
     backendNodeId = positiveInteger(backendNodeId, TARGET_REGISTRY_ERROR_CODES.INVALID_BACKEND_NODE);
     if (this.documentEpoch === 0) fail(TARGET_REGISTRY_ERROR_CODES.DOCUMENT_NOT_COMMITTED);
@@ -235,7 +299,8 @@ export class TargetRegistry {
     const ref = frame
       ? `d${this.documentEpoch}:f${this.#frameOrdinal(frame)}:e${backendNodeId}`
       : `d${this.documentEpoch}:e${backendNodeId}`;
-    if (this.deadRefs.has(ref)) fail(this.deadRefs.get(ref));
+    const terminalReason = this.deadRefs.get(ref);
+    if (terminalReason) fail(terminalReason);
     if (this.refs.has(ref)) return ref;
     if (this.refs.size + this.deadRefs.size >= this.maxRefs) fail(TARGET_REGISTRY_ERROR_CODES.MAX_REFS_EXCEEDED);
     this.refs.set(ref, {
@@ -251,7 +316,7 @@ export class TargetRegistry {
     return ref;
   }
 
-  resolveRef(ref) {
+  resolveRef(ref: string) {
     const parsed = this.parseRef(ref);
     if (parsed.documentEpoch !== this.documentEpoch) fail(TARGET_REGISTRY_ERROR_CODES.STALE_TARGET);
     const route = this.refs.get(ref);
@@ -279,7 +344,7 @@ export class TargetRegistry {
     });
   }
 
-  detachTarget(targetId) {
+  detachTarget(targetId: string): void {
     targetId = identifier(targetId, TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND);
     if (this.detachedTargets.has(targetId)) return;
     const targets = this.#targetSubtree(targetId);
@@ -294,7 +359,7 @@ export class TargetRegistry {
     this.#removePendingDescendants(targets, frames);
   }
 
-  detachFrame(frameId) {
+  detachFrame(frameId: string): void {
     frameId = identifier(frameId, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
     if (this.detachedFrames.has(frameId)) return;
     const frames = this.#frameSubtree(frameId);
@@ -302,7 +367,7 @@ export class TargetRegistry {
       this.#reserveFrame();
       frames.add(frameId);
     }
-    this.#retireRefs((route) => route.frameId && frames.has(route.frameId), TARGET_REGISTRY_ERROR_CODES.FRAME_DETACHED);
+    this.#retireRefs((route) => route.frameId !== null && frames.has(route.frameId), TARGET_REGISTRY_ERROR_CODES.FRAME_DETACHED);
     const hostedTargets = new Set(
       [...this.targets.values()].filter((target) => target.hostFrameId && frames.has(target.hostFrameId)).map((target) => target.targetId),
     );
@@ -312,7 +377,7 @@ export class TargetRegistry {
   }
 
   getSnapshot() {
-    const origins = new Set();
+    const origins = new Set<string>();
     const records = [
       ...this.targets.values(),
       ...this.pendingTargets.values(),
@@ -339,11 +404,11 @@ export class TargetRegistry {
     return this.getSnapshot();
   }
 
-  #targetInput(input) {
+  #targetInput(input: TargetInput): TargetRecord {
     const code = TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT;
     const targetId = identifier(input.targetId, code);
     const type = input.type === undefined ? null : input.type;
-    if (type !== null && !TARGET_TYPES.has(type)) fail(code);
+    if (type !== null && (typeof type !== "string" || !TARGET_TYPES.has(type as TargetType))) fail(code);
     const parentTargetId = optionalIdentifier(input.parentTargetId, code);
     const hostFrameId = optionalIdentifier(input.hostFrameId, code);
     if (type === "iframe" && (!parentTargetId || !hostFrameId)) fail(code);
@@ -351,7 +416,7 @@ export class TargetRegistry {
     if (type === "worker" && hostFrameId) fail(code);
     return {
       targetId,
-      type,
+      type: type as TargetType | null,
       parentTargetId,
       hostFrameId,
       sessionId: optionalIdentifier(input.sessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT),
@@ -359,7 +424,7 @@ export class TargetRegistry {
     };
   }
 
-  #frameInput(input) {
+  #frameInput(input: FrameInput): FrameRecord {
     const code = TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT;
     const backendNodeId = input.backendNodeId === undefined || input.backendNodeId === null
       ? null
@@ -375,11 +440,11 @@ export class TargetRegistry {
     };
   }
 
-  #targetPlaceholder(targetId, sessionId = null) {
+  #targetPlaceholder(targetId: string, sessionId: string | null = null): TargetRecord {
     return { targetId, type: null, parentTargetId: null, hostFrameId: null, sessionId, origin: "" };
   }
 
-  #mergeTarget(current, next) {
+  #mergeTarget(current: TargetRecord, next: TargetRecord): TargetRecord {
     const code = TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT;
     return {
       targetId: current.targetId,
@@ -391,7 +456,7 @@ export class TargetRegistry {
     };
   }
 
-  #mergeFrame(current, next) {
+  #mergeFrame(current: FrameRecord, next: FrameRecord): FrameRecord {
     if (current.targetId !== next.targetId) fail(TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
     return {
       ...current,
@@ -401,11 +466,11 @@ export class TargetRegistry {
     };
   }
 
-  #frameIdentityChanged(current, next) {
-    return current.backendNodeId !== next.backendNodeId || current.parentFrameId !== next.parentFrameId || (next.origin && current.origin !== next.origin);
+  #frameIdentityChanged(current: FrameRecord, next: FrameRecord): boolean {
+    return current.backendNodeId !== next.backendNodeId || current.parentFrameId !== next.parentFrameId || (next.origin !== "" && current.origin !== next.origin);
   }
 
-  #assertTargetGraph(target) {
+  #assertTargetGraph(target: TargetRecord): void {
     if (target.parentTargetId === target.targetId) fail(TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT);
     const seen = new Set([target.targetId]);
     let cursor = target.parentTargetId;
@@ -416,7 +481,7 @@ export class TargetRegistry {
     }
   }
 
-  #assertFrameGraph(frame) {
+  #assertFrameGraph(frame: FrameRecord): void {
     if (frame.parentFrameId === frame.frameId) fail(TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
     const seen = new Set([frame.frameId]);
     let cursor = frame.parentFrameId;
@@ -429,13 +494,13 @@ export class TargetRegistry {
     }
   }
 
-  #assertSessionAvailable(sessionId, targetId) {
+  #assertSessionAvailable(sessionId: string | null, targetId: string): void {
     if (!sessionId) return;
     const owner = this.sessionToTarget.get(sessionId);
     if (owner && owner !== targetId) fail(TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
   }
 
-  #bindSession(sessionId, targetId) {
+  #bindSession(sessionId: string, targetId: string): void {
     this.#assertSessionAvailable(sessionId, targetId);
     this.sessionToTarget.set(sessionId, targetId);
   }
@@ -452,27 +517,27 @@ export class TargetRegistry {
     }
   }
 
-  #storeTarget(target) {
+  #storeTarget(target: TargetRecord): void {
     const map = this.#canActivateTarget(target) ? this.targets : this.pendingTargets;
     this.targets.delete(target.targetId);
     this.pendingTargets.delete(target.targetId);
     map.set(target.targetId, target);
   }
 
-  #storeFrame(frame) {
+  #storeFrame(frame: FrameRecord): void {
     const map = this.#canActivateFrame(frame) ? this.frames : this.pendingFrames;
     this.frames.delete(frame.frameId);
     this.pendingFrames.delete(frame.frameId);
     map.set(frame.frameId, frame);
   }
 
-  #canActivateTarget(target) {
+  #canActivateTarget(target: TargetRecord): boolean {
     if (!target.type) return false;
     if (target.type !== "iframe") return !target.parentTargetId || this.targets.has(target.parentTargetId);
-    return this.targets.has(target.parentTargetId);
+    return target.parentTargetId !== null && this.targets.has(target.parentTargetId);
   }
 
-  #canActivateFrame(frame) {
+  #canActivateFrame(frame: FrameRecord): boolean {
     if (!this.targets.has(frame.targetId)) return false;
     if (!frame.parentFrameId) return true;
     const parent = this.frames.get(frame.parentFrameId);
@@ -498,7 +563,7 @@ export class TargetRegistry {
     }
   }
 
-  #replaceSession(target, sessionId) {
+  #replaceSession(target: TargetRecord, sessionId: string) {
     this.#bindSession(sessionId, target.targetId);
     if (target.sessionId) this.sessionToTarget.delete(target.sessionId);
     target.sessionId = sessionId;
@@ -525,7 +590,7 @@ export class TargetRegistry {
     this.deadRefs.clear();
   }
 
-  #clearChildGraph(mainTargetId) {
+  #clearChildGraph(mainTargetId: string): void {
     for (const [targetId, target] of [...this.targets, ...this.pendingTargets]) {
       if (targetId === mainTargetId) continue;
       if (target.sessionId) this.sessionToTarget.delete(target.sessionId);
@@ -538,14 +603,14 @@ export class TargetRegistry {
     this.detachedFrames.clear();
   }
 
-  #frameOrdinal(frame) {
+  #frameOrdinal(frame: FrameRecord): number {
     if (frame.ordinal !== null) return frame.ordinal;
     if (this.nextFrameOrdinal > Number.MAX_SAFE_INTEGER) fail(TARGET_REGISTRY_ERROR_CODES.DOCUMENT_EPOCH_OVERFLOW);
     frame.ordinal = this.nextFrameOrdinal++;
     return frame.ordinal;
   }
 
-  #liveFrame(frame) {
+  #liveFrame(frame: FrameRecord): boolean {
     if (this.detachedFrames.has(frame.frameId) || !this.targets.has(frame.targetId)) return false;
     const seen = new Set([frame.frameId]);
     let cursor = frame.parentFrameId;
@@ -559,7 +624,7 @@ export class TargetRegistry {
     return true;
   }
 
-  #retireRefs(predicate, reason) {
+  #retireRefs(predicate: (route: RefRoute) => boolean, reason: ErrorCode): void {
     for (const [ref, route] of [...this.refs]) {
       if (!predicate(route)) continue;
       this.refs.delete(ref);
@@ -567,17 +632,17 @@ export class TargetRegistry {
     }
   }
 
-  #failRef(ref, reason) {
+  #failRef(ref: string, reason: ErrorCode): never {
     this.refs.delete(ref);
     this.deadRefs.set(ref, reason);
     fail(reason);
   }
 
-  #targetSubtree(root) {
-    const result = new Set();
+  #targetSubtree(root: string): Set<string> {
+    const result = new Set<string>();
     const queue = [root];
     while (queue.length) {
-      const id = queue.shift();
+      const id = queue.shift()!;
       if (result.has(id) || (!this.targets.has(id) && !this.pendingTargets.has(id))) continue;
       result.add(id);
       for (const target of [...this.targets.values(), ...this.pendingTargets.values()]) {
@@ -587,11 +652,11 @@ export class TargetRegistry {
     return result;
   }
 
-  #frameSubtree(root) {
-    const result = new Set();
+  #frameSubtree(root: string): Set<string> {
+    const result = new Set<string>();
     const queue = [root];
     while (queue.length) {
-      const id = queue.shift();
+      const id = queue.shift()!;
       if (result.has(id) || (!this.frames.has(id) && !this.pendingFrames.has(id))) continue;
       result.add(id);
       for (const frame of [...this.frames.values(), ...this.pendingFrames.values()]) {
@@ -601,7 +666,7 @@ export class TargetRegistry {
     return result;
   }
 
-  #removeTarget(targetId, detached) {
+  #removeTarget(targetId: string, detached: boolean): void {
     const target = this.targets.get(targetId) || this.pendingTargets.get(targetId);
     if (target?.sessionId) this.sessionToTarget.delete(target.sessionId);
     this.targets.delete(targetId);
@@ -609,32 +674,34 @@ export class TargetRegistry {
     if (detached) this.detachedTargets.add(targetId);
   }
 
-  #removeFrame(frameId, detached) {
+  #removeFrame(frameId: string, detached: boolean): void {
     this.frames.delete(frameId);
     this.pendingFrames.delete(frameId);
     if (detached) this.detachedFrames.add(frameId);
   }
 
-  #removePendingDescendants(targets, frames) {
+  #removePendingDescendants(targets: Set<string>, frames: Set<string>): void {
     for (const target of [...this.pendingTargets.values()]) {
-      if (targets.has(target.targetId) || targets.has(target.parentTargetId) || frames.has(target.hostFrameId)) {
+      if (targets.has(target.targetId)
+        || (target.parentTargetId !== null && targets.has(target.parentTargetId))
+        || (target.hostFrameId !== null && frames.has(target.hostFrameId))) {
         this.#removeTarget(target.targetId, true);
       }
     }
     for (const frame of [...this.pendingFrames.values()]) {
-      if (targets.has(frame.targetId) || frames.has(frame.frameId) || frames.has(frame.parentFrameId)) {
+      if (targets.has(frame.targetId) || frames.has(frame.frameId) || (frame.parentFrameId !== null && frames.has(frame.parentFrameId))) {
         this.#removeFrame(frame.frameId, true);
       }
     }
   }
 
-  #publicTarget(targetId) {
+  #publicTarget(targetId: string) {
     const target = this.targets.get(targetId) || this.pendingTargets.get(targetId);
     if (!target) return undefined;
     return immutable({ ...target, state: this.targets.has(targetId) ? "active" : "pending" });
   }
 
-  #publicFrame(frameId) {
+  #publicFrame(frameId: string) {
     const frame = this.frames.get(frameId) || this.pendingFrames.get(frameId);
     if (!frame) return undefined;
     const { ordinal: _ordinal, generation: _generation, ...publicFrame } = frame;

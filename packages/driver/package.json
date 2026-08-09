@@ -13,6 +13,9 @@
   "scripts": {
     "build": "node ../../scripts/build-driver.mjs"
   },
+  "devDependencies": {
+    "@newton-browser/core": "workspace:*"
+  },
   "exports": {
     ".": "./dist/driver.js",
     "./chrome-tabs-port": "./dist/chrome-tabs-port.js",

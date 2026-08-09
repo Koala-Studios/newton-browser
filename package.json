@@ -39,8 +39,8 @@
     "smoke:extension-ready": "node scripts/smoke/extension-readiness.mjs",
     "eval:agent-cost": "node scripts/measure-agent-cost.mjs --json",
     "release:check": "node scripts/release-check.mjs",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "node scripts/run-tests.mjs",
+    "typecheck": "tsc -p tsconfig.json && tsc -p packages/driver/tsconfig.json --noEmit",
+    "test": "pnpm build:driver && node scripts/run-tests.mjs",
     "lint": "pnpm boundary:check"
   },
   "devDependencies": {

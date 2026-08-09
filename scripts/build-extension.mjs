@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { stripTypeScriptTypes } from "node:module";
+import { buildDriver } from "./build-driver.mjs";
 
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = () => {};
@@ -9,7 +10,7 @@ const repoRoot = process.cwd();
 const appRoot = path.join(repoRoot, "apps", "extension");
 const distRoot = path.join(appRoot, "dist");
 const sourceRoot = path.join(appRoot, "src");
-const driverRoot = path.join(repoRoot, "packages", "driver", "src");
+const driverRoot = buildDriver({ quiet: true });
 const coreRoot = path.join(repoRoot, "packages", "core", "src");
 
 assertInside(repoRoot, distRoot);

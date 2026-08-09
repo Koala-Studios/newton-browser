@@ -9,7 +9,7 @@ import {
   MAX_CLEANUP_FAILURE_REPORTS,
   MAX_DEDUPE_KEY_LENGTH,
   runSessionTransaction,
-} from "../src/session-transaction.js";
+} from "../dist/session-transaction.js";
 
 async function captureRejected(action) {
   let captured;

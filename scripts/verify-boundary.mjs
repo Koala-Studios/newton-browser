@@ -7,7 +7,7 @@ const requiredFiles = [
   "packages/core/package.json",
   "packages/core/src/index.ts",
   "packages/driver/package.json",
-  "packages/driver/src/driver.js",
+  "packages/driver/src/driver.ts",
   "apps/extension/package.json",
   "apps/extension/manifest.json",
   "apps/mcp-server/package.json",

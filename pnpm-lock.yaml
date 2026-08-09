@@ -41,7 +41,11 @@ importers:
 
   packages/core: {}
 
-  packages/driver: {}
+  packages/driver:
+    devDependencies:
+      '@newton-browser/core':
+        specifier: workspace:*
+        version: link:../core
 
 packages:
 

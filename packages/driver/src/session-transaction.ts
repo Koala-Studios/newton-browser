@@ -24,7 +24,59 @@ export {
   MAX_DEDUPE_KEY_LENGTH,
 };
 
-function safeToString(value, fallback = "") {
+type CleanupFailure = {
+  step: string;
+  code: string | undefined;
+  name: string;
+  message: string;
+};
+
+type RollbackSummary = {
+  attempts: number;
+  completed: number;
+  failureCount: number;
+  failures: CleanupFailure[];
+  truncated: boolean;
+};
+
+type TransactionError = Error & {
+  code?: string;
+  cleanup?: RollbackSummary & { total: number };
+};
+
+type CleanupEntry = {
+  name: unknown;
+  fn: () => unknown;
+  executed: boolean;
+};
+
+export type SessionLifecycleOptions = {
+  states?: readonly unknown[];
+  transitions?: unknown;
+  initialState?: unknown;
+};
+
+export type SessionTransactionOptions = {
+  lifecycle?: SessionLifecycleOptions | null;
+};
+
+export type SessionLifecycleController = {
+  getState: () => string;
+  transition: (nextState: unknown) => string;
+};
+
+export type RegisterSessionCleanup = (
+  name: unknown,
+  fn: () => unknown,
+  options?: { dedupeKey?: unknown },
+) => boolean;
+
+export type SessionTransactionContext = {
+  defer: RegisterSessionCleanup;
+  lifecycle?: SessionLifecycleController;
+};
+
+function safeToString(value: unknown, fallback = ""): string {
   try {
     return String(value);
   } catch {
@@ -32,15 +84,16 @@ function safeToString(value, fallback = "") {
   }
 }
 
-function safeRead(value, key, fallback = undefined) {
+function safeRead(value: unknown, key: PropertyKey, fallback: unknown = undefined): unknown {
   try {
-    return value?.[key];
+    if (value == null) return fallback;
+    return Reflect.get(Object(value), key);
   } catch {
     return fallback;
   }
 }
 
-function clampText(value, limit) {
+function clampText(value: unknown, limit: unknown): string {
   const text = safeToString(value, "");
   if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
     return text;
@@ -48,12 +101,12 @@ function clampText(value, limit) {
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}\u2026` : text;
 }
 
-function normalizeLifecycleStates(states) {
+function normalizeLifecycleStates(states: unknown): string[] {
   if (!Array.isArray(states) || states.length === 0) {
     throw new TypeError("lifecycle states must be a non-empty array");
   }
-  const seen = new Set();
-  const normalized = [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
   for (const rawState of states) {
     const state = safeToString(rawState, "");
     if (!state) throw new TypeError("lifecycle state names must be non-empty");
@@ -64,20 +117,21 @@ function normalizeLifecycleStates(states) {
   return normalized;
 }
 
-function normalizeLifecycleTransitions(states, transitions) {
-  const transitionMap = new Map();
+function normalizeLifecycleTransitions(
+  states: string[],
+  transitions: unknown,
+): Map<string, string[]> {
+  const transitionMap = new Map<string, string[]>();
   const stateSet = new Set(states);
   if (transitions == null) {
     for (let index = 0; index + 1 < states.length; index += 1) {
-      const current = states[index];
-      const next = states[index + 1];
-      transitionMap.set(current, [next]);
+      transitionMap.set(states[index]!, [states[index + 1]!]);
     }
-    transitionMap.set(states[states.length - 1], []);
+    transitionMap.set(states[states.length - 1]!, []);
     return transitionMap;
   }
 
-  if (typeof transitions !== "object" || transitions === null || Array.isArray(transitions)) {
+  if (typeof transitions !== "object" || Array.isArray(transitions)) {
     throw new TypeError("lifecycle.transitions must be an object");
   }
 
@@ -89,29 +143,24 @@ function normalizeLifecycleTransitions(states, transitions) {
     if (!Array.isArray(targets)) {
       throw new TypeError(`lifecycle transition list must be an array: ${normalizedSource}`);
     }
-    const uniqueTargets = [];
+    const uniqueTargets: string[] = [];
     for (const target of targets) {
       const normalizedTarget = safeToString(target, "");
       if (!stateSet.has(normalizedTarget)) {
         throw new TypeError(`unknown lifecycle transition target: ${normalizedTarget}`);
       }
-      if (!uniqueTargets.includes(normalizedTarget)) {
-        uniqueTargets.push(normalizedTarget);
-      }
+      if (!uniqueTargets.includes(normalizedTarget)) uniqueTargets.push(normalizedTarget);
     }
     transitionMap.set(normalizedSource, uniqueTargets);
   }
 
   for (const state of states) {
-    if (!transitionMap.has(state)) {
-      transitionMap.set(state, []);
-    }
+    if (!transitionMap.has(state)) transitionMap.set(state, []);
   }
-
   return transitionMap;
 }
 
-function makeLifecycleController(lifecycle) {
+function makeLifecycleController(lifecycle: SessionLifecycleOptions): SessionLifecycleController {
   const hasExplicitStates = Object.prototype.hasOwnProperty.call(lifecycle ?? {}, "states");
   const states = normalizeLifecycleStates(
     hasExplicitStates ? lifecycle?.states : DEFAULT_LIFECYCLE_STATES,
@@ -119,14 +168,13 @@ function makeLifecycleController(lifecycle) {
   const transitions = normalizeLifecycleTransitions(states, lifecycle?.transitions);
   const initialState = lifecycle && Object.prototype.hasOwnProperty.call(lifecycle, "initialState")
     ? safeToString(lifecycle.initialState, "")
-    : states[0];
+    : states[0]!;
   if (!states.includes(initialState)) {
     throw new TypeError(`unknown lifecycle initial state: ${initialState}`);
   }
 
   let currentState = initialState;
-
-  const transition = (nextState) => {
+  const transition = (nextState: unknown): string => {
     const normalizedNextState = safeToString(nextState, "");
     const allowedTargets = transitions.get(currentState) ?? [];
     if (!stateSetHas(states, normalizedNextState)) {
@@ -139,29 +187,22 @@ function makeLifecycleController(lifecycle) {
     return currentState;
   };
 
-  return {
-    getState() {
-      return currentState;
-    },
-    transition,
-  };
+  return { getState: () => currentState, transition };
 }
 
-function stateSetHas(states, state) {
+function stateSetHas(states: string[], state: string): boolean {
   for (const known of states) {
     if (known === state) return true;
   }
   return false;
 }
 
-function normalizePrimaryError(error) {
+function normalizePrimaryError(error: unknown): TransactionError {
   if (error instanceof Error) return error;
   if (error && typeof error === "object") {
     const rawMessage = safeRead(error, "message", safeToString(error, ""));
-    const message = typeof rawMessage === "string"
-      ? rawMessage
-      : safeToString(rawMessage, "");
-    const wrapper = new Error(message);
+    const message = typeof rawMessage === "string" ? rawMessage : safeToString(rawMessage, "");
+    const wrapper: TransactionError = new Error(message);
     const rawCode = safeRead(error, "code");
     if (
       typeof rawCode === "string"
@@ -176,7 +217,7 @@ function normalizePrimaryError(error) {
   return new Error(safeToString(error, ""));
 }
 
-function normalizeCleanupCode(code) {
+function normalizeCleanupCode(code: unknown): string | undefined {
   if (
     typeof code === "string"
     || typeof code === "number"
@@ -188,19 +229,13 @@ function normalizeCleanupCode(code) {
   return undefined;
 }
 
-function normalizeFailureStepName(step) {
+function normalizeFailureStepName(step: unknown): string {
   const nameFromObject = step && typeof step === "object" ? safeRead(step, "name", undefined) : undefined;
-  const stepNameSource = typeof nameFromObject === "undefined"
-    ? step
-    : nameFromObject;
-
-  return clampText(
-    safeToString(stepNameSource, "unnamed") || "unnamed",
-    MAX_CLEANUP_STEP_NAME_LENGTH,
-  );
+  const stepNameSource = typeof nameFromObject === "undefined" ? step : nameFromObject;
+  return clampText(safeToString(stepNameSource, "unnamed") || "unnamed", MAX_CLEANUP_STEP_NAME_LENGTH);
 }
 
-function normalizeCleanupFailure(step, error) {
+function normalizeCleanupFailure(step: unknown, error: unknown): CleanupFailure {
   const stepName = normalizeFailureStepName(step);
   if (error instanceof Error) {
     return {
@@ -210,20 +245,16 @@ function normalizeCleanupFailure(step, error) {
       message: clampText(safeRead(error, "message", safeToString(error, "")), MAX_CLEANUP_FAILURE_MESSAGE_LENGTH),
     };
   }
-
   const messageValue = safeRead(error, "message", safeToString(error, ""));
   return {
     step: stepName,
     code: normalizeCleanupCode(safeRead(error, "code")),
     name: "Error",
-    message: clampText(
-      typeof messageValue === "string" ? messageValue : safeToString(messageValue, ""),
-      MAX_CLEANUP_FAILURE_MESSAGE_LENGTH,
-    ),
+    message: clampText(typeof messageValue === "string" ? messageValue : safeToString(messageValue, ""), MAX_CLEANUP_FAILURE_MESSAGE_LENGTH),
   };
 }
 
-function normalizeDedupeKey(value) {
+function normalizeDedupeKey(value: unknown): string {
   if (
     typeof value !== "string"
     && typeof value !== "number"
@@ -232,17 +263,15 @@ function normalizeDedupeKey(value) {
   ) {
     throw new TypeError("dedupeKey must be a non-empty scalar up to 128 characters");
   }
-
   const key = String(value);
   if (key.length === 0 || key.length > MAX_DEDUPE_KEY_LENGTH) {
     throw new TypeError("dedupeKey must be a non-empty scalar up to 128 characters");
   }
-
   return key;
 }
 
-async function rollbackAll(entries) {
-  const failures = [];
+async function rollbackAll(entries: CleanupEntry[]): Promise<RollbackSummary> {
+  const failures: CleanupFailure[] = [];
   let attempted = 0;
   let completed = 0;
   for (const entry of [...entries].reverse()) {
@@ -256,7 +285,6 @@ async function rollbackAll(entries) {
       failures.push(normalizeCleanupFailure(entry, failure));
     }
   }
-
   const totalFailures = failures.length;
   return {
     attempts: attempted,
@@ -267,23 +295,22 @@ async function rollbackAll(entries) {
   };
 }
 
-export async function runSessionTransaction(work, options = {}) {
-  if (typeof work !== "function") {
-    throw new TypeError("work must be a function");
-  }
+export async function runSessionTransaction<Result>(
+  work: (context: SessionTransactionContext) => Result | PromiseLike<Result>,
+  options: SessionTransactionOptions = {},
+): Promise<Awaited<Result>> {
+  if (typeof work !== "function") throw new TypeError("work must be a function");
 
   const lifecycle = options?.lifecycle ? makeLifecycleController(options.lifecycle) : null;
-  const rollbacks = [];
-  const dedupeKeys = new Set();
+  const rollbacks: CleanupEntry[] = [];
+  const dedupeKeys = new Set<string>();
   let settled = false;
   let rollbackAttempted = false;
-  let rollbackSummary = null;
+  let rollbackSummary: RollbackSummary | null = null;
 
-  const registerCleanup = (name, fn, { dedupeKey } = {}) => {
+  const registerCleanup: RegisterSessionCleanup = (name, fn, { dedupeKey } = {}) => {
     if (settled) throw new Error("session_transaction_settled");
-    if (typeof fn !== "function") {
-      throw new TypeError("cleanup handler must be a function");
-    }
+    if (typeof fn !== "function") throw new TypeError("cleanup handler must be a function");
     if (typeof dedupeKey !== "undefined") {
       const key = normalizeDedupeKey(dedupeKey);
       if (dedupeKeys.has(key)) return false;
@@ -293,39 +320,26 @@ export async function runSessionTransaction(work, options = {}) {
     return true;
   };
 
-  const runRollback = async () => {
-    if (rollbackAttempted) return rollbackSummary;
+  const runRollback = async (): Promise<RollbackSummary> => {
+    if (rollbackAttempted) return rollbackSummary!;
     rollbackAttempted = true;
     rollbackSummary = await rollbackAll(rollbacks);
     return rollbackSummary;
   };
 
-  const context = {
-    defer: registerCleanup,
-  };
-  if (lifecycle) {
-    context.lifecycle = {
-      getState: lifecycle.getState,
-      transition: lifecycle.transition,
-    };
-  }
+  const context: SessionTransactionContext = lifecycle
+    ? { defer: registerCleanup, lifecycle }
+    : { defer: registerCleanup };
 
   try {
     const result = await Promise.resolve(work(context));
     settled = true;
-    return result;
+    return result as Awaited<Result>;
   } catch (error) {
     settled = true;
     const primary = normalizePrimaryError(error);
     const rollback = await runRollback();
-    primary.cleanup = {
-      attempts: rollback.attempts,
-      completed: rollback.completed,
-      failureCount: rollback.failureCount,
-      failures: rollback.failures,
-      truncated: rollback.truncated,
-      total: rollback.attempts,
-    };
+    primary.cleanup = { ...rollback, total: rollback.attempts };
     throw primary;
   }
 }

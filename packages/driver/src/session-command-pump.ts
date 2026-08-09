@@ -5,50 +5,74 @@ const SESSION_QUEUE_FULL_ERROR = "session_queue_full";
 const INVALID_COMMAND_SIZE_ERROR = "invalid_command_size";
 const INVALID_EXECUTOR_ERROR = "invalid_executor";
 
-function createError(code, message = code) {
-  const error = new Error(message);
-  error.code = code;
+type PumpError = Error & { code: string };
+
+type QueueEntry = {
+  item: unknown;
+  bytes: number;
+  execute: (item: unknown) => unknown;
+  resolve: (output: unknown) => void;
+  reject: (reason?: unknown) => void;
+};
+
+export type SessionCommandPumpOptions = {
+  maxItems?: number;
+  maxBytes?: number;
+};
+
+export type SessionCommandPumpSnapshot = {
+  running: boolean;
+  runningCount: number;
+  runningBytes: number;
+  queueLength: number;
+  queuedBytes: number;
+  maxItems: number;
+  maxBytes: number;
+  closed: boolean;
+};
+
+function createError(code: string, message = code): PumpError {
+  const error: PumpError = Object.assign(new Error(message), { code });
   return error;
 }
 
-function isSafePositiveInteger(value) {
-  return Number.isSafeInteger(value) && value > 0;
+function isSafePositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function isSafeNonNegativeInteger(value) {
-  return Number.isSafeInteger(value) && value >= 0;
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 export class SessionCommandPump {
+  readonly maxItems: number;
+  readonly maxBytes: number;
+  closed = false;
+  private readonly queue: QueueEntry[] = [];
+  private queuedBytes = 0;
+  private runningCount = 0;
+  private runningBytes = 0;
+  private _draining = false;
+  private _closePromise: Promise<void> | null = null;
+  private _closeResolve: (() => void) | null = null;
+
   /**
    * Create an in-session FIFO work queue with in-flight caps.
    *
    * maxItems and maxBytes are enforced across in-flight work (running + queued)
    * so a running entry consumes capacity from later enqueues.
    */
-  constructor({ maxItems = 32, maxBytes = 1024 * 1024 } = {}) {
+  constructor({ maxItems = 32, maxBytes = 1024 * 1024 }: SessionCommandPumpOptions = {}) {
     if (!isSafePositiveInteger(maxItems) || !isSafePositiveInteger(maxBytes)) {
       throw createError(INVALID_COMMAND_SIZE_ERROR);
     }
 
     this.maxItems = maxItems;
     this.maxBytes = maxBytes;
-
-    this.closed = false;
-    this.queue = [];
-    this.queuedBytes = 0;
-    this.runningCount = 0;
-    this.runningBytes = 0;
-
-    this._draining = false;
-    this._closePromise = null;
-    this._closeResolve = null;
   }
 
-  /**
-   * Return bounded diagnostics only (no payload content).
-   */
-  snapshot() {
+  /** Return bounded diagnostics only (no payload content). */
+  snapshot(): SessionCommandPumpSnapshot {
     return {
       running: this.runningCount > 0,
       runningCount: this.runningCount,
@@ -61,7 +85,7 @@ export class SessionCommandPump {
     };
   }
 
-  closeAfterCurrent() {
+  closeAfterCurrent(): Promise<void> {
     if (this._closePromise) {
       return this._closePromise;
     }
@@ -80,7 +104,11 @@ export class SessionCommandPump {
     return this._closePromise;
   }
 
-  enqueue(item, bytes, execute) {
+  enqueue<Item, Output>(
+    item: Item,
+    bytes: number,
+    execute: (item: Item) => Output | PromiseLike<Output>,
+  ): Promise<Awaited<Output>> {
     if (this.closed) {
       return Promise.reject(createError(SESSION_FINALIZING_ERROR));
     }
@@ -98,12 +126,12 @@ export class SessionCommandPump {
       return Promise.reject(createError(SESSION_QUEUE_FULL_ERROR));
     }
 
-    return new Promise((resolve, reject) => {
+    return new Promise<Awaited<Output>>((resolve, reject) => {
       this.queue.push({
         item,
         bytes,
-        execute,
-        resolve,
+        execute: (queuedItem) => execute(queuedItem as Item),
+        resolve: (output) => resolve(output as Awaited<Output>),
         reject,
       });
       this.queuedBytes += bytes;
@@ -111,7 +139,7 @@ export class SessionCommandPump {
     });
   }
 
-  _rejectQueued(error) {
+  private _rejectQueued(error: PumpError): void {
     if (this.queue.length === 0) {
       return;
     }
@@ -123,7 +151,7 @@ export class SessionCommandPump {
     }
   }
 
-  _resolveCloseIfNeeded() {
+  private _resolveCloseIfNeeded(): void {
     if (!this.closed || !this._closeResolve) {
       return;
     }
@@ -136,7 +164,7 @@ export class SessionCommandPump {
     resolve();
   }
 
-  async _drain() {
+  private async _drain(): Promise<void> {
     if (this._draining) {
       return;
     }
@@ -150,6 +178,7 @@ export class SessionCommandPump {
         }
 
         const entry = this.queue.shift();
+        if (!entry) break;
         this.queuedBytes -= entry.bytes;
         this.runningCount += 1;
         this.runningBytes += entry.bytes;

@@ -261,6 +261,13 @@ pnpm pack:check            # Build and verify the MCP package tarball
 pnpm release:check         # Run the complete release gate
 ```
 
+The browser driver, controller, transport adapter, session lifecycle, target registry,
+containment, input, and renderer-liveness modules are strict TypeScript. `pnpm
+build:driver` compiles them into the stable JavaScript filenames consumed by the MV3
+extension; tests exercise those compiled files, and a parity gate compares two clean
+builds byte-for-byte. The overlay remains JavaScript/CSS because it is an isolated page
+asset, not part of the typed control path.
+
 The full release gate is intentionally exhaustive and includes packed-install, clean-user, protocol, fixture, chaos, concurrency, and artifact checks. See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
 
 ## Repository layout
@@ -269,7 +276,7 @@ The full release gate is intentionally exhaustive and includes packed-install, c
 apps/extension/       Manifest V3 extension
 apps/mcp-server/      stdio MCP server and localhost relay
 packages/core/        Contracts, schemas, redaction, and safety floor
-packages/driver/      Browser-side CDP driver
+packages/driver/      Strict TypeScript browser-side CDP driver and compiled runtime
 skills/newton-browser Canonical agent workflow and tool reference
 examples/mcp/         Version-pinned artifact configuration examples
 docs/                 Installation, security, decisions, and release docs

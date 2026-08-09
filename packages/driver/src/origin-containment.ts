@@ -4,22 +4,24 @@ const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const CONNECTION_TYPES = new Set(["WebSocket", "EventSource"]);
 
 export class OriginContainmentError extends Error {
-  constructor(code) {
+  readonly code: string;
+
+  constructor(code: string) {
     super("origin containment policy error");
     this.name = "OriginContainmentError";
     this.code = code;
   }
 }
 
-function fail(code) {
+function fail(code: string): never {
   throw new OriginContainmentError(code);
 }
 
-export function normalizeGrantOrigin(value) {
+export function normalizeGrantOrigin(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > ORIGIN_LENGTH_CAP || /[\u0000-\u001f\u007f*]/.test(value)) {
     fail("invalid_origin_grant");
   }
-  let parsed;
+  let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
@@ -36,7 +38,7 @@ export function normalizeGrantOrigin(value) {
   return parsed.origin;
 }
 
-export function originForUrl(value) {
+export function originForUrl(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > 8192 || /[\u0000-\u001f\u007f]/.test(value)) return "";
   try {
     const parsed = new URL(value);
@@ -49,7 +51,13 @@ export function originForUrl(value) {
   return "";
 }
 
-export function compileOriginGrant(primaryOrigin, allowedOrigins = []) {
+export type OriginGrant = Readonly<{
+  primaryOrigin: string;
+  origins: readonly string[];
+  contains(value: unknown): boolean;
+}>;
+
+export function compileOriginGrant(primaryOrigin: unknown, allowedOrigins: readonly unknown[] = []): OriginGrant {
   if (!Array.isArray(allowedOrigins)) fail("invalid_origin_grant");
   if (allowedOrigins.length + 1 > ORIGIN_CAP) fail("origin_grant_too_large");
   const primary = normalizeGrantOrigin(primaryOrigin);
@@ -58,14 +66,28 @@ export function compileOriginGrant(primaryOrigin, allowedOrigins = []) {
   return Object.freeze({
     primaryOrigin: primary,
     origins: Object.freeze(origins),
-    contains(value) {
+    contains(value: unknown) {
       const candidate = originForUrl(value);
       return Boolean(candidate && allowed.has(candidate));
     },
   });
 }
 
-export function decidePausedRequest(input, grant) {
+type PausedRequestInput = {
+  request?: { url?: unknown; method?: unknown } | null;
+  isNavigationRequest?: unknown;
+  resourceType?: unknown;
+};
+
+type PausedTargetInput = { url?: unknown; initiatorUrl?: unknown };
+
+export type ContainmentDecision = Readonly<{
+  action: "continue" | "continue_without_body_access" | "fail" | "resume" | "hold" | "block";
+  reason: string;
+  granted: boolean;
+}>;
+
+export function decidePausedRequest(input: PausedRequestInput | null | undefined, grant: OriginGrant): ContainmentDecision {
   const request = input?.request ?? {};
   const url = String(request.url ?? "");
   const method = String(request.method ?? "GET").toUpperCase();
@@ -77,7 +99,7 @@ export function decidePausedRequest(input, grant) {
   return decision("fail", "unsupported_ungranted_request", false);
 }
 
-export function decidePausedTarget(input, grant) {
+export function decidePausedTarget(input: PausedTargetInput | null | undefined, grant: OriginGrant): ContainmentDecision {
   const url = String(input?.url ?? "");
   if (!url || url === "about:blank") {
     return input?.initiatorUrl && grant.contains(input.initiatorUrl)
@@ -88,6 +110,6 @@ export function decidePausedTarget(input, grant) {
   return decision("block", "ungranted_target", false);
 }
 
-function decision(action, reason, granted) {
+function decision(action: ContainmentDecision["action"], reason: string, granted: boolean): ContainmentDecision {
   return Object.freeze({ action, reason, granted });
 }

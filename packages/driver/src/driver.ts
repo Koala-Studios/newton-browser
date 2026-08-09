@@ -1,4 +1,4 @@
-// @ts-check
+// Newton Browser strict TypeScript driver.
 // Newton Browser in-extension CDP driver.
 //
 // Runs in the MV3 service worker. Attaches chrome.debugger (CDP) to the ACTIVE
@@ -14,6 +14,43 @@ import { TargetRegistry } from "./target-registry.js";
 import { compileOriginGrant, decidePausedRequest, decidePausedTarget } from "./origin-containment.js";
 import { DialogTracker, InputDispatcher } from "./input-dispatcher.js";
 import { RendererLiveness } from "./renderer-liveness.js";
+import type {
+  ActiveActionSignals,
+  ActionSignalWindow,
+  Box,
+  BrowserAction,
+  BrowserWaitFor,
+  BrowserDriverOptions,
+  CdpRecord,
+  CdpRoute,
+  ConsoleEntry,
+  ChangeRecord,
+  DeltaObservation,
+  DriverAction,
+  DriverContext,
+  DriverError,
+  DriverObservation,
+  DriverObservationNode,
+  DriverRecord,
+  FullObservation,
+  HeldTarget,
+  NetworkEntry,
+  NormalizedTarget,
+  NormalizedWait,
+  ObserveOptions,
+  ObservationNodeSnapshot,
+  PendingDialogRoute,
+  Point,
+  InputDispatchScope,
+  InteractiveFilters,
+  PageSignature,
+  ScreenshotOptions,
+  TargetRoute,
+  TargetResolution,
+  TextObservation,
+  Viewport,
+  WaitResult,
+} from "./types.js";
 
 const CDP_VERSION = "1.3";
 const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Network", "Log"];
@@ -42,12 +79,46 @@ const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays p
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
 const INLINE_IMAGE_MAX_CHARS = 23_000_000; // supports up to the 16 MiB decoded relay bound
 
-export function createNewtonBrowserDriver(options = {}) {
+export function createNewtonBrowserDriver(options: BrowserDriverOptions = {}) {
   return new NewtonBrowserDriver(options);
 }
 
 class NewtonBrowserDriver {
-  constructor(options = {}) {
+  tabId: number | null;
+  attached: boolean;
+  refIndex: Map<string, TargetRoute>;
+  devicePixelRatio: number;
+  zoom: number;
+  accent: string | null;
+  ownerLabel: string;
+  ownsTab: boolean;
+  lastNodes: Map<string, ObservationNodeSnapshot>;
+  lastObserveUrl: string | null;
+  lastScrollY: number;
+  ownedNodeCache: Map<string, boolean | CdpRecord>;
+  activeActionSignals: ActiveActionSignals | null;
+  pendingDialog: CdpRecord | null;
+  pendingDialogRoute: PendingDialogRoute | null;
+  pendingDialogs: Map<string, CdpRecord>;
+  sessionViewport: Viewport | null;
+  consoleBuffer: ConsoleEntry[];
+  consoleDropped: number;
+  networkBuffer: Map<string, NetworkEntry>;
+  networkDropped: number;
+  networkInFlight: Set<string>;
+  allowedOrigins: string[];
+  targetRegistry: TargetRegistry;
+  mainTargetId: string | null;
+  containment: ReturnType<typeof compileOriginGrant> | null;
+  containmentReady: boolean;
+  heldTargets: Map<string, HeldTarget>;
+  inputDispatcher: InputDispatcher;
+  dialogTracker: DialogTracker;
+  rendererLiveness: RendererLiveness;
+  livenessEpoch: number;
+  activeCommandId: string | null;
+
+  constructor(options: BrowserDriverOptions = {}) {
     this.tabId = null;
     this.attached = false;
     this.refIndex = new Map(); // ref -> immutable target route
@@ -89,7 +160,7 @@ class NewtonBrowserDriver {
       : null;
     this.containmentReady = false;
     this.heldTargets = new Map();
-    this.inputDispatcher = new InputDispatcher((method, params, route) => this.cdp(method, params, route));
+    this.inputDispatcher = new InputDispatcher((method: string, params: CdpRecord, route: CdpRoute) => this.cdp(method, params, route));
     this.dialogTracker = new DialogTracker();
     this.rendererLiveness = new RendererLiveness();
     this.livenessEpoch = 1;
@@ -97,11 +168,11 @@ class NewtonBrowserDriver {
     this.activeCommandId = null;
   }
 
-  isAttachedTo(tabId) {
+  isAttachedTo(tabId: number): boolean {
     return this.attached && this.tabId === tabId;
   }
 
-  async attach(tabId) {
+  async attach(tabId: number): Promise<void> {
     if (this.attached && this.tabId === tabId) return;
     if (this.attached) await this.detach();
     this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
@@ -134,13 +205,13 @@ class NewtonBrowserDriver {
   // and again on every main-frame navigation (Proposal 28 §3) — the injected
   // overlay world is destroyed on navigation, so without this the cursor/outline
   // disappears on the first nav and never returns. Fire-and-forget; never gates.
-  async reassertOverlay() {
+  async reassertOverlay(): Promise<void> {
     if (!this.attached || this.tabId == null) return;
     await this.injectOverlay();
     await this.sendToPage({ type: "NB_DRIVE_BEGIN", accent: this.accent ?? undefined, ownerLabel: this.ownerLabel });
   }
 
-  async detach() {
+  async detach(): Promise<void> {
     if (!this.attached || this.tabId == null) return;
     await this.sendToPage({ type: "NB_DRIVE_END" }).catch(() => {});
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
@@ -165,7 +236,7 @@ class NewtonBrowserDriver {
   // closed the old target). Clear the stale in-memory flag so a follow-up
   // attach() actually re-establishes the CDP session instead of no-op'ing. We do
   // NOT call chrome.debugger.detach here — Chrome already did.
-  markDetached(reason = "debugger_detached") {
+  markDetached(reason = "debugger_detached"): void {
     this.failRenderer("root", "debugger_detached", reason);
     this.attached = false;
     this.refIndex.clear();
@@ -181,37 +252,37 @@ class NewtonBrowserDriver {
     this.dialogTracker = new DialogTracker();
   }
 
-  ensureRenderer(targetKey) {
+  ensureRenderer(targetKey: string): NonNullable<ReturnType<RendererLiveness["snapshot"]>> {
     const existing = this.rendererLiveness.snapshot(targetKey);
     if (existing) return existing;
-    return this.rendererLiveness.register(targetKey, this.livenessEpoch);
+    return this.rendererLiveness.register(targetKey, this.livenessEpoch)!;
   }
 
-  failRenderer(targetKey, state, detail) {
+  failRenderer(targetKey: string, state: string, detail?: string): NonNullable<ReturnType<RendererLiveness["snapshot"]>> {
     const snapshot = this.ensureRenderer(targetKey);
     if (snapshot.state === state || snapshot.state === "terminal") return snapshot;
     try {
-      return this.rendererLiveness.transition(targetKey, state, { epoch: snapshot.epoch, detail });
+      return this.rendererLiveness.transition(targetKey, state, { epoch: snapshot.epoch, ...(detail !== undefined ? { detail } : {}) })!;
     } catch {
       return snapshot;
     }
   }
 
-  reconcileRenderer(targetKey) {
+  reconcileRenderer(targetKey: string): NonNullable<ReturnType<RendererLiveness["snapshot"]>> {
     let snapshot = this.ensureRenderer(targetKey);
     if (snapshot.state === "healthy") return snapshot;
     try {
       if (snapshot.state !== "reconciling") {
-        snapshot = this.rendererLiveness.transition(targetKey, "reconciling", { epoch: snapshot.epoch });
+        snapshot = this.rendererLiveness.transition(targetKey, "reconciling", { epoch: snapshot.epoch })!;
       }
-      return this.rendererLiveness.transition(targetKey, "healthy", { epoch: snapshot.epoch });
+      return this.rendererLiveness.transition(targetKey, "healthy", { epoch: snapshot.epoch })!;
     } catch {
       this.livenessEpoch += 1;
-      return this.rendererLiveness.register(targetKey, this.livenessEpoch);
+      return this.rendererLiveness.register(targetKey, this.livenessEpoch)!;
     }
   }
 
-  assertRendererLive(targetKey, actionKind) {
+  assertRendererLive(targetKey: string, actionKind: string): void {
     const snapshot = this.ensureRenderer(targetKey);
     if (snapshot.state === "healthy" || snapshot.state === "reconciling") return;
     if (snapshot.state === "dialog_blocked" && (actionKind === "dialog_accept" || actionKind === "dialog_dismiss")) return;
@@ -222,15 +293,15 @@ class NewtonBrowserDriver {
     throw typedDriverError(code);
   }
 
-  markDiscarded() {
+  markDiscarded(): NonNullable<ReturnType<RendererLiveness["snapshot"]>> {
     return this.failRenderer("root", "discarded", "tab_discarded");
   }
 
-  markTargetGone(targetKey = "root") {
+  markTargetGone(targetKey = "root"): NonNullable<ReturnType<RendererLiveness["snapshot"]>> {
     return this.failRenderer(targetKey, "target_gone", "target_removed");
   }
 
-  async dispatchInput(route, operation) {
+  async dispatchInput<T>(route: CdpRoute, operation: (input: InputDispatchScope) => Promise<T>): Promise<T> {
     const targetKey = inputTargetKey(route);
     this.ensureRenderer(targetKey);
     const result = await this.dialogTracker.race(targetKey, this.activeCommandId, () => this.inputDispatcher.run(route, operation));
@@ -238,10 +309,10 @@ class NewtonBrowserDriver {
     return result.value;
   }
 
-  recordDebuggerEvent(sourceOrMethod, methodOrParams = {}, eventParams = {}) {
+  recordDebuggerEvent(sourceOrMethod: CdpRecord | string, methodOrParams: CdpRecord | string = {}, eventParams: CdpRecord = {}): Promise<void> | undefined {
     const source = typeof sourceOrMethod === "string" ? {} : sourceOrMethod ?? {};
-    const method = typeof sourceOrMethod === "string" ? sourceOrMethod : methodOrParams;
-    const params = typeof sourceOrMethod === "string" ? methodOrParams : eventParams;
+    const method = typeof sourceOrMethod === "string" ? sourceOrMethod : String(methodOrParams);
+    const params: CdpRecord = typeof sourceOrMethod === "string" && typeof methodOrParams !== "string" ? methodOrParams : eventParams;
     const targetEvent = this.recordTargetEvent(source, method, params);
     // Dialog open/close is tracked persistently (not just inside an action window)
     // because a JS dialog blocks the renderer until it is handled (WS9.4).
@@ -274,7 +345,8 @@ class NewtonBrowserDriver {
     // Network ring buffer (WS9.3) — metadata only, never headers.
     if (method === "Network.requestWillBeSent" && params?.requestId) {
       while (this.networkInFlight.size >= NETWORK_BUFFER_MAX) {
-        this.networkInFlight.delete(this.networkInFlight.values().next().value);
+        const oldest = this.networkInFlight.values().next().value;
+        if (typeof oldest === "string") this.networkInFlight.delete(oldest);
       }
       this.networkInFlight.add(String(params.requestId));
       this.pushNetwork(params.requestId, { requestId: params.requestId, method: String(params.request?.method ?? "GET"), url: String(params.request?.url ?? ""), resourceType: params.type, at: new Date().toISOString() });
@@ -310,7 +382,7 @@ class NewtonBrowserDriver {
     return targetEvent;
   }
 
-  cdp(method, params = {}, routeOrTimeout = {}) {
+  cdp(method: string, params: CdpRecord = {}, routeOrTimeout: CdpRoute | number = {}): Promise<CdpRecord> {
     const timeoutMs = typeof routeOrTimeout === "number"
       ? routeOrTimeout
       : routeOrTimeout?.timeoutMs ?? CDP_TIMEOUT_MS;
@@ -341,7 +413,7 @@ class NewtonBrowserDriver {
     });
   }
 
-  async initializeTargetRegistry() {
+  async initializeTargetRegistry(): Promise<void> {
     this.targetRegistry = new TargetRegistry();
     const response = await this.cdp("Target.getTargetInfo", {}).catch(() => null);
     const info = response?.targetInfo;
@@ -355,7 +427,7 @@ class NewtonBrowserDriver {
     this.targetRegistry.commitTopLevelDocument(targetId);
   }
 
-  async recordTargetEvent(source, method, params) {
+  async recordTargetEvent(source: CdpRecord, method: string, params: CdpRecord): Promise<void> {
     const sourceSessionId = typeof source?.sessionId === "string" ? source.sessionId : null;
     if (method === "Target.attachedToTarget" && params?.targetInfo && typeof params.sessionId === "string") {
       const info = params.targetInfo;
@@ -387,7 +459,7 @@ class NewtonBrowserDriver {
       const route = { sessionId: params.sessionId };
       await this.installContainment(route);
       const parent = parentTargetId ? this.targetRegistry.listObservationRoutes().find((candidate) => candidate.targetId === parentTargetId) : null;
-      const targetDecision = decidePausedTarget({ url: info.url, initiatorUrl: parent?.origin }, this.containment);
+      const targetDecision = decidePausedTarget({ url: info.url, initiatorUrl: parent?.origin }, this.containment!);
       if (targetDecision.action === "resume") {
         await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
       } else {
@@ -401,7 +473,7 @@ class NewtonBrowserDriver {
     if (method === "Target.targetInfoChanged" && params?.targetInfo?.targetId) {
       const held = this.heldTargets.get(params.targetInfo.targetId);
       if (!held) return;
-      const targetDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment);
+      const targetDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment!);
       if (targetDecision.action === "resume") {
         this.heldTargets.delete(held.targetId);
         await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: held.sessionId });
@@ -412,7 +484,7 @@ class NewtonBrowserDriver {
       return;
     }
     if (method === "Fetch.requestPaused" && typeof params?.requestId === "string") {
-      const decision = decidePausedRequest(params, this.containment);
+      const decision = decidePausedRequest(params, this.containment!);
       const route = sourceSessionId ? { sessionId: sourceSessionId } : {};
       if (decision.action === "fail") {
         if (this.activeActionSignals) this.activeActionSignals.containmentPrevention = decision.reason;
@@ -457,14 +529,14 @@ class NewtonBrowserDriver {
     });
   }
 
-  installContainment(route) {
+  installContainment(route: CdpRoute): Promise<CdpRecord> {
     return this.cdp("Fetch.enable", {
       patterns: [{ urlPattern: "*", requestStage: "Request" }],
       handleAuthRequests: false,
     }, route);
   }
 
-  preflightAction(action) {
+  preflightAction(action: DriverAction): Promise<void> | void {
     if (!this.containmentReady || !this.containment) throw Object.assign(new Error("origin_containment_unavailable"), { code: "origin_containment_unavailable" });
     if (action?.kind === "navigate" && !this.containment.contains(action.url)) {
       throw Object.assign(new Error("ungranted_navigation"), { code: "ungranted_navigation" });
@@ -473,7 +545,7 @@ class NewtonBrowserDriver {
     if (selector) return this.validateSelector(selector);
   }
 
-  async validateSelector(selector) {
+  async validateSelector(selector: string): Promise<void> {
     const root = await this.cdp("DOM.getDocument", { depth: 0 });
     const nodeId = root?.root?.nodeId;
     if (!nodeId) throw typedDriverError("target_resolution_failed");
@@ -488,7 +560,7 @@ class NewtonBrowserDriver {
   // CSS-pixel calibration (§5.2 note): CDP Input coordinates are layout-viewport
   // CSS pixels; the overlay uses position:fixed in the same space. Measure DPR /
   // zoom once so the cursor lands on the clicked element at non-100% zoom.
-  async calibrate() {
+  async calibrate(): Promise<void> {
     const metrics = await this.cdp("Page.getLayoutMetrics", {}).catch(() => null);
     const scale = metrics?.visualViewport?.scale;
     this.zoom = typeof scale === "number" && scale > 0 ? scale : 1;
@@ -496,20 +568,24 @@ class NewtonBrowserDriver {
     this.devicePixelRatio = dpr && dpr > 0 ? dpr : 1;
   }
 
-  async injectOverlay() {
+  async injectOverlay(): Promise<void> {
     await chrome.scripting.insertCSS({ target: { tabId: this.tabId }, files: ["src/overlay.css"] }).catch(() => {});
     await chrome.scripting.executeScript({ target: { tabId: this.tabId }, files: ["src/overlay.js"] }).catch(() => {});
   }
 
-  sendToPage(message) {
+  sendToPage(message: DriverRecord): Promise<CdpRecord | void> {
     return chrome.tabs.sendMessage(this.tabId, message).catch(() => {});
   }
 
   // ── Observation (the read half) ───────────────────────────────────────────
   // Compact AX observation with backendNodeId-keyed refs (§7.5). Excludes
   // the bridge overlay UI so the agent never targets the bubble.
-  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars } = {}) {
-    if (mode === "text") return this.observeText({ maxChars });
+  async observe(options?: ObserveOptions & { mode?: "full" }): Promise<FullObservation>;
+  async observe(options: ObserveOptions & { mode: "text" }): Promise<TextObservation>;
+  async observe(options: ObserveOptions & { mode: "diff" }): Promise<FullObservation | DeltaObservation>;
+  async observe(options?: ObserveOptions): Promise<DriverObservation>;
+  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars }: ObserveOptions = {}): Promise<DriverObservation> {
+    if (mode === "text") return this.observeText(maxChars === undefined ? {} : { maxChars });
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
     const url = await this.evalString("location.href");
     // A navigation invalidates the diff baseline and the per-document owned-node
@@ -571,6 +647,7 @@ class NewtonBrowserDriver {
     if (includeInteractive && nodes.length < cap) {
       const discovered = await this.interactiveObservationNodes(cap - nodes.length, new Set(nodes.map((node) => node.ref)), { requestedRoles, filterText });
       for (const node of discovered) {
+        if (!node.route) continue;
         this.refIndex.set(node.ref, node.route);
         const { route: _route, ...publicNode } = node;
         nodes.push(publicNode);
@@ -578,6 +655,7 @@ class NewtonBrowserDriver {
     }
     for (const fileNode of await this.fileInputObservationNodes(cap - nodes.length)) {
       if (nodes.some((node) => node.ref === fileNode.ref)) continue;
+      if (!fileNode.route) continue;
       this.refIndex.set(fileNode.ref, fileNode.route);
       const { backendNodeId: _backendNodeId, route: _route, ...publicNode } = fileNode;
       nodes.push(publicNode);
@@ -606,7 +684,7 @@ class NewtonBrowserDriver {
   // WS9.1: readable-text observation. Prefer main/article content, fall back to body
   // innerText. Raw text crosses the loopback relay and is secret-redacted host-side by
   // redactBrowserResult before it reaches the client, exactly like accessible names.
-  async observeText({ maxChars = TEXT_OBSERVE_CHAR_CAP } = {}) {
+  async observeText({ maxChars = TEXT_OBSERVE_CHAR_CAP }: Pick<ObserveOptions, "maxChars"> = {}): Promise<TextObservation> {
     const cap = Math.max(200, Math.min(Number(maxChars) || TEXT_OBSERVE_CHAR_CAP, TEXT_OBSERVE_CHAR_CAP));
     const url = await this.evalString("location.href");
     const title = await this.evalString("document.title");
@@ -625,7 +703,7 @@ class NewtonBrowserDriver {
     };
   }
 
-  async accessibilityTreesForOrigin(origin) {
+  async accessibilityTreesForOrigin(origin: string): Promise<CdpRecord> {
     const page = await this.cdp("Page.getFrameTree", {}).catch(() => null);
     this.reconcileFrameTree(page?.frameTree, origin);
     const allowed = new Set([...this.allowedOrigins, origin].filter(Boolean));
@@ -643,7 +721,7 @@ class NewtonBrowserDriver {
     return { trees, excludedFrames: excludedFrames.slice(0, 64) };
   }
 
-  reconcileFrameTree(frameTree, origin) {
+  reconcileFrameTree(frameTree: CdpRecord | undefined, origin: string): void {
     if (!this.mainTargetId) {
       this.mainTargetId = `tab-${this.tabId ?? "unattached"}`;
       this.targetRegistry.registerTarget({ targetId: this.mainTargetId, type: "page", origin });
@@ -665,26 +743,28 @@ class NewtonBrowserDriver {
   // Post-action observation as a compact diff (D6). Used after in-place actions
   // (click/fill/scroll/…); navigations and the explicit observe stay full so the
   // diff baseline is re-established.
-  observeDelta() {
+  observeDelta(): Promise<FullObservation | DeltaObservation> {
     return this.observe({ mode: "diff" });
   }
 
   // describeNode is one CDP round-trip per node; owned-ness never changes for a
   // backendNodeId within a document, so cache it (cleared on navigation). (J45)
-  async isOwnedOverlayNodeCached(backendNodeId, route = {}) {
+  async isOwnedOverlayNodeCached(backendNodeId: number, route: TargetRoute = {}): Promise<boolean> {
     const key = `${route.sessionId ?? "root"}:${backendNodeId}`;
-    if (this.ownedNodeCache.has(key)) return this.ownedNodeCache.get(key);
+    const cached = this.ownedNodeCache.get(key);
+    if (typeof cached === "boolean") return cached;
     const owned = await this.isOwnedOverlayNode(backendNodeId, route);
     this.ownedNodeCache.set(key, owned);
     return owned;
   }
 
-  async describedNodeFactsCached(backendNodeId, route = {}) {
+  async describedNodeFactsCached(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord> {
     const key = `${route.sessionId ?? "root"}:${backendNodeId}:facts`;
-    if (this.ownedNodeCache.has(key)) return this.ownedNodeCache.get(key);
+    const cached = this.ownedNodeCache.get(key);
+    if (cached && typeof cached === "object") return cached;
     const described = await this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null);
     const node = described?.node ?? {};
-    const attributes = {};
+    const attributes: CdpRecord = {};
     for (let index = 0; index < (node.attributes ?? []).length; index += 2) {
       attributes[String(node.attributes[index]).toLowerCase()] = String(node.attributes[index + 1] ?? "");
     }
@@ -697,7 +777,7 @@ class NewtonBrowserDriver {
   // an optional pre-capture wait, and mobile/desktop device renders. Masks
   // sensitive zones before capture; returns an inline base64 image only when the
   // caller asked (bounded + stripped from persistence by redaction).
-  async screenshot({ sensitiveZones = [], fullPage = false, waitMs, device, clip, inline = false, format = "png", quality } = {}) {
+  async screenshot({ sensitiveZones = [], fullPage = false, waitMs, device, clip, inline = false, format = "png", quality }: ScreenshotOptions = {}): Promise<DriverRecord> {
     const emulation = await this.applyDeviceEmulation(device);
     const restoreDevice = emulation.restore;
     const imageFormat = format === "jpeg" ? "jpeg" : "png";
@@ -707,8 +787,8 @@ class NewtonBrowserDriver {
       const wait = Math.max(0, Math.min(Number(waitMs) || 0, MAX_SCREENSHOT_WAIT_MS));
       if (wait > 0) { await this.waitForSettle().catch(() => {}); await delay(wait); }
       if (masksConfigured && !await this.maskZones(sensitiveZones)) throw new Error("mask_application_failed");
-      const params = { format: imageFormat };
-      if (imageFormat === "jpeg") params.quality = Math.max(1, Math.min(Number.isFinite(quality) ? Math.trunc(quality) : 70, 100));
+      const params: CdpRecord = { format: imageFormat };
+      if (imageFormat === "jpeg") params.quality = Math.max(1, Math.min(typeof quality === "number" && Number.isFinite(quality) ? Math.trunc(quality) : 70, 100));
       let truncated = false;
       if (clip && Number.isFinite(clip.width) && Number.isFinite(clip.height) && clip.width > 0 && clip.height > 0) {
         params.clip = { x: Math.max(0, clip.x || 0), y: Math.max(0, clip.y || 0), width: Math.min(clip.width, MAX_SHOT_PX), height: Math.min(clip.height, MAX_SHOT_PX), scale: 1 };
@@ -750,9 +830,10 @@ class NewtonBrowserDriver {
       await this.unmaskZones();
       const url = await this.evalString("location.href");
       const title = await this.evalString("document.title");
-      const scale = params.clip?.scale || 1;
-      const width = params.clip ? Math.round(params.clip.width * scale) : undefined;
-      const height = params.clip ? Math.round(params.clip.height * scale) : undefined;
+      const captureClip = params.clip as (Box & { scale: number }) | undefined;
+      const scale = captureClip?.scale || 1;
+      const width = captureClip ? Math.round(captureClip.width * scale) : undefined;
+      const height = captureClip ? Math.round(captureClip.height * scale) : undefined;
       // Carry the image ONLY when the caller asked for it inline — otherwise a
       // multi-MB base64 would be POSTed across the network just to be stripped by
       // redaction. Drop an over-cap inline image here too (before the POST) so it
@@ -784,7 +865,7 @@ class NewtonBrowserDriver {
   // visibly reflows the page, so we never silently distort the user's own
   // current tab. Returns { restore, clip } — the clip is the device viewport so
   // the capture can target an explicit region (see screenshot()).
-  async applyDeviceEmulation(device) {
+  async applyDeviceEmulation(device?: "mobile" | "desktop"): Promise<{ restore: () => Promise<void>; clip: Box | null }> {
     if (device !== "mobile" && device !== "desktop") return { restore: async () => {}, clip: null };
     if (!this.ownsTab) throw new Error("device_emulation_needs_owned_tab");
     // Mobile render via viewport width + mobile:true (responsive sites switch on
@@ -808,62 +889,91 @@ class NewtonBrowserDriver {
   }
 
   // ── Action execution (the write half) ──────────────────────────────────────
-  async executeAction(action, context = {}) {
-    const kind = action?.kind;
+  async executeAction(action: DriverAction, context: DriverContext = {}): Promise<DriverRecord> {
+    const kind = action.kind;
     this.assertRendererLive("root", kind);
     this.activeCommandId = typeof context?.commandId === "string" ? context.commandId : null;
     try {
-      if (kind === "observe") return this.withObservationMeta("verified", {}, await this.observe({ maxNodes: action.maxNodes, query: action.query, roles: action.roles, includeInteractive: action.includeInteractive, mode: action.mode }));
-      if (kind === "screenshot") return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({ sensitiveZones: action.sensitiveZones, fullPage: action.fullPage, waitMs: action.waitMs, device: action.device, clip: action.clip, inline: action.inline, format: action.format, quality: action.quality }) };
-      if (kind === "navigate") return this.navigate(action);
-      if (kind === "back" || kind === "forward" || kind === "reload") return this.historyAction(kind);
-      if (kind === "scroll") return this.scroll(action);
-      if (kind === "wait_for") return this.waitFor(action);
-      if (kind === "click") return this.click(action);
-      if (kind === "press") return this.press(action);
-      if (kind === "hover" || kind === "move") return this.hover(action);
-      if (kind === "fill" || kind === "type") return this.fill(action);
-      if (kind === "select") return this.select(action);
-      if (kind === "clear") return this.clear(action);
-      if (kind === "set_files") return this.setFiles(action);
-      if (kind === "dialog_accept" || kind === "dialog_dismiss") return this.handleDialog(kind, action);
-      if (kind === "resize") return this.resizeViewport(action);
-      if (kind === "console") return { status: "verified", verified: true, changed: {}, observation: this.getConsole(action) };
-      if (kind === "network") return { status: "verified", verified: true, changed: {}, observation: await this.getNetwork(action) };
-      return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+      switch (kind) {
+        case "observe":
+          return this.withObservationMeta("verified", {}, await this.observe({
+            ...(action.maxNodes !== undefined ? { maxNodes: action.maxNodes } : {}),
+            ...(action.query !== undefined ? { query: action.query } : {}),
+            ...(action.roles !== undefined ? { roles: action.roles } : {}),
+            ...(action.includeInteractive !== undefined ? { includeInteractive: action.includeInteractive } : {}),
+            ...(action.mode !== undefined ? { mode: action.mode } : {}),
+          }));
+        case "screenshot":
+          return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({
+            ...(action.sensitiveZones !== undefined ? { sensitiveZones: action.sensitiveZones } : {}),
+            ...(action.fullPage !== undefined ? { fullPage: action.fullPage } : {}),
+            ...(action.waitMs !== undefined ? { waitMs: action.waitMs } : {}),
+            ...(action.device !== undefined ? { device: action.device } : {}),
+            ...(action.clip !== undefined ? { clip: action.clip } : {}),
+            ...(action.inline !== undefined ? { inline: action.inline } : {}),
+            ...(action.format !== undefined ? { format: action.format } : {}),
+            ...(action.quality !== undefined ? { quality: action.quality } : {}),
+          }) };
+        case "navigate": return this.navigate(action);
+        case "back":
+        case "forward":
+        case "reload": return this.historyAction(kind);
+        case "scroll": return this.scroll(action);
+        case "wait_for": return this.waitFor(action);
+        case "click": return this.click(action);
+        case "press": return this.press(action);
+        case "hover":
+        case "move": return this.hover(action);
+        case "fill":
+        case "type": return this.fill(action);
+        case "select": return this.select(action);
+        case "clear": return this.clear(action);
+        case "set_files": return this.setFiles(action);
+        case "dialog_accept":
+        case "dialog_dismiss": return this.handleDialog(kind, action);
+        case "resize": return this.resizeViewport(action);
+        case "console": return { status: "verified", verified: true, changed: {}, observation: this.getConsole(action) };
+        case "network": return { status: "verified", verified: true, changed: {}, observation: await this.getNetwork(action) };
+        case "fill_form": return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+        default: {
+          const unhandled: never = kind;
+          void unhandled;
+          return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+        }
+      }
     } finally {
       this.activeCommandId = null;
     }
   }
 
   // ── Console / network read-only buffers (WS9.2 / WS9.3) ─────────────────────
-  pushConsole(entry) {
+  pushConsole(entry: ConsoleEntry): void {
     if (!entry.text) return;
     entry.text = String(entry.text).slice(0, 2000);
     this.consoleBuffer.push(entry);
     while (this.consoleBuffer.length > CONSOLE_BUFFER_MAX) { this.consoleBuffer.shift(); this.consoleDropped += 1; }
   }
 
-  pushNetwork(requestId, entry) {
+  pushNetwork(requestId: string, entry: NetworkEntry): void {
     if (!this.networkBuffer.has(requestId)) {
       while (this.networkBuffer.size >= NETWORK_BUFFER_MAX) {
         const oldest = this.networkBuffer.keys().next().value;
-        this.networkBuffer.delete(oldest);
+        if (typeof oldest === "string") this.networkBuffer.delete(oldest);
         this.networkDropped += 1;
       }
     }
     this.networkBuffer.set(requestId, { ...this.networkBuffer.get(requestId), ...entry });
   }
 
-  updateNetwork(requestId, patch) {
+  updateNetwork(requestId: string, patch: Partial<NetworkEntry>): void {
     const existing = this.networkBuffer.get(requestId);
     if (existing) this.networkBuffer.set(requestId, { ...existing, ...patch });
   }
 
-  getConsole(action = {}) {
+  getConsole(action: DriverAction = { kind: "console" }): DriverRecord {
     const level = typeof action.level === "string" ? action.level : null;
     const pattern = typeof action.pattern === "string" ? action.pattern.toLowerCase() : null;
-    const limit = Number.isInteger(action.limit) ? action.limit : 100;
+    const limit = typeof action.limit === "number" && Number.isInteger(action.limit) ? action.limit : 100;
     let entries = this.consoleBuffer.filter((entry) =>
       (!level || entry.level === level) && (!pattern || String(entry.text).toLowerCase().includes(pattern)));
     entries = entries.slice(-limit);
@@ -872,10 +982,10 @@ class NewtonBrowserDriver {
     return { kind: "console_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped, capturedAt: new Date().toISOString() };
   }
 
-  async getNetwork(action = {}) {
+  async getNetwork(action: DriverAction = { kind: "network" }): Promise<DriverRecord> {
     if (typeof action.requestId === "string" && action.requestId) return this.getNetworkBody(action.requestId);
     const urlPattern = typeof action.urlPattern === "string" ? action.urlPattern.toLowerCase() : null;
-    const limit = Number.isInteger(action.limit) ? action.limit : 100;
+    const limit = typeof action.limit === "number" && Number.isInteger(action.limit) ? action.limit : 100;
     let entries = [...this.networkBuffer.values()].filter((entry) => !urlPattern || String(entry.url).toLowerCase().includes(urlPattern));
     entries = entries.slice(-limit);
     return { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
@@ -883,7 +993,7 @@ class NewtonBrowserDriver {
 
   // Fetch one response body — only when its URL origin is within the session grant.
   // Response HEADERS are never returned. Bodies are capped; over-cap is truncated.
-  async getNetworkBody(requestId) {
+  async getNetworkBody(requestId: string): Promise<DriverRecord> {
     const entry = this.networkBuffer.get(requestId);
     const base = { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries: [], count: 0, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
     if (!entry) return { ...base, body: null, reason: "unknown_request_id" };
@@ -893,7 +1003,7 @@ class NewtonBrowserDriver {
     const response = await this.cdp("Network.getResponseBody", { requestId }).catch(() => null);
     if (!response) return { ...base, body: null, bodyDisposition: "body_unavailable", reason: "body_unavailable" };
     const raw = String(response.body ?? "");
-    const mimeType = String(entry.mimeType || "").toLowerCase().split(";", 1)[0];
+    const mimeType = String(entry.mimeType || "").toLowerCase().split(";", 1)[0] ?? "";
     const truncated = raw.length > NETWORK_BODY_MAX_CHARS;
     if (response.base64Encoded || !isSupportedTextMime(mimeType) || raw.includes("\uFFFD")) {
       const bytes = bodyBytes(raw, Boolean(response.base64Encoded));
@@ -922,7 +1032,7 @@ class NewtonBrowserDriver {
   // Set the owned tab's viewport (WS9.6). Owned-tab only — resizing distorts the
   // page layout, so we never silently reflow the user's own current tab. The
   // override persists on the driver and is re-applied on re-attach.
-  async resizeViewport(action) {
+  async resizeViewport(action: DriverAction): Promise<DriverRecord> {
     if (!this.ownsTab) return this.withObservationMeta("failed", {}, await this.observe({}), "resize_needs_owned_tab");
     const viewport = action?.viewport;
     if (!viewport || typeof viewport.width !== "number" || typeof viewport.height !== "number") {
@@ -940,14 +1050,14 @@ class NewtonBrowserDriver {
   // observe. `promptText` is applied to prompt() dialogs on accept and ignored
   // otherwise. With no dialog open this is a typed no-op, not an error the agent
   // must recover from.
-  async handleDialog(kind, action) {
+  async handleDialog(kind: "dialog_accept" | "dialog_dismiss", action: DriverAction): Promise<DriverRecord> {
     if (!this.pendingDialog) {
       return this.withObservationMeta("failed", {}, await this.observe({}), "no_dialog_open");
     }
     const accept = kind === "dialog_accept";
     const dialog = this.pendingDialog;
     const pendingRoute = this.pendingDialogRoute;
-    const params = { accept };
+    const params: CdpRecord = { accept };
     if (accept && dialog.dialogType === "prompt") {
       params.promptText = String(action?.promptText ?? dialog.defaultPrompt ?? "");
     }
@@ -971,7 +1081,7 @@ class NewtonBrowserDriver {
     }
   }
 
-  async navigate(action) {
+  async navigate(action: DriverAction): Promise<DriverRecord> {
     await this.preflightAction(action);
     const startUrl = await this.evalString("location.href");
     await this.cdp("Page.navigate", { url: action.url });
@@ -980,7 +1090,7 @@ class NewtonBrowserDriver {
     return this.withObservationMeta("verified", { navigated: action.url ?? observation.origin, ...(observation.origin !== safeOrigin(startUrl) ? { newTarget: false } : {}) }, observation);
   }
 
-  async historyAction(kind) {
+  async historyAction(kind: "back" | "forward" | "reload"): Promise<DriverRecord> {
     const before = await this.pageSignature();
     if (kind === "back") await this.cdp("Runtime.evaluate", { expression: "history.back()" });
     if (kind === "forward") await this.cdp("Runtime.evaluate", { expression: "history.forward()" });
@@ -992,11 +1102,11 @@ class NewtonBrowserDriver {
     return this.withObservationMeta(Object.keys(changed).length > 0 || kind === "reload" ? "verified" : "dispatched_unverified", changed, observation);
   }
 
-  async click(action) {
+  async click(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
     if (target.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    const point = target.point ?? await this.actionablePoint(target.backendNodeId, target);
+    const point = target.point ?? (target.backendNodeId ? await this.actionablePoint(target.backendNodeId, target) : null);
     if (!point) return this.targetMoved();
     this.paintCursorClick(point.x, point.y); // fire-and-forget (§5.1)
     const before = await this.pageSignature();
@@ -1032,7 +1142,7 @@ class NewtonBrowserDriver {
     }
   }
 
-  async fill(action) {
+  async fill(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const point = await this.actionablePoint(target.backendNodeId, target);
@@ -1054,7 +1164,7 @@ class NewtonBrowserDriver {
     return this.withObservationMeta(waitResult ? (waitResult.matched ? "verified" : "timed_out") : "verified", changed, observation, waitResult && !waitResult.matched ? waitResult.reason : undefined);
   }
 
-  async select(action) {
+  async select(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const beforeState = await this.elementState(target.backendNodeId, target);
@@ -1095,7 +1205,7 @@ class NewtonBrowserDriver {
     return this.withObservationMeta(applied || Object.keys(changed).length > 0 ? "verified" : "dispatched_unverified", changed, observation);
   }
 
-  async clear(action) {
+  async clear(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const beforeState = await this.elementState(target.backendNodeId, target);
@@ -1109,7 +1219,7 @@ class NewtonBrowserDriver {
     return this.withObservationMeta("verified", diffElement(beforeState, afterState), observation);
   }
 
-  async interactiveObservationNodes(limit, existingRefs = new Set(), filters = {}) {
+  async interactiveObservationNodes(limit: number, existingRefs: Set<string> = new Set(), filters: InteractiveFilters = {}): Promise<DriverObservationNode[]> {
     if (limit <= 0) return [];
     const output = [];
     const allowed = new Set(this.allowedOrigins);
@@ -1136,7 +1246,7 @@ class NewtonBrowserDriver {
         if (!bbox || !facts.role) continue;
         const role = String(facts.role).toLowerCase();
         const accessibleName = String(name || facts.accessibleName || "").slice(0, 240);
-        if (filters.requestedRoles?.size > 0 && !filters.requestedRoles.has(role)) continue;
+        if (filters.requestedRoles && filters.requestedRoles.size > 0 && !filters.requestedRoles.has(role)) continue;
         if (filters.filterText && !`${role} ${accessibleName}`.toLowerCase().includes(filters.filterText)) continue;
         const resolvedRoute = this.targetRegistry.resolveRef(ref);
         existingRefs.add(ref);
@@ -1158,7 +1268,7 @@ class NewtonBrowserDriver {
     return output;
   }
 
-  async fileInputObservationNodes(limit) {
+  async fileInputObservationNodes(limit: number): Promise<DriverObservationNode[]> {
     if (limit <= 0) return [];
     const route = this.targetRegistry.listObservationRoutes()[0];
     if (!route) return [];
@@ -1188,7 +1298,7 @@ class NewtonBrowserDriver {
     return output;
   }
 
-  async fileInputDisplayFacts(backendNodeId, route = {}) {
+  async fileInputDisplayFacts(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return { name: "", bbox: null };
     const result = await this.cdp("Runtime.callFunctionOn", {
@@ -1207,26 +1317,26 @@ class NewtonBrowserDriver {
     return result?.result?.value ?? { name: "", bbox: null };
   }
 
-  async setFiles(action) {
+  async setFiles(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const facts = await this.fileInputFacts(target.backendNodeId, target);
     if (!facts.isFileInput) throw new Error("target_not_file_input");
-    const explicitRef = Boolean(action?.target?.ref || action?.ref);
+    const explicitRef = Boolean((action.target && "ref" in action.target && action.target.ref) || action.ref);
     if (!facts.visible && !explicitRef) throw new Error("hidden_file_input_requires_ref");
     const files = Array.isArray(action.files) ? action.files : [];
     if (files.length > 1 && !facts.multiple) throw new Error("file_input_not_multiple");
     await this.cdp("DOM.setFileInputFiles", { backendNodeId: target.backendNodeId, files }, target);
     const accepted = await this.fileInputState(target.backendNodeId, target);
-    const expectedNames = files.map((file) => String(file).split(/[\\/]/).at(-1) || "");
-    if (accepted.length !== expectedNames.length || accepted.some((file, index) => file.filename !== expectedNames[index])) {
+    const expectedNames = files.map((file: string) => String(file).split(/[\\/]/).at(-1) || "");
+    if (accepted.length !== expectedNames.length || accepted.some((file: CdpRecord, index: number) => file.filename !== expectedNames[index])) {
       throw new Error("file_input_acceptance_mismatch");
     }
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", { files: accepted, fileCount: accepted.length }, observation);
   }
 
-  async fileInputFacts(backendNodeId, route = {}) {
+  async fileInputFacts(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return { isFileInput: false, multiple: false, visible: false };
     const result = await this.cdp("Runtime.callFunctionOn", {
@@ -1247,7 +1357,7 @@ class NewtonBrowserDriver {
     return result?.result?.value ?? { isFileInput: false, multiple: false, visible: false };
   }
 
-  async fileInputState(backendNodeId, route = {}) {
+  async fileInputState(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord[]> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return [];
     const result = await this.cdp("Runtime.callFunctionOn", {
@@ -1264,7 +1374,7 @@ class NewtonBrowserDriver {
     return Array.isArray(result?.result?.value) ? result.result.value : [];
   }
 
-  async scroll(action) {
+  async scroll(action: DriverAction): Promise<DriverRecord> {
     const dy = Number(action.value) || 600;
     const beforeY = await this.evalNumber("window.scrollY");
     const acknowledged = await this.dispatchInput(
@@ -1283,7 +1393,7 @@ class NewtonBrowserDriver {
     );
   }
 
-  async waitForScrollPositionChange(beforeY, timeoutMs = 1200) {
+  async waitForScrollPositionChange(beforeY: number, timeoutMs = 1200): Promise<number> {
     const deadline = Date.now() + timeoutMs;
     let current = beforeY;
     while (Date.now() < deadline) {
@@ -1296,13 +1406,13 @@ class NewtonBrowserDriver {
 
   // First-class wait_for: ref-appears / text-appears / networkIdle. Never
   // caller-supplied JS (§7.5).
-  async waitFor(action) {
+  async waitFor(action: DriverAction): Promise<DriverRecord> {
     const waitResult = await this.waitForCondition(action.waitFor ?? action, action.timeoutMs);
     const observation = await this.observeDelta();
     return this.withObservationMeta(waitResult.matched ? "verified" : "timed_out", waitResult.matched ? { waitedFor: true } : {}, observation, waitResult.reason);
   }
 
-  async press(action) {
+  async press(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (target?.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
     const keys = Array.isArray(action.keys) && action.keys.length > 0 ? action.keys : [String(action.value ?? "Enter")];
@@ -1321,10 +1431,10 @@ class NewtonBrowserDriver {
     }
   }
 
-  async hover(action) {
+  async hover(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
-    const point = target.point ?? await this.actionablePoint(target.backendNodeId, target);
+    const point = target.point ?? (target.backendNodeId ? await this.actionablePoint(target.backendNodeId, target) : null);
     if (!point) return this.targetMoved();
     await this.dispatchInput(target, (input) => input.pointerMove(point));
     await this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
@@ -1336,7 +1446,7 @@ class NewtonBrowserDriver {
   // Resolve the target element's structural facts so the SW can re-check the
   // floor with real evidence BEFORE dispatching a mutating action (§7, S3). The
   // accessible name lets host/structural commit rules gate a ref-targeted click.
-  async resolveEvidence(action) {
+  async resolveEvidence(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     const origin = target?.origin || await this.evalString("location.origin");
     if (!target?.backendNodeId) {
@@ -1367,14 +1477,14 @@ class NewtonBrowserDriver {
 
   // Authoritative accessible name from the AX tree (matches what observe shows
   // the model), used by the pre-dispatch commit re-check.
-  async axNameFor(backendNodeId, route = {}) {
+  async axNameFor(backendNodeId: number, route: TargetRoute = {}): Promise<string> {
     const tree = await this.cdp("Accessibility.getPartialAXTree", { backendNodeId, fetchRelatives: false }, route).catch(() => null);
     const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
     const node = nodes.find((n) => n.backendDOMNodeId === backendNodeId && n.name?.value) ?? nodes.find((n) => n.name?.value);
     return node?.name?.value ? String(node.name.value).slice(0, 240) : "";
   }
 
-  async elementFacts(backendNodeId, route = {}) {
+  async elementFacts(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return {};
     const result = await this.cdp("Runtime.callFunctionOn", {
@@ -1411,7 +1521,7 @@ class NewtonBrowserDriver {
   }
 
   // ── Targeting + actionability (§7.5) ───────────────────────────────────────
-  async resolveTarget(action) {
+  async resolveTarget(action: DriverAction): Promise<TargetResolution | null> {
     const target = normalizedTarget(action);
     if (target) {
       if (target.coordinates) return { point: target.coordinates };
@@ -1437,7 +1547,7 @@ class NewtonBrowserDriver {
         const matches = observation.nodes.filter((node) => nodeMatchesTarget(node, target));
         if (matches.length > 1) throw new Error("ambiguous");
         const match = matches[0];
-        if (match && this.refIndex.has(match.ref)) return this.refIndex.get(match.ref);
+        if (match && this.refIndex.has(match.ref)) return this.refIndex.get(match.ref) ?? null;
       }
       if (target.text) {
         const backendNodeId = await this.backendNodeIdFromElementExpression(findByVisibleTextSource(), [target.text, Boolean(target.exact)]);
@@ -1447,7 +1557,7 @@ class NewtonBrowserDriver {
     }
     // valid ref → role_name → text → selector. Never click a guess.
     if (action.ref && this.refIndex.has(action.ref)) {
-      return this.targetRegistry.resolveRef(action.ref);
+      return this.targetRegistry.resolveRef(action.ref) ?? null;
     }
     if (action.selector) {
       const backendNodeId = await this.backendNodeIdForSelector(action.selector);
@@ -1460,12 +1570,12 @@ class NewtonBrowserDriver {
       const matches = observation.nodes.filter((node) => (node.name ?? "").toLowerCase().includes(needle));
       if (matches.length > 1) throw new Error("ambiguous");
       const match = matches[0];
-      if (match && this.refIndex.has(match.ref)) return this.refIndex.get(match.ref);
+      if (match && this.refIndex.has(match.ref)) return this.refIndex.get(match.ref) ?? null;
     }
     return null;
   }
 
-  async backendNodeIdForSelector(selector) {
+  async backendNodeIdForSelector(selector: string): Promise<number | null> {
     const root = await this.cdp("DOM.getDocument", { depth: 0 }).catch(() => null);
     const nodeId = root?.root?.nodeId;
     if (!nodeId) return null;
@@ -1483,7 +1593,7 @@ class NewtonBrowserDriver {
     return described?.node?.backendNodeId ?? null;
   }
 
-  async backendNodeIdFromElementExpression(functionDeclaration, args) {
+  async backendNodeIdFromElementExpression(functionDeclaration: string, args: unknown[]): Promise<number | null> {
     const expression = `(${functionDeclaration})(...${JSON.stringify(args)})`;
     const evaluated = await this.cdp("Runtime.evaluate", {
       expression,
@@ -1507,7 +1617,7 @@ class NewtonBrowserDriver {
     }
   }
 
-  async actionablePoint(backendNodeId, route = {}) {
+  async actionablePoint(backendNodeId: number, route: TargetRoute = {}): Promise<Point | null> {
     // Bring off-screen / below-the-fold targets into view first — the single
     // biggest real-world reliability win. Without this, an element outside the
     // viewport never hit-tests and times out as stale_target (seen live on the
@@ -1556,7 +1666,7 @@ class NewtonBrowserDriver {
   // the centre of each rendered line fragment (getClientRects — one rect per
   // wrapped line for inline content), then the bounding-box centre as a fallback.
   // This is what makes off-screen / multi-line inline links reliably clickable.
-  async candidatePoints(backendNodeId, route = {}) {
+  async candidatePoints(backendNodeId: number, route: TargetRoute = {}): Promise<Point[]> {
     const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }, route).catch(() => null);
     const cdpPoints = centersForQuads(quads?.quads);
     if (cdpPoints.length > 0) return cdpPoints;
@@ -1581,7 +1691,7 @@ class NewtonBrowserDriver {
     return Array.isArray(pts) ? pts.filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y)) : [];
   }
 
-  async scrollIntoView(backendNodeId, route = {}) {
+  async scrollIntoView(backendNodeId: number, route: TargetRoute = {}): Promise<void> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return;
     await this.cdp("Runtime.callFunctionOn", {
@@ -1590,7 +1700,7 @@ class NewtonBrowserDriver {
     }, route).catch(() => {});
   }
 
-  async boxFor(backendNodeId, route = {}) {
+  async boxFor(backendNodeId: number, route: TargetRoute = {}): Promise<Box | null> {
     const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }, route).catch(() => null);
     const quadBox = boundsForQuads(quads?.quads);
     if (quadBox) return quadBox;
@@ -1628,17 +1738,18 @@ class NewtonBrowserDriver {
     return { x: x - scrollX, y: y - scrollY, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
   }
 
-  async hitTestTarget(backendNodeId, x, y, route = {}) {
+  async hitTestTarget(backendNodeId: number, x: number, y: number, route: TargetRoute = {}): Promise<boolean> {
     const hit = await this.cdp("DOM.getNodeForLocation", {
       x: Math.round(x),
       y: Math.round(y),
       includeUserAgentShadowDOM: true,
       ignorePointerEventsNone: false,
     }, route).catch(() => null);
-    if (!Number.isInteger(hit?.backendNodeId)) return this.runtimeHitTestTarget(backendNodeId, x, y, route);
-    if (hit.backendNodeId === backendNodeId) return true;
+    const hitBackendNodeId = hit?.backendNodeId;
+    if (typeof hitBackendNodeId !== "number" || !Number.isInteger(hitBackendNodeId)) return this.runtimeHitTestTarget(backendNodeId, x, y, route);
+    if (hitBackendNodeId === backendNodeId) return true;
     const objectId = await this.objectIdFor(backendNodeId, route);
-    const hitObjectId = await this.objectIdFor(hit.backendNodeId, route);
+    const hitObjectId = await this.objectIdFor(hitBackendNodeId, route);
     if (objectId && hitObjectId) {
       const result = await this.cdp("Runtime.callFunctionOn", {
         objectId,
@@ -1651,7 +1762,7 @@ class NewtonBrowserDriver {
     return this.runtimeHitTestTarget(backendNodeId, x, y, route);
   }
 
-  async runtimeHitTestTarget(backendNodeId, x, y, route = {}) {
+  async runtimeHitTestTarget(backendNodeId: number, x: number, y: number, route: TargetRoute = {}): Promise<boolean> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return false;
     const result = await this.cdp("Runtime.callFunctionOn", {
@@ -1666,7 +1777,7 @@ class NewtonBrowserDriver {
     return Boolean(result?.result?.value);
   }
 
-  async blockingElementEvidence(point, route = {}) {
+  async blockingElementEvidence(point: Point, route: TargetRoute = {}): Promise<DriverRecord | null> {
     const hit = await this.cdp("DOM.getNodeForLocation", {
       x: Math.round(point.x),
       y: Math.round(point.y),
@@ -1676,7 +1787,7 @@ class NewtonBrowserDriver {
     const backendNodeId = hit?.backendNodeId;
     if (!Number.isInteger(backendNodeId)) return null;
     const [facts, name, described] = await Promise.all([
-      this.elementFacts(backendNodeId, route).catch(() => ({})),
+      this.elementFacts(backendNodeId, route).catch((): CdpRecord => ({})),
       this.axNameFor(backendNodeId, route).catch(() => ""),
       this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null),
     ]);
@@ -1694,12 +1805,12 @@ class NewtonBrowserDriver {
     };
   }
 
-  async objectIdFor(backendNodeId, route = {}) {
+  async objectIdFor(backendNodeId: number, route: TargetRoute = {}): Promise<string | null> {
     const resolved = await this.cdp("DOM.resolveNode", { backendNodeId }, route).catch(() => null);
     return typeof resolved?.object?.objectId === "string" ? resolved.object.objectId : null;
   }
 
-  async isOwnedOverlayNode(backendNodeId, route = {}) {
+  async isOwnedOverlayNode(backendNodeId: number, route: TargetRoute = {}): Promise<boolean> {
     const described = await this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null);
     const attrs = described?.node?.attributes ?? [];
     for (let i = 0; i < attrs.length; i += 2) {
@@ -1708,7 +1819,7 @@ class NewtonBrowserDriver {
     return false;
   }
 
-  async maskZones(zones) {
+  async maskZones(zones: NonNullable<BrowserAction["sensitiveZones"]>): Promise<boolean | undefined> {
     if (!Array.isArray(zones) || zones.length === 0) return;
     const response = await this.sendToPage({ type: "NB_DRIVE_MASK", zones });
     return response?.ok === true;
@@ -1754,33 +1865,33 @@ class NewtonBrowserDriver {
     await this.waitForSettle(750);
   }
 
-  paintCursorClick(x, y) {
+  paintCursorClick(x: number, y: number): void {
     // fire-and-forget, never awaited, errors swallowed (§5.1).
     this.sendToPage({ type: "NB_DRIVE_MOVE", x, y });
     this.sendToPage({ type: "NB_DRIVE_CLICK", x, y });
   }
 
-  paintCursorField(point) {
+  paintCursorField(point: Point): void {
     this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
     this.sendToPage({ type: "NB_DRIVE_FIELD", rect: { x: point.x - 12, y: point.y - 12, width: 24, height: 24 } });
   }
 
-  async evalString(expression, route = {}) {
+  async evalString(expression: string, route: TargetRoute = {}): Promise<string> {
     const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return typeof result?.result?.value === "string" ? result.result.value : "";
   }
 
-  async evalNumber(expression, route = {}) {
+  async evalNumber(expression: string, route: TargetRoute = {}): Promise<number> {
     const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return typeof result?.result?.value === "number" ? result.result.value : 0;
   }
 
-  async evalBool(expression, route = {}) {
+  async evalBool(expression: string, route: TargetRoute = {}): Promise<boolean> {
     const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return Boolean(result?.result?.value);
   }
 
-  async waitForCondition(waitFor, actionTimeoutMs) {
+  async waitForCondition(waitFor: BrowserWaitFor | DriverAction | undefined, actionTimeoutMs?: number): Promise<WaitResult> {
     const timeoutMs = Math.max(100, Math.min(Number(waitFor?.timeoutMs ?? actionTimeoutMs ?? AUTO_WAIT_TIMEOUT_MS) || AUTO_WAIT_TIMEOUT_MS, 120000));
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -1790,7 +1901,7 @@ class NewtonBrowserDriver {
     return { matched: false, reason: "timed_out" };
   }
 
-  async waitConditionMet(waitFor) {
+  async waitConditionMet(waitFor: BrowserWaitFor | DriverAction | undefined): Promise<boolean> {
     const wait = normalizedWaitFor(waitFor);
     if (!wait) {
       await this.waitForSettle();
@@ -1814,11 +1925,18 @@ class NewtonBrowserDriver {
       if (visible) return true;
     }
     if (wait.ref || wait.role || wait.name) {
-      const target = await this.resolveTarget({ target: wait.ref ? { ref: wait.ref } : { role: wait.role ?? "", name: wait.name } });
+      const target = await this.resolveTarget({
+        kind: "wait_for",
+        target: wait.ref ? { ref: wait.ref } : { role: wait.role ?? "", ...(wait.name !== undefined ? { name: wait.name } : {}) },
+      });
       if (target) return true;
     }
     if (wait.value) {
-      const target = await this.resolveTarget({ target: wait.selector ? { selector: wait.selector } : wait.ref ? { ref: wait.ref } : wait.role ? { role: wait.role, name: wait.name } : undefined });
+      const waitTarget = wait.selector ? { selector: wait.selector }
+        : wait.ref ? { ref: wait.ref }
+          : wait.role ? { role: wait.role, ...(wait.name !== undefined ? { name: wait.name } : {}) }
+            : undefined;
+      const target = await this.resolveTarget({ kind: "wait_for", ...(waitTarget ? { target: waitTarget } : {}) });
       if (target?.backendNodeId) {
         const state = await this.elementState(target.backendNodeId, target);
         if (String(state.value ?? "").includes(wait.value)) return true;
@@ -1827,7 +1945,7 @@ class NewtonBrowserDriver {
     return false;
   }
 
-  async selectorVisible(selector) {
+  async selectorVisible(selector: string): Promise<boolean> {
     const result = await this.cdp("Runtime.evaluate", {
       expression: `(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
@@ -1846,14 +1964,14 @@ class NewtonBrowserDriver {
     return Boolean(result?.result?.value);
   }
 
-  async pageSignature() {
+  async pageSignature(): Promise<PageSignature> {
     return {
       url: await this.evalString("location.href"),
       title: await this.evalString("document.title"),
     };
   }
 
-  async elementState(backendNodeId, route = {}) {
+  async elementState(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord> {
     const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return {};
     const state = await this.cdp("Runtime.callFunctionOn", {
@@ -1872,7 +1990,7 @@ class NewtonBrowserDriver {
     return state?.result?.value && typeof state.result.value === "object" ? state.result.value : {};
   }
 
-  withObservationMeta(status, changed, observation, reason) {
+  withObservationMeta(status: string, changed: ChangeRecord, observation: DriverObservation, reason?: string): DriverRecord {
     const verified = status === "verified";
     return {
       status,
@@ -1892,20 +2010,20 @@ class NewtonBrowserDriver {
     };
   }
 
-  async targetMoved(status = "stale_target") {
+  async targetMoved(status = "stale_target"): Promise<DriverRecord> {
     const observation = await this.observe({});
     return this.withObservationMeta(status, {}, observation, status === "not_found" ? "target_not_found" : "target_moved");
   }
 
-  refreshPendingDialog() {
+  refreshPendingDialog(): void {
     const latest = [...this.pendingDialogs.values()].at(-1) ?? null;
     this.pendingDialog = latest?.dialog ?? null;
     this.pendingDialogRoute = latest?.route ?? null;
   }
 
-  beginActionSignals() {
+  beginActionSignals(): ActionSignalWindow {
     const previous = this.activeActionSignals;
-    const signals = {};
+    const signals: ActiveActionSignals = {};
     let finished = false;
     this.activeActionSignals = signals;
     return {
@@ -1920,9 +2038,9 @@ class NewtonBrowserDriver {
   }
 }
 
-function axObservationStates(axNode) {
-  const properties = new Map((axNode?.properties ?? []).map((property) => [property?.name, property?.value?.value]));
-  const output = {};
+function axObservationStates(axNode: CdpRecord): ChangeRecord {
+  const properties = new Map<string, unknown>((axNode?.properties ?? []).map((property: CdpRecord) => [String(property?.name ?? ""), property?.value?.value]));
+  const output: ChangeRecord = {};
   for (const name of ["disabled", "selected", "expanded", "required"]) {
     if (typeof properties.get(name) === "boolean") output[name] = properties.get(name);
   }
@@ -1933,13 +2051,13 @@ function axObservationStates(axNode) {
   return output;
 }
 
-function publicNodeFacts(facts, routeOrigin) {
+function publicNodeFacts(facts: CdpRecord, routeOrigin?: string): DriverRecord {
   const localName = String(facts?.localName ?? "").slice(0, 80);
-  const attributes = facts?.attributes ?? {};
+  const attributes: CdpRecord = facts?.attributes && typeof facts.attributes === "object" ? facts.attributes : {};
   const elementType = localName === "input" && attributes.type
     ? `input:${String(attributes.type).toLowerCase().slice(0, 40)}`
     : localName;
-  let href;
+  let href: string | undefined;
   if (typeof attributes.href === "string" && routeOrigin) {
     try {
       const destination = new URL(attributes.href, `${routeOrigin}/`);
@@ -1962,10 +2080,10 @@ function publicNodeFacts(facts, routeOrigin) {
 // (carry full node incl. bbox for targeting); `removed` are refs gone; `updated`
 // are refs whose accessible name/value changed. bbox is deliberately NOT a change
 // signal — it is viewport-relative and a scroll would make every node "changed".
-function computeObservationDelta(baseline, nodes) {
-  const added = [];
-  const updated = [];
-  const seen = new Set();
+function computeObservationDelta(baseline: Map<string, ObservationNodeSnapshot>, nodes: DriverObservationNode[]): { added: DriverObservationNode[]; removed: string[]; updated: DriverRecord[] } {
+  const added: DriverObservationNode[] = [];
+  const updated: DriverRecord[] = [];
+  const seen = new Set<string>();
   for (const node of nodes) {
     seen.add(node.ref);
     const prev = baseline.get(node.ref);
@@ -1975,12 +2093,12 @@ function computeObservationDelta(baseline, nodes) {
       updated.push({ ref: node.ref, ...current.state });
     }
   }
-  const removed = [];
+  const removed: string[] = [];
   for (const ref of baseline.keys()) if (!seen.has(ref)) removed.push(ref);
   return { added, removed, updated };
 }
 
-function safeOrigin(url) {
+function safeOrigin(url: unknown): string {
   try {
     return new URL(String(url)).origin;
   } catch {
@@ -1988,7 +2106,7 @@ function safeOrigin(url) {
   }
 }
 
-function isSupportedTextMime(mimeType) {
+function isSupportedTextMime(mimeType: string): boolean {
   return mimeType.startsWith("text/")
     || mimeType === "application/json"
     || mimeType.endsWith("+json")
@@ -1998,7 +2116,7 @@ function isSupportedTextMime(mimeType) {
     || mimeType === "application/x-www-form-urlencoded";
 }
 
-function bodyBytes(raw, base64Encoded) {
+function bodyBytes(raw: string, base64Encoded: boolean): Uint8Array {
   if (!base64Encoded) return new TextEncoder().encode(raw);
   try {
     const decoded = atob(raw);
@@ -2008,12 +2126,14 @@ function bodyBytes(raw, base64Encoded) {
   }
 }
 
-async function sha256Hex(bytes) {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const input = new Uint8Array(bytes.byteLength);
+  input.set(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", input.buffer);
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-function normalizedTarget(action) {
+function normalizedTarget(action: DriverAction | undefined | null): NormalizedTarget | null {
   if (!action || typeof action !== "object") return null;
   if (action.target && typeof action.target === "object") return action.target;
   if (action.ref) return { ref: String(action.ref) };
@@ -2024,12 +2144,14 @@ function normalizedTarget(action) {
   if (action.testId) return { testId: String(action.testId) };
   if (action.selector) return { selector: String(action.selector) };
   if (action.text) return { text: String(action.text), ...(action.exact ? { exact: true } : {}) };
-  if (Number.isFinite(action.x) && Number.isFinite(action.y)) return { coordinates: { x: Math.round(action.x), y: Math.round(action.y) } };
+  if (typeof action.x === "number" && Number.isFinite(action.x) && typeof action.y === "number" && Number.isFinite(action.y)) {
+    return { coordinates: { x: Math.round(action.x), y: Math.round(action.y) } };
+  }
   return null;
 }
 
-function observationNodeSnapshot(node) {
-  const state = {
+function observationNodeSnapshot(node: DriverObservationNode): ObservationNodeSnapshot {
+  const state: DriverRecord = {
     role: node.role,
     ...(node.name !== undefined ? { name: node.name } : {}),
     ...(node.value !== undefined ? { value: node.value } : {}),
@@ -2045,30 +2167,31 @@ function observationNodeSnapshot(node) {
     ...(node.frameId !== undefined ? { frameId: node.frameId } : {}),
     ...(node.frameOrigin !== undefined ? { frameOrigin: node.frameOrigin } : {}),
   };
-  return { ...state, state, bbox: node.bbox };
+  return { ...state, state, ...(node.bbox !== undefined ? { bbox: node.bbox } : {}) };
 }
 
-function selectorFromAction(action) {
+function selectorFromAction(action: DriverAction): string | null {
   const target = normalizedTarget(action);
   if (typeof target?.selector === "string" && target.selector) return target.selector;
   const wait = normalizedWaitFor(action?.waitFor ?? (action?.kind === "wait_for" ? action : null));
   return typeof wait?.selector === "string" && wait.selector ? wait.selector : null;
 }
 
-function normalizedWaitFor(waitFor) {
+function normalizedWaitFor(waitFor: BrowserWaitFor | DriverAction | undefined | null): NormalizedWait | null {
   if (!waitFor || typeof waitFor !== "object") return null;
-  const output = {};
-  for (const key of ["url", "title", "text", "selector", "role", "name", "ref", "value"]) {
-    if (typeof waitFor[key] === "string" && waitFor[key].trim()) output[key] = waitFor[key];
+  const output: NormalizedWait = {};
+  for (const key of ["url", "title", "text", "selector", "role", "name", "ref", "value"] as const) {
+    const value = waitFor[key as keyof typeof waitFor];
+    if (typeof value === "string" && value.trim()) Object.assign(output, { [key]: value });
   }
-  if (typeof waitFor.state === "string") output.state = waitFor.state;
+  if ("state" in waitFor && typeof waitFor.state === "string") output.state = waitFor.state;
   if (typeof waitFor.timeoutMs === "number") output.timeoutMs = waitFor.timeoutMs;
   return Object.keys(output).length > 0 ? output : null;
 }
 
-function childFrameRecords(frameTree) {
-  const frames = [];
-  const visit = (tree) => {
+function childFrameRecords(frameTree: CdpRecord | undefined): Array<{ frameId: string; parentFrameId: string | null; origin: string }> {
+  const frames: Array<{ frameId: string; parentFrameId: string | null; origin: string }> = [];
+  const visit = (tree: CdpRecord | undefined): void => {
     for (const child of tree?.childFrames ?? []) {
       const frameId = child?.frame?.id;
       if (typeof frameId !== "string") continue;
@@ -2080,29 +2203,31 @@ function childFrameRecords(frameTree) {
   return frames;
 }
 
-function centersForQuads(quads) {
+function centersForQuads(quads: unknown): Point[] {
   if (!Array.isArray(quads)) return [];
   return quads.flatMap((quad) => {
-    if (!Array.isArray(quad) || quad.length < 8 || quad.some((value) => !Number.isFinite(value))) return [];
+    if (!Array.isArray(quad) || quad.length < 8 || quad.some((value) => typeof value !== "number" || !Number.isFinite(value))) return [];
+    const values = quad.map(Number);
     return [{
-      x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4,
-      y: (quad[1] + quad[3] + quad[5] + quad[7]) / 4,
+      x: (values[0]! + values[2]! + values[4]! + values[6]!) / 4,
+      y: (values[1]! + values[3]! + values[5]! + values[7]!) / 4,
     }];
   });
 }
 
-function boundsForQuads(quads) {
+function boundsForQuads(quads: unknown): Box | null {
   if (!Array.isArray(quads)) return null;
   const points = quads.flatMap((quad) => Array.isArray(quad) ? quad : []);
-  if (points.length < 8 || points.some((value) => !Number.isFinite(value))) return null;
-  const xs = points.filter((_value, index) => index % 2 === 0);
-  const ys = points.filter((_value, index) => index % 2 === 1);
+  if (points.length < 8 || points.some((value) => typeof value !== "number" || !Number.isFinite(value))) return null;
+  const numericPoints = points.map(Number);
+  const xs = numericPoints.filter((_value, index) => index % 2 === 0);
+  const ys = numericPoints.filter((_value, index) => index % 2 === 1);
   const x = Math.min(...xs);
   const y = Math.min(...ys);
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
-function textWaitExpression(text) {
+function textWaitExpression(text: string): string {
   return `(() => {
     const body = document.body;
     if (!body) return false;
@@ -2113,7 +2238,7 @@ function textWaitExpression(text) {
   })()`;
 }
 
-function nodeMatchesTarget(node, target) {
+function nodeMatchesTarget(node: DriverObservationNode, target: NormalizedTarget): boolean {
   if (!node || !target) return false;
   if (target.ref) return node.ref === target.ref;
   if (target.role && String(node.role).toLowerCase() !== String(target.role).toLowerCase()) return false;
@@ -2124,35 +2249,35 @@ function nodeMatchesTarget(node, target) {
   return Boolean(target.role);
 }
 
-function matchText(value, expected, exact) {
+function matchText(value: unknown, expected: unknown, exact?: boolean): boolean {
   const left = String(value ?? "").trim().toLowerCase();
   const right = String(expected ?? "").trim().toLowerCase();
   if (!right) return false;
   return exact ? left === right : left.includes(right);
 }
 
-function diffPage(before, after) {
-  const changed = {};
+function diffPage(before: PageSignature, after: PageSignature): ChangeRecord {
+  const changed: ChangeRecord = {};
   if (before.url !== after.url) changed.navigated = safeOrigin(after.url);
   if (before.title !== after.title) changed.title = after.title.slice(0, 160);
   return changed;
 }
 
-function diffElement(before, after) {
-  const changed = {};
+function diffElement(before: CdpRecord, after: CdpRecord): ChangeRecord {
+  const changed: ChangeRecord = {};
   for (const key of ["value", "checked", "ariaChecked", "ariaPressed", "text"]) {
     if (before[key] !== after[key]) changed[key] = typeof after[key] === "string" ? after[key].slice(0, 160) : after[key];
   }
   return changed;
 }
 
-function isNetworkWrite(request) {
+function isNetworkWrite(request: CdpRecord | undefined): boolean {
   const method = String(request?.method ?? "").toUpperCase();
   return Boolean(method && !["GET", "HEAD", "OPTIONS"].includes(method));
 }
 
 // Map a CDP console/log type to a bounded level enum (WS9.2).
-function consoleLevelFor(type) {
+function consoleLevelFor(type: unknown): string {
   const t = String(type ?? "log");
   if (t === "warning" || t === "warn") return "warn";
   if (t === "error" || t === "assert") return "error";
@@ -2163,7 +2288,7 @@ function consoleLevelFor(type) {
 
 // Render Runtime.consoleAPICalled args into a single line without executing getters
 // or pulling object internals. Only primitive previews and CDP descriptions are used.
-function consoleArgsText(args) {
+function consoleArgsText(args: unknown): string {
   if (!Array.isArray(args)) return "";
   return args.map((arg) => {
     if (arg == null) return "";
@@ -2174,35 +2299,33 @@ function consoleArgsText(args) {
   }).join(" ").trim().slice(0, 2000);
 }
 
-function inputTargetKey(route = {}) {
-  return typeof route?.sessionId === "string" && route.sessionId ? `session:${route.sessionId}` : "root";
+function inputTargetKey(route: CdpRoute | number | null | undefined = {}): string {
+  return typeof route === "object" && typeof route?.sessionId === "string" && route.sessionId ? `session:${route.sessionId}` : "root";
 }
 
-function dialogRoute(dialog = {}) {
+function dialogRoute(dialog: PendingDialogRoute | null = null): CdpRoute {
   return typeof dialog?.sessionId === "string" && dialog.sessionId ? { sessionId: dialog.sessionId } : {};
 }
 
-function typedDriverError(code) {
-  const error = new Error(code);
-  error.code = code;
-  return error;
+function typedDriverError(code: string): DriverError {
+  return Object.assign(new Error(code), { code });
 }
 
-function isInvalidSelectorError(error) {
-  const message = String(error?.message ?? error ?? "");
+function isInvalidSelectorError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
   return /invalid selector|not a valid selector|failed to execute ['\"]queryselector|syntaxerror/i.test(message);
 }
 
-function reconciliationChanges(signals) {
-  const changed = {};
-  for (const key of ["navigation", "networkWrite", "dialog", "download", "newTarget"]) {
+function reconciliationChanges(signals: ActiveActionSignals | null | undefined): ChangeRecord {
+  const changed: ChangeRecord = {};
+  for (const key of ["navigation", "networkWrite", "dialog", "download", "newTarget"] as const) {
     if (signals?.[key]) changed[key] = true;
   }
   if (signals?.containmentPrevention) changed.containmentPrevention = signals.containmentPrevention;
   return changed;
 }
 
-function reconcilePostActionSignals(signals) {
+function reconcilePostActionSignals(signals: ActiveActionSignals | null | undefined): string | null {
   if (signals?.containmentPrevention) return signals.containmentPrevention;
   if (signals?.networkWrite) return "post_action_network_write";
   if (signals?.download) return "post_action_download";
@@ -2211,7 +2334,7 @@ function reconcilePostActionSignals(signals) {
   return null;
 }
 
-function findByTestIdSource() {
+function findByTestIdSource(): string {
   return `function (testId) {
     const attrs = ["data-testid", "data-test-id", "data-test"];
     const matches = Array.from(document.querySelectorAll("[data-testid],[data-test-id],[data-test]"))
@@ -2221,7 +2344,7 @@ function findByTestIdSource() {
   }`;
 }
 
-function findByAttributeTextSource() {
+function findByAttributeTextSource(): string {
   return `function (attr, value, exact) {
     const expected = String(value || "").toLowerCase();
     const found = Array.from(document.querySelectorAll("input,textarea,[role='textbox'],[contenteditable='true']"))
@@ -2234,7 +2357,7 @@ function findByAttributeTextSource() {
   }`;
 }
 
-function findByLabelSource() {
+function findByLabelSource(): string {
   return `function (value, exact) {
     const expected = String(value || "").toLowerCase();
     const matches = (text) => {
@@ -2255,7 +2378,7 @@ function findByLabelSource() {
   }`;
 }
 
-function findByVisibleTextSource() {
+function findByVisibleTextSource(): string {
   return `function (value, exact) {
     const expected = String(value || "").toLowerCase();
     const matches = (text) => {
@@ -2274,6 +2397,6 @@ function findByVisibleTextSource() {
   }`;
 }
 
-function delay(ms) {
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

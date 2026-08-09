@@ -581,3 +581,19 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: parse the validated nested target, reject mixed nested/shorthand strategies and empty values, and reject ambiguous target objects instead of silently selecting by priority.
 - Regression: canonical action tests prove nested target preservation and reject mixed strategies, empty sensitive zones, and empty field values.
 - Status: closed.
+
+## BB-066 - Type-only initialization changed the public action-signal shape
+
+- Minimal repro: run the compiled driver test that records navigation, network-write, dialog, download, and new-target signals after the first strict TypeScript pass.
+- Root cause: the migration initialized every optional signal to `false` or `null` to satisfy an overly strict internal type, so spreading the signal window added a new `containmentPrevention:null` field and false-valued fields that the JavaScript runtime had omitted.
+- Fix: model signals as optional facts and preserve the original empty-object initialization; TypeScript still checks every supported key.
+- Regression: `driver records dialog, download, new-target, navigation, and network-write signals` compares the exact public shape from compiled output and failed before the correction.
+- Status: closed.
+
+## BB-067 - Created-tab identifiers were trusted through type assertions
+
+- Minimal repro: make the Chrome tabs adapter or controller tabs port return a created tab without a numeric ID. The initial TypeScript draft asserted the ID and could reach update, grouping, host creation, or debugger setup with `undefined`.
+- Root cause: compile-time non-null/type assertions replaced runtime narrowing at an external Chrome/adapter boundary.
+- Fix: require a nonnegative safe-integer tab ID immediately after creation/selection and before registering cleanup or performing any downstream effect; model the real Chrome `tabs.update` API as required.
+- Regression: Chrome-port and controller tests inject missing IDs and assert rejection plus zero update, group, host-create, driver-create, cleanup, or publication effects.
+- Status: closed.

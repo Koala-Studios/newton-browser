@@ -1,6 +1,119 @@
-// @ts-check
+// Bridge runtime for transport-injected browser sessions.
 import { SessionCommandPump } from "./session-command-pump.js";
 import { runSessionTransaction } from "./session-transaction.js";
+
+type UnknownRecord = Record<string, unknown>;
+type Theme = { color: string; accent: string };
+type TabMode = "current" | "owned_group";
+type Disposition = "close" | "deliverable" | "handoff";
+type LifecycleState = "creating_tab" | "verifying_origin" | "attaching_debugger" | "publishing_ready" | "active" | "reconciling" | "degraded";
+type Outcome = typeof OUTCOME_COMPLETED | typeof OUTCOME_PREVENTED | typeof OUTCOME_NOT_STARTED | typeof OUTCOME_UNKNOWN;
+type TabInfo = { id?: number; url?: string; pendingUrl?: string; discarded?: boolean };
+type DriverDelta = {
+  status?: string;
+  verified?: boolean;
+  reason?: string;
+  changed?: UnknownRecord;
+  screenshot?: unknown;
+  observation?: UnknownRecord;
+};
+type DriverEvidence = { resolved?: { origin?: string } & UnknownRecord; signals?: UnknownRecord };
+type DriverPort = {
+  accent: string | null;
+  ownsTab: boolean;
+  allowedOrigins: string[];
+  attached?: boolean;
+  containmentReady?: boolean;
+  attach(tabId: number): Promise<unknown>;
+  detach(): Promise<unknown>;
+  isAttachedTo(tabId: number | null): boolean;
+  reassertOverlay(): Promise<unknown>;
+  markDetached(reason: string): void;
+  markDiscarded?(): void;
+  markTargetGone?(): void;
+  recordDebuggerEvent?(source: DebuggerSource, method: string, params: UnknownRecord): Promise<unknown>;
+  preflightAction?(action: UnknownRecord): Promise<unknown>;
+  resolveEvidence(action: UnknownRecord): Promise<DriverEvidence | null>;
+  executeAction(action: UnknownRecord, context: { commandId: string }): Promise<DriverDelta>;
+};
+type DebuggerSource = { tabId?: number };
+type SessionDescriptor = {
+  sessionId: string;
+  origin?: string | null;
+  allowedOrigins?: unknown;
+  goal?: unknown;
+  instanceLabel?: unknown;
+  tabMode?: unknown;
+  ownedTabId?: unknown;
+  tabGroupId?: unknown;
+  incognito?: boolean;
+};
+type Command = UnknownRecord & {
+  commandId: string;
+  sessionId: string;
+  actionKind?: string;
+  action?: UnknownRecord;
+  sessionEpoch?: unknown;
+  sequence?: unknown;
+};
+type TransportPort = {
+  createSession(input: UnknownRecord): Promise<{ sessionId?: string }>;
+  attachTab(sessionId: string, input: UnknownRecord): Promise<unknown>;
+  stopSession(sessionId: string): Promise<unknown> | unknown;
+  stopAll(): Promise<unknown>;
+  listSessions(): Promise<SessionDescriptor[]>;
+  subscribe(sessionId: string, callback: (command: unknown) => Promise<void>): () => void;
+  postEvent(commandId: string, eventType: string, detail: UnknownRecord): Promise<unknown>;
+  postResult(event: UnknownRecord): Promise<unknown> | unknown;
+};
+type TabsPort = {
+  createOwnedTab(origin: unknown, color: unknown, title: string, options?: { incognito?: boolean }): Promise<{ tabId: number; groupId?: number | null }>;
+  setAutoDiscardable?(tabId: number, autoDiscardable: boolean): Promise<unknown>;
+  removeTab(tabId: number): Promise<unknown>;
+  getTab(tabId: number): Promise<TabInfo>;
+  focusTab?(tabId: number | null): Promise<unknown>;
+  finalizeTab?(tabId: number, disposition: Disposition): Promise<unknown>;
+  onDebuggerEvent?(callback: (source: DebuggerSource, method: string, params: UnknownRecord) => void): () => void;
+  onDebuggerDetach?(callback: (source: DebuggerSource, reason: string) => void): () => void;
+  onTabRemoved?(callback: (tabId: number) => void): () => void;
+  onTabUpdated?(callback: (tabId: number, changeInfo: UnknownRecord, tab: TabInfo) => void): () => void;
+};
+type RuntimeOptions = {
+  transport: TransportPort;
+  evaluateFloor: (input: UnknownRecord) => unknown | Promise<unknown>;
+  tabs: TabsPort;
+  driverFactory: () => DriverPort;
+  notify?: (event: UnknownRecord) => unknown | Promise<unknown>;
+  themes?: Theme[];
+};
+type RuntimeOptionsInput = Partial<RuntimeOptions>;
+type ControllerInput = {
+  sessionId: string;
+  tabId: number | null;
+  origin: string | null;
+  allowedOrigins: unknown;
+  tabMode: TabMode;
+  ownsTab: boolean;
+  tabGroupId: number | null;
+  accent: string | null;
+  driver: DriverPort;
+  lifecycleState: LifecycleState;
+};
+type StartSessionInput = {
+  tabId?: number;
+  origin?: string;
+  allowedOrigins?: unknown;
+  goal?: unknown;
+  tabMode?: unknown;
+  instanceLabel?: unknown;
+};
+type RestoredBinding = { sessionId?: string; tabId?: number; tabGroupId?: number | null };
+type SequenceValidation = { rejected: boolean; code?: string; outcome?: Outcome; fence?: boolean };
+type ShutdownResult = { finalized: boolean; disposition: Disposition | null; tabId: number | null; tabKept: boolean };
+type CommandNotificationState = { notifyState: boolean; notifiedState: boolean };
+type CommandShutdownState = { notification: CommandNotificationState; promise: Promise<ShutdownResult> };
+type ShutdownState = { awaitCurrent: boolean; closePromise: Promise<unknown>; notifyState: boolean; promise: Promise<ShutdownResult> | null };
+type Defer = (name: string, cleanup: () => unknown | Promise<unknown>, options: { dedupeKey: string }) => void;
 const DEFAULT_SESSION_MAX_ITEMS = 32;
 const DEFAULT_SESSION_MAX_BYTES = 1024 * 1024;
 const STALE_COMMAND_EPOCH_ERROR = "stale_command_epoch";
@@ -12,7 +125,7 @@ const OUTCOME_UNKNOWN = "outcome_unknown";
 const MAX_REATTACH_ATTEMPTS = 4;
 const commandByteEncoder = new TextEncoder();
 
-const DEFAULT_GROUP_THEMES = [
+const DEFAULT_GROUP_THEMES: Theme[] = [
   { color: "blue", accent: "31, 111, 235" },
   { color: "purple", accent: "137, 87, 229" },
   { color: "green", accent: "35, 134, 54" },
@@ -21,7 +134,31 @@ const DEFAULT_GROUP_THEMES = [
 ];
 
 class SessionController {
-  constructor({ sessionId, tabId, origin, allowedOrigins, tabMode, ownsTab, tabGroupId, accent, driver, lifecycleState }) {
+  readonly sessionId: string;
+  readonly tabId: number | null;
+  readonly origin: string | null;
+  allowedOrigins: string[];
+  readonly tabMode: TabMode;
+  readonly ownsTab: boolean;
+  readonly tabGroupId: number | null;
+  readonly driver: DriverPort;
+  streaming: boolean;
+  closing: boolean;
+  sessionEpoch: number | null;
+  nextSequence: number;
+  unsubscribe: (() => void) | null;
+  reattaching: boolean;
+  reattachPending: boolean;
+  reattachAttempts: number;
+  lastDetachReason: string | null;
+  lifecycleState: LifecycleState;
+  routingErrorCode: string | null;
+  _commandShutdown: CommandShutdownState | null;
+  _shutdownState: ShutdownState | null;
+  _stopSession: Promise<void> | null;
+  readonly pump: SessionCommandPump;
+
+  constructor({ sessionId, tabId, origin, allowedOrigins, tabMode, ownsTab, tabGroupId, accent, driver, lifecycleState }: ControllerInput) {
     this.sessionId = sessionId;
     this.tabId = tabId ?? null;
     this.origin = origin ?? null;
@@ -72,23 +209,24 @@ class SessionController {
   }
 }
 
-export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFactory, notify, themes = DEFAULT_GROUP_THEMES } = {}) {
+export function createBridgeRuntime(options: RuntimeOptionsInput = {}) {
+  const { transport, evaluateFloor, tabs, driverFactory, notify, themes = DEFAULT_GROUP_THEMES } = requireRuntimeOptions(options);
   if (!transport) throw new Error("bridge transport is required");
   if (typeof evaluateFloor !== "function") throw new Error("bridge floor evaluator is required");
   if (!tabs) throw new Error("bridge tabs port is required");
   if (typeof driverFactory !== "function") throw new Error("bridge driver factory is required");
 
-  const sessions = new Map();
-  const provisioningByTab = new Map();
-  const bindingSessions = new Set();
+  const sessions = new Map<string, SessionController>();
+  const provisioningByTab = new Map<number | null, SessionController>();
+  const bindingSessions = new Set<string>();
   let themeCursor = 0;
 
-  const emit = async (event) => {
+  const emit = async (event: UnknownRecord): Promise<void> => {
     if (typeof notify !== "function") return;
     await Promise.resolve(notify(event)).catch(() => {});
   };
 
-  const postResult = async (event) => {
+  const postResult = async (event: UnknownRecord): Promise<void> => {
     try {
       await Promise.resolve(transport.postResult(event)).catch(() => {});
     } catch {
@@ -102,7 +240,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     return { ...primary, sessions: list, count: list.length };
   };
 
-  const notifyState = async ({ required = false } = {}) => {
+  const notifyState = async ({ required = false }: { required?: boolean } = {}) => {
     const event = { type: "state", state: bridgeSnapshot() };
     if (required && typeof notify === "function") {
       await Promise.resolve(notify(event));
@@ -118,14 +256,14 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
 
     snapshot: bridgeSnapshot,
 
-    isDrivingTab(tabId) {
+    isDrivingTab(tabId: number): boolean {
       for (const controller of sessions.values()) {
         if (controller.tabId === tabId && controller.driver.isAttachedTo(tabId)) return true;
       }
       return false;
     },
 
-    async reassertOverlayForTab(tabId) {
+    async reassertOverlayForTab(tabId: number): Promise<void> {
       for (const controller of sessions.values()) {
         if (controller.tabId === tabId && controller.driver.isAttachedTo(tabId)) {
           await controller.driver.reassertOverlay().catch(() => {});
@@ -133,20 +271,23 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }
     },
 
-    async startSession({ tabId, origin, allowedOrigins, goal, tabMode, instanceLabel } = {}) {
+    async startSession({ tabId, origin, allowedOrigins, goal, tabMode, instanceLabel }: StartSessionInput = {}) {
       if (!safeOrigin(origin)) throw new Error("origin_required");
       const mode = tabMode === "current" ? "current" : "owned_group";
       const theme = nextTheme();
       if (mode === "current" && typeof tabId !== "number") {
         throw new Error("A normal web tab is required to drive the current tab.");
       }
-      return runSessionTransaction(async ({ defer }) => {
-        let ownedTabId = mode === "current" ? tabId : null;
+      return runSessionTransaction(async ({ defer }: { defer: Defer }) => {
+        let selectedTabId: unknown = mode === "current" ? tabId : null;
         let tabGroupId = null;
         if (mode === "owned_group") {
           const acquired = await tabs.createOwnedTab(origin, theme.color, groupTitle({ goal, instanceLabel, origin }));
-          ownedTabId = acquired.tabId;
+          selectedTabId = acquired.tabId;
           tabGroupId = acquired.groupId ?? null;
+        }
+        const ownedTabId = requireTabId(selectedTabId);
+        if (mode === "owned_group") {
           defer("owned_tab", () => tabs.removeTab(ownedTabId), { dedupeKey: `tab:${ownedTabId}` });
         }
         const created = await transport.createSession({
@@ -159,11 +300,12 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           instanceLabel: instanceLabel ?? "",
         });
         if (!created?.sessionId) throw new Error("session_start_failed");
-        defer("host_session", () => transport.stopSession(created.sessionId), {
-          dedupeKey: `host:${created.sessionId}`,
+        const createdSessionId = created.sessionId;
+        defer("host_session", () => transport.stopSession(createdSessionId), {
+          dedupeKey: `host:${createdSessionId}`,
         });
         const controller = newController({
-          sessionId: created.sessionId,
+          sessionId: createdSessionId,
           tabId: ownedTabId,
           origin: origin ?? null,
           allowedOrigins: dedupeOrigins(allowedOrigins, origin),
@@ -178,7 +320,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         const preAttachOrigin = await liveTabOrigin(ownedTabId);
         if (!controller.allowedOrigins.includes(preAttachOrigin)) throw new Error("origin_not_granted");
         controller.lifecycleState = "attaching_debugger";
-        defer("debugger", () => controller.driver.detach(), { dedupeKey: `debugger:${created.sessionId}` });
+        defer("debugger", () => controller.driver.detach(), { dedupeKey: `debugger:${createdSessionId}` });
         await controller.driver.attach(ownedTabId);
         controller.lifecycleState = "verifying_origin";
         const liveOrigin = await liveTabOrigin(ownedTabId);
@@ -188,7 +330,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         defer("published_session", () => {
           sessions.delete(controller.sessionId);
           stopSubscription(controller);
-        }, { dedupeKey: `published:${created.sessionId}` });
+        }, { dedupeKey: `published:${createdSessionId}` });
         sessions.set(controller.sessionId, controller);
         provisioningByTab.delete(controller.tabId);
         startSubscription(controller);
@@ -198,11 +340,11 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       });
     },
 
-    async ensureForActiveSessions(activeTabId, restoredBindings = []) {
+    async ensureForActiveSessions(activeTabId?: number, restoredBindings: RestoredBinding[] = []) {
       const list = await transport.listSessions().catch(() => null);
       if (!Array.isArray(list)) return;
-      const restored = new Map((Array.isArray(restoredBindings) ? restoredBindings : []).flatMap((binding) =>
-        binding?.sessionId && Number.isInteger(binding?.tabId) ? [[binding.sessionId, binding]] : [],
+      const restored = new Map<string, RestoredBinding>((Array.isArray(restoredBindings) ? restoredBindings : []).flatMap((binding) =>
+        binding.sessionId && Number.isInteger(binding.tabId) ? [[binding.sessionId, binding] as const] : [],
       ));
       for (const session of list) {
         if (!session?.sessionId) continue;
@@ -223,11 +365,11 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }
     },
 
-    async stop(sessionId) {
+    async stop(sessionId?: string) {
       const controller = sessionId ? sessions.get(sessionId) : firstController();
       if (!controller) return { stopped: false };
       await shutdownController(controller, { awaitCurrent: true });
-      if (!controller._commandShutdown?.notifiedState) {
+      if (!controller._commandShutdown?.notification.notifiedState) {
         await notifyState();
       }
       return { stopped: true };
@@ -255,7 +397,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }
     },
 
-    async handleDebuggerEvent(source, method, params) {
+    async handleDebuggerEvent(source: DebuggerSource, method: string, params: UnknownRecord) {
       const controller = controllerForTab(source?.tabId);
       if (!controller) return;
       try {
@@ -268,15 +410,17 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       if (method === "Page.javascriptDialogOpening") {
         await emit({ type: "dialog", message: params?.message ?? "", dialogType: params?.type ?? "alert" });
       }
-      if (method === "Target.targetCreated" && params?.targetInfo?.type === "page") {
-        await emit({ type: "new_target", url: params.targetInfo.url ?? "" });
+      const targetInfo = isRecord(params.targetInfo) ? params.targetInfo : null;
+      if (method === "Target.targetCreated" && targetInfo?.type === "page") {
+        await emit({ type: "new_target", url: targetInfo.url ?? "" });
       }
-      if (method === "Page.frameNavigated" && params?.frame && !params.frame.parentId) {
+      const frame = isRecord(params.frame) ? params.frame : null;
+      if (method === "Page.frameNavigated" && frame && !frame.parentId) {
         await controller.driver.reassertOverlay().catch(() => {});
       }
     },
 
-    async handleDebuggerDetach(source, reason) {
+    async handleDebuggerDetach(source: DebuggerSource, reason: unknown) {
       const controller = controllerForTab(source?.tabId);
       if (!controller) return;
       const detachReason = String(reason ?? "debugger_detached");
@@ -299,7 +443,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       await attemptReattach(controller);
     },
 
-    async handleTabUpdated(tabId, changeInfo, tab) {
+    async handleTabUpdated(tabId: number, changeInfo: UnknownRecord, tab: TabInfo) {
       const controller = controllerForTab(tabId);
       if (!controller) return;
       if (changeInfo?.discarded === true || tab?.discarded === true) {
@@ -313,7 +457,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       if (controller.reattachPending) await attemptReattach(controller);
     },
 
-    async handleTabRemoved(tabId) {
+    async handleTabRemoved(tabId: number) {
       const controller = controllerForTab(tabId);
       if (controller) {
         controller.driver.markTargetGone?.();
@@ -336,21 +480,21 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   });
 
   function nextTheme() {
-    const theme = themes[themeCursor % themes.length] ?? DEFAULT_GROUP_THEMES[0];
+    const theme = themes[themeCursor % themes.length] ?? DEFAULT_GROUP_THEMES[0]!;
     themeCursor += 1;
     return theme;
   }
 
-  function newController(input) {
+  function newController(input: Omit<ControllerInput, "driver">) {
     return new SessionController({ ...input, driver: driverFactory() });
   }
 
-  async function bindExternalSession(session, activeTabId) {
-    return runSessionTransaction(async ({ defer }) => {
+  async function bindExternalSession(session: SessionDescriptor, activeTabId?: number) {
+    return runSessionTransaction(async ({ defer }: { defer: Defer }) => {
       const mode = session.tabMode === "current" ? "current" : "owned_group";
       const theme = nextTheme();
-      let tabId = Number.isInteger(session.ownedTabId) ? session.ownedTabId : null;
-      let tabGroupId = Number.isInteger(session.tabGroupId) ? session.tabGroupId : null;
+      let tabId = typeof session.ownedTabId === "number" && Number.isInteger(session.ownedTabId) ? session.ownedTabId : null;
+      let tabGroupId = typeof session.tabGroupId === "number" && Number.isInteger(session.tabGroupId) ? session.tabGroupId : null;
       let retainedOwnedTab = false;
       const origin = session.origin ?? null;
       defer("host_session", () => transport.stopSession(session.sessionId), {
@@ -371,9 +515,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
             groupTitle({ goal: session.goal, instanceLabel: session.instanceLabel, origin }),
             { incognito: session.incognito === true },
           );
-          tabId = acquired.tabId;
+          tabId = requireTabId(acquired.tabId);
           tabGroupId = acquired.groupId ?? null;
-          defer("owned_tab", () => tabs.removeTab(tabId), { dedupeKey: `tab:${tabId}` });
+          const acquiredTabId = tabId;
+          defer("owned_tab", () => tabs.removeTab(acquiredTabId), { dedupeKey: `tab:${acquiredTabId}` });
         }
         await transport.attachTab(session.sessionId, {
           ownedTabId: tabId,
@@ -381,7 +526,8 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           attached: false,
         });
       } else if (mode === "owned_group") {
-        defer("owned_tab", () => tabs.removeTab(tabId), { dedupeKey: `tab:${tabId}` });
+        const retainedTabId = tabId;
+        defer("owned_tab", () => tabs.removeTab(retainedTabId), { dedupeKey: `tab:${retainedTabId}` });
         retainedOwnedTab = true;
       }
       if (retainedOwnedTab) await tabs.setAutoDiscardable?.(tabId, false);
@@ -421,7 +567,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     });
   }
 
-  async function attemptReattach(controller) {
+  async function attemptReattach(controller: SessionController): Promise<boolean> {
     if (!controller.reattachPending || controller.reattaching || controller.closing) return false;
     if (!sessions.has(controller.sessionId) || typeof controller.tabId !== "number") return false;
     controller.reattaching = true;
@@ -462,7 +608,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       await notifyState();
       return true;
     } catch (error) {
-      if (/replaced|devtools|another debugger|already attached/i.test(String(error?.message ?? error ?? ""))) {
+      if (/replaced|devtools|another debugger|already attached/i.test(errorMessage(error))) {
         controller.reattachPending = false;
         controller.routingErrorCode = "debugger_conflict";
         controller.lifecycleState = "degraded";
@@ -485,27 +631,27 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     }
   }
 
-  function startSubscription(controller) {
+  function startSubscription(controller: SessionController): void {
     if (controller.streaming || controller.closing || !sessions.has(controller.sessionId)) return;
     controller.streaming = true;
-    controller.unsubscribe = transport.subscribe(controller.sessionId, async (command) => {
+    controller.unsubscribe = transport.subscribe(controller.sessionId, async (command: unknown) => {
       await enqueueCommand(controller, command);
     });
   }
 
-  function stopSubscription(controller) {
+  function stopSubscription(controller: SessionController): void {
     controller.unsubscribe?.();
     controller.unsubscribe = null;
     controller.streaming = false;
   }
 
-  async function runCommand(controller, command) {
+  async function runCommand(controller: SessionController, command: Command): Promise<void> {
     const commandId = command.commandId;
     if (!commandId || command.sessionId !== controller.sessionId) return;
     await transport.postEvent(commandId, "running", { actionKind: command.actionKind }).catch(() => {});
     let executionStarted = false;
     let terminalResultAttempted = false;
-    const emitTerminalResult = async (details, outcome) => {
+    const emitTerminalResult = async (details: UnknownRecord, outcome: Outcome) => {
       if (terminalResultAttempted) return;
       terminalResultAttempted = true;
       await reportCommandResult(command, details, outcome);
@@ -529,7 +675,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }
       const action = command.action ?? {};
       if (action.kind === "__finalize") {
-        const disposition = ["close", "deliverable", "handoff"].includes(action.disposition) ? action.disposition : null;
+        const disposition = isDisposition(action.disposition) ? action.disposition : null;
         if (!disposition) throw new Error("invalid_finalize_disposition");
         executionStarted = true;
         prepareShutdown(controller, { notifyState: true, awaitCurrent: false });
@@ -600,7 +746,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     }
   }
 
-  async function preDispatchFloor(controller, action) {
+  async function preDispatchFloor(controller: SessionController, action: UnknownRecord) {
     try {
       const evidence = await controller.driver.resolveEvidence(action);
     if (!evidence) return null;
@@ -613,32 +759,32 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       signals: evidence.signals,
     }));
     if (!decision) return null;
-    if (decision && typeof decision !== "object") return null;
-    if (decision.blocked) return { stop: "blocked", decision };
+    if (!isRecord(decision)) return null;
+    if (decision.blocked) return { stop: "blocked" as const, decision };
     return { stop: null, decision };
     } catch (error) {
-      if (error?.code === "invalid_selector" || errorCode(error) === "invalid_selector") throw error;
+      if (errorCode(error) === "invalid_selector") throw error;
       throw new Error("floor_evaluation_failed");
     }
   }
 
-  function finalizeCurrentCommand(controller, disposition) {
+  function finalizeCurrentCommand(controller: SessionController, disposition: Disposition) {
     return commandShutdown(controller, { disposition });
   }
 
-  function firstController() {
+  function firstController(): SessionController | null {
     for (const controller of sessions.values()) return controller;
     return null;
   }
 
-  function controllerForTab(tabId) {
+  function controllerForTab(tabId: number | null | undefined): SessionController | null {
     for (const controller of sessions.values()) {
       if (controller.tabId === tabId) return controller;
     }
-    return provisioningByTab.get(tabId) ?? null;
+    return tabId === undefined ? null : provisioningByTab.get(tabId) ?? null;
   }
 
-  function registerProvisioningController(controller, defer) {
+  function registerProvisioningController(controller: SessionController, defer: Defer): void {
     if (provisioningByTab.has(controller.tabId)) throw new Error("tab_already_provisioning");
     provisioningByTab.set(controller.tabId, controller);
     defer("private_controller", () => {
@@ -646,17 +792,17 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     }, { dedupeKey: `private:${controller.sessionId}` });
   }
 
-  async function liveTabOrigin(tabId) {
+  async function liveTabOrigin(tabId: number | null): Promise<string> {
     if (typeof tabId !== "number") return "";
     const tab = await tabs.getTab(tabId).catch(() => null);
     return safeOrigin(tab?.pendingUrl) || safeOrigin(tab?.url);
   }
 
-  async function shutdownController(controller, { awaitCurrent = true } = {}) {
+  async function shutdownController(controller: SessionController, { awaitCurrent = true }: { awaitCurrent?: boolean } = {}) {
     return completeShutdown(controller, { awaitCurrent });
   }
 
-  async function completeShutdown(controller, { awaitCurrent = true, disposition = null, notifyState = false } = {}) {
+  async function completeShutdown(controller: SessionController, { awaitCurrent = true, disposition = null, notifyState = false }: { awaitCurrent?: boolean; disposition?: Disposition | null; notifyState?: boolean } = {}) {
     const shutdownState = prepareShutdown(controller, { awaitCurrent, notifyState });
     if (!shutdownState.promise) {
       shutdownState.promise = (async () => {
@@ -671,7 +817,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     return shutdownState.promise;
   }
 
-  function prepareShutdown(controller, { awaitCurrent = true, notifyState = false } = {}) {
+  function prepareShutdown(controller: SessionController, { awaitCurrent = true, notifyState = false }: { awaitCurrent?: boolean; notifyState?: boolean } = {}): ShutdownState {
     if (!controller._shutdownState) {
       controller.closing = true;
       const closePromise = controller.pump.closeAfterCurrent();
@@ -692,20 +838,21 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     return controller._shutdownState;
   }
 
-  function stopHostSession(controller) {
+  function stopHostSession(controller: SessionController): Promise<void> {
     if (controller._stopSession) return controller._stopSession;
-    controller._stopSession = Promise.resolve()
+    const stopping = Promise.resolve()
       .then(() => transport.stopSession(controller.sessionId))
-      .catch(() => {});
-    return controller._stopSession;
+      .then(() => undefined)
+      .catch(() => undefined);
+    controller._stopSession = stopping;
+    return stopping;
   }
 
-  function commandShutdown(controller, { disposition = null, notifyState: shouldNotifyState = false } = {}) {
+  function commandShutdown(controller: SessionController, { disposition = null, notifyState: shouldNotifyState = false }: { disposition?: Disposition | null; notifyState?: boolean } = {}): Promise<ShutdownResult> {
     if (!controller._commandShutdown) {
-      const state = {
+      const notification: CommandNotificationState = {
         notifyState: Boolean(shouldNotifyState),
         notifiedState: false,
-        promise: null,
       };
 
       const commandResult = (async () => {
@@ -738,23 +885,22 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         if (disposition) {
           await emit({ type: "finalized", sessionId: controller.sessionId, disposition, tabId, tabKept });
         }
-        if (state.notifyState) {
+        if (notification.notifyState) {
           await notifyState();
-          state.notifiedState = true;
+          notification.notifiedState = true;
         }
         return shutdownResult;
       })();
 
-      state.promise = commandResult;
-      controller._commandShutdown = state;
+      controller._commandShutdown = { notification, promise: commandResult };
     } else if (shouldNotifyState) {
-      controller._commandShutdown.notifyState = true;
+      controller._commandShutdown.notification.notifyState = true;
     }
     return controller._commandShutdown.promise;
   }
 
-  async function enqueueCommand(controller, command) {
-    if (!command || typeof command !== "object") return;
+  async function enqueueCommand(controller: SessionController, command: unknown) {
+    if (!isRecord(command)) return;
     const commandId = command.commandId;
     if (typeof commandId !== "string" || commandId.length === 0) return;
     if (command.sessionId !== controller.sessionId) return;
@@ -772,7 +918,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     }
 
     const bytes = commandByteCount(envelope);
-    if (!Number.isSafeInteger(bytes)) {
+    if (typeof bytes !== "number" || !Number.isSafeInteger(bytes)) {
       await reportCommandResult(envelope, { ok: false, errorCode: "invalid_command_size" }, OUTCOME_PREVENTED);
       return;
     }
@@ -786,9 +932,9 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     return handled;
   }
 
-  function commandEnvelope(command) {
-    const commandId = command?.commandId;
-    const sessionId = command?.sessionId;
+  function commandEnvelope(command: UnknownRecord): Command | null {
+    const commandId = command.commandId;
+    const sessionId = command.sessionId;
     if (typeof commandId !== "string" || commandId.length === 0) return null;
     if (typeof sessionId !== "string" || sessionId.length === 0) return null;
     return {
@@ -798,10 +944,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     };
   }
 
-  async function reportCommandResult(command, details, outcome) {
-    const commandId = command?.commandId;
-    const sessionEpoch = command?.sessionEpoch;
-    const sequence = command?.sequence;
+  async function reportCommandResult(command: Command, details: UnknownRecord, outcome: Outcome) {
+    const commandId = command.commandId;
+    const sessionEpoch = command.sessionEpoch;
+    const sequence = command.sequence;
     if (typeof commandId !== "string" || commandId.length === 0) return;
     const retrySafe = stageRetrySafe(outcome);
     await postResult({
@@ -814,9 +960,9 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     });
   }
 
-  function validateAndTrackCommandSequence(controller, command) {
-    const sessionEpoch = positiveSafeInteger(command?.sessionEpoch);
-    const sequence = positiveSafeInteger(command?.sequence);
+  function validateAndTrackCommandSequence(controller: SessionController, command: Command): SequenceValidation {
+    const sessionEpoch = positiveSafeInteger(command.sessionEpoch);
+    const sequence = positiveSafeInteger(command.sequence);
     if (sessionEpoch == null || sequence == null) {
       return {
         rejected: true,
@@ -824,7 +970,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         outcome: OUTCOME_PREVENTED,
       };
     }
-    if (!Number.isSafeInteger(controller.sessionEpoch) || controller.sessionEpoch <= 0) {
+    if (typeof controller.sessionEpoch !== "number" || !Number.isSafeInteger(controller.sessionEpoch) || controller.sessionEpoch <= 0) {
       if (sequence !== 1) {
         return {
           rejected: true,
@@ -861,7 +1007,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     return { rejected: false };
   }
 
-  function commandByteCount(command) {
+  function commandByteCount(command: Command): number | null {
     try {
       const json = JSON.stringify(command);
       if (typeof json !== "string") return null;
@@ -871,9 +1017,9 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     }
   }
 
-  function pumpRejectionCode(error) {
-    if (error && typeof error.code === "string") return error.code;
-    const code = String(error?.message ?? "");
+  function pumpRejectionCode(error: unknown): string {
+    if (isRecord(error) && typeof error.code === "string") return error.code;
+    const code = isRecord(error) && typeof error.message === "string" ? error.message : "";
     if (code === "invalid_command_size") return "invalid_command_size";
     if (code === "session_queue_full") return "session_queue_full";
     if (code === "session_finalizing") return "session_finalizing";
@@ -883,15 +1029,15 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   return runtime;
 }
 
-function groupTitle({ goal, instanceLabel, origin } = {}) {
-  const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
-  const cap = (value) => (value.length > 28 ? `${value.slice(0, 27)}...` : value);
+function groupTitle({ goal, instanceLabel, origin }: { goal?: unknown; instanceLabel?: unknown; origin?: unknown } = {}) {
+  const clean = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const cap = (value: string) => (value.length > 28 ? `${value.slice(0, 27)}...` : value);
   const goalText = clean(goal);
   if (goalText) return cap(goalText);
   const label = clean(instanceLabel);
   if (label) return cap(label);
   try {
-    const host = new URL(origin).hostname.replace(/^www\./, "");
+    const host = new URL(String(origin ?? "")).hostname.replace(/^www\./, "");
     if (host) return cap(host);
   } catch {
     // Ignore non-URL origins.
@@ -899,14 +1045,14 @@ function groupTitle({ goal, instanceLabel, origin } = {}) {
   return "Newton";
 }
 
-function dedupeOrigins(origins, origin) {
+function dedupeOrigins(origins: unknown, origin: unknown): string[] {
   const list = Array.isArray(origins) ? origins.map(safeOrigin).filter(Boolean) : [];
   const normalizedOrigin = safeOrigin(origin);
   if (normalizedOrigin && !list.includes(normalizedOrigin)) list.unshift(normalizedOrigin);
   return [...new Set(list)];
 }
 
-function safeOrigin(value) {
+function safeOrigin(value: unknown): string {
   try {
     const url = new URL(String(value ?? ""));
     return url.protocol === "http:" || url.protocol === "https:" ? url.origin : "";
@@ -915,7 +1061,7 @@ function safeOrigin(value) {
   }
 }
 
-function deltaToResult(delta) {
+function deltaToResult(delta: DriverDelta | null | undefined): unknown {
   if (!delta) return { kind: "ack", message: "ok" };
   if (delta.screenshot) return delta.screenshot;
   if (delta.observation) {
@@ -930,17 +1076,33 @@ function deltaToResult(delta) {
   return { kind: "ack", message: delta.status ?? "ok" };
 }
 
-function errorCode(error) {
-  if (error && typeof error.code === "string") return error.code.slice(0, 80);
-  const message = String(error?.message ?? error ?? "driver_error");
+function errorCode(error: unknown): string {
+  if (isRecord(error) && typeof error.code === "string") return error.code.slice(0, 80);
+  const message = errorMessage(error) || "driver_error";
   return message.slice(0, 80).replace(/[^a-z0-9_]+/gi, "_").toLowerCase() || "driver_error";
 }
 
-function stageRetrySafe(outcome) {
+function stageRetrySafe(outcome: Outcome): boolean {
   return outcome === OUTCOME_NOT_STARTED || outcome === OUTCOME_PREVENTED;
 }
 
-function isUncertainDriverFailure(code) {
+function requireRuntimeOptions(options: RuntimeOptionsInput): RuntimeOptions {
+  const { transport, evaluateFloor, tabs, driverFactory } = options;
+  if (!transport) throw new Error("bridge transport is required");
+  if (typeof evaluateFloor !== "function") throw new Error("bridge floor evaluator is required");
+  if (!tabs) throw new Error("bridge tabs port is required");
+  if (typeof driverFactory !== "function") throw new Error("bridge driver factory is required");
+  return {
+    transport,
+    evaluateFloor,
+    tabs,
+    driverFactory,
+    ...(options.notify ? { notify: options.notify } : {}),
+    ...(options.themes ? { themes: options.themes } : {}),
+  };
+}
+
+function isUncertainDriverFailure(code: string): boolean {
   return code === "input_cleanup_failed"
     || code === "renderer_unresponsive"
     || code === "debugger_conflict"
@@ -948,6 +1110,26 @@ function isUncertainDriverFailure(code) {
     || code.startsWith("cdp_timeout_");
 }
 
-function positiveSafeInteger(value) {
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
+function positiveSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  if (isRecord(error) && typeof error.message === "string") return error.message;
+  return String(error ?? "");
+}
+
+function isDisposition(value: unknown): value is Disposition {
+  return value === "close" || value === "deliverable" || value === "handoff";
+}
+
+function requireTabId(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("invalid_tab_id");
+  }
+  return value;
 }

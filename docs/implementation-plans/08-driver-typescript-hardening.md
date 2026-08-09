@@ -1,6 +1,6 @@
 # Plan 08 — Driver TypeScript Hardening
 
-- **Status:** Approval required
+- **Status:** Approved; implementation in progress
 - **Depends on:** Plans 01–07 stabilized
 - **Primary outcome:** The critical driver/controller/transport path is checked by TypeScript and built deterministically, without rewriting the product or changing runtime behavior.
 

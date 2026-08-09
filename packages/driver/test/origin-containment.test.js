@@ -6,7 +6,7 @@ import {
   decidePausedTarget,
   normalizeGrantOrigin,
   originForUrl,
-} from "../src/origin-containment.js";
+} from "../dist/origin-containment.js";
 
 test("origin grants accept only bounded exact canonical HTTP(S) origins", () => {
   assert.equal(normalizeGrantOrigin("https://example.com"), "https://example.com");

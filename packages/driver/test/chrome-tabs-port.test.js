@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createChromeTabsPort } from "../src/chrome-tabs-port.js";
+import { createChromeTabsPort } from "../dist/chrome-tabs-port.js";
 
 test("chrome tabs port creates owned tabs without taking the user's active tab", async () => {
   const creates = [];
@@ -57,12 +57,36 @@ test("chrome tabs port creates owned tabs without taking the user's active tab",
   assert.deepEqual(updates, [{ groupId: 201, input: { title: "QA", color: "blue" } }]);
 });
 
+test("chrome tabs port rejects an invalid created-tab id before update or grouping", async () => {
+  const sideEffects = [];
+  const port = createChromeTabsPort({
+    tabs: {
+      async create() { return {}; },
+      async update() { sideEffects.push("update"); },
+      async group() { sideEffects.push("group"); return 1; },
+      async remove() {},
+      async get() { return {}; },
+      onRemoved: { addListener() {}, removeListener() {} },
+      onUpdated: { addListener() {}, removeListener() {} },
+    },
+    tabGroups: { async update() { sideEffects.push("group_update"); } },
+    debugger: {
+      onEvent: { addListener() {}, removeListener() {} },
+      onDetach: { addListener() {}, removeListener() {} },
+    },
+  });
+
+  await assert.rejects(port.createOwnedTab("https://example.com", "blue", "QA"), /invalid_created_tab_id/);
+  assert.deepEqual(sideEffects, []);
+});
+
 test("incognito owned tabs open in an incognito window, reusing an existing one", async () => {
   const creates = [];
   const windowCreates = [];
   const port = createChromeTabsPort({
     tabs: {
       async create(input) { creates.push(input); return { id: 55 }; },
+      async update() {},
       async group() { return 66; },
       async remove() {}, async get() { return { id: 55 }; },
       onRemoved: { addListener() {}, removeListener() {} },
@@ -85,6 +109,7 @@ test("incognito owned tabs open a new incognito window when none exists", async 
   const port = createChromeTabsPort({
     tabs: {
       async create(input) { creates.push(input); return { id: 1 }; },
+      async update() {},
       async group() { return 2; }, async remove() {}, async get() { return { id: 1 }; },
       onRemoved: { addListener() {}, removeListener() {} },
     },
@@ -99,7 +124,7 @@ test("incognito owned tabs open a new incognito window when none exists", async 
 test("incognito owned tabs surface incognito_not_allowed when the extension is blocked", async () => {
   const port = createChromeTabsPort({
     tabs: {
-      async create() { return { id: 1 }; }, async group() { return 2; }, async remove() {}, async get() { return { id: 1 }; },
+      async create() { return { id: 1 }; }, async update() {}, async group() { return 2; }, async remove() {}, async get() { return { id: 1 }; },
       onRemoved: { addListener() {}, removeListener() {} },
     },
     tabGroups: { async update() {} },

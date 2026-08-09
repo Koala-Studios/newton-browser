@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { SessionCommandPump } from "../src/session-command-pump.js";
+import { SessionCommandPump } from "../dist/session-command-pump.js";
 
 function deferredGate() {
   let resolve;

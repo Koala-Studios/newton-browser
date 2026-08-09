@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createBridgeRuntime } from "../src/controller.js";
+import { createBridgeRuntime } from "../dist/controller.js";
 
 type Deferred<T = void> = {
   promise: Promise<T>;
@@ -345,6 +345,30 @@ test("BridgeRuntime rolls back every owned-session start failure stage", async (
       assert.ok(order.indexOf(`stop_host:failure-${stage}`) > order.indexOf("detach_debugger"));
     }
   }
+});
+
+test("BridgeRuntime rejects an invalid owned-tab result before host or debugger side effects", async () => {
+  let createSessionCalls = 0;
+  const removals: unknown[] = [];
+  const harness = createControllerHarness({
+    createSession: async () => {
+      createSessionCalls += 1;
+      return { sessionId: "must-not-start" };
+    },
+    tabsOverrides: {
+      async createOwnedTab() { return { tabId: undefined, groupId: 201 }; },
+      async removeTab(tabId: unknown) { removals.push(tabId); },
+    },
+  });
+
+  await assert.rejects(
+    harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" }),
+    /invalid_tab_id/,
+  );
+  assert.equal(createSessionCalls, 0);
+  assert.deepEqual(removals, []);
+  assert.equal(harness.drivers.length, 0);
+  assert.equal(harness.runtime.snapshot().count, 0);
 });
 
 test("BridgeRuntime rolls back a failed external-session rebind before publication", async () => {

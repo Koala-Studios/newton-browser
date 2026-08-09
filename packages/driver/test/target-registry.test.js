@@ -5,7 +5,7 @@ import {
   TARGET_REGISTRY_ERROR_CODES as CODES,
   TargetRegistry,
   TargetRegistryError,
-} from "../src/target-registry.js";
+} from "../dist/target-registry.js";
 
 function throwsCode(work, code) {
   assert.throws(work, (error) => error instanceof TargetRegistryError && error.code === code);

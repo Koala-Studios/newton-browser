@@ -453,3 +453,24 @@ compressed, and otherwise opaque bodies are omitted. Their bounded metadata may 
 MIME type, declared encoding, byte count, and SHA-256, never raw bytes. Screenshot
 results always state `mask_applied`, `mask_not_configured`, or `mask_not_applicable`; a
 configured mask failure prevents capture instead of returning unmasked bytes.
+
+## 30. Strict TypeScript control path with deterministic JavaScript output (2026-08-09)
+
+The critical browser-side control path is now strict TypeScript: driver, controller,
+Chrome tabs adapter, session command pump and transaction, target registry, origin
+containment, input dispatcher, and renderer liveness. The package enables `strict`,
+`noImplicitOverride`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes` and
+imports public browser action types from `@newton-browser/core`. Raw CDP variability is
+isolated to one documented adapter record; the rest of the control path uses narrowed
+internal types. This captures the relevant compile-time advantage without a Rust
+rewrite, native executable, daemon, or architecture change.
+
+`scripts/build-driver.mjs` invokes the pinned workspace TypeScript compiler, emits the
+existing JavaScript filenames, removes the empty declaration-only `types.js`, and copies
+the overlay JavaScript/CSS separately. The extension builder consumes only this compiled
+output. Driver tests also import compiled output, so source-only success cannot hide a
+broken package graph. A two-clean-build regression compares the exact production
+allowlist, SHA-256, and bytes and rejects TypeScript, source maps, tests, fixtures, and
+absolute workspace paths. An intentionally incomplete action switch must fail strict
+typechecking, while the production action switch is exhaustive and retains the prior
+runtime fallback for invalid unvalidated JavaScript callers.

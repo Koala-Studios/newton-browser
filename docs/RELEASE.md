@@ -11,7 +11,12 @@ pnpm install --frozen-lockfile
 pnpm release:check
 ```
 
-The gate runs boundary, type, unit/contract, build, deterministic extension artifact, packed clean-install, isolated clean-user directories, fixture, Node 24/25, chaos, and concurrent two-host checks. It must leave all ports in `127.0.0.1:17321-17340` closed.
+The gate runs boundary, strict workspace and driver typechecking, unit/contract tests,
+deterministic driver and extension builds, packed clean-install, isolated clean-user
+directories, fixture, Node 24/25, chaos, and concurrent two-host checks. The driver
+artifact must contain only compiled JavaScript and overlay assets—no TypeScript, source
+maps, tests, fixtures, absolute checkout paths, or declaration-only runtime module. The
+gate must leave all ports in `127.0.0.1:17321-17340` closed.
 
 Expected release artifacts:
 

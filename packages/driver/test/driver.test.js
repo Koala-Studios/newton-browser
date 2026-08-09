@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createNewtonBrowserDriver } from "../src/driver.js";
+import { createNewtonBrowserDriver } from "../dist/driver.js";
 
 test("driver emulates focus for an inactive owned tab and restores it on detach", async () => {
   const originalChrome = globalThis.chrome;
