@@ -182,13 +182,32 @@ export class TargetRegistry {
     return this.#publicFrame(candidate.frameId);
   }
 
-  commitTopLevelDocument(targetId = this.mainTargetId) {
+  targetForSession(sessionId) {
+    sessionId = identifier(sessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
+    const targetId = this.sessionToTarget.get(sessionId);
+    return targetId ? this.#publicTarget(targetId) : undefined;
+  }
+
+  listObservationRoutes() {
+    const routes = [];
+    const main = this.targets.get(this.mainTargetId);
+    if (main) routes.push({ targetId: main.targetId, sessionId: main.sessionId, frameId: null, origin: main.origin });
+    for (const frame of this.frames.values()) {
+      const target = this.targets.get(frame.targetId);
+      if (!target || target.type === "worker" || !this.#liveFrame(frame)) continue;
+      routes.push({ targetId: target.targetId, sessionId: target.sessionId, frameId: frame.frameId, origin: frame.origin || target.origin });
+    }
+    return immutable(routes);
+  }
+
+  commitTopLevelDocument(targetId = this.mainTargetId, nextOrigin) {
     if (targetId === null) fail(TARGET_REGISTRY_ERROR_CODES.DOCUMENT_NOT_FOUND);
     const target = this.targets.get(identifier(targetId, TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND));
     if (!target) fail(TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND);
     if (target.type !== "page" || target.parentTargetId !== null) {
       fail(TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT);
     }
+    if (nextOrigin !== undefined) target.origin = origin(nextOrigin, TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT);
     this.#advanceDocumentEpoch();
     this.mainTargetId = targetId;
     this.#clearChildGraph(targetId);
@@ -342,10 +361,13 @@ export class TargetRegistry {
 
   #frameInput(input) {
     const code = TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT;
+    const backendNodeId = input.backendNodeId === undefined || input.backendNodeId === null
+      ? null
+      : positiveInteger(input.backendNodeId, TARGET_REGISTRY_ERROR_CODES.INVALID_BACKEND_NODE);
     return {
       frameId: identifier(input.frameId, code),
       targetId: identifier(input.targetId, code),
-      backendNodeId: positiveInteger(input.backendNodeId, TARGET_REGISTRY_ERROR_CODES.INVALID_BACKEND_NODE),
+      backendNodeId,
       parentFrameId: optionalIdentifier(input.parentFrameId, code),
       origin: origin(input.origin, code),
       ordinal: null,
@@ -373,14 +395,14 @@ export class TargetRegistry {
     if (current.targetId !== next.targetId) fail(TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
     return {
       ...current,
-      backendNodeId: next.backendNodeId,
+      backendNodeId: next.backendNodeId ?? current.backendNodeId,
       parentFrameId: mergeKnown(current.parentFrameId, next.parentFrameId, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT),
-      origin: mergeKnown(current.origin, next.origin, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT),
+      origin: next.origin || current.origin,
     };
   }
 
   #frameIdentityChanged(current, next) {
-    return current.backendNodeId !== next.backendNodeId || current.parentFrameId !== next.parentFrameId;
+    return current.backendNodeId !== next.backendNodeId || current.parentFrameId !== next.parentFrameId || (next.origin && current.origin !== next.origin);
   }
 
   #assertTargetGraph(target) {
@@ -447,9 +469,7 @@ export class TargetRegistry {
   #canActivateTarget(target) {
     if (!target.type) return false;
     if (target.type !== "iframe") return !target.parentTargetId || this.targets.has(target.parentTargetId);
-    const parent = this.targets.get(target.parentTargetId);
-    const host = this.frames.get(target.hostFrameId);
-    return Boolean(parent && host && host.targetId === parent.targetId && this.#liveFrame(host));
+    return this.targets.has(target.parentTargetId);
   }
 
   #canActivateFrame(frame) {

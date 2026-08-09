@@ -241,6 +241,15 @@ export type BrowserObservationNode = {
   disabled?: boolean;
   bbox?: { x: number; y: number; width: number; height: number };
   target?: BrowserTarget;
+  documentEpoch?: number;
+  frameId?: string;
+  frameOrigin?: string;
+};
+
+export type BrowserExcludedFrame = {
+  frameId: string;
+  frameOrigin: string | null;
+  reason: "origin_not_granted";
 };
 
 export type BrowserObservationResult = {
@@ -258,6 +267,7 @@ export type BrowserObservationResult = {
   changed?: Record<string, unknown>;
   // Set when a page-initiated JavaScript dialog is blocking the renderer (WS9.4).
   pendingDialog?: BrowserPendingDialog;
+  excludedFrames?: BrowserExcludedFrame[];
 };
 
 export type BrowserScreenshotResult = {
@@ -295,6 +305,7 @@ export type BrowserObservationDelta = {
   verified?: boolean;
   reason?: string;
   changed?: Record<string, unknown>;
+  excludedFrames?: BrowserExcludedFrame[];
 };
 
 // A readable-text observation (WS9.1): the page's main/article text (falling back

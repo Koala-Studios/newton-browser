@@ -292,10 +292,15 @@ test("standalone extension stays connected as a non-controlling standby for anot
     const transport = createLocalPanelTransport({
       healthCheck: async () => true,
       hostUrls: ["ws://127.0.0.1:17321"],
-      getClientIdentity: async () => ({ clientId: "chrome_profile_test", browserFamily: "chrome" }),
+      getClientIdentity: async () => ({ clientId: "chrome_profile_test", browserFamily: "chrome", browserMajor: 130 }),
     });
     assert.deepEqual(await transport.connectHost(), { connected: false, hostCount: 0, pairingRequired: false });
-    assert.deepEqual(sent, [{ type: "client_hello", clientId: "chrome_profile_test", browserFamily: "chrome" }]);
+    assert.deepEqual(sent, [{
+      type: "client_hello",
+      clientId: "chrome_profile_test",
+      browserFamily: "chrome",
+      browserMajor: 130,
+    }]);
     assert.deepEqual(await transport.listSessions(), []);
     assert.equal(sent.some((message) => message.type === "bridge_request"), false, "standby must not claim or query sessions");
   } finally {

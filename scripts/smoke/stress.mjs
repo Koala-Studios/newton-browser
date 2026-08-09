@@ -157,7 +157,12 @@ async function connectFakeExtension(port) {
     for (const waiter of pendingRequests.values()) waiter.reject(new Error("stress extension disconnected"));
     pendingRequests.clear();
   });
-  ws.send(JSON.stringify({ type: "client_hello", clientId: `stress_extension_${randomUUID().replaceAll("-", "")}`, browserFamily: "chrome" }));
+  ws.send(JSON.stringify({
+    type: "client_hello",
+    clientId: `stress_extension_${randomUUID().replaceAll("-", "")}`,
+    browserFamily: "chrome",
+    browserMajor: 130,
+  }));
   await waitFor(() => bridge.getStatus().eligibleClientCount === 1, "stress extension readiness");
   return ws;
 }

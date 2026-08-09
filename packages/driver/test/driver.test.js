@@ -37,6 +37,71 @@ test("driver emulates focus for an inactive owned tab and restores it on detach"
   }
 });
 
+test("driver routes flattened CDP commands through an exact child session", async () => {
+  const originalChrome = globalThis.chrome;
+  const calls = [];
+  globalThis.chrome = {
+    debugger: {
+      sendCommand(target, method, params, callback) {
+        calls.push({ target, method, params });
+        callback({ ok: true });
+      },
+    },
+    runtime: { lastError: null },
+  };
+  try {
+    const driver = createNewtonBrowserDriver();
+    driver.tabId = 17;
+    await driver.cdp("Accessibility.getFullAXTree", {}, { sessionId: "child-session", timeoutMs: 100 });
+    assert.deepEqual(calls, [{
+      target: { tabId: 17, sessionId: "child-session" },
+      method: "Accessibility.getFullAXTree",
+      params: {},
+    }]);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
+});
+
+test("driver records flattened target/frame lifecycle without swallowing detach", async () => {
+  const driver = createNewtonBrowserDriver();
+  const cdpCalls = [];
+  driver.cdp = async (method, params, route) => { cdpCalls.push({ method, params, route }); return {}; };
+  driver.mainTargetId = "main-target";
+  driver.targetRegistry.registerTarget({ targetId: "main-target", type: "page", origin: "https://example.com" });
+  driver.targetRegistry.commitTopLevelDocument("main-target");
+
+  await driver.recordDebuggerEvent({}, "Target.attachedToTarget", {
+    sessionId: "child-session",
+    targetInfo: { targetId: "child-frame", type: "iframe", url: "https://child.test/frame" },
+  });
+  await driver.recordDebuggerEvent({ sessionId: "child-session" }, "Page.frameNavigated", {
+    frame: { id: "child-frame", url: "https://child.test/frame" },
+  });
+  const snapshot = driver.targetRegistry.getSnapshot();
+  assert.equal(snapshot.counts.targets.active, 2);
+  assert.equal(snapshot.counts.frames.active, 1);
+  assert.equal(driver.targetRegistry.targetForSession("child-session").targetId, "child-frame");
+  assert.deepEqual(cdpCalls[0], {
+    method: "Target.setAutoAttach",
+    params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+    route: { sessionId: "child-session" },
+  });
+
+  await driver.recordDebuggerEvent({ sessionId: "child-session" }, "Target.attachedToTarget", {
+    sessionId: "nested-session",
+    targetInfo: { targetId: "nested-frame", type: "iframe", url: "https://nested.test/frame" },
+  });
+  await driver.recordDebuggerEvent({ sessionId: "nested-session" }, "Page.frameNavigated", {
+    frame: { id: "nested-root", url: "https://nested.test/frame" },
+  });
+  assert.equal(driver.targetRegistry.targetForSession("nested-session").parentTargetId, "child-frame");
+  assert.equal(cdpCalls.some((call) => call.method === "Target.setAutoAttach" && call.route?.sessionId === "nested-session"), true);
+
+  await driver.recordDebuggerEvent({}, "Target.detachedFromTarget", { sessionId: "child-session" });
+  assert.equal(driver.targetRegistry.getSnapshot().counts.targets.active, 1);
+});
+
 test("driver observation emits stable refs and excludes bridge overlay nodes", async () => {
   const driver = createNewtonBrowserDriver();
   let boxCalls = 0;
@@ -64,14 +129,14 @@ test("driver observation emits stable refs and excludes bridge overlay nodes", a
   };
 
   const first = await driver.observe({ maxNodes: 10 });
-  assert.deepEqual(first.nodes.map((node) => node.ref), ["e101", "e102"]);
+  assert.deepEqual(first.nodes.map((node) => node.ref), ["d1:e101", "d1:e102"]);
   assert.deepEqual(first.nodes.map((node) => node.name), ["Save", "Docs"]);
-  assert.equal(driver.refIndex.get("e101"), 101);
-  assert.equal(driver.refIndex.get("e102"), 102);
+  assert.equal(driver.refIndex.get("d1:e101").backendNodeId, 101);
+  assert.equal(driver.refIndex.get("d1:e102").backendNodeId, 102);
   assert.equal(boxCalls, 2);
 
   const second = await driver.observe({ maxNodes: 10 });
-  assert.deepEqual(second.nodes.map((node) => node.ref), ["e101", "e102"]);
+  assert.deepEqual(second.nodes.map((node) => node.ref), ["d1:e101", "d1:e102"]);
   assert.equal(boxCalls, 2, "unchanged nodes reuse cached bboxes when the page has not scrolled");
 });
 
@@ -108,7 +173,11 @@ test("driver full-page screenshot bounds clip size and marks truncation", async 
 
 test("driver resolveEvidence uses AX accessible name and commit signals", async () => {
   const driver = createNewtonBrowserDriver();
-  driver.refIndex.set("e7", 7);
+  driver.mainTargetId = "main";
+  driver.targetRegistry.registerTarget({ targetId: "main", type: "page", origin: "https://example.com" });
+  driver.targetRegistry.commitTopLevelDocument("main");
+  const ref = driver.targetRegistry.createRef("main", 7);
+  driver.refIndex.set(ref, driver.targetRegistry.resolveRef(ref));
   driver.evalString = async (expression) => (expression === "location.origin" ? "https://example.com" : "");
   driver.objectIdFor = async (backendNodeId) => (backendNodeId === 7 ? "object-7" : null);
   driver.cdp = async (method) => {
@@ -132,7 +201,7 @@ test("driver resolveEvidence uses AX accessible name and commit signals", async 
     return {};
   };
 
-  const evidence = await driver.resolveEvidence({ kind: "click", target: { ref: "e7" } });
+  const evidence = await driver.resolveEvidence({ kind: "click", target: { ref } });
   assert.deepEqual(evidence, {
     resolved: {
       role: "button",
@@ -239,6 +308,110 @@ test("driver observes same-origin iframe AX trees and excludes cross-origin fram
 
   assert.deepEqual(requestedFrames, ["main", "same"]);
   assert.deepEqual(observation.nodes.map((node) => node.name), ["Main button", "Same-origin frame button"]);
+  assert.match(observation.nodes[1].ref, /^d1:f\d+:e202$/);
+  assert.deepEqual(observation.excludedFrames, [{ frameId: "cross", frameOrigin: "https://other.example", reason: "origin_not_granted" }]);
+});
+
+test("driver observes and resolves a granted OOPIF through its exact flattened session", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com", "https://child.test"] });
+  driver.mainTargetId = "main-target";
+  driver.targetRegistry.registerTarget({ targetId: "main-target", type: "page", origin: "https://example.com" });
+  driver.targetRegistry.commitTopLevelDocument("main-target");
+  const calls = [];
+  driver.cdp = async (method, params, route) => {
+    calls.push({ method, params, route });
+    if (method === "Target.setAutoAttach") return {};
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", url: "https://example.com/page" } } };
+    if (method === "Accessibility.getFullAXTree") {
+      return route?.sessionId === "child-session" ? { nodes: [axNode(77, "button", "Child action")] } : { nodes: [] };
+    }
+    if (method === "DOM.describeNode") return { node: {} };
+    if (method === "DOM.getContentQuads") return { quads: [[10, 10, 30, 10, 30, 30, 10, 30]] };
+    return {};
+  };
+  await driver.recordDebuggerEvent({}, "Target.attachedToTarget", {
+    sessionId: "child-session",
+    targetInfo: { targetId: "child-target", type: "iframe", url: "https://child.test/frame" },
+  });
+  await driver.recordDebuggerEvent({ sessionId: "child-session" }, "Page.frameNavigated", {
+    frame: { id: "child-root", url: "https://child.test/frame" },
+  });
+  driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/page" : "Example";
+  driver.evalNumber = async () => 0;
+  driver.fileInputObservationNodes = async () => [];
+
+  const observation = await driver.observe({});
+  const ref = observation.nodes[0].ref;
+  assert.match(ref, /^d1:f\d+:e77$/);
+  assert.equal((await driver.resolveTarget({ target: { ref } })).sessionId, "child-session");
+  assert.equal(calls.some((call) => call.method === "Accessibility.getFullAXTree" && call.route?.sessionId === "child-session"), true);
+  assert.equal(calls.some((call) => call.method === "DOM.getContentQuads" && call.route?.sessionId === "child-session"), true);
+});
+
+test("driver does not read an ungranted OOPIF and reports bounded exclusion metadata", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  driver.mainTargetId = "main-target";
+  driver.targetRegistry.registerTarget({ targetId: "main-target", type: "page", origin: "https://example.com" });
+  driver.targetRegistry.commitTopLevelDocument("main-target");
+  let childReads = 0;
+  driver.cdp = async (method, _params, route) => {
+    if (method === "Target.setAutoAttach") return {};
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", url: "https://example.com/page" } } };
+    if (method === "Accessibility.getFullAXTree") {
+      if (route?.sessionId === "child-session") childReads += 1;
+      return { nodes: [] };
+    }
+    return {};
+  };
+  await driver.recordDebuggerEvent({}, "Target.attachedToTarget", {
+    sessionId: "child-session",
+    targetInfo: { targetId: "child-target", type: "iframe", url: "https://denied.test/frame" },
+  });
+  await driver.recordDebuggerEvent({ sessionId: "child-session" }, "Page.frameNavigated", {
+    frame: { id: "child-root", url: "https://denied.test/frame" },
+  });
+  driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/page" : "Example";
+  driver.evalNumber = async () => 0;
+  driver.fileInputObservationNodes = async () => [];
+
+  const observation = await driver.observe({});
+  assert.equal(childReads, 0);
+  assert.deepEqual(observation.excludedFrames, [{ frameId: "child-root", frameOrigin: "https://denied.test", reason: "origin_not_granted" }]);
+});
+
+test("driver routes a composite-ref fill through the recorded child session", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.mainTargetId = "main";
+  driver.targetRegistry.registerTarget({ targetId: "main", type: "page", origin: "https://example.com" });
+  driver.targetRegistry.commitTopLevelDocument("main");
+  driver.targetRegistry.registerTarget({ targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "child-session", origin: "https://child.test" });
+  driver.targetRegistry.registerFrame({ frameId: "root", targetId: "child", origin: "https://child.test" });
+  const ref = driver.targetRegistry.createRef("child", 77, { frameId: "root" });
+  const routed = [];
+  driver.actionablePoint = async (_backendNodeId, route) => { routed.push(route); return { x: 10, y: 10 }; };
+  driver.elementState = async (_backendNodeId, route) => { routed.push(route); return {}; };
+  driver.pressMouse = async (_point, route) => { routed.push(route); };
+  driver.releaseMouse = async (_point, route) => { routed.push(route); };
+  driver.paintCursorField = () => {};
+  driver.cdp = async (_method, _params, route) => { routed.push(route); return {}; };
+  driver.observeDelta = async () => ({ kind: "observation_delta", nodes: [], nodeCount: 0 });
+
+  await driver.fill({ kind: "fill", target: { ref }, value: "hello" });
+  assert.equal(routed.length > 5, true);
+  assert.equal(routed.every((route) => route?.sessionId === "child-session"), true);
+});
+
+test("driver never heals stale or detached composite refs by semantic rematching", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.mainTargetId = "main";
+  driver.targetRegistry.registerTarget({ targetId: "main", type: "page", origin: "https://example.com" });
+  driver.targetRegistry.commitTopLevelDocument("main");
+  const staleRef = driver.targetRegistry.createRef("main", 7);
+  driver.targetRegistry.commitTopLevelDocument("main");
+  let observed = false;
+  driver.observe = async () => { observed = true; return { nodes: [{ ref: "d2:e7", role: "button", name: "Same name" }] }; };
+  await assert.rejects(driver.resolveTarget({ target: { ref: staleRef, name: "Same name" } }), (error) => error?.code === "stale_target");
+  assert.equal(observed, false);
 });
 
 test("driver uses CDP page coordinates for iframe candidates and hit testing", async () => {
@@ -303,16 +476,18 @@ test("driver verifies scroll state when Chrome drops the wheel acknowledgement",
 
 test("driver resolves top-level action target shorthands from observations", async () => {
   const driver = createNewtonBrowserDriver();
-  driver.refIndex.set("e2", 2);
-  driver.refIndex.set("e7", 7);
+  const textbox = { backendNodeId: 2 };
+  const button = { backendNodeId: 7 };
+  driver.refIndex.set("d1:e2", textbox);
+  driver.refIndex.set("d1:e7", button);
   driver.observe = async () => ({
     kind: "observation",
     mode: "cdp",
     origin: "https://example.com",
     title: "Example",
     nodes: [
-      { ref: "e2", role: "textbox", name: "Name " },
-      { ref: "e7", role: "button", name: "Increment" },
+      { ref: "d1:e2", role: "textbox", name: "Name " },
+      { ref: "d1:e7", role: "button", name: "Increment" },
     ],
     nodeCount: 2,
     truncated: false,
@@ -521,8 +696,8 @@ test("driver observation emits a fresh ref for a hidden file input", async () =>
   driver.fileInputDisplayFacts = async () => ({ name: "Creative asset", bbox: null });
 
   const observation = await driver.observe({});
-  assert.deepEqual(observation.nodes, [{ ref: "e71", role: "file", name: "Creative asset", target: { ref: "e71" } }]);
-  assert.equal(driver.refIndex.get("e71"), 71);
+  assert.deepEqual(observation.nodes, [{ ref: "d1:e71", role: "file", name: "Creative asset", documentEpoch: 1, target: { ref: "d1:e71" } }]);
+  assert.equal(driver.refIndex.get("d1:e71").backendNodeId, 71);
 });
 
 test("driver records dialog, download, new-target, navigation, and network-write signals", () => {

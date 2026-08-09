@@ -306,7 +306,10 @@ function normalizeClientIdentity(value) {
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(clientId) || !["chrome", "edge", "chromium"].includes(browserFamily)) {
     throw new Error("invalid_client_identity");
   }
-  return { clientId, browserFamily };
+  const browserMajor = Number.isSafeInteger(value?.browserMajor) && value.browserMajor > 0
+    ? value.browserMajor
+    : 0;
+  return { clientId, browserFamily, browserMajor };
 }
 
 async function defaultHealthCheck(hostUrl) {

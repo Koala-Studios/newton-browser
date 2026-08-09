@@ -638,7 +638,9 @@ test("BridgeRuntime treats approval-required floor decisions as non-blocking met
 });
 
 test("BridgeRuntime forwards debugger events into the active driver", async () => {
-  const seen: Array<{ method: string; params: unknown }> = [];
+  const seen: Array<{ source: unknown; method: string; params: unknown }> = [];
+  let rejectRouting = false;
+  let runtime: ReturnType<typeof createBridgeRuntime>;
   const transport = {
     async createSession() {
       return { sessionId: "s1" };
@@ -659,6 +661,8 @@ test("BridgeRuntime forwards debugger events into the active driver", async () =
     accent: null,
     async attach() {
       this.attached = true;
+      assert.equal(runtime.snapshot().count, 0, "a provisioning controller is not publicly visible");
+      await runtime.handleDebuggerEvent({ tabId: 101 }, "Target.attachedToTarget", { sessionId: "during-attach" });
     },
     async detach() {
       this.attached = false;
@@ -670,11 +674,12 @@ test("BridgeRuntime forwards debugger events into the active driver", async () =
     markDetached() {
       this.attached = false;
     },
-    recordDebuggerEvent(method: string, params: unknown) {
-      seen.push({ method, params });
+    recordDebuggerEvent(source: unknown, method: string, params: unknown) {
+      if (rejectRouting) throw new Error("nested auto-attach failed");
+      seen.push({ source, method, params });
     },
   };
-  const runtime = createBridgeRuntime({
+  runtime = createBridgeRuntime({
     transport,
     evaluateFloor() {
       return { blocked: false, approvalRequired: false, reasons: [], class: "agentic", permissionRequired: "newton_browser.act", commitBoundary: "none" };
@@ -693,7 +698,14 @@ test("BridgeRuntime forwards debugger events into the active driver", async () =
 
   await runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
   await runtime.handleDebuggerEvent({ tabId: 101 }, "Network.requestWillBeSent", { request: { method: "POST" } });
-  assert.deepEqual(seen, [{ method: "Network.requestWillBeSent", params: { request: { method: "POST" } } }]);
+  assert.deepEqual(seen, [
+    { source: { tabId: 101 }, method: "Target.attachedToTarget", params: { sessionId: "during-attach" } },
+    { source: { tabId: 101 }, method: "Network.requestWillBeSent", params: { request: { method: "POST" } } },
+  ]);
+  rejectRouting = true;
+  await runtime.handleDebuggerEvent({ tabId: 101 }, "Target.attachedToTarget", { sessionId: "child" });
+  assert.equal(runtime.snapshot().lifecycleState, "degraded");
+  assert.equal(runtime.snapshot().routingErrorCode, "child_routing_unavailable");
 });
 
 test("BridgeRuntime binds host sessions once when ensure runs concurrently", async () => {

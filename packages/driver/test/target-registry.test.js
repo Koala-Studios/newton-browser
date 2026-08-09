@@ -156,6 +156,14 @@ test("out-of-order session, frame, and target events reconcile deterministically
   assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 0, detached: 0 });
 });
 
+test("frame lifecycle can register before an owner backend node is known", () => {
+  const registry = mainRegistry();
+  const frame = registry.registerFrame({ frameId: "frame", targetId: "main", origin: "https://frame.test" });
+  assert.equal(frame.backendNodeId, null);
+  registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 9 });
+  assert.equal(registry.createRef("main", 10, { frameId: "frame" }), "d1:f1:e10");
+});
+
 test("pending target and frame state obeys exact caps", () => {
   const targetRegistry = new TargetRegistry({ maxTargets: 1 });
   targetRegistry.registerSession("one", "s-one");
@@ -229,6 +237,7 @@ test("child session replacement retires old routes and bumps frame identity", ()
 test("sessions have exactly one target owner and failures do not half-register", () => {
   const registry = new TargetRegistry();
   registry.registerSession("one", "shared");
+  assert.equal(registry.targetForSession("shared").targetId, "one");
   const before = registry.getSnapshot();
   throwsCode(() => registry.registerSession("two", "shared"), CODES.SESSION_CONFLICT);
   assert.deepEqual(registry.getSnapshot(), before);
@@ -248,17 +257,23 @@ test("target and frame cycles are rejected without partial mutation", () => {
   assert.equal(frames.getSnapshot().counts.frames.active, 0);
 });
 
-test("frame identity changes retire prior refs and origin conflicts do not mutate", () => {
+test("frame identity or origin changes retire prior refs and publish the new route", () => {
   const registry = mainRegistry();
   registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 1, origin: "https://frame.test" });
   const ref = registry.createRef("main", 10, { frameId: "frame" });
-  throwsCode(
-    () => registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 1, origin: "https://other.test" }),
-    CODES.FRAME_CONFLICT,
-  );
-  assert.equal(registry.resolveRef(ref).origin, "https://frame.test");
-  registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 2 });
+  registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 1, origin: "https://other.test" });
   throwsCode(() => registry.resolveRef(ref), CODES.FRAME_DETACHED);
+  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "frame").origin, "https://other.test");
+  const navigatedRef = registry.createRef("main", 10, { frameId: "frame" });
+  registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 2 });
+  throwsCode(() => registry.resolveRef(navigatedRef), CODES.FRAME_DETACHED);
+});
+
+test("top-level navigation may replace the document origin", () => {
+  const registry = mainRegistry();
+  registry.commitTopLevelDocument("main", "https://next.test");
+  assert.equal(registry.listObservationRoutes()[0].origin, "https://next.test");
+  assert.equal(registry.createRef("main", 1), "d2:e1");
 });
 
 test("workers are tracked but never actionable", () => {

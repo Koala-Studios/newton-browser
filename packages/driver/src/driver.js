@@ -10,8 +10,10 @@
 // every action is funneled through the typed contract. The cursor overlay is
 // fire-and-forget and NEVER gates execution (§5.1).
 
+import { TargetRegistry } from "./target-registry.js";
+
 const CDP_VERSION = "1.3";
-const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Input", "Network", "Log"];
+const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Network", "Log"];
 const CONSOLE_BUFFER_MAX = 500;
 const NETWORK_BUFFER_MAX = 500;
 const NETWORK_BODY_MAX_CHARS = 512_000;
@@ -45,7 +47,7 @@ class NewtonBrowserDriver {
   constructor(options = {}) {
     this.tabId = null;
     this.attached = false;
-    this.refIndex = new Map(); // ref -> backendNodeId
+    this.refIndex = new Map(); // ref -> immutable target route
     this.devicePixelRatio = 1;
     this.zoom = 1;
     this.accent = typeof options.accent === "string" ? options.accent : null;
@@ -74,6 +76,8 @@ class NewtonBrowserDriver {
     this.networkDropped = 0;
     // Session origin grant, set by the controller. Gates network-body fetches.
     this.allowedOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
+    this.targetRegistry = new TargetRegistry();
+    this.mainTargetId = null;
   }
 
   isAttachedTo(tabId) {
@@ -86,8 +90,9 @@ class NewtonBrowserDriver {
     await chrome.debugger.attach({ tabId }, CDP_VERSION);
     this.tabId = tabId;
     this.attached = true;
+    await this.initializeTargetRegistry();
     for (const domain of CDP_DOMAINS) {
-      await this.cdp(`${domain}.enable`, {}).catch(() => {});
+      await this.cdp(`${domain}.enable`, {});
     }
     // Owned tabs stay inactive so they never steal the user's focus. Chrome
     // otherwise accepts pointer/key CDP commands for a background tab while
@@ -95,7 +100,7 @@ class NewtonBrowserDriver {
     // debugger target behave as active without activating the visible tab.
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
     // Child frames / popups attach to the same session (§7.5).
-    await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: false }).catch(() => {});
+    await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: false });
     await this.calibrate();
     // Re-apply a caller-chosen viewport (WS9.6) that a re-attach would otherwise drop.
     if (this.sessionViewport) {
@@ -122,6 +127,8 @@ class NewtonBrowserDriver {
     this.attached = false;
     this.tabId = null;
     this.refIndex.clear();
+    this.targetRegistry = new TargetRegistry();
+    this.mainTargetId = null;
   }
 
   // Chrome detached the debugger underneath us (e.g. a cross-process navigation
@@ -131,9 +138,15 @@ class NewtonBrowserDriver {
   markDetached() {
     this.attached = false;
     this.refIndex.clear();
+    this.targetRegistry = new TargetRegistry();
+    this.mainTargetId = null;
   }
 
-  recordDebuggerEvent(method, params = {}) {
+  recordDebuggerEvent(sourceOrMethod, methodOrParams = {}, eventParams = {}) {
+    const source = typeof sourceOrMethod === "string" ? {} : sourceOrMethod ?? {};
+    const method = typeof sourceOrMethod === "string" ? sourceOrMethod : methodOrParams;
+    const params = typeof sourceOrMethod === "string" ? methodOrParams : eventParams;
+    const targetEvent = this.recordTargetEvent(source, method, params);
     // Dialog open/close is tracked persistently (not just inside an action window)
     // because a JS dialog blocks the renderer until it is handled (WS9.4).
     if (method === "Page.javascriptDialogOpening") {
@@ -167,7 +180,7 @@ class NewtonBrowserDriver {
       this.updateNetwork(params.requestId, { failed: true });
     }
     const signals = this.activeActionSignals;
-    if (!signals) return;
+    if (!signals) return targetEvent;
     if (method === "Network.requestWillBeSent" && isNetworkWrite(params?.request)) {
       signals.networkWrite = true;
     }
@@ -183,9 +196,14 @@ class NewtonBrowserDriver {
     if (method === "Target.targetCreated" && params?.targetInfo?.type === "page") {
       signals.newTarget = true;
     }
+    return targetEvent;
   }
 
-  cdp(method, params = {}, timeoutMs = CDP_TIMEOUT_MS) {
+  cdp(method, params = {}, routeOrTimeout = {}) {
+    const timeoutMs = typeof routeOrTimeout === "number"
+      ? routeOrTimeout
+      : routeOrTimeout?.timeoutMs ?? CDP_TIMEOUT_MS;
+    const sessionId = typeof routeOrTimeout === "object" ? routeOrTimeout?.sessionId : null;
     return new Promise((resolve, reject) => {
       // Bound every CDP call: chrome.debugger.sendCommand can hang indefinitely
       // (e.g. Page.captureScreenshot under device emulation on some pages). The
@@ -197,7 +215,8 @@ class NewtonBrowserDriver {
         settled = true;
         reject(new Error(`cdp_timeout_${method}`));
       }, timeoutMs);
-      chrome.debugger.sendCommand({ tabId: this.tabId }, method, params, (result) => {
+      const debuggee = sessionId ? { tabId: this.tabId, sessionId } : { tabId: this.tabId };
+      chrome.debugger.sendCommand(debuggee, method, params, (result) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -205,6 +224,83 @@ class NewtonBrowserDriver {
         if (error) reject(new Error(error.message));
         else resolve(result ?? {});
       });
+    });
+  }
+
+  async initializeTargetRegistry() {
+    this.targetRegistry = new TargetRegistry();
+    const response = await this.cdp("Target.getTargetInfo", {}).catch(() => null);
+    const info = response?.targetInfo;
+    const targetId = typeof info?.targetId === "string" && info.targetId ? info.targetId : `tab-${this.tabId}`;
+    this.mainTargetId = targetId;
+    this.targetRegistry.registerTarget({
+      targetId,
+      type: "page",
+      origin: safeOrigin(info?.url),
+    });
+    this.targetRegistry.commitTopLevelDocument(targetId);
+  }
+
+  async recordTargetEvent(source, method, params) {
+    const sourceSessionId = typeof source?.sessionId === "string" ? source.sessionId : null;
+    if (method === "Target.attachedToTarget" && params?.targetInfo && typeof params.sessionId === "string") {
+      const info = params.targetInfo;
+      if (!["page", "iframe", "worker"].includes(info.type)) return;
+      const type = info.type;
+      const targetId = String(info.targetId ?? "");
+      if (!targetId) return;
+      const sourceTarget = sourceSessionId ? this.targetRegistry.targetForSession(sourceSessionId) : null;
+      const parentTargetId = type === "page"
+        ? (typeof info.openerId === "string" ? info.openerId : null)
+        : type === "iframe" ? (sourceTarget?.targetId ?? this.mainTargetId) : null;
+      const hostFrameId = type === "iframe"
+        ? (typeof info.openerFrameId === "string" ? info.openerFrameId : targetId)
+        : null;
+      this.targetRegistry.registerTarget({
+        targetId,
+        type,
+        ...(parentTargetId ? { parentTargetId } : {}),
+        ...(hostFrameId ? { hostFrameId } : {}),
+        sessionId: params.sessionId,
+        origin: safeOrigin(info.url),
+      });
+      await this.cdp(
+        "Target.setAutoAttach",
+        { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+        { sessionId: params.sessionId },
+      );
+      for (const domain of CDP_DOMAINS) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
+      return;
+    }
+    if (method === "Target.detachedFromTarget") {
+      const target = typeof params?.sessionId === "string"
+        ? this.targetRegistry.targetForSession(params.sessionId)
+        : undefined;
+      const targetId = typeof params?.targetId === "string" ? params.targetId : target?.targetId;
+      if (targetId) this.targetRegistry.detachTarget(targetId);
+      return;
+    }
+    if (method === "Page.frameDetached" && typeof params?.frameId === "string") {
+      this.targetRegistry.detachFrame(params.frameId);
+      return;
+    }
+    if (method !== "Page.frameNavigated" || !params?.frame || typeof params.frame.id !== "string") return;
+    const frame = params.frame;
+    if (!frame.parentId && !sourceSessionId) {
+      if (!this.mainTargetId) return;
+      this.targetRegistry.commitTopLevelDocument(this.mainTargetId, safeOrigin(frame.url));
+      this.refIndex.clear();
+      return;
+    }
+    const target = sourceSessionId
+      ? this.targetRegistry.targetForSession(sourceSessionId)
+      : this.mainTargetId ? { targetId: this.mainTargetId } : undefined;
+    if (!target?.targetId) return;
+    this.targetRegistry.registerFrame({
+      frameId: frame.id,
+      targetId: target.targetId,
+      ...(typeof frame.parentId === "string" ? { parentFrameId: frame.parentId } : {}),
+      origin: safeOrigin(frame.url),
     });
   }
 
@@ -246,19 +342,22 @@ class NewtonBrowserDriver {
     // observe (bbox is viewport-relative — a scroll moves every node).
     const scrollY = (await this.evalNumber("window.scrollY")) || 0;
     const reuseBboxes = Math.abs(scrollY - (this.lastScrollY || 0)) < 1;
-    const trees = await this.accessibilityTreesForOrigin(safeOrigin(url));
+    const frameObservation = await this.accessibilityTreesForOrigin(safeOrigin(url));
+    const trees = Array.isArray(frameObservation) ? frameObservation : frameObservation.trees;
+    const excludedFrames = Array.isArray(frameObservation) ? [] : frameObservation.excludedFrames;
     const filterText = typeof query === "string" ? query.toLowerCase() : "";
     const nodes = [];
     this.refIndex.clear();
     let truncated = false;
-    for (const axNode of trees.flatMap((tree) => tree.nodes ?? [])) {
+    for (const tree of trees) for (const axNode of tree.nodes ?? []) {
       if (nodes.length >= cap) { truncated = true; break; }
       const role = axNode.role?.value;
       if (!role || !ACTIONABLE_ROLES.has(role)) continue;
       if (axNode.ignored) continue;
       const backendNodeId = axNode.backendDOMNodeId;
       if (typeof backendNodeId !== "number") continue;
-      if (await this.isOwnedOverlayNodeCached(backendNodeId)) continue;
+      const route = tree.route ?? { targetId: this.mainTargetId, sessionId: null, frameId: null, origin: safeOrigin(url) };
+      if (await this.isOwnedOverlayNodeCached(backendNodeId, route)) continue;
       const name = String(axNode.name?.value ?? "").slice(0, 240);
       if (filterText && !name.toLowerCase().includes(filterText)) continue;
       const value = axNode.value?.value ? String(axNode.value.value).slice(0, 240) : undefined;
@@ -266,23 +365,28 @@ class NewtonBrowserDriver {
       // across observations. Reuse the prior bbox for an unchanged node when the
       // page has not scrolled — skipping the per-node measurement round-trips
       // (J45). Targeting still re-measures its own element before any click.
-      const ref = `e${backendNodeId}`;
+      const ref = this.targetRegistry.createRef(route.targetId, backendNodeId, route.frameId ? { frameId: route.frameId } : {});
       const prev = this.lastNodes.get(ref);
       let bbox;
       if (reuseBboxes && prev && prev.bbox && prev.role === role && prev.name === name && prev.value === value) {
         bbox = prev.bbox;
       } else {
-        const measured = await this.boxFor(backendNodeId);
+        const measured = await this.boxFor(backendNodeId, route);
         if (!measured) continue; // not laid out / not visible
         bbox = [Math.round(measured.x), Math.round(measured.y), Math.round(measured.width), Math.round(measured.height)];
       }
-      this.refIndex.set(ref, backendNodeId);
-      nodes.push({ ref, role, name, ...(value ? { value } : {}), bbox, target: { ref } });
+      const resolvedRoute = this.targetRegistry.resolveRef(ref);
+      this.refIndex.set(ref, resolvedRoute);
+      nodes.push({
+        ref, role, name, ...(value ? { value } : {}), bbox, target: { ref },
+        documentEpoch: resolvedRoute.documentEpoch,
+        ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
+      });
     }
     for (const fileNode of await this.fileInputObservationNodes(cap - nodes.length)) {
       if (nodes.some((node) => node.ref === fileNode.ref)) continue;
-      this.refIndex.set(fileNode.ref, fileNode.backendNodeId);
-      const { backendNodeId: _backendNodeId, ...publicNode } = fileNode;
+      this.refIndex.set(fileNode.ref, fileNode.route);
+      const { backendNodeId: _backendNodeId, route: _route, ...publicNode } = fileNode;
       nodes.push(publicNode);
       if (nodes.length >= cap) { truncated = true; break; }
     }
@@ -290,7 +394,7 @@ class NewtonBrowserDriver {
     const title = await this.evalString("document.title");
     const origin = safeOrigin(url);
     const capturedAt = new Date().toISOString();
-    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, capturedAt };
+    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
     // D6: emit a compact diff when asked (and a baseline exists, and the read is
     // not query-filtered). If the page churned heavily, fall back to a full snapshot.
     const canDiff = mode === "diff" && !filterText && this.lastNodes.size > 0;
@@ -300,7 +404,7 @@ class NewtonBrowserDriver {
       const delta = computeObservationDelta(baseline, nodes);
       const churn = delta.added.length + delta.removed.length + delta.updated.length;
       if (churn <= Math.max(8, Math.round(nodes.length * 0.6))) {
-        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, capturedAt };
+        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
       }
     }
     return full;
@@ -329,14 +433,40 @@ class NewtonBrowserDriver {
   }
 
   async accessibilityTreesForOrigin(origin) {
-    const main = await this.cdp("Accessibility.getFullAXTree", {}).catch(() => ({ nodes: [] }));
-    if (!origin) return [main];
     const page = await this.cdp("Page.getFrameTree", {}).catch(() => null);
-    const frameIds = sameOriginChildFrameIds(page?.frameTree, origin);
-    const children = await Promise.all(frameIds.map((frameId) =>
-      this.cdp("Accessibility.getFullAXTree", { frameId }).catch(() => ({ nodes: [] })),
-    ));
-    return [main, ...children];
+    this.reconcileFrameTree(page?.frameTree, origin);
+    const allowed = new Set([...this.allowedOrigins, origin].filter(Boolean));
+    const trees = [];
+    const excludedFrames = [];
+    for (const route of this.targetRegistry.listObservationRoutes()) {
+      if (route.frameId && (!route.origin || !allowed.has(route.origin))) {
+        excludedFrames.push({ frameId: route.frameId, frameOrigin: route.origin || null, reason: "origin_not_granted" });
+        continue;
+      }
+      const params = route.frameId ? { frameId: route.frameId } : {};
+      const tree = await this.cdp("Accessibility.getFullAXTree", params, route).catch(() => ({ nodes: [] }));
+      trees.push({ ...tree, route });
+    }
+    return { trees, excludedFrames: excludedFrames.slice(0, 64) };
+  }
+
+  reconcileFrameTree(frameTree, origin) {
+    if (!this.mainTargetId) {
+      this.mainTargetId = `tab-${this.tabId ?? "unattached"}`;
+      this.targetRegistry.registerTarget({ targetId: this.mainTargetId, type: "page", origin });
+      this.targetRegistry.commitTopLevelDocument(this.mainTargetId);
+    }
+    const known = new Set(this.targetRegistry.listObservationRoutes().map((route) => route.frameId).filter(Boolean));
+    for (const frame of childFrameRecords(frameTree)) {
+      if (known.has(frame.frameId)) continue;
+      this.targetRegistry.registerFrame({
+        frameId: frame.frameId,
+        targetId: this.mainTargetId,
+        ...(frame.parentFrameId && known.has(frame.parentFrameId) ? { parentFrameId: frame.parentFrameId } : {}),
+        origin: frame.origin,
+      });
+      known.add(frame.frameId);
+    }
   }
 
   // Post-action observation as a compact diff (D6). Used after in-place actions
@@ -348,10 +478,11 @@ class NewtonBrowserDriver {
 
   // describeNode is one CDP round-trip per node; owned-ness never changes for a
   // backendNodeId within a document, so cache it (cleared on navigation). (J45)
-  async isOwnedOverlayNodeCached(backendNodeId) {
-    if (this.ownedNodeCache.has(backendNodeId)) return this.ownedNodeCache.get(backendNodeId);
-    const owned = await this.isOwnedOverlayNode(backendNodeId);
-    this.ownedNodeCache.set(backendNodeId, owned);
+  async isOwnedOverlayNodeCached(backendNodeId, route = {}) {
+    const key = `${route.sessionId ?? "root"}:${backendNodeId}`;
+    if (this.ownedNodeCache.has(key)) return this.ownedNodeCache.get(key);
+    const owned = await this.isOwnedOverlayNode(backendNodeId, route);
+    this.ownedNodeCache.set(key, owned);
     return owned;
   }
 
@@ -618,25 +749,25 @@ class NewtonBrowserDriver {
   async click(action) {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
-    if (target.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
-    const point = target.point ?? await this.actionablePoint(target.backendNodeId);
+    if (target.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
+    const point = target.point ?? await this.actionablePoint(target.backendNodeId, target);
     if (!point) return this.targetMoved();
     this.paintCursorClick(point.x, point.y); // fire-and-forget (§5.1)
     const before = await this.pageSignature();
-    const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId) : {};
+    const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId, target) : {};
       const signalWindow = this.beginActionSignals();
       try {
-        await this.moveMouse(point);
-        if (target.backendNodeId && !(await this.hitTestTarget(target.backendNodeId, point.x, point.y))) {
+        await this.moveMouse(point, target);
+        if (target.backendNodeId && !(await this.hitTestTarget(target.backendNodeId, point.x, point.y, target))) {
           return this.targetMoved();
         }
-        await this.pressMouse(point);
-      await this.releaseMouse(point);
+        await this.pressMouse(point, target);
+      await this.releaseMouse(point, target);
       await this.settleShort();
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
       const after = await this.pageSignature();
-      const afterState = target.backendNodeId ? await this.elementState(target.backendNodeId).catch(() => ({})) : {};
+      const afterState = target.backendNodeId ? await this.elementState(target.backendNodeId, target).catch(() => ({})) : {};
       const changed = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...reconciliationChanges(signals), ...(waitResult?.matched ? { waitedFor: true } : {}) };
       const observation = await this.observeDelta();
       const reconciliation = reconcilePostActionSignals(signals);
@@ -651,24 +782,24 @@ class NewtonBrowserDriver {
   async fill(action) {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
-    const point = await this.actionablePoint(target.backendNodeId);
+    const point = await this.actionablePoint(target.backendNodeId, target);
     if (!point) return this.targetMoved();
-    const beforeState = await this.elementState(target.backendNodeId);
+    const beforeState = await this.elementState(target.backendNodeId, target);
     this.paintCursorField(point);
-    await this.pressMouse(point);
-    await this.releaseMouse(point);
-    await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
-    await this.selectAll();
+    await this.pressMouse(point, target);
+    await this.releaseMouse(point, target);
+    await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
+    await this.selectAll(target);
     if (action.kind === "type") {
       for (const ch of String(action.value ?? "")) {
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", text: ch });
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", text: ch });
+        await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", text: ch }, target);
+        await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", text: ch }, target);
       }
     } else {
-      await this.cdp("Input.insertText", { text: String(action.value ?? "") });
+      await this.cdp("Input.insertText", { text: String(action.value ?? "") }, target);
     }
     const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
-    const afterState = await this.elementState(target.backendNodeId).catch(() => ({}));
+    const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const changed = { ...diffElement(beforeState, afterState), ...(waitResult?.matched ? { waitedFor: true } : {}) };
     const observation = await this.observeDelta();
     return this.withObservationMeta(waitResult ? (waitResult.matched ? "verified" : "timed_out") : "verified", changed, observation, waitResult && !waitResult.matched ? waitResult.reason : undefined);
@@ -677,12 +808,12 @@ class NewtonBrowserDriver {
   async select(action) {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
-    const beforeState = await this.elementState(target.backendNodeId);
+    const beforeState = await this.elementState(target.backendNodeId, target);
     // Native <select>: choose the option by value/label/text and fire input+change
     // so frameworks observe the change (S9). Plain insertText does not select an
     // <option> and is a no-op on real selects.
     let applied = false;
-    const objectId = await this.objectIdFor(target.backendNodeId);
+    const objectId = await this.objectIdFor(target.backendNodeId, target);
     if (objectId) {
       const result = await this.cdp("Runtime.callFunctionOn", {
         objectId,
@@ -701,7 +832,7 @@ class NewtonBrowserDriver {
         }`,
         arguments: [{ value: String(action.value ?? "") }],
         returnByValue: true,
-      }).catch(() => null);
+      }, target).catch(() => null);
       applied = Boolean(result?.result?.value);
     }
     if (!applied) {
@@ -709,7 +840,7 @@ class NewtonBrowserDriver {
       await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
       await this.cdp("Input.insertText", { text: String(action.value ?? "") }).catch(() => {});
     }
-    const afterState = await this.elementState(target.backendNodeId).catch(() => ({}));
+    const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const changed = diffElement(beforeState, afterState);
     const observation = await this.observeDelta();
     return this.withObservationMeta(applied || Object.keys(changed).length > 0 ? "verified" : "dispatched_unverified", changed, observation);
@@ -718,34 +849,39 @@ class NewtonBrowserDriver {
   async clear(action) {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
-    const beforeState = await this.elementState(target.backendNodeId);
-    await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
-    await this.selectAll();
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", windowsVirtualKeyCode: 46 });
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", windowsVirtualKeyCode: 46 });
-    const afterState = await this.elementState(target.backendNodeId).catch(() => ({}));
+    const beforeState = await this.elementState(target.backendNodeId, target);
+    await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
+    await this.selectAll(target);
+    await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", windowsVirtualKeyCode: 46 }, target);
+    await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", windowsVirtualKeyCode: 46 }, target);
+    const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", diffElement(beforeState, afterState), observation);
   }
 
   async fileInputObservationNodes(limit) {
     if (limit <= 0) return [];
-    const document = await this.cdp("DOM.getDocument", { depth: 0, pierce: true }).catch(() => null);
+    const route = this.targetRegistry.listObservationRoutes()[0];
+    if (!route) return [];
+    const document = await this.cdp("DOM.getDocument", { depth: 0, pierce: true }, route).catch(() => null);
     const nodeId = document?.root?.nodeId;
     if (!nodeId) return [];
-    const queried = await this.cdp("DOM.querySelectorAll", { nodeId, selector: "input[type='file']" }).catch(() => null);
+    const queried = await this.cdp("DOM.querySelectorAll", { nodeId, selector: "input[type='file']" }, route).catch(() => null);
     const output = [];
     for (const candidateNodeId of (queried?.nodeIds ?? []).slice(0, limit)) {
-      const described = await this.cdp("DOM.describeNode", { nodeId: candidateNodeId }).catch(() => null);
+      const described = await this.cdp("DOM.describeNode", { nodeId: candidateNodeId }, route).catch(() => null);
       const backendNodeId = described?.node?.backendNodeId;
       if (!Number.isInteger(backendNodeId)) continue;
-      const facts = await this.fileInputDisplayFacts(backendNodeId);
-      const ref = `e${backendNodeId}`;
+      const facts = await this.fileInputDisplayFacts(backendNodeId, route);
+      const ref = this.targetRegistry.createRef(route.targetId, backendNodeId);
+      const resolvedRoute = this.targetRegistry.resolveRef(ref);
       output.push({
         backendNodeId,
+        route: resolvedRoute,
         ref,
         role: "file",
         name: facts.name || "File input",
+        documentEpoch: resolvedRoute.documentEpoch,
         ...(facts.bbox ? { bbox: facts.bbox } : {}),
         target: { ref },
       });
@@ -753,8 +889,8 @@ class NewtonBrowserDriver {
     return output;
   }
 
-  async fileInputDisplayFacts(backendNodeId) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async fileInputDisplayFacts(backendNodeId, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return { name: "", bbox: null };
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -768,21 +904,21 @@ class NewtonBrowserDriver {
         return { name, bbox: visible ? [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)] : null };
       }`,
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     return result?.result?.value ?? { name: "", bbox: null };
   }
 
   async setFiles(action) {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
-    const facts = await this.fileInputFacts(target.backendNodeId);
+    const facts = await this.fileInputFacts(target.backendNodeId, target);
     if (!facts.isFileInput) throw new Error("target_not_file_input");
     const explicitRef = Boolean(action?.target?.ref || action?.ref);
     if (!facts.visible && !explicitRef) throw new Error("hidden_file_input_requires_ref");
     const files = Array.isArray(action.files) ? action.files : [];
     if (files.length > 1 && !facts.multiple) throw new Error("file_input_not_multiple");
-    await this.cdp("DOM.setFileInputFiles", { backendNodeId: target.backendNodeId, files });
-    const accepted = await this.fileInputState(target.backendNodeId);
+    await this.cdp("DOM.setFileInputFiles", { backendNodeId: target.backendNodeId, files }, target);
+    const accepted = await this.fileInputState(target.backendNodeId, target);
     const expectedNames = files.map((file) => String(file).split(/[\\/]/).at(-1) || "");
     if (accepted.length !== expectedNames.length || accepted.some((file, index) => file.filename !== expectedNames[index])) {
       throw new Error("file_input_acceptance_mismatch");
@@ -791,8 +927,8 @@ class NewtonBrowserDriver {
     return this.withObservationMeta("verified", { files: accepted, fileCount: accepted.length }, observation);
   }
 
-  async fileInputFacts(backendNodeId) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async fileInputFacts(backendNodeId, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return { isFileInput: false, multiple: false, visible: false };
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -808,12 +944,12 @@ class NewtonBrowserDriver {
         };
       }`,
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     return result?.result?.value ?? { isFileInput: false, multiple: false, visible: false };
   }
 
-  async fileInputState(backendNodeId) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async fileInputState(backendNodeId, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return [];
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -825,7 +961,7 @@ class NewtonBrowserDriver {
         }));
       }`,
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     return Array.isArray(result?.result?.value) ? result.result.value : [];
   }
 
@@ -870,13 +1006,13 @@ class NewtonBrowserDriver {
 
   async press(action) {
     const target = await this.resolveTarget(action);
-    if (target?.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
+    if (target?.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
     const keys = Array.isArray(action.keys) && action.keys.length > 0 ? action.keys : [String(action.value ?? "Enter")];
     const signalWindow = this.beginActionSignals();
     try {
       for (const key of keys.slice(0, 8)) {
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: String(key) });
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: String(key) });
+        await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: String(key) }, target ?? {});
+        await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: String(key) }, target ?? {});
       }
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
@@ -893,16 +1029,16 @@ class NewtonBrowserDriver {
   async hover(action) {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
-    const point = target.point ?? await this.actionablePoint(target.backendNodeId);
+    const point = target.point ?? await this.actionablePoint(target.backendNodeId, target);
     if (!point) return this.targetMoved();
-    await this.moveMouse(point);
+    await this.moveMouse(point, target);
     await this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
     await this.settleShort();
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", { hovered: true }, observation);
   }
 
-  async moveMouse(point) {
+  async moveMouse(point, route = {}) {
     await this.cdp("Input.dispatchMouseEvent", {
       type: "mouseMoved",
       x: point.x,
@@ -910,10 +1046,10 @@ class NewtonBrowserDriver {
       button: "none",
       buttons: 0,
       pointerType: "mouse",
-    });
+    }, route);
   }
 
-  async pressMouse(point) {
+  async pressMouse(point, route = {}) {
     await this.cdp("Input.dispatchMouseEvent", {
       type: "mousePressed",
       x: point.x,
@@ -922,10 +1058,10 @@ class NewtonBrowserDriver {
       buttons: 1,
       clickCount: 1,
       pointerType: "mouse",
-    });
+    }, route);
   }
 
-  async releaseMouse(point) {
+  async releaseMouse(point, route = {}) {
     await this.cdp("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       x: point.x,
@@ -934,25 +1070,25 @@ class NewtonBrowserDriver {
       buttons: 0,
       clickCount: 1,
       pointerType: "mouse",
-    });
+    }, route);
   }
 
   // Resolve the target element's structural facts so the SW can re-check the
   // floor with real evidence BEFORE dispatching a mutating action (§7, S3). The
   // accessible name lets host/structural commit rules gate a ref-targeted click.
   async resolveEvidence(action) {
-    const origin = await this.evalString("location.origin");
     const target = await this.resolveTarget(action).catch(() => null);
+    const origin = target?.origin || await this.evalString("location.origin");
     if (!target?.backendNodeId) {
       return { resolved: { origin }, signals: {} };
     }
-    const facts = await this.elementFacts(target.backendNodeId);
+    const facts = await this.elementFacts(target.backendNodeId, target);
     // Use the authoritative AX accessible name (same source as observe). The
     // naive aria-label/innerText read in elementFacts misses names computed by
     // the accessibility algorithm (labelledby, nested web components like the
     // YouTube Subscribe button) — without this the commit re-check under-reads
     // the name and fails to escalate.
-    const axName = await this.axNameFor(target.backendNodeId);
+    const axName = await this.axNameFor(target.backendNodeId, target);
     return {
       resolved: {
         role: facts.role || "",
@@ -971,15 +1107,15 @@ class NewtonBrowserDriver {
 
   // Authoritative accessible name from the AX tree (matches what observe shows
   // the model), used by the pre-dispatch commit re-check.
-  async axNameFor(backendNodeId) {
-    const tree = await this.cdp("Accessibility.getPartialAXTree", { backendNodeId, fetchRelatives: false }).catch(() => null);
+  async axNameFor(backendNodeId, route = {}) {
+    const tree = await this.cdp("Accessibility.getPartialAXTree", { backendNodeId, fetchRelatives: false }, route).catch(() => null);
     const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
     const node = nodes.find((n) => n.backendDOMNodeId === backendNodeId && n.name?.value) ?? nodes.find((n) => n.name?.value);
     return node?.name?.value ? String(node.name.value).slice(0, 240) : "";
   }
 
-  async elementFacts(backendNodeId) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async elementFacts(backendNodeId, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return {};
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -1008,7 +1144,7 @@ class NewtonBrowserDriver {
         };
       }`,
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     return result?.result?.value && typeof result.result.value === "object" ? result.result.value : {};
   }
 
@@ -1017,14 +1153,7 @@ class NewtonBrowserDriver {
     const target = normalizedTarget(action);
     if (target) {
       if (target.coordinates) return { point: target.coordinates };
-      if (target.ref && this.refIndex.has(target.ref)) return { backendNodeId: this.refIndex.get(target.ref) };
-      // Stable element-keyed ref from an earlier observation: recover the exact
-      // element by its backendNodeId if it still exists (S21) instead of falling
-      // through to a positional/text re-match that could pick a different node.
-      if (target.ref) {
-        const recovered = await this.backendNodeForStableRef(target.ref);
-        if (recovered) return { backendNodeId: recovered };
-      }
+      if (target.ref) return this.targetRegistry.resolveRef(target.ref);
       if (target.selector) {
         const backendNodeId = await this.backendNodeIdForSelector(target.selector);
         if (backendNodeId) return { backendNodeId };
@@ -1046,7 +1175,7 @@ class NewtonBrowserDriver {
         const matches = observation.nodes.filter((node) => nodeMatchesTarget(node, target));
         if (matches.length > 1) throw new Error("ambiguous");
         const match = matches[0];
-        if (match && this.refIndex.has(match.ref)) return { backendNodeId: this.refIndex.get(match.ref) };
+        if (match && this.refIndex.has(match.ref)) return this.refIndex.get(match.ref);
       }
       if (target.text) {
         const backendNodeId = await this.backendNodeIdFromElementExpression(findByVisibleTextSource(), [target.text, Boolean(target.exact)]);
@@ -1056,7 +1185,7 @@ class NewtonBrowserDriver {
     }
     // valid ref → role_name → text → selector. Never click a guess.
     if (action.ref && this.refIndex.has(action.ref)) {
-      return { backendNodeId: this.refIndex.get(action.ref) };
+      return this.targetRegistry.resolveRef(action.ref);
     }
     if (action.selector) {
       const backendNodeId = await this.backendNodeIdForSelector(action.selector);
@@ -1069,19 +1198,9 @@ class NewtonBrowserDriver {
       const matches = observation.nodes.filter((node) => (node.name ?? "").toLowerCase().includes(needle));
       if (matches.length > 1) throw new Error("ambiguous");
       const match = matches[0];
-      if (match && this.refIndex.has(match.ref)) return { backendNodeId: this.refIndex.get(match.ref) };
+      if (match && this.refIndex.has(match.ref)) return this.refIndex.get(match.ref);
     }
     return null;
-  }
-
-  // Recover the element for a stable `e<backendNodeId>` ref from any prior
-  // observation, if that exact node still exists in the live DOM (S21).
-  async backendNodeForStableRef(ref) {
-    const match = /^e(\d+)$/.exec(String(ref ?? ""));
-    if (!match) return null;
-    const backendNodeId = Number(match[1]);
-    const described = await this.cdp("DOM.describeNode", { backendNodeId }).catch(() => null);
-    return described?.node ? backendNodeId : null;
   }
 
   async backendNodeIdForSelector(selector) {
@@ -1120,26 +1239,26 @@ class NewtonBrowserDriver {
     }
   }
 
-  async actionablePoint(backendNodeId) {
+  async actionablePoint(backendNodeId, route = {}) {
     // Bring off-screen / below-the-fold targets into view first — the single
     // biggest real-world reliability win. Without this, an element outside the
     // viewport never hit-tests and times out as stale_target (seen live on the
     // large dynamic catalog).
-    await this.scrollIntoView(backendNodeId);
+    await this.scrollIntoView(backendNodeId, route);
     const deadline = Date.now() + AUTO_WAIT_TIMEOUT_MS;
-    const vh = (await this.evalNumber("window.innerHeight")) || 100000;
-    const vw = (await this.evalNumber("window.innerWidth")) || 100000;
+    const vh = (await this.evalNumber("window.innerHeight", route)) || 100000;
+    const vw = (await this.evalNumber("window.innerWidth", route)) || 100000;
     let previous = null;
     let rescrolls = 0;
     while (Date.now() < deadline) {
-      const box = await this.boxFor(backendNodeId);
+      const box = await this.boxFor(backendNodeId, route);
       if (box && box.width > 0 && box.height > 0) {
         const cx = box.x + box.width / 2;
         const cy = box.y + box.height / 2;
         // If the bbox centre is outside the viewport, re-scroll (bounded) and re-measure.
         if ((cy < 0 || cy > vh || cx < 0 || cx > vw) && rescrolls < 3) {
           rescrolls += 1;
-          await this.scrollIntoView(backendNodeId);
+          await this.scrollIntoView(backendNodeId, route);
           previous = null;
           await delay(AUTO_WAIT_POLL_MS);
           continue;
@@ -1151,11 +1270,11 @@ class NewtonBrowserDriver {
           // on footer links → stale_target). Try each rendered fragment's centre
           // (getClientRects) and the bbox centre; the first point that actually
           // hit-tests to this node (or a descendant) wins.
-          for (const pt of await this.candidatePoints(backendNodeId)) {
+          for (const pt of await this.candidatePoints(backendNodeId, route)) {
             const x = Math.round(pt.x);
             const y = Math.round(pt.y);
             if (x < 0 || x > vw || y < 0 || y > vh) continue;
-            if (await this.hitTestTarget(backendNodeId, x, y)) return { x, y };
+            if (await this.hitTestTarget(backendNodeId, x, y, route)) return { x, y };
           }
         }
         previous = box;
@@ -1169,11 +1288,11 @@ class NewtonBrowserDriver {
   // the centre of each rendered line fragment (getClientRects — one rect per
   // wrapped line for inline content), then the bounding-box centre as a fallback.
   // This is what makes off-screen / multi-line inline links reliably clickable.
-  async candidatePoints(backendNodeId) {
-    const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }).catch(() => null);
+  async candidatePoints(backendNodeId, route = {}) {
+    const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }, route).catch(() => null);
     const cdpPoints = centersForQuads(quads?.quads);
     if (cdpPoints.length > 0) return cdpPoints;
-    const objectId = await this.objectIdFor(backendNodeId);
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return [];
     const res = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -1189,25 +1308,25 @@ class NewtonBrowserDriver {
         return out;
       }`,
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     const pts = res?.result?.value;
     return Array.isArray(pts) ? pts.filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y)) : [];
   }
 
-  async scrollIntoView(backendNodeId) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async scrollIntoView(backendNodeId, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return;
     await this.cdp("Runtime.callFunctionOn", {
       objectId,
       functionDeclaration: `function () { try { this.scrollIntoView({ block: "center", inline: "center" }); } catch (e) {} }`,
-    }).catch(() => {});
+    }, route).catch(() => {});
   }
 
-  async boxFor(backendNodeId) {
-    const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }).catch(() => null);
+  async boxFor(backendNodeId, route = {}) {
+    const quads = await this.cdp("DOM.getContentQuads", { backendNodeId }, route).catch(() => null);
     const quadBox = boundsForQuads(quads?.quads);
     if (quadBox) return quadBox;
-    const objectId = await this.objectIdFor(backendNodeId);
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (objectId) {
       const rect = await this.cdp("Runtime.callFunctionOn", {
         objectId,
@@ -1216,7 +1335,7 @@ class NewtonBrowserDriver {
           return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
         }`,
         returnByValue: true,
-      }).catch(() => null);
+      }, route).catch(() => null);
       const value = rect?.result?.value;
       if (
         value
@@ -1229,43 +1348,43 @@ class NewtonBrowserDriver {
       }
     }
 
-    const model = await this.cdp("DOM.getBoxModel", { backendNodeId }).catch(() => null);
+    const model = await this.cdp("DOM.getBoxModel", { backendNodeId }, route).catch(() => null);
     const quad = model?.model?.content;
     if (!quad || quad.length < 8) return null;
     const xs = [quad[0], quad[2], quad[4], quad[6]];
     const ys = [quad[1], quad[3], quad[5], quad[7]];
     const x = Math.min(...xs);
     const y = Math.min(...ys);
-    const scrollX = await this.evalNumber("window.scrollX");
-    const scrollY = await this.evalNumber("window.scrollY");
+    const scrollX = await this.evalNumber("window.scrollX", route);
+    const scrollY = await this.evalNumber("window.scrollY", route);
     return { x: x - scrollX, y: y - scrollY, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
   }
 
-  async hitTestTarget(backendNodeId, x, y) {
+  async hitTestTarget(backendNodeId, x, y, route = {}) {
     const hit = await this.cdp("DOM.getNodeForLocation", {
       x: Math.round(x),
       y: Math.round(y),
       includeUserAgentShadowDOM: true,
       ignorePointerEventsNone: false,
-    }).catch(() => null);
-    if (!Number.isInteger(hit?.backendNodeId)) return this.runtimeHitTestTarget(backendNodeId, x, y);
+    }, route).catch(() => null);
+    if (!Number.isInteger(hit?.backendNodeId)) return this.runtimeHitTestTarget(backendNodeId, x, y, route);
     if (hit.backendNodeId === backendNodeId) return true;
-    const objectId = await this.objectIdFor(backendNodeId);
-    const hitObjectId = await this.objectIdFor(hit.backendNodeId);
+    const objectId = await this.objectIdFor(backendNodeId, route);
+    const hitObjectId = await this.objectIdFor(hit.backendNodeId, route);
     if (objectId && hitObjectId) {
       const result = await this.cdp("Runtime.callFunctionOn", {
         objectId,
         functionDeclaration: "function (hit) { return Boolean(hit && (hit === this || this.contains(hit))); }",
         arguments: [{ objectId: hitObjectId }],
         returnByValue: true,
-      }).catch(() => null);
+      }, route).catch(() => null);
       if (result?.result?.value === true) return true;
     }
-    return this.runtimeHitTestTarget(backendNodeId, x, y);
+    return this.runtimeHitTestTarget(backendNodeId, x, y, route);
   }
 
-  async runtimeHitTestTarget(backendNodeId, x, y) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async runtimeHitTestTarget(backendNodeId, x, y, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return false;
     const result = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -1275,17 +1394,17 @@ class NewtonBrowserDriver {
       }`,
       arguments: [{ value: x }, { value: y }],
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     return Boolean(result?.result?.value);
   }
 
-  async objectIdFor(backendNodeId) {
-    const resolved = await this.cdp("DOM.resolveNode", { backendNodeId }).catch(() => null);
+  async objectIdFor(backendNodeId, route = {}) {
+    const resolved = await this.cdp("DOM.resolveNode", { backendNodeId }, route).catch(() => null);
     return typeof resolved?.object?.objectId === "string" ? resolved.object.objectId : null;
   }
 
-  async isOwnedOverlayNode(backendNodeId) {
-    const described = await this.cdp("DOM.describeNode", { backendNodeId }).catch(() => null);
+  async isOwnedOverlayNode(backendNodeId, route = {}) {
+    const described = await this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null);
     const attrs = described?.node?.attributes ?? [];
     for (let i = 0; i < attrs.length; i += 2) {
       if (attrs[i] === "data-newton-browser-ui") return true;
@@ -1293,9 +1412,9 @@ class NewtonBrowserDriver {
     return false;
   }
 
-  async selectAll() {
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2 });
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2 });
+  async selectAll(route = {}) {
+    await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2 }, route);
+    await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2 }, route);
   }
 
   async maskZones(zones) {
@@ -1344,18 +1463,18 @@ class NewtonBrowserDriver {
     this.sendToPage({ type: "NB_DRIVE_FIELD", rect: { x: point.x - 12, y: point.y - 12, width: 24, height: 24 } });
   }
 
-  async evalString(expression) {
-    const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }).catch(() => null);
+  async evalString(expression, route = {}) {
+    const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return typeof result?.result?.value === "string" ? result.result.value : "";
   }
 
-  async evalNumber(expression) {
-    const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }).catch(() => null);
+  async evalNumber(expression, route = {}) {
+    const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return typeof result?.result?.value === "number" ? result.result.value : 0;
   }
 
-  async evalBool(expression) {
-    const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }).catch(() => null);
+  async evalBool(expression, route = {}) {
+    const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return Boolean(result?.result?.value);
   }
 
@@ -1399,7 +1518,7 @@ class NewtonBrowserDriver {
     if (wait.value) {
       const target = await this.resolveTarget({ target: wait.selector ? { selector: wait.selector } : wait.ref ? { ref: wait.ref } : wait.role ? { role: wait.role, name: wait.name } : undefined });
       if (target?.backendNodeId) {
-        const state = await this.elementState(target.backendNodeId);
+        const state = await this.elementState(target.backendNodeId, target);
         if (String(state.value ?? "").includes(wait.value)) return true;
       }
     }
@@ -1427,8 +1546,8 @@ class NewtonBrowserDriver {
     };
   }
 
-  async elementState(backendNodeId) {
-    const objectId = await this.objectIdFor(backendNodeId);
+  async elementState(backendNodeId, route = {}) {
+    const objectId = await this.objectIdFor(backendNodeId, route);
     if (!objectId) return {};
     const state = await this.cdp("Runtime.callFunctionOn", {
       objectId,
@@ -1442,7 +1561,7 @@ class NewtonBrowserDriver {
         };
       }`,
       returnByValue: true,
-    }).catch(() => null);
+    }, route).catch(() => null);
     return state?.result?.value && typeof state.result.value === "object" ? state.result.value : {};
   }
 
@@ -1547,17 +1666,18 @@ function normalizedWaitFor(waitFor) {
   return Object.keys(output).length > 0 ? output : null;
 }
 
-function sameOriginChildFrameIds(frameTree, origin) {
-  const ids = [];
+function childFrameRecords(frameTree) {
+  const frames = [];
   const visit = (tree) => {
     for (const child of tree?.childFrames ?? []) {
-      if (safeOrigin(child?.frame?.url) !== origin) continue;
-      if (typeof child?.frame?.id === "string") ids.push(child.frame.id);
+      const frameId = child?.frame?.id;
+      if (typeof frameId !== "string") continue;
+      frames.push({ frameId, parentFrameId: child.frame.parentId ?? null, origin: safeOrigin(child.frame.url) });
       visit(child);
     }
   };
   visit(frameTree);
-  return ids;
+  return frames;
 }
 
 function centersForQuads(quads) {

@@ -244,7 +244,8 @@ async function loadClientIdentity() {
   }
   const userAgent = String(globalThis.navigator?.userAgent ?? "");
   const browserFamily = /Edg\//i.test(userAgent) ? "edge" : /Chrome\//i.test(userAgent) ? "chrome" : "chromium";
-  return { clientId, browserFamily };
+  const browserMajor = Number(/(?:Edg|Chrome|Chromium)\/(\d+)/i.exec(userAgent)?.[1] ?? 0);
+  return { clientId, browserFamily, browserMajor };
 }
 
 async function findActiveWebTab() {

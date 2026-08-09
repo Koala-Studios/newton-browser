@@ -59,6 +59,24 @@ test("compact observations accept bbox arrays from the extension but do not expo
   assert.equal("rawHtml" in (result.nodes[0] as Record<string, unknown>), false);
 });
 
+test("frame provenance and excluded frames survive redaction with strict bounds", () => {
+  const result = redactBrowserResult({
+    kind: "observation", mode: "cdp", origin: "https://example.com", title: "Frames",
+    nodes: [{ ref: "d2:f1:e7", role: "button", documentEpoch: 2, frameId: "child", frameOrigin: "https://child.test" }],
+    excludedFrames: [
+      { frameId: "denied", frameOrigin: "https://denied.test/path?secret=x", reason: "origin_not_granted" },
+      { frameId: "ignored", frameOrigin: "https://ignored.test", reason: "invented" },
+    ],
+    nodeCount: 1, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z",
+  });
+  assert.equal(result?.kind, "observation");
+  if (result?.kind !== "observation") throw new Error("expected observation");
+  assert.deepEqual(result.nodes[0], {
+    ref: "d2:f1:e7", role: "button", documentEpoch: 2, frameId: "child", frameOrigin: "https://child.test",
+  });
+  assert.deepEqual(result.excludedFrames, [{ frameId: "denied", frameOrigin: "https://denied.test", reason: "origin_not_granted" }]);
+});
+
 test("a pending dialog is surfaced on observations with its message secret-masked", () => {
   const result = redactBrowserResult({
     kind: "observation",

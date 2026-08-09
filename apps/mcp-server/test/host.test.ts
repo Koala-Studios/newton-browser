@@ -463,12 +463,48 @@ test("zero-touch local trust accepts an extension without a pairing key and stil
     const ready = await readyPromise;
     assert.equal(ready.authMode, "local_trust");
     assert.equal(ready.hostInstanceId, bridge.hostInstanceId);
-    socket.send(JSON.stringify({ type: "client_hello", clientId: "local_chrome_client", browserFamily: "chrome" }));
+    socket.send(JSON.stringify({
+      type: "client_hello",
+      clientId: "local_chrome_client",
+      browserFamily: "chrome",
+      browserMajor: 130,
+    }));
     await waitForMessage(socket, (message) => message.type === "client_ready");
     assert.equal(bridge.getStatus().extensionConnected, true);
     assert.equal(bridge.getStatus().authMode, "local_trust");
     socket.close();
   } finally {
+    await bridge.close();
+  }
+});
+
+test("Chromium below 125 is authenticated but refused with a typed capability error", async () => {
+  const bridge = createNewtonBrowserHost({ authMode: "local_trust", pairingSecret: PAIRING_SECRET });
+  const address = await bridge.listen(0);
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`, {
+    headers: { Origin: "chrome-extension://test-id" },
+  });
+  try {
+    const readyPromise = waitForMessage(socket, (message) => message.type === "ready");
+    await waitForOpen(socket);
+    await readyPromise;
+    const clientReady = waitForMessage(socket, (message) => message.type === "client_ready");
+    socket.send(JSON.stringify({
+      type: "client_hello",
+      clientId: "unsupported_chrome_client",
+      browserFamily: "chrome",
+      browserMajor: 124,
+    }));
+    const client = await clientReady;
+    assert.equal(client.eligible, false);
+    const response = await extensionRequest(socket, "listSessions", {});
+    assert.equal(response.ok, false);
+    assert.equal(response.error, "browser_version_unsupported");
+    assert.equal(bridge.getStatus().extensionConnected, false);
+    assert.deepEqual(bridge.getStatus().browserMajors, [124]);
+    assert.equal(bridge.getStatus().minimumBrowserMajor, 125);
+  } finally {
+    socket.close();
     await bridge.close();
   }
 });
@@ -792,8 +828,11 @@ test("queued command timeout returns not-started and late-result timeout cleanup
   try {
     const session = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
     await extensionRequest(socket, "subscribeSession", { sessionId: session.sessionId });
-    const first = bridge.dispatch(session.sessionId, { kind: "observe" }, 120);
-    const queued = bridge.dispatch(session.sessionId, { kind: "observe" }, 120);
+    // Give the queued command an earlier independent deadline. Equal deadlines
+    // make the expected phase scheduling-dependent: the first timeout can release
+    // and send the second command in the millisecond before its own timer fires.
+    const first = bridge.dispatch(session.sessionId, { kind: "observe" }, 150);
+    const queued = bridge.dispatch(session.sessionId, { kind: "observe" }, 100);
     const wire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId);
     const firstResult = await first;
     assert.equal(firstResult.outcome, "outcome_unknown");
@@ -1525,7 +1564,15 @@ async function toolCall(bridge: ReturnType<typeof createNewtonBrowserHost>, name
   return { isError: result?.isError === true, json: JSON.parse(result.content[0].text) };
 }
 
-async function connectExtension(port: number, hostInstanceId: string, identity = { clientId: "test_chrome_client", browserFamily: "chrome" }) {
+async function connectExtension(
+  port: number,
+  hostInstanceId: string,
+  identity: { clientId: string; browserFamily: string; browserMajor?: number } = {
+    clientId: "test_chrome_client",
+    browserFamily: "chrome",
+    browserMajor: 130,
+  },
+) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Origin: "chrome-extension://test-id" } });
   const challengePromise = waitForMessage(socket, (message) => message.type === "auth_challenge");
   await waitForOpen(socket);
@@ -1538,7 +1585,7 @@ async function connectExtension(port: number, hostInstanceId: string, identity =
   socket.send(JSON.stringify({ type: "auth_response", hostInstanceId: challenge.hostInstanceId, proof }));
   await readyPromise;
   const clientReady = waitForMessage(socket, (message) => message.type === "client_ready");
-  socket.send(JSON.stringify({ type: "client_hello", ...identity }));
+  socket.send(JSON.stringify({ type: "client_hello", browserMajor: 130, ...identity }));
   await clientReady;
   return socket;
 }

@@ -40,7 +40,12 @@ type HostClient = {
   id: string;
   socket: WebSocket;
   authenticated: boolean;
-  identity: null | { clientId: string; browserFamily: "chrome" | "edge" | "chromium"; version?: string };
+  identity: null | {
+    clientId: string;
+    browserFamily: "chrome" | "edge" | "chromium";
+    browserMajor: number;
+    version?: string;
+  };
   nonce: string;
   authTimer: NodeJS.Timeout | null;
   subscriptions: Set<string>;
@@ -132,6 +137,7 @@ const DECISION_STRING_BOUND = 128;
 const NORMALIZED_CLASS_VALUES = new Set(["read_only", "agentic", "approval_required", "blocked"]);
 const NORMALIZED_COMMIT_BOUNDARIES = new Set(["none", "draft", "commit", "external_effect"]);
 const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
+const MINIMUM_BROWSER_MAJOR = 125;
 
 export function createNewtonBrowserHost(options: HostOptions = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) };
@@ -205,6 +211,8 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
         authenticatedClientCount: authenticatedClients().length,
         eligibleClientCount: eligibleClients().length,
         connectedBrowsers: [...new Set(authenticatedClients().flatMap((client) => client.identity ? [client.identity.browserFamily] : []))].sort(),
+        browserMajors: [...new Set(authenticatedClients().flatMap((client) => client.identity ? [client.identity.browserMajor] : []))].sort((a, b) => a - b),
+        minimumBrowserMajor: MINIMUM_BROWSER_MAJOR,
         extensionVersion: eligibleClients().map((client) => client.identity?.version).find((version): version is string => typeof version === "string") ?? null,
         claimedSessionsByBrowser: claimedSessionCounts(),
         sessionCount: sessions.size,
@@ -254,7 +262,14 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
         };
         const timer = setTimeout(() => {
           removeReadinessWaiter(sessionId, finish);
-          const error = eligibleClients().length === 0 ? "extension_disconnected" : "session_setup_timeout";
+          const hasUnsupportedBrowser = authenticatedClients().some((client) =>
+            client.identity
+            && (browserTarget === "auto" || client.identity.browserFamily === browserTarget)
+            && client.identity.browserMajor < MINIMUM_BROWSER_MAJOR,
+          );
+          const error = eligibleClients().length > 0
+            ? "session_setup_timeout"
+            : hasUnsupportedBrowser ? "browser_version_unsupported" : "extension_disconnected";
           api.stopSession(sessionId);
           reject(new Error(error));
         }, Math.max(50, Math.min(timeoutMs, limits.maxCommandTimeoutMs)));
@@ -1038,6 +1053,9 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
     client.identity = {
       clientId,
       browserFamily: browserFamily as "chrome" | "edge" | "chromium",
+      browserMajor: Number.isSafeInteger(message.browserMajor) && message.browserMajor > 0
+        ? message.browserMajor
+        : 0,
       ...(typeof message.version === "string" ? { version: message.version.slice(0, 32) } : {}),
     };
     send(client, { type: "client_ready", hostInstanceId, browserTarget, eligible: isEligible(client) });
@@ -1080,6 +1098,9 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
 
   function requireEligible(client: HostClient): void {
     requireIdentity(client);
+    if (client.identity && client.identity.browserMajor < MINIMUM_BROWSER_MAJOR) {
+      throw new Error("browser_version_unsupported");
+    }
     if (!isEligible(client)) throw new Error("browser_not_selected");
   }
 
@@ -1137,6 +1158,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
 
   function isEligible(client: HostClient): boolean {
     return client.authenticated && client.socket.readyState === WebSocket.OPEN && client.identity !== null
+      && client.identity.browserMajor >= MINIMUM_BROWSER_MAJOR
       && (browserTarget === "auto" || client.identity.browserFamily === browserTarget);
   }
 

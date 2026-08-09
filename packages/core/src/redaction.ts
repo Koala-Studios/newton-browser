@@ -199,6 +199,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ? input.removed.flatMap((ref) => (typeof ref === "string" && ref.trim() ? [redactText(ref).slice(0, TEXT_CAP)] : [])).slice(0, NODE_CAP)
       : [];
     const updated = Array.isArray(input.updated) ? input.updated.flatMap((node) => normalizeUpdated(node)).slice(0, NODE_CAP) : [];
+    const excludedFrames = normalizeExcludedFrames(input.excludedFrames);
     return {
       kind: "observation_delta",
       mode: "cdp",
@@ -207,6 +208,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       added,
       removed,
       updated,
+      ...(excludedFrames.length ? { excludedFrames } : {}),
       nodeCount: typeof input.nodeCount === "number" ? Math.max(0, Math.trunc(input.nodeCount)) : added.length,
       capturedAt: isoOrNow(input.capturedAt),
       ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
@@ -236,6 +238,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
     const nodes = Array.isArray(input.nodes)
       ? input.nodes.flatMap((node, index) => normalizeNode(node, index)).slice(0, NODE_CAP)
       : [];
+    const excludedFrames = normalizeExcludedFrames(input.excludedFrames);
     return {
       kind: "observation",
       mode: input.mode === "cdp" ? "cdp" : "passive",
@@ -244,6 +247,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       nodes,
       nodeCount: typeof input.nodeCount === "number" ? Math.max(0, Math.trunc(input.nodeCount)) : nodes.length,
       truncated: Boolean(input.truncated),
+      ...(excludedFrames.length ? { excludedFrames } : {}),
       capturedAt: isoOrNow(input.capturedAt),
       ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
       ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
@@ -362,7 +366,21 @@ function normalizeNode(value: unknown, index: number) {
     ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
     ...(normalizeBbox(input.bbox) ? { bbox: normalizeBbox(input.bbox)! } : {}),
     ...(redactBrowserTarget(input.target) ? { target: redactBrowserTarget(input.target)! } : {}),
+    ...(Number.isSafeInteger(input.documentEpoch) && Number(input.documentEpoch) > 0 ? { documentEpoch: Number(input.documentEpoch) } : {}),
+    ...(typeof input.frameId === "string" && input.frameId.trim() ? { frameId: redactText(input.frameId).slice(0, 128) } : {}),
+    ...(typeof input.frameOrigin === "string" && redactBrowserOrigin(input.frameOrigin) ? { frameOrigin: redactBrowserOrigin(input.frameOrigin) } : {}),
   }];
+}
+
+function normalizeExcludedFrames(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const input = item as Record<string, unknown>;
+    if (typeof input.frameId !== "string" || !input.frameId.trim() || input.reason !== "origin_not_granted") return [];
+    const frameOrigin = redactBrowserOrigin(input.frameOrigin);
+    return [{ frameId: redactText(input.frameId).slice(0, 128), frameOrigin: frameOrigin || null, reason: "origin_not_granted" as const }];
+  }).slice(0, 64);
 }
 
 function normalizeUpdated(value: unknown) {

@@ -14,6 +14,7 @@ export const BROWSER_SESSION_LIFECYCLE_STATES = [
   "verifying_origin",
   "publishing_ready",
   "active",
+  "degraded",
   "finalizing",
   "stopped",
 ] as const;

@@ -40,6 +40,7 @@ class SessionController {
     this.unsubscribe = null;
     this.reattaching = false;
     this.lifecycleState = lifecycleState ?? "creating_tab";
+    this.routingErrorCode = null;
     this._commandShutdown = null;
     this._shutdownState = null;
     this._stopSession = null;
@@ -60,6 +61,7 @@ class SessionController {
       streaming: this.streaming,
       attached: this.driver.attached,
       lifecycleState: this.lifecycleState,
+      ...(this.routingErrorCode ? { routingErrorCode: this.routingErrorCode } : {}),
       commandPump: this.pump.snapshot(),
     };
   }
@@ -72,6 +74,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   if (typeof driverFactory !== "function") throw new Error("bridge driver factory is required");
 
   const sessions = new Map();
+  const provisioningByTab = new Map();
   const bindingSessions = new Set();
   let themeCursor = 0;
 
@@ -165,6 +168,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           accent: mode === "owned_group" ? theme.accent : null,
           lifecycleState: "attaching_debugger",
         });
+        registerProvisioningController(controller, defer);
         defer("debugger", () => controller.driver.detach(), { dedupeKey: `debugger:${created.sessionId}` });
         await controller.driver.attach(ownedTabId);
         controller.lifecycleState = "verifying_origin";
@@ -177,6 +181,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           stopSubscription(controller);
         }, { dedupeKey: `published:${created.sessionId}` });
         sessions.set(controller.sessionId, controller);
+        provisioningByTab.delete(controller.tabId);
         startSubscription(controller);
         controller.lifecycleState = "active";
         await notifyState({ required: true });
@@ -244,7 +249,13 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     async handleDebuggerEvent(source, method, params) {
       const controller = controllerForTab(source?.tabId);
       if (!controller) return;
-      controller.driver.recordDebuggerEvent?.(method, params);
+      try {
+        await controller.driver.recordDebuggerEvent?.(source, method, params);
+      } catch {
+        controller.routingErrorCode = "child_routing_unavailable";
+        controller.lifecycleState = "degraded";
+        return;
+      }
       if (method === "Page.javascriptDialogOpening") {
         await emit({ type: "dialog", message: params?.message ?? "", dialogType: params?.type ?? "alert" });
       }
@@ -366,6 +377,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         accent: mode === "owned_group" ? theme.accent : null,
         lifecycleState: "verifying_origin",
       });
+      registerProvisioningController(controller, defer);
       const liveOrigin = await liveTabOrigin(tabId);
       if (!controller.allowedOrigins.includes(liveOrigin)) throw new Error("origin_not_granted");
       controller.lifecycleState = "attaching_debugger";
@@ -383,6 +395,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         stopSubscription(controller);
       }, { dedupeKey: `published:${session.sessionId}` });
       sessions.set(controller.sessionId, controller);
+      provisioningByTab.delete(controller.tabId);
       startSubscription(controller);
       controller.lifecycleState = "active";
       await notifyState({ required: true });
@@ -418,6 +431,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       const liveOrigin = await liveTabOrigin(controller.tabId);
       if (!controller.allowedOrigins.includes(liveOrigin)) {
         await emitTerminalResult({ ok: false, errorCode: "origin_not_granted" }, OUTCOME_PREVENTED);
+        return;
+      }
+      if (controller.routingErrorCode) {
+        await emitTerminalResult({ ok: false, errorCode: controller.routingErrorCode }, OUTCOME_PREVENTED);
         return;
       }
       if (!controller.driver.isAttachedTo(controller.tabId) && typeof controller.tabId === "number") {
@@ -527,7 +544,15 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     for (const controller of sessions.values()) {
       if (controller.tabId === tabId) return controller;
     }
-    return null;
+    return provisioningByTab.get(tabId) ?? null;
+  }
+
+  function registerProvisioningController(controller, defer) {
+    if (provisioningByTab.has(controller.tabId)) throw new Error("tab_already_provisioning");
+    provisioningByTab.set(controller.tabId, controller);
+    defer("private_controller", () => {
+      if (provisioningByTab.get(controller.tabId) === controller) provisioningByTab.delete(controller.tabId);
+    }, { dedupeKey: `private:${controller.sessionId}` });
   }
 
   async function liveTabOrigin(tabId) {
@@ -819,6 +844,7 @@ function delay(ms) {
 }
 
 function errorCode(error) {
+  if (error && typeof error.code === "string") return error.code.slice(0, 80);
   const message = String(error?.message ?? error ?? "driver_error");
   return message.slice(0, 80).replace(/[^a-z0-9_]+/gi, "_").toLowerCase() || "driver_error";
 }
