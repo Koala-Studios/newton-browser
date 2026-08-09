@@ -19,3 +19,12 @@ Newton Browser is an independent, local-only Chromium browser-control product. I
 ## Verification
 
 Use the root scripts. At release, `pnpm release:check` must pass from packed artifacts three consecutive times with no skipped critical tests. Record manual and live-browser evidence under `test/evidence/`.
+
+## Thread Orchestration
+
+When approved work is delegated through concurrent Codex threads, follow
+`orchestrator_guide.md`. Assign exact, non-overlapping write paths, keep integration
+hotspots under one owner, and treat worker output as an implementation candidate requiring
+independent orchestrator review. Scrutinize instruction compliance, logic, failure paths,
+tests, safety, and the integrated result rather than relying on worker claims or
+worker-branch tests.
