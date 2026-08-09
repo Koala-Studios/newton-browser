@@ -34,7 +34,7 @@ future implementation until the corresponding plan, tests, and evidence have lan
 | --- | --- | --- | --- | --- | --- |
 | AIP-01 | [Session command pump](implementation-plans/01-session-command-pump.md) | none | APPROVED | IN PROGRESS — reviewed primitive integrated; W1 controller integration + W2 host contracts active | `53f5090`; host/controller evidence pending |
 | AIP-02 | [Transactional lifecycle and framing](implementation-plans/02-transactional-lifecycle-and-framing.md) | AIP-01 contract types | APPROVED | IN PROGRESS — transaction primitive and bounded MCP framing integrated; lifecycle integration pending | `6be1ef3`; `7451008`–`98b3b2f`; lifecycle/live evidence pending |
-| AIP-03 | [Target/frame/session registry](implementation-plans/03-target-frame-session-registry.md) | AIP-01, AIP-02 | APPROVED | queued behind AIP-01/AIP-02 shared contracts | pending |
+| AIP-03 | [Target/frame/session registry](implementation-plans/03-target-frame-session-registry.md) | AIP-01, AIP-02 | APPROVED | IN PROGRESS — W3 pure registry isolated behind AIP-01/AIP-02 integration; first draft returned for graph-model correction | pending |
 | AIP-04 | [Preventive origin containment](implementation-plans/04-preventive-origin-containment.md) | AIP-03 | APPROVED | queued behind AIP-03 registry | pending |
 | AIP-05 | [Input and renderer reliability](implementation-plans/05-input-and-renderer-reliability.md) | AIP-01, AIP-03 | APPROVED | queued behind AIP-01/AIP-03 execution contracts | pending |
 | AIP-06 | [Agent output efficiency](implementation-plans/06-agent-output-efficiency.md) | AIP-01 result contract | APPROVED | queued behind AIP-01 result contract | pending |
@@ -78,6 +78,15 @@ release claims remain those of the `v0.4.5` release evidence until implementatio
 | `pnpm test` | pass | 2026-08-08 | 144 tests: 142 passed, 2 platform-specific persistent-socket tests skipped, 0 failed |
 | `pnpm release:check` | not run | — | not required for documentation-only planning |
 
+## Implementation checkpoint record
+
+These checks cover only code already accepted into the integration branch. They do not
+include quarantined worker commits or satisfy the final packed-artifact release gates.
+
+| Check | Result | Date | Evidence |
+| --- | --- | --- | --- |
+| `pnpm test` | pass | 2026-08-08 | 203 tests: 201 passed, the same 2 platform-specific persistent-socket tests skipped, 0 failed after command-pump, transaction, and bounded-framing integration |
+
 ## Historical product work
 
 The former WS0–WS12 ledger tracked the 0.4 release program. That program produced the
@@ -109,3 +118,4 @@ authorize public actions and are not silently folded into this engineering audit
 | 2026-08-08 | Owner approved the complete implementation program. Started four isolated GPT-5.3 Codex Spark worktrees: W1 command-pump primitive (`019fe444-277a-7322-b1a4-3ef54d170ff7`), W2 transaction primitive (`019fe444-278b-73c0-9d42-a32ad8a640d3`), W3 bounded framing (`019fe444-32c8-74b0-9ff8-19c6448c2d9e`), and W4 eval foundation (`019fe444-32f3-7783-92a7-8d643ade56f6`). Shared integration files remain orchestrator-owned. | `orchestrator_guide.md`; Codex thread worktrees |
 | 2026-08-08 | Independently reviewed and integrated the session transaction and command pump primitives after returning failing first drafts for correction. Focused regressions pass (`16/16` transaction, `11/11` pump); root lint and typecheck pass. Reused the same W1/W2 tasks for controller and host-contract integration. | `6be1ef3`; `53f5090`; focused Node tests |
 | 2026-08-08 | Integrated the bounded MCP parser and replaced the unbounded inline server parser after four adversarial review passes. Root framing integration passes `32/32` including exact caps, fragmented backlog efficiency, async callback ordering, typed EOF errors, mixed framing, and end/close races; root typecheck passes. Reused W3 for the non-overlapping AIP-03 registry primitive. | `7451008`–`98b3b2f`; `apps/mcp-server/test/framing.test.ts` |
+| 2026-08-08 | Re-ran the complete accepted integration suite after framing landed: 201 passed, 2 existing platform-specific persistent-socket tests skipped, and 0 failed. W1 controller, W2 host dispatch, W3 registry, and W4 eval drafts remain isolated pending independent correction and review. | `pnpm test`; 203 total tests |
