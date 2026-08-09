@@ -842,8 +842,8 @@ The cleanest approach for most recommendations is specification-first reimplemen
 - [`apps/mcp-server/src/mcp-server.ts`](../apps/mcp-server/src/mcp-server.ts) — MCP surface and framing
 - [`apps/mcp-server/src/bridge.ts`](../apps/mcp-server/src/bridge.ts) — loopback relay, ownership, bounds, pending commands
 - [`apps/extension/src/local-transport.js`](../apps/extension/src/local-transport.js) — multi-host extension transport
-- [`packages/driver/src/controller.js`](../packages/driver/src/controller.js) — session/tab ownership and command routing
-- [`packages/driver/src/driver.js`](../packages/driver/src/driver.js) — CDP observation, resolution, input, verification, signals
+- [`packages/driver/src/controller.ts`](../packages/driver/src/controller.ts) — session/tab ownership and command routing
+- [`packages/driver/src/driver.ts`](../packages/driver/src/driver.ts) — CDP observation, resolution, input, verification, signals
 - [`scripts/release-check.mjs`](../scripts/release-check.mjs) and [`RELEASE.md`](RELEASE.md) — release gate and evidence summary
 
 ### agent-browser at the audited commit

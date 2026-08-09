@@ -27,6 +27,8 @@ Newton Browser was created to give agents a browser-control tool that is **agent
 - **Keep tabs isolated.** Owned tabs are the default; current-tab control must be requested explicitly.
 - **Make browser ownership deterministic.** Chrome and Edge can remain enabled together while only one browser owns a session.
 - **Apply a safety floor.** Credentials, payment data, one-time codes, government identifiers, and cross-origin targets are blocked before dispatch.
+- **Contain controlled targets before they run.** Related Chromium targets are paused
+  while exact-origin rules are installed, without serializing unrelated sessions.
 - **See what happened.** Observations, screenshots, typed action results, and explicit tab finalization make browser work inspectable.
 
 ## How it works
@@ -258,6 +260,9 @@ pnpm lint                  # Verify the standalone product boundary
 pnpm smoke:quick           # Run the fast smoke subset
 pnpm extension:artifact    # Build the distributable extension ZIP + checksum
 pnpm pack:check            # Build and verify the MCP package tarball
+pnpm eval                  # Run provider-free regression tasks and fixture contracts
+pnpm eval:agent-cost       # Enforce catalog and successful-workflow token budgets
+pnpm eval:live             # Run connected-extension browser acceptance harnesses
 pnpm release:check         # Run the complete release gate
 ```
 
@@ -267,6 +272,11 @@ build:driver` compiles them into the stable JavaScript filenames consumed by the
 extension; tests exercise those compiled files, and a parity gate compares two clean
 builds byte-for-byte. The overlay remains JavaScript/CSS because it is an isolated page
 asset, not part of the typed control path.
+
+Provider-free regression tasks, two-origin request counters, frame/input live harnesses,
+and bounded local command metrics are part of the release program. `pnpm eval:live`
+requires a connected unpacked extension and is never silently substituted by fixture-only
+results.
 
 The full release gate is intentionally exhaustive and includes packed-install, clean-user, protocol, fixture, chaos, concurrency, and artifact checks. See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
 

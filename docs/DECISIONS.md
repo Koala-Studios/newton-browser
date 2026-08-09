@@ -474,3 +474,19 @@ allowlist, SHA-256, and bytes and rejects TypeScript, source maps, tests, fixtur
 absolute workspace paths. An intentionally incomplete action switch must fail strict
 typechecking, while the production action switch is exhaustive and retains the prior
 runtime fallback for invalid unvalidated JavaScript callers.
+
+## 31. Provider-free regression tasks and bounded local diagnostics (2026-08-09)
+
+Newton's regression evals execute declared fixture steps through a supplied deterministic
+runner. They do not call an LLM, model provider, hosted service, or telemetry endpoint.
+Each run receives isolated home, config, cache, browser-profile, download, and output
+roots under a validated temporary parent; recorded local writes must stay below that root,
+and cleanup refuses any path that is not an owned `newton-browser-eval-*` child.
+
+Full status and authenticated doctor output may expose operational facts needed to debug
+the command system: session epoch/sequence, queue depth/bytes, running command identifier,
+oldest queued age, lifecycle state, bounded p50/p95/max queue-wait and execution samples,
+outcome counts, and fixed MCP framing limits. Samples retain only the latest 256 numeric
+values in memory. Compact agent status remains unchanged. These diagnostics never include
+page text, response bodies, cookies, storage, browser profile files, saved credentials, or
+real-user browsing history.

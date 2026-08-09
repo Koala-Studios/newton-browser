@@ -1,6 +1,6 @@
 # Plan 06 — Agent Output and Token Efficiency
 
-- **Status:** Approval required
+- **Status:** Complete
 - **Depends on:** Plan 01 result contract
 - **Primary outcome:** The default agent workflow carries the minimum tokens needed to select and verify actions, without weakening Newton’s internal observation model or safety evidence.
 
@@ -21,7 +21,7 @@ The audit found Newton’s tool catalog already much smaller than agent-browser�
 
 - `packages/core/src/protocol.ts` — observation/output options and compact result types.
 - `packages/core/src/redaction.ts` — run before every public renderer and preserve redaction markers.
-- `packages/driver/src/driver.js` and `packages/driver/test/driver.test.js` — enrich the internal AX model without changing its safety boundary.
+- `packages/driver/src/driver.ts` and `packages/driver/test/driver.test.js` — enrich the internal AX model without changing its safety boundary.
 - `apps/mcp-server/src/mcp-server.ts` — expose output controls and remove duplicated envelope fields.
 - `apps/mcp-server/test/host.test.ts` and existing fixture tests.
 - `README.md`, `docs/MCP_CLIENTS.md`, `docs/DECISIONS.md`, and `test/evidence/qa-ledger.md`.

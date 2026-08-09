@@ -15,7 +15,6 @@ let sessionId = "";
 
 try {
   await bridge.listen(hostPort, "127.0.0.1");
-  await waitFor(() => bridge.getStatus().eligibleClientCount === 1, `${browserTarget} extension`);
   sessionId = bridge.createSession({
     origin: fixture.origin,
     allowedOrigins: [fixture.origin],
@@ -54,22 +53,12 @@ try {
   throw error;
 } finally {
   bridge.stopAll();
-  await new Promise((resolve) => setTimeout(resolve, 250));
   await bridge.close();
   await fixture.close();
 }
 
 function writeState(value) {
   fs.writeFileSync(statePath, `${JSON.stringify(value)}\n`);
-}
-
-async function waitFor(predicate, label, timeoutMs = 90_000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 function assert(condition, message) {

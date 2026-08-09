@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Scoped dialog frame</title></head>
+<body>
+  <button id="frame-dialog">Frame dialog</button>
+  <button id="frame-ack">Frame acknowledgement</button>
+  <output id="frame-status" aria-label="Frame status">idle</output>
+  <script>
+    const cross = new URL(location.href).searchParams.get("cross") === "1";
+    document.querySelector("#frame-dialog").textContent = cross ? "Cross-origin frame dialog" : "Same-origin frame dialog";
+    document.querySelector("#frame-ack").textContent = cross ? "Cross-origin frame acknowledgement" : "Same-origin frame acknowledgement";
+    document.querySelector("#frame-dialog").addEventListener("click", () => alert(`frame-dialog:${location.origin}`));
+    document.querySelector("#frame-ack").addEventListener("click", () => {
+      document.querySelector("#frame-status").textContent = `ack:${location.origin}`;
+    });
+  </script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,6 +20,7 @@ const env = {
   npm_config_cache: path.join(isolated, "npm-cache"),
   NEWTON_BROWSER_CONFIG_DIR: path.join(isolated, "bridge-config"),
 };
+const smokePort = 18651;
 
 try {
   fs.mkdirSync(install, { recursive: true });
@@ -34,8 +36,13 @@ try {
   // the central directory in Node rather than shelling to `tar -xf` (GNU tar on Linux
   // cannot read ZIPs).
   if (!zipEntryNames(extensionZip).includes("manifest.json")) throw new Error("clean-user extension artifact missing manifest.json");
-  run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", env.NEWTON_BROWSER_CONFIG_DIR, "--port", "18651"], isolated, env, false);
-  process.stdout.write(`${JSON.stringify({ ok: true, isolatedProfile: true, sourceCheckoutCwd: false, globalInstall: false, zeroTouch: true, artifacts: 2 })}\n`);
+  run(process.execPath, [path.join(root, "scripts", "smoke", "packed-stdio.mjs"), "--entry", entry, "--config-dir", env.NEWTON_BROWSER_CONFIG_DIR, "--port", String(smokePort)], isolated, env, false);
+  await assertPortReusable(smokePort);
+  const residue = fs.readdirSync(env.NEWTON_BROWSER_CONFIG_DIR, { recursive: true })
+    .map(String)
+    .filter((entryName) => /(?:\.tmp$|observer|binding|session)/i.test(entryName));
+  if (residue.length > 0) throw new Error(`clean-user runtime residue: ${residue.join(",")}`);
+  process.stdout.write(`${JSON.stringify({ ok: true, isolatedProfile: true, sourceCheckoutCwd: false, globalInstall: false, zeroTouch: true, artifacts: 2, portReleased: true, runtimeResidue: 0 })}\n`);
 } finally {
   fs.rmSync(isolated, { recursive: true, force: true });
 }
@@ -67,6 +74,13 @@ function nodeCli(name) {
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 function cleanPackageManagerEnv(input) { const output = { ...input, npm_config_update_notifier: "false" }; delete output.npm_config_verify_deps_before_run; return output; }
+function assertPortReusable(port) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => server.close((error) => error ? reject(error) : resolve()));
+  });
+}
 function run(command, args, cwd, environment, capture) {
   const result = spawnSync(command, args, { cwd, env: environment, encoding: "utf8", stdio: capture ? "pipe" : "inherit", windowsHide: true, timeout: 120_000 });
   if (result.error) throw result.error;

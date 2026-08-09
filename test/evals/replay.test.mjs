@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -6,12 +8,14 @@ import {
   buildMachineReport,
   renderMarkdownReport,
   serializeMachineReport,
+  writeLocalEvalReports,
 } from "../../scripts/evals/report.mjs";
 import {
   EvalSchemaError,
+  parseEvalTaskFromDirectory,
   parseEvalTask,
 } from "../../scripts/evals/schema.mjs";
-import { replayTask, fixtureResolveRef } from "../../scripts/evals/replay.mjs";
+import { replayTask, replayTasks, fixtureResolveRef } from "../../scripts/evals/replay.mjs";
 
 const tasksDir = path.join("test", "evals", "tasks");
 
@@ -80,6 +84,87 @@ function evalTask(overrides = {}) {
     `task:${overrides.id ?? "t1"}`,
   );
 }
+
+test("checked-in task catalog replays deterministically without a provider", async () => {
+  const tasks = parseEvalTaskFromDirectory(tasksDir).filter((task) => task.id !== "forbidden-effect-caught");
+  assert.equal(tasks.some((task) => task.id === "input-key-fidelity"), true);
+  assert.equal(tasks.some((task) => task.id === "dialog-renderer-categories"), true);
+  const results = await replayTasks(tasks, {
+    now: () => Date.parse(START_TIME),
+    runner: async ({ task, step }) => {
+      if (step.tool !== "browser.observe") return { status: step.expect.status };
+      const duplicate = task.id === "ambiguous-ref-resolution";
+      return {
+        status: step.expect.status,
+        result: {
+          kind: "observation",
+          nodes: [
+            { ref: "d1:e1", role: "button", name: "Delete record" },
+            ...(duplicate ? [{ ref: "d1:e2", role: "button", name: "Delete record" }] : []),
+          ],
+        },
+      };
+    },
+  });
+  assert.equal(results.every((result) => result.status === "passed"), true, JSON.stringify(results));
+});
+
+test("checked-in forbidden-effect task fails on its declared effect", async () => {
+  const task = parseEvalTaskFromDirectory(tasksDir).find((entry) => entry.id === "forbidden-effect-caught");
+  assert.ok(task);
+  const result = await replayTask(task, {
+    runner: async ({ step }) => step.tool === "browser.act"
+      ? {
+          status: "completed",
+          effects: [{ origin: "http://127.0.0.1:4311", method: "POST", type: "http" }],
+        }
+      : { status: "completed" },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.steps[1].forbidden.violated, true);
+  assert.equal(result.steps[1].forbidden.matchCount, 1);
+});
+
+test("replay isolates all local roots and rejects writes outside them", async () => {
+  const parent = await fs.promises.mkdtemp(path.join(os.tmpdir(), "newton-eval-parent-"));
+  const simulatedRealHome = path.join(parent, "simulated-real-home");
+  const sentinel = path.join(simulatedRealHome, "sentinel.txt");
+  await fs.promises.mkdir(simulatedRealHome);
+  await fs.promises.writeFile(sentinel, "unchanged", "utf8");
+  let isolatedRoot = "";
+  try {
+    const result = await replayTask(evalTask({ id: "hermetic-roots", steps: [
+      { tool: "browser.session.start", expect: "completed" },
+    ] }), {
+      hermetic: {
+        parent,
+        async beforeCleanup(roots, taskResultValue) {
+          isolatedRoot = roots.root;
+          for (const name of ["home", "config", "cache", "profile", "downloads", "output"]) {
+            assert.equal(fs.statSync(roots[name]).isDirectory(), true);
+          }
+          const report = buildMachineReport([taskResultValue], { runId: "hermetic", generatedAt: START_TIME });
+          const written = await writeLocalEvalReports(report, { outputRoot: roots.output, baseName: "hermetic" });
+          roots.recordWrite(written.machinePath);
+          roots.recordWrite(written.markdownPath);
+          assert.equal(written.machineBytes > 0, true);
+          assert.equal(written.markdownBytes > 0, true);
+        },
+      },
+      runner: async ({ context }) => {
+        const artifactPath = context.recordLocalWrite(path.join(context.hermetic.output, "runner-artifact.json"));
+        await fs.promises.writeFile(artifactPath, "{}", "utf8");
+        assert.throws(() => context.recordLocalWrite(sentinel), /escaped hermetic root/);
+        return { status: "completed" };
+      },
+    });
+    assert.equal(result.status, "passed");
+    assert.equal(await fs.promises.readFile(sentinel, "utf8"), "unchanged");
+    assert.equal(fs.existsSync(isolatedRoot), false);
+  } finally {
+    await fs.promises.rm(parent, { recursive: true, force: true });
+  }
+});
 
 test("schema rejects malformed task payloads", () => {
   const cases = [

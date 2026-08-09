@@ -2,6 +2,7 @@ import net from "node:net";
 
 import { configDirectory, doctorToken, loadBrowserTarget, loadHostPolicies, loadOrCreatePairingConfig, loadTransportAuthMode } from "./config.ts";
 import { INSTALL_CLIENTS, type InstallClient, runInstall, serverInvocation } from "./install.ts";
+import { MAX_MCP_BODY_BYTES, MAX_MCP_BUFFER_BYTES, MAX_MCP_HEADER_BYTES } from "./mcp-frame-parser.ts";
 
 export const NEWTON_BROWSER_VERSION = "0.4.5";
 export const SUPPORTED_MCP_PROTOCOLS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
@@ -98,6 +99,13 @@ export async function collectDoctorReport(input: { directory?: string; firstPort
       browserSelection: { ok: true, target: browserTarget },
       pairing: { ok: true, state: authMode === "paired" ? "configured" : "not_required" },
       protocol: { ok: true, supported: [...SUPPORTED_MCP_PROTOCOLS] },
+      framing: {
+        ok: true,
+        headerBytes: MAX_MCP_HEADER_BYTES,
+        bodyBytes: MAX_MCP_BODY_BYTES,
+        bufferBytes: MAX_MCP_BUFFER_BYTES,
+        bufferedBytes: 0,
+      },
       extension: { ok: extensionConnected, state: extensionState },
     },
     nextAction: extensionConnected

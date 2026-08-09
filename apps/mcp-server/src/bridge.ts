@@ -83,6 +83,18 @@ type PendingCommand = {
   phase: PendingCommandPhase;
   settled: boolean;
   createdAt: number;
+  sentAt: number | null;
+};
+
+type CommandMetrics = {
+  created: number;
+  sent: number;
+  settled: number;
+  maxQueueDepth: number;
+  lateResultsAccepted: number;
+  queueWaitMs: number[];
+  executionMs: number[];
+  outcomes: Record<BrowserCommandOutcome, number>;
 };
 
 type IdempotencyEntry = {
@@ -161,6 +173,16 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
   const idempotencyLedger = new Map<string, Map<string, IdempotencyEntry>>();
   const lateResults = new Map<string, LateResultRecord>();
   const lateResultOrder: string[] = [];
+  const commandMetrics: CommandMetrics = {
+    created: 0,
+    sent: 0,
+    settled: 0,
+    maxQueueDepth: 0,
+    lateResultsAccepted: 0,
+    queueWaitMs: [],
+    executionMs: [],
+    outcomes: { completed: 0, prevented: 0, not_started: 0, outcome_unknown: 0 },
+  };
 
   let activeCommandCount = 0;
   let server: http.Server | null = null;
@@ -222,6 +244,17 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
         extensionVersion: eligibleClients().map((client) => client.identity?.version).find((version): version is string => typeof version === "string") ?? null,
         claimedSessionsByBrowser: claimedSessionCounts(),
         sessionCount: sessions.size,
+        sessionDiagnostics: [...sessionStates.entries()].map(([sessionId, state]) => ({
+          sessionId,
+          epoch: state.epoch,
+          sequence: state.sequence,
+          queueDepth: state.queuedCommandIds.length,
+          queuedBytes: state.queuedBytes,
+          running: state.inFlightCommandId,
+          oldestQueuedMs: oldestQueuedAge(state),
+          lifecycleState: sessions.get(sessionId)?.lifecycleState ?? "stopped",
+        })),
+        commandMetrics: commandMetricsSnapshot(),
         limits,
       };
     },
@@ -744,6 +777,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
         );
         finalizeIdempotency(record.sessionId, record.idempotencyKey, record.idempotencyHash, normalized);
       }
+      commandMetrics.lateResultsAccepted += 1;
       removeLateResult(commandId);
       return;
     }
@@ -760,6 +794,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
     const state = ensureSessionState(sessionId);
     state.queuedCommandIds.push(command.commandId);
     state.queuedBytes += command.bytes;
+    commandMetrics.maxQueueDepth = Math.max(commandMetrics.maxQueueDepth, state.queuedCommandIds.length);
   }
 
   function canEnqueueCommand(state: SessionState, command: PendingCommand): boolean {
@@ -777,6 +812,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
     if (!owner || !owner.subscriptions.has(sessionId) || state.inFlightCommandId) return false;
     state.inFlightCommandId = command.commandId;
     command.phase = "sent";
+    command.sentAt = Date.now();
     command.targetClientId = owner.id;
     command.targetClientIdentity = owner.identity?.clientId ?? "";
     pendingByCommandId.set(command.commandId, command);
@@ -786,8 +822,10 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
       command.targetClientId = null;
       command.targetClientIdentity = null;
       state.inFlightCommandId = null;
+      command.sentAt = null;
       return false;
     }
+    commandMetrics.sent += 1;
     return true;
   }
 
@@ -889,6 +927,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
       state.queuedCommandIds = state.queuedCommandIds.filter((candidate) => candidate !== command.commandId);
     }
     if (pendingByCommandId.delete(command.commandId)) {
+      recordCommandMetrics(command, event);
       pendingCommandCountBySession.set(command.sessionId, Math.max(0, (pendingCommandCountBySession.get(command.sessionId) ?? 0) - 1));
       activeCommandCount = Math.max(0, activeCommandCount - 1);
       if (command.idempotencyKey && command.idempotencyHash) finalizeIdempotency(command.sessionId, command.idempotencyKey, command.idempotencyHash, event);
@@ -1179,12 +1218,13 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
     return state;
   }
 
-  function createPendingCommand(params: Omit<PendingCommand, "phase" | "settled" | "bytes" | "timer"> & { timer?: PendingCommand["timer"] }): PendingCommand {
-    const command = {
+  function createPendingCommand(params: Omit<PendingCommand, "phase" | "settled" | "bytes" | "timer" | "sentAt"> & { timer?: PendingCommand["timer"] }): PendingCommand {
+    const command: PendingCommand = {
       ...params,
       phase: "queued" as const,
       settled: false,
       createdAt: Date.now(),
+      sentAt: null,
       timer: params.timer ?? null,
       bytes: 0,
     };
@@ -1197,7 +1237,37 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
       targetClientId: null,
       resolve: command.resolve,
     }));
+    commandMetrics.created += 1;
     return command;
+  }
+
+  function recordCommandMetrics(command: PendingCommand, event: BridgeResultEvent): void {
+    const settledAt = Date.now();
+    commandMetrics.settled += 1;
+    commandMetrics.outcomes[event.outcome] += 1;
+    pushBoundedSample(commandMetrics.queueWaitMs, Math.max(0, (command.sentAt ?? settledAt) - command.createdAt));
+    if (command.sentAt !== null) pushBoundedSample(commandMetrics.executionMs, Math.max(0, settledAt - command.sentAt));
+  }
+
+  function commandMetricsSnapshot() {
+    return {
+      created: commandMetrics.created,
+      sent: commandMetrics.sent,
+      settled: commandMetrics.settled,
+      maxQueueDepth: commandMetrics.maxQueueDepth,
+      lateResultsAccepted: commandMetrics.lateResultsAccepted,
+      outcomes: { ...commandMetrics.outcomes },
+      queueWaitMs: summarizeSamples(commandMetrics.queueWaitMs),
+      executionMs: summarizeSamples(commandMetrics.executionMs),
+    };
+  }
+
+  function oldestQueuedAge(state: SessionState): number {
+    const createdAt = state.queuedCommandIds
+      .map((commandId) => pendingByCommandId.get(commandId)?.createdAt)
+      .filter((value): value is number => typeof value === "number")
+      .reduce<number | null>((oldest, value) => oldest === null ? value : Math.min(oldest, value), null);
+    return createdAt === null ? 0 : Math.max(0, Date.now() - createdAt);
   }
 
   function makeFailureResultForUnknown(sessionEpoch: number, sequence: number, outcome: "prevented" | "not_started", errorCode: string): BridgeResultEvent {
@@ -1605,4 +1675,21 @@ function isAllowedWebSocketOrigin(origin: string | undefined): boolean {
 
 function range(first: number, last: number): number[] {
   return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+}
+
+function pushBoundedSample(samples: number[], value: number, cap = 256): void {
+  samples.push(value);
+  if (samples.length > cap) samples.splice(0, samples.length - cap);
+}
+
+function summarizeSamples(samples: number[]): { count: number; p50: number; p95: number; max: number } {
+  if (samples.length === 0) return { count: 0, p50: 0, p95: 0, max: 0 };
+  const sorted = [...samples].sort((left, right) => left - right);
+  const percentile = (fraction: number) => sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
+  return {
+    count: sorted.length,
+    p50: percentile(0.5),
+    p95: percentile(0.95),
+    max: sorted[sorted.length - 1] ?? 0,
+  };
 }

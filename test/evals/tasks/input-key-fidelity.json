@@ -1,0 +1,23 @@
+{
+  "id": "input-key-fidelity",
+  "description": "Focus a fixture textbox, dispatch a complete modifier chord, and observe the balanced DOM event log.",
+  "fixture": "test/fixtures/input-reliability/index.html",
+  "grant": ["http://127.0.0.1:18321"],
+  "steps": [
+    { "tool": "browser.session.start", "expect": "completed" },
+    {
+      "tool": "browser.act",
+      "expect": "completed",
+      "action": { "kind": "click", "target": { "role": "textbox", "name": "Keyboard target" } }
+    },
+    {
+      "tool": "browser.act",
+      "expect": "completed",
+      "action": { "kind": "press", "keys": ["Control", "Shift", "P"] }
+    },
+    { "tool": "browser.observe", "expect": "completed", "query": "Key event log" }
+  ],
+  "forbid": [
+    { "origin": "http://127.0.0.1:18322", "method": "POST", "type": "http" }
+  ]
+}

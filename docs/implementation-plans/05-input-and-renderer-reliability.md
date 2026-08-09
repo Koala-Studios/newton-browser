@@ -1,6 +1,6 @@
 # Plan 05 — Input and Renderer Reliability
 
-- **Status:** Approval required
+- **Status:** Approved; deterministic implementation and live harness complete, live Chrome/Edge evidence pending
 - **Depends on:** Plans 01 and 03
 - **Primary outcome:** Actions behave like deliberate user input, recover from browser lifecycle events, and report dialogs, discards, detachments, and renderer failures precisely.
 
@@ -12,8 +12,8 @@ Agent cost is dominated by repairs when clicks, typing, focus, dialogs, or rende
 
 ### Add
 
-- `packages/driver/src/input-dispatcher.js` — printable text, special keys, chords, pointer sequences, and dialog races.
-- `packages/driver/src/renderer-liveness.js` — explicit liveness state machine and recovery classification.
+- `packages/driver/src/input-dispatcher.ts` — printable text, special keys, chords, pointer sequences, and dialog races.
+- `packages/driver/src/renderer-liveness.ts` — explicit liveness state machine and recovery classification.
 - `packages/driver/test/input-dispatcher.test.js`.
 - `packages/driver/test/renderer-liveness.test.js`.
 - `test/fixtures/input-reliability/` — dialog, key-event, discard, slow-renderer, and OOPIF pages.
@@ -21,9 +21,9 @@ Agent cost is dominated by repairs when clicks, typing, focus, dialogs, or rende
 
 ### Edit
 
-- `packages/driver/src/driver.js` — delegate input and liveness handling.
-- `packages/driver/src/controller.js` — connect command outcomes to liveness and dialog state.
-- `packages/driver/src/chrome-tabs-port.js` — tab discard and ownership lifecycle signals.
+- `packages/driver/src/driver.ts` — delegate input and liveness handling.
+- `packages/driver/src/controller.ts` — connect command outcomes to liveness and dialog state.
+- `packages/driver/src/chrome-tabs-port.ts` — tab discard and ownership lifecycle signals.
 - `apps/extension/src/service-worker.js` — mark owned tabs non-discardable and surface discard/detach events.
 - `apps/mcp-server/src/bridge.ts` and `apps/mcp-server/src/mcp-server.ts` — retain typed failure categories.
 - Existing driver unit, fixture, and live-browser smoke tests.

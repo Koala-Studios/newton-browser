@@ -47,8 +47,12 @@
   <section aria-label="Frames and shadow DOM">
     <fixture-shadow></fixture-shadow>
     <fixture-nested-shadow></fixture-nested-shadow>
-    <iframe title="Same origin frame" src="/frame.html"></iframe>
+    <button id="replace-oopif" type="button">Replace OOPIF target</button>
+    <button id="detach-oopif" type="button">Detach OOPIF target</button>
+    <output id="frame-churn-status">frame-churn-idle</output>
+    <iframe title="Same origin frame" id="same-frame" src="/frame.html?label=Same-origin"></iframe>
     <iframe title="Cross origin frame" id="cross-frame"></iframe>
+    <div id="oopif-slot"><iframe title="Granted OOPIF frame" id="oopif-churn-frame"></iframe></div>
   </section>
 
   <section aria-label="Safety signals">
@@ -90,5 +94,33 @@
   <a id="disallowed-transition" href="/redirect-cross">Disallowed origin redirect</a>
 
   <script type="module" src="/fixture.js"></script>
+  <script type="module">
+    const parameters = new URLSearchParams(location.search);
+    const crossOrigin = parameters.get("oopifOrigin");
+    const nestedOrigin = parameters.get("nestedOrigin");
+    const slot = document.querySelector("#oopif-slot");
+    const status = document.querySelector("#frame-churn-status");
+    let generation = 1;
+    const frameUrl = () => {
+      const url = new URL("/frame.html", crossOrigin);
+      url.searchParams.set("label", `Granted-OOPIF-${generation}`);
+      if (nestedOrigin) url.searchParams.set("nestedOrigin", nestedOrigin);
+      return url.href;
+    };
+    if (crossOrigin) document.querySelector("#oopif-churn-frame").src = frameUrl();
+    document.querySelector("#replace-oopif").addEventListener("click", () => {
+      if (!crossOrigin) {
+        status.textContent = "oopif-not-configured";
+        return;
+      }
+      generation += 1;
+      slot.innerHTML = `<iframe title="Granted OOPIF frame" id="oopif-churn-frame" src="${frameUrl()}"></iframe>`;
+      status.textContent = `oopif-replaced:${generation}`;
+    });
+    document.querySelector("#detach-oopif").addEventListener("click", () => {
+      slot.replaceChildren();
+      status.textContent = `oopif-detached:${generation}`;
+    });
+  </script>
 </body>
 </html>

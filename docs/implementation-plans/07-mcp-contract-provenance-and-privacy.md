@@ -1,6 +1,6 @@
 # Plan 07 — MCP Contract, Provenance, and Opaque-Body Privacy
 
-- **Status:** Approval required
+- **Status:** Complete
 - **Depends on:** Plans 04 and 06
 - **Primary outcome:** Agents receive a strict, discoverable, versioned MCP contract that identifies untrusted page data, describes action risk, and cannot leak opaque encoded bodies around text redaction.
 
@@ -23,7 +23,7 @@ An efficient output format is only useful when agents can reliably construct val
 - `packages/core/src/action-schema.ts` — strict discriminated validation and unknown-field policy.
 - `packages/core/src/protocol.ts` — typed provenance, next action, contract version, and opaque-body metadata.
 - `packages/core/src/redaction.ts` — explicit handling for encoded or undecodable bodies.
-- `packages/driver/src/driver.js` — label body encoding and source origin before returning network evidence.
+- `packages/driver/src/driver.ts` — label body encoding and source origin before returning network evidence.
 - `apps/mcp-server/src/mcp-server.ts` — publish concise schemas, server instructions, and annotations.
 - `apps/mcp-server/src/bridge.ts` — preserve provenance and contract version.
 - Existing MCP/core contract tests and packed-server smokes.

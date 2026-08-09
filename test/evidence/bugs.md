@@ -597,3 +597,45 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: require a nonnegative safe-integer tab ID immediately after creation/selection and before registering cleanup or performing any downstream effect; model the real Chrome `tabs.update` API as required.
 - Regression: Chrome-port and controller tests inject missing IDs and assert rejection plus zero update, group, host-create, driver-create, cleanup, or publication effects.
 - Status: closed.
+
+## BB-068 - Strict eval validation rejected deferred semantic targets
+
+- Minimal repro: load the checked-in semantic-ref task after strict browser-action parsing
+  became canonical. A target-required click is validated before replay resolves its
+  `semanticRef`, producing `click requires a target` and preventing the task from loading.
+- Root cause: the eval schema applied final core action validation before the replay stage
+  that is explicitly responsible for semantic target resolution.
+- Fix: permit a missing target only when the same validated step contains a non-empty
+  `semanticRef`; validate all other action fields with a temporary valid composite ref,
+  remove that placeholder, and inject only the actually resolved ref during replay.
+- Regression: the complete checked-in catalog, ambiguity cases, and
+  observe-to-semantic-action sequence pass in `test/evals/replay.test.mjs`.
+- Status: closed.
+
+## BB-069 - Live acceptance drafts contradicted the public output contract
+
+- Minimal repro: run the input/dialog live harness. Session start passes a page URL with a
+  path/query where the API requires an exact origin; frame/input observations then request
+  the compact default while attempting to read JSON `nodes`.
+- Root cause: worker drafts were written against internal driver-shaped results rather than
+  the strict public MCP start and projection contract.
+- Fix: start with the normalized origin, navigate explicitly to the fixture URL, and request
+  `format:"json"` for every live assertion that consumes nodes or frame metadata. Fixture
+  contracts import compiled driver output rather than TypeScript source.
+- Regression: all live scripts pass syntax/boundary/type gates, the deterministic fixture
+  suite passes, and strict MCP origin/projection regressions remain in the root suite.
+- Status: closed before live evidence was claimed.
+
+## BB-070 - Excluded-frame provenance was dropped by agent output projection
+
+- Minimal repro: project a redacted driver observation containing an ungranted OOPIF in
+  `excludedFrames` through either compact or JSON agent output. The driver/core preserved
+  the facts, but the MCP projection omitted them.
+- Root cause: the Plan-06 projector allowlisted node/base fields without adding the
+  Plan-03 excluded-frame metadata.
+- Fix: normalize at most 64 entries containing bounded frame ID, redacted origin, and
+  reason, and carry the same host-redacted array in compact and JSON projections.
+- Regression: `compact and JSON observations preserve bounded excluded-frame provenance`
+  fails on the prior projector and passes after correction; the live frame-churn harness
+  consumes the JSON form.
+- Status: closed at source/packed projection level; connected OOPIF evidence remains open.

@@ -1,6 +1,6 @@
 # Plan 04 — Preventive Origin Containment
 
-- **Status:** Approval required
+- **Status:** Approved; deterministic implementation and request-counter harness complete, live browser evidence pending
 - **Depends on:** Plan 03 target/frame/session registry
 - **Primary outcome:** Newton prevents controlled targets and mutating requests from crossing the session grant, rather than discovering the violation only after an effect may have occurred.
 
@@ -26,7 +26,7 @@ For a session grant containing the normalized primary origin and explicit allowe
 
 ### Add
 
-- `packages/driver/src/origin-containment.js` — grant compiler, request/target decision engine, and CDP Fetch lifecycle.
+- `packages/driver/src/origin-containment.ts` — grant compiler, request/target decision engine, and CDP Fetch lifecycle.
 - `packages/driver/test/origin-containment.test.js` — table-driven policy and redirect tests.
 - `test/fixtures/origin-containment/` — two-origin fixture with redirect, form, beacon, socket, popup, iframe, and worker endpoints.
 - `scripts/smoke/origin-containment-live.mjs` — real-Chromium prevention proof.
@@ -36,9 +36,9 @@ For a session grant containing the normalized primary origin and explicit allowe
 - `packages/core/src/protocol.ts` — preventive decision and outcome types.
 - `packages/core/src/host-policy.ts` — shared normalized grant evaluation without URL string-prefix comparisons.
 - `packages/core/src/risk.ts` — classify mutating requests and target creation risk.
-- `packages/driver/src/driver.js` — install containment on every attached target and route Fetch events.
-- `packages/driver/src/controller.js` — require containment readiness before a command can execute.
-- `packages/driver/src/target-registry.js` — hold paused targets until grant reconciliation completes.
+- `packages/driver/src/driver.ts` — install containment on every attached target and route Fetch events.
+- `packages/driver/src/controller.ts` — require containment readiness before a command can execute.
+- `packages/driver/src/target-registry.ts` — hold paused targets until grant reconciliation completes.
 - `apps/extension/src/service-worker.js` — preflight explicit navigation requests and current-tab attachment.
 - `apps/mcp-server/src/bridge.ts` — preserve preventive decisions and uncertain outcomes.
 - `apps/mcp-server/src/mcp-server.ts` — expose the structured result without implying an effect was rolled back.

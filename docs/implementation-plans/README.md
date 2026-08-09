@@ -1,6 +1,6 @@
 # Newton Browser Audit Implementation Program
 
-- Status: approval required
+- Status: approved implementation program in progress
 - Created: 2026-08-08
 Source: [`AGENT_BROWSER_COMPARATIVE_AUDIT.md`](../AGENT_BROWSER_COMPARATIVE_AUDIT.md)
 
@@ -41,15 +41,15 @@ containment, input, observation, or regression work.
 
 | Plan | Capability | Depends on | Implementation status |
 | --- | --- | --- | --- |
-| [01](01-session-command-pump.md) | Per-session command pump, fencing, idempotency, outcome semantics | none | in progress |
-| [02](02-transactional-lifecycle-and-framing.md) | Transactional session lifecycle, finalization, bounded MCP framing | 01 contract types | in progress |
-| [03](03-target-frame-session-registry.md) | Target/frame/session registry, composite refs, OOPIF routing | 01, 02 | not started |
-| [04](04-preventive-origin-containment.md) | Preventive controlled-target and mutation-egress containment | 03 | not started |
-| [05](05-input-and-renderer-reliability.md) | Dialog-aware input, keyboard correctness, renderer lifecycle | 01, 03 | not started |
-| [06](06-agent-output-efficiency.md) | Compact observations/results, scoping, initial observation | 01 result contract | not started |
-| [07](07-mcp-contract-provenance-and-privacy.md) | Strict schemas, annotations, provenance, opaque-body policy | 04, 06 | not started |
-| [08](08-driver-typescript-hardening.md) | Checked/compiled TypeScript for critical extension driver code | 01-07 behavior stable | not started |
-| [09](09-regression-evals-observability-and-release.md) | Regression corpus, task replay, budgets, doctor, live CI | incrementally consumes 01-08 | in progress (foundation only) |
+| [01](01-session-command-pump.md) | Per-session command pump, fencing, idempotency, outcome semantics | none | deterministic/packed complete; live pending |
+| [02](02-transactional-lifecycle-and-framing.md) | Transactional session lifecycle, finalization, bounded MCP framing | 01 contract types | deterministic complete; live restart pending |
+| [03](03-target-frame-session-registry.md) | Target/frame/session registry, composite refs, OOPIF routing | 01, 02 | deterministic complete; live pending |
+| [04](04-preventive-origin-containment.md) | Preventive controlled-target and mutation-egress containment | 03 | deterministic complete; live pending |
+| [05](05-input-and-renderer-reliability.md) | Dialog-aware input, keyboard correctness, renderer lifecycle | 01, 03 | deterministic complete; live pending |
+| [06](06-agent-output-efficiency.md) | Compact observations/results, scoping, initial observation | 01 result contract | complete |
+| [07](07-mcp-contract-provenance-and-privacy.md) | Strict schemas, annotations, provenance, opaque-body policy | 04, 06 | complete |
+| [08](08-driver-typescript-hardening.md) | Checked/compiled TypeScript for critical extension driver code | 01-07 behavior stable | source/packed complete; live pending |
+| [09](09-regression-evals-observability-and-release.md) | Regression corpus, task replay, budgets, doctor, live CI | incrementally consumes 01-08 | deterministic/release wiring complete; live/final gate pending |
 
 ## Dependency and integration order
 
@@ -76,8 +76,8 @@ These files are integration hotspots and must have one active owner at a time:
 
 - `packages/core/src/protocol.ts`
 - `packages/core/src/transport.ts`
-- `packages/driver/src/controller.js`
-- `packages/driver/src/driver.js`
+- `packages/driver/src/controller.ts`
+- `packages/driver/src/driver.ts`
 - `apps/mcp-server/src/bridge.ts`
 - `apps/mcp-server/src/mcp-server.ts`
 - `scripts/release-check.mjs`

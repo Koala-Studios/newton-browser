@@ -11,9 +11,10 @@ pnpm install --frozen-lockfile
 pnpm release:check
 ```
 
-The gate runs boundary, strict workspace and driver typechecking, unit/contract tests,
-deterministic driver and extension builds, packed clean-install, isolated clean-user
-directories, fixture, Node 24/25, chaos, and concurrent two-host checks. The driver
+The 13-stage gate runs boundary, strict workspace and driver typechecking, unit/contract
+tests, provider-free regression evals, exact agent-cost budgets, deterministic driver and
+extension builds, packed clean-install, isolated clean-user directories, fixture,
+Node 24/25, chaos, and concurrent two-host checks. The driver
 artifact must contain only compiled JavaScript and overlay assets—no TypeScript, source
 maps, tests, fixtures, absolute checkout paths, or declaration-only runtime module. The
 gate must leave all ports in `127.0.0.1:17321-17340` closed.
@@ -27,6 +28,11 @@ Expected release artifacts:
 Before handing artifacts to another machine, compare the checksum, inspect both archive listings, run the clean-user procedure in `INSTALL.md`, and record exact versions/results in `test/evidence/qa-ledger.md`. Real-browser rows require Chrome and Edge stable with the unpacked release artifact, retained authentication, inactive owned-tab creation, current-tab scope, screenshot display, file acceptance, and cleanup.
 
 Do not tag or publish while any critical evidence row is open, skipped, or unexplained.
+
+Real-browser acceptance is separate from the hermetic release command because it requires
+an already loaded Chrome/Edge extension. Run `pnpm eval:live` for each required browser
+target, record browser/extension versions and fixture counters, and do not treat
+`extension_disconnected` as a passing live result.
 
 Final 0.4 candidate evidence (2026-07-11): the unshortened packed release gate passed
 three consecutive times after incognito support and release-scope closure—381.5s,

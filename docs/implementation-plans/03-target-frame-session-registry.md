@@ -1,6 +1,6 @@
 # Plan 03: Target, Frame, and CDP Session Registry
 
-- Status: approval required
+- Status: approved; deterministic implementation and live harness complete, live browser evidence pending
 - Classification: core browser-target foundation
 - Dependencies: Plans 01 and 02
 
@@ -33,13 +33,13 @@ updated skills and compatibility notes.
 
 | Operation | File | Purpose |
 | --- | --- | --- |
-| add | `packages/driver/src/target-registry.js` | target/frame/session graph and ref codec |
+| add | `packages/driver/src/target-registry.ts` | target/frame/session graph and ref codec |
 | add | `packages/driver/test/target-registry.test.js` | graph, epoch, detach, collision tests |
 | edit | `packages/core/src/protocol.ts` | frame provenance, excluded-frame, ref epoch fields |
 | edit | `packages/core/src/redaction.ts` | bound/redact new provenance fields |
-| edit | `packages/driver/src/driver.js` | flattened-session event handling and routed CDP |
-| edit | `packages/driver/src/controller.js` | pass complete debugger source to the driver |
-| edit | `packages/driver/src/chrome-tabs-port.js` | preserve `source.sessionId` and browser version facts |
+| edit | `packages/driver/src/driver.ts` | flattened-session event handling and routed CDP |
+| edit | `packages/driver/src/controller.ts` | pass complete debugger source to the driver |
+| edit | `packages/driver/src/chrome-tabs-port.ts` | preserve `source.sessionId` and browser version facts |
 | edit | `apps/extension/src/service-worker.js` | initialize version capability and event routing |
 | edit | `apps/extension/manifest.json` | `minimum_chrome_version: "125"` |
 | edit | `apps/mcp-server/src/bridge.ts` | browser-version readiness and capability status |

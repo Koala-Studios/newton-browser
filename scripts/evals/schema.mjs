@@ -251,7 +251,9 @@ function parseTaskStep(raw, label) {
     step.semanticRef = parseSemanticRef(value.semanticRef, `${label}.semanticRef`);
   }
   if (value.action !== undefined) {
-    step.action = parseAction(value.action, `${label}.action`);
+    step.action = parseAction(value.action, `${label}.action`, {
+      allowMissingTarget: step.semanticRef !== undefined,
+    });
   }
   if (step.tool !== "browser.act") {
     if (step.action !== undefined) {
@@ -300,7 +302,7 @@ function parseSemanticRef(raw, label) {
     ref: (input) => parseTrimmedString(input, `${label}.ref`, LIMITS.targetRef),
   }));
 }
-function parseAction(raw, label) {
+function parseAction(raw, label, { allowMissingTarget = false } = {}) {
   const value = asObject(raw, label);
   ensureOnlyKeys(label, value, ACTION_KEYS);
   const kind = parseEnum(value.kind, BROWSER_ACTION_KINDS, `${label}.kind`);
@@ -309,7 +311,13 @@ function parseAction(raw, label) {
     if (key === "kind") continue;
     action[key] = parseActionField(key, entry, `${label}.${key}`);
   }
-  const normalized = parseBrowserAction(action);
+  const targetDeferred = allowMissingTarget && actionRequiresTarget(kind) && !hasTargetHint(action);
+  const parsed = parseBrowserAction(targetDeferred
+    ? { ...action, target: { ref: "d1:e1" } }
+    : action);
+  const normalized = targetDeferred && parsed
+    ? Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "target"))
+    : parsed;
   if (!normalized || normalized.kind !== kind) {
     throw new EvalSchemaError(`${label}.kind is invalid`, `${label}.kind`);
   }

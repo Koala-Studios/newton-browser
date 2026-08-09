@@ -1,6 +1,6 @@
 # Plan 02: Transactional Session Lifecycle and Bounded Framing
 
-- Status: approval required
+- Status: approved; deterministic implementation complete, live MV3 restart acceptance pending
 - Classification: core lifecycle and security gate
 - Dependencies: Plan 01 relay epoch/outcome types
 
@@ -46,11 +46,11 @@ MCP input limits:
 
 | Operation | File | Purpose |
 | --- | --- | --- |
-| add | `packages/driver/src/session-transaction.js` | rollback stack and lifecycle state helper |
+| add | `packages/driver/src/session-transaction.ts` | rollback stack and lifecycle state helper |
 | add | `packages/driver/test/session-transaction.test.js` | reverse cleanup and partial-cleanup tests |
 | add | `apps/mcp-server/test/framing.test.ts` | parser cap and malformed-frame matrix |
 | edit | `packages/core/src/transport.ts` | lifecycle state and finalize outcome types |
-| edit | `packages/driver/src/controller.js` | transactional start/rebind/finalize/stop |
+| edit | `packages/driver/src/controller.ts` | transactional start/rebind/finalize/stop |
 | edit | `apps/extension/src/service-worker.js` | binding publication/removal only after committed state |
 | edit | `apps/mcp-server/src/bridge.ts` | ready-state publication, ownership transaction, pending rejection |
 | edit | `apps/mcp-server/src/mcp-server.ts` | bounded parser and typed protocol errors |

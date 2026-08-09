@@ -8,6 +8,13 @@
 - `--doctor` reports `extension.state:"disconnected"`: load the extension in the intended profile. In default `local_trust`, no popup action is required; in optional `paired` mode, verify the pairing secret.
 - `origin_required`, `invalid_origin`, or `origin_not_granted`: pass an exact HTTP(S) origin such as `https://example.com`, not a page URL, wildcard, credentialed URL, or path.
 - `queue_full`, `command_timeout`, or `session_limit`: wait for the current command, stop unused sessions, and retry once after observing state.
+- Queue or timeout diagnosis: request `browser.status` with `detail:"full"` or run
+  `--doctor`. Inspect `sessionDiagnostics`, `commandMetrics`, and the reported framing
+  limits. A queued timeout is `not_started`; a command lost after dispatch is
+  `outcome_unknown` and must not be retried automatically.
+- `dialog_blocked`: answer the scoped dialog, then re-observe. `discarded`,
+  `debugger_conflict`, `target_gone`, and `renderer_unresponsive` are distinct lifecycle
+  failures; do not treat them as a generic timeout or reload a current-tab session.
 - `result_too_large`: use screenshot `delivery:"image"` or `delivery:"file"`; inline delivery is deliberately bounded.
 - `invalid_file_path`, `file_type_not_allowed`, `file_too_large`, or `file_total_too_large`: use exact non-symlink absolute paths to allowed image/video files within the documented caps.
 - `hidden_file_input_requires_ref`: observe immediately before acting and pass the hidden input's fresh `ref`.

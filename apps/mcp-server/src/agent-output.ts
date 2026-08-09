@@ -17,6 +17,7 @@ type ProjectedNode = {
   href?: string; elementType?: string; documentEpoch?: number; frameId?: string; frameOrigin?: string;
   target?: NodeTarget; geometry?: { x: number; y: number; width: number; height: number };
 };
+type ProjectedExcludedFrame = { frameId: string; frameOrigin?: string; reason: string };
 
 const OBSERVATION_QUERY_LIMIT = 120;
 const OBSERVATION_ROLE_LIMIT = 12;
@@ -59,6 +60,7 @@ export type ObservationProjectionBase = {
   reason?: string;
   changed?: Record<string, unknown>;
   title?: string;
+  excludedFrames?: ProjectedExcludedFrame[];
 };
 type ObservationBudget = { nodesScanned: number; nodesReturned: number; nodesOmitted: number; truncated: boolean; continuation?: ObservationBudgetContinuation };
 export type ObservationBudgetContinuation = {
@@ -177,9 +179,23 @@ function normalizeChanged(value: unknown): Record<string, unknown> | undefined {
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
+function normalizeExcludedFrames(value: unknown): ProjectedExcludedFrame[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const frames = value.flatMap((entry) => {
+    if (!isObjectRecord(entry)) return [];
+    const frameId = asSafeBoundedText(entry.frameId, 120).trim();
+    const reason = asSafeBoundedText(entry.reason, 80).trim();
+    if (!frameId || !reason) return [];
+    const frameOrigin = asSafeString(redactBrowserOrigin(entry.frameOrigin), 160).trim();
+    return [{ frameId, ...(frameOrigin ? { frameOrigin } : {}), reason }];
+  }).slice(0, 64);
+  return frames.length > 0 ? frames : undefined;
+}
+
 function normalizeObservationBase(result: Record<string, unknown>): ObservationProjectionBase {
   const actionStatus = asSafeBoundedText(result.actionStatus, 32);
   const reason = asSafeBoundedText(result.reason, OBS_REASON_CAP);
+  const excludedFrames = normalizeExcludedFrames(result.excludedFrames);
   return {
     trust: "untrusted_page_content",
     origin: asSafeBoundedText(redactBrowserOrigin(result.origin), OBS_NODE_TEXT_CAP) || "about:blank",
@@ -191,6 +207,7 @@ function normalizeObservationBase(result: Record<string, unknown>): ObservationP
     ...(reason ? { reason } : {}),
     ...(normalizeChanged(result.changed) ? { changed: normalizeChanged(result.changed) } : {}),
     ...(typeof result.title === "string" ? { title: asSafeBoundedText(result.title, OBS_NODE_TEXT_CAP) } : {}),
+    ...(excludedFrames ? { excludedFrames } : {}),
   };
 }
 

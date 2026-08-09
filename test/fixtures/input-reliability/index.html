@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Newton input reliability fixture</title></head>
+<body>
+  <main>
+    <h1>Input reliability</h1>
+    <label for="keyboard-target">Keyboard target</label>
+    <input id="keyboard-target" aria-label="Keyboard target" autocomplete="off">
+    <label for="key-log">Key event log</label>
+    <textarea id="key-log" aria-label="Key event log" readonly>none</textarea>
+    <label for="pointer-log">Pointer event log</label>
+    <textarea id="pointer-log" aria-label="Pointer event log" readonly>none</textarea>
+    <button id="dialog-mousedown">Dialog on mousedown</button>
+    <button id="dialog-mouseup">Dialog on mouseup</button>
+    <button id="dialog-click">Dialog on click</button>
+    <button id="async-value">Set asynchronous value</button>
+    <output id="async-output" aria-label="Asynchronous value">idle</output>
+    <button id="removable-target">Removable target</button>
+    <button id="remove-target">Remove target</button>
+    <iframe id="same-frame" title="Same-origin dialog frame" src="frame.html"></iframe>
+    <iframe id="cross-frame" title="Cross-origin dialog frame"></iframe>
+  </main>
+  <script>
+    const keyLog = document.querySelector("#key-log");
+    const pointerLog = document.querySelector("#pointer-log");
+    const keyEvents = [];
+    const pointerEvents = [];
+    const recordKey = (event) => {
+      keyEvents.push({
+        type: event.type,
+        key: event.key,
+        code: event.code,
+        keyCode: event.keyCode,
+        which: event.which,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      });
+      keyLog.value = JSON.stringify(keyEvents);
+    };
+    for (const type of ["keydown", "keypress", "keyup", "input"]) {
+      document.querySelector("#keyboard-target").addEventListener(type, recordKey);
+    }
+    const recordPointer = (event) => {
+      pointerEvents.push({ type: event.type, button: event.button, buttons: event.buttons });
+      pointerLog.value = JSON.stringify(pointerEvents);
+    };
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      document.addEventListener(type, recordPointer, true);
+    }
+    document.querySelector("#dialog-mousedown").addEventListener("mousedown", () => alert("mousedown-dialog"));
+    document.querySelector("#dialog-mouseup").addEventListener("mouseup", () => alert("mouseup-dialog"));
+    document.querySelector("#dialog-click").addEventListener("click", () => alert("click-dialog"));
+    document.querySelector("#async-value").addEventListener("click", () => {
+      queueMicrotask(() => { document.querySelector("#async-output").textContent = "settled-without-delay"; });
+    });
+    document.querySelector("#remove-target").addEventListener("click", () => document.querySelector("#removable-target")?.remove());
+    const frameOrigin = new URL(location.href).searchParams.get("frameOrigin");
+    document.querySelector("#cross-frame").src = frameOrigin ? `${frameOrigin}/frame.html?cross=1` : "frame.html?cross=1";
+  </script>
+</body>
+</html>

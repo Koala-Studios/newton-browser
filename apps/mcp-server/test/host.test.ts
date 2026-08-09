@@ -45,6 +45,17 @@ test("browser.status defaults to compact and keeps full diagnostics explicit", a
   assert.equal(Array.isArray(full.json.protocolVersions), true);
   assert.equal("eligibleClientCount" in full.json, true);
   assert.equal(full.json.contractVersion, "1.0");
+  assert.deepEqual(full.json.commandMetrics, {
+    created: 0,
+    sent: 0,
+    settled: 0,
+    maxQueueDepth: 0,
+    lateResultsAccepted: 0,
+    outcomes: { completed: 0, prevented: 0, not_started: 0, outcome_unknown: 0 },
+    queueWaitMs: { count: 0, p50: 0, p95: 0, max: 0 },
+    executionMs: { count: 0, p50: 0, p95: 0, max: 0 },
+  });
+  assert.deepEqual(full.json.sessionDiagnostics, []);
 });
 
 test("session start requires an exact origin and waits for authenticated extension attachment", async () => {
@@ -891,6 +902,21 @@ test("per-session dispatch is serialized in FIFO order", async () => {
     assert.equal(thirdResult.outcome, "completed");
     assert.equal(secondWire.command.sequence, 2);
     assert.equal(thirdWire.command.sequence, 3);
+    const diagnostics = bridge.getStatus();
+    assert.equal(diagnostics.commandMetrics.created, 3);
+    assert.equal(diagnostics.commandMetrics.sent, 3);
+    assert.equal(diagnostics.commandMetrics.settled, 3);
+    assert.equal(diagnostics.commandMetrics.maxQueueDepth, 2);
+    assert.equal(diagnostics.commandMetrics.outcomes.completed, 3);
+    assert.equal(diagnostics.commandMetrics.queueWaitMs.count, 3);
+    assert.equal(diagnostics.commandMetrics.executionMs.count, 3);
+    assert.deepEqual(diagnostics.sessionDiagnostics.map((entry) => ({
+      sessionId: entry.sessionId,
+      queueDepth: entry.queueDepth,
+      queuedBytes: entry.queuedBytes,
+      running: entry.running,
+      oldestQueuedMs: entry.oldestQueuedMs,
+    })), [{ sessionId, queueDepth: 0, queuedBytes: 0, running: null, oldestQueuedMs: 0 }]);
   } finally {
     socket.close();
     await bridge.close();

@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { TASK_EXPECT_STATUSES, actionRequiresTarget, coerceParsedEvalTask, parseEvalPath } from "./schema.mjs";
 const STEP_STATUSES = new Set(TASK_EXPECT_STATUSES);
 const RESOLUTION_STATUSES = new Set(["resolved", "not_found", "ambiguous", "runner_contract_invalid"]);
@@ -59,7 +63,16 @@ const TARGET_HINT_LIMITS = Object.freeze({
   selector: LIMITS.targetSelector,
 });
 const FALLBACK_CODE = "runner_contract_invalid";
+const HERMETIC_DIRECTORY_NAMES = Object.freeze(["home", "config", "cache", "profile", "downloads", "output"]);
+
 export async function replayTask(rawTask, options = {}) {
+  return withHermeticEvalRoots(
+    (hermeticRoots) => replayTaskInHermeticRoots(rawTask, { ...options, hermeticRoots }),
+    options.hermetic,
+  );
+}
+
+async function replayTaskInHermeticRoots(rawTask, options) {
   const task = coerceParsedEvalTask(rawTask, options.label ?? "task");
   const runner = options.runner;
   if (typeof runner !== "function") {
@@ -68,7 +81,14 @@ export async function replayTask(rawTask, options = {}) {
   const fixtureAdapter = options.fixtureAdapter ?? {};
   const resolveRef = fixtureAdapter.resolveRef ?? options.resolveRef ?? fixtureResolveRef;
   const now = options.now ?? Date.now;
-  const context = { taskId: task.id, fixture: task.fixture, grant: task.grant, state: {} };
+  const context = {
+    taskId: task.id,
+    fixture: task.fixture,
+    grant: task.grant,
+    state: {},
+    hermetic: options.hermeticRoots,
+    recordLocalWrite: options.hermeticRoots.recordWrite,
+  };
   const steps = [];
   const startedAt = now();
   let setupFailure;
@@ -132,6 +152,50 @@ export async function replayTasks(tasks, options = {}) {
     results.push(await replayTask(task, { ...options, label: task?.id ?? "task" }));
   }
   return results;
+}
+
+export async function withHermeticEvalRoots(callback, options = {}) {
+  if (typeof callback !== "function") throw new TypeError("withHermeticEvalRoots requires a callback");
+  const parent = path.resolve(options.parent ?? os.tmpdir());
+  const root = await fs.promises.mkdtemp(path.join(parent, "newton-browser-eval-"));
+  const recordedWrites = [];
+  const directories = Object.fromEntries(HERMETIC_DIRECTORY_NAMES.map((name) => [name, path.join(root, name)]));
+  try {
+    await Promise.all(Object.values(directories).map((directory) => fs.promises.mkdir(directory, { recursive: false })));
+    const roots = Object.freeze({
+      root,
+      ...directories,
+      recordWrite(value) {
+        const candidate = validateHermeticPath(value, root, "local write");
+        recordedWrites.push(candidate);
+        return candidate;
+      },
+    });
+    const result = await callback(roots);
+    if (typeof options.beforeCleanup === "function") await options.beforeCleanup(roots, result);
+    for (const recorded of recordedWrites) validateHermeticPath(recorded, root, "recorded local write");
+    return result;
+  } finally {
+    validateOwnedTempRoot(root, parent);
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+}
+
+function validateHermeticPath(value, root, label) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} path required`);
+  const candidate = path.resolve(value);
+  const relative = path.relative(root, candidate);
+  if (relative === "" || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    throw new Error(`${label} escaped hermetic root`);
+  }
+  return candidate;
+}
+
+function validateOwnedTempRoot(root, parent) {
+  const relative = path.relative(parent, root);
+  if (!relative.startsWith("newton-browser-eval-") || relative.includes(path.sep) || path.isAbsolute(relative)) {
+    throw new Error("refusing to remove unowned eval root");
+  }
 }
 async function runStep({
   index,

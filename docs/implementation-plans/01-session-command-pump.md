@@ -1,6 +1,6 @@
 # Plan 01: Per-Session Command Pump, Fencing, and Idempotency
 
-- Status: approval required
+- Status: approved; deterministic and packed implementation complete, live acceptance pending
 - Classification: core execution foundation
 - Dependencies: none
 - Primary owners: core protocol, MCP bridge, extension controller
@@ -56,12 +56,12 @@ Timeout rules are exact:
 
 | Operation | File | Purpose |
 | --- | --- | --- |
-| add | `packages/driver/src/session-command-pump.js` | FIFO queue, close barrier, byte/item bounds |
+| add | `packages/driver/src/session-command-pump.ts` | FIFO queue, close barrier, byte/item bounds |
 | add | `packages/driver/test/session-command-pump.test.js` | isolated ordering/fairness/finalize tests |
 | edit | `packages/core/src/protocol.ts` | public outcomes and act-result fields |
 | edit | `packages/core/src/transport.ts` | epoch/sequence/idempotency relay types |
 | edit | `packages/core/src/action-schema.ts` | validate the idempotency key at the public boundary |
-| edit | `packages/driver/src/controller.js` | one pump per `SessionController`; enqueue subscription callbacks |
+| edit | `packages/driver/src/controller.ts` | one pump per `SessionController`; enqueue subscription callbacks |
 | edit | `apps/mcp-server/src/bridge.ts` | one in-flight dispatch per session, result ledger, late-result tombstones |
 | edit | `apps/mcp-server/src/mcp-server.ts` | expose/forward `idempotencyKey`; map outcomes |
 | edit | `packages/driver/test/controller.test.ts` | same-session and cross-session concurrency regressions |

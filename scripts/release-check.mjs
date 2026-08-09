@@ -4,7 +4,8 @@ import net from "node:net";
 // `build` runs before `typecheck`/`test`: @newton-browser/core resolves its types and
 // runtime entry from dist, so tsc and the by-name package imports in the test suite
 // need the workspace built first.
-for (const command of ["build", "lint", "typecheck", "test", "extension:artifact", "pack:check", "smoke:quick", "smoke:matrix", "smoke:chaos", "smoke:multi-client", "smoke:clean-user"]) {
+const stages = ["build", "lint", "typecheck", "test", "eval", "eval:agent-cost", "extension:artifact", "pack:check", "smoke:quick", "smoke:matrix", "smoke:chaos", "smoke:multi-client", "smoke:clean-user"];
+for (const command of stages) {
   const executable = process.env.npm_execpath ? process.execPath : "pnpm";
   const args = process.env.npm_execpath ? [process.env.npm_execpath, command] : [command];
   const timeout = command === "smoke:chaos" ? 420_000 : 300_000;
@@ -15,7 +16,7 @@ for (const command of ["build", "lint", "typecheck", "test", "extension:artifact
 const occupied = [];
 for (let port = 17321; port <= 17340; port += 1) if (await canConnect(port)) occupied.push(port);
 if (occupied.length) throw new Error(`orphan Newton Browser host ports remain: ${occupied.join(", ")}`);
-process.stdout.write(`${JSON.stringify({ ok: true, stages: 11, orphanHostPorts: 0 })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, stages: stages.length, orphanHostPorts: 0 })}\n`);
 
 function canConnect(port) {
   return new Promise((resolve) => {

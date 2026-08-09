@@ -30,6 +30,13 @@ test("doctor reports runtime, config, loopback, protocol, extension state, and n
     assert.equal(report.checks.loopback.incumbents.length, 1);
     assert.equal(report.checks.extension.state, "disconnected");
     assert.equal(report.checks.protocol.supported.includes("2025-06-18"), true);
+    assert.deepEqual(report.checks.framing, {
+      ok: true,
+      headerBytes: 16 * 1024,
+      bodyBytes: 4 * 1024 * 1024,
+      bufferBytes: 4 * 1024 * 1024 + 16 * 1024,
+      bufferedBytes: 0,
+    });
     assert.equal(report.nextAction, "load_or_pair_extension");
   } finally {
     await host.close();

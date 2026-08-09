@@ -223,6 +223,23 @@ test("geometry appears only when includeGeometry is true", () => {
   assert.equal((projection.projection.nodes as any)[0].geometry !== undefined, true);
 });
 
+test("compact and JSON observations preserve bounded excluded-frame provenance", () => {
+  const input = {
+    ...sample,
+    excludedFrames: [
+      { frameId: "frame-cross", frameOrigin: "https://cross.example", reason: "origin_not_granted" },
+      { frameId: "", frameOrigin: "https://ignored.example", reason: "origin_not_granted" },
+    ],
+  };
+  const compact = projectCompactObservation(input);
+  const json = projectLeanObservation(input);
+  assert.equal(compact.ok, true);
+  assert.equal(json.ok, true);
+  const expected = [{ frameId: "frame-cross", frameOrigin: "https://cross.example", reason: "origin_not_granted" }];
+  assert.deepEqual(compact.projection.excludedFrames, expected);
+  assert.deepEqual(json.projection.excludedFrames, expected);
+});
+
 test("compact and lean projections preserve rich state and target provenance", () => {
   const rich = {
     ...sample,

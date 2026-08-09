@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { TASK_EXPECT_STATUSES, TASK_TOOLS, sanitizeFixturePath } from "./schema.mjs";
 const S = new Set(TASK_EXPECT_STATUSES);
 const T = new Set(TASK_TOOLS);
@@ -5,6 +8,7 @@ const E = new Set("runner_contract_invalid setup_failed teardown_failed target_r
 const K = new Set(["observation", "observation_delta", "observation_text", "screenshot", "console_log", "network_log", "ack"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,120}$/;
 const R = Object.freeze({taskCount: 256, stepCount: 256, matchCount: 128 * 1024, runId: 120, taskId: 120, fixture: 240});
+const LOCAL_REPORT_LIMITS = Object.freeze({ machineBytes: 4 * 1024 * 1024, markdownBytes: 1024 * 1024 });
 
 export function buildMachineReport(taskResults, options = {}) {
   const { tasks, passed } = normalizeTaskSet(taskResults);
@@ -24,6 +28,38 @@ export function renderMarkdownReport(machineReport) {
     lines.push("");
   }
   return lines.join("\n");
+}
+
+export async function writeLocalEvalReports(machineReport, options = {}) {
+  if (typeof options.outputRoot !== "string" || options.outputRoot.trim() === "") {
+    throw new Error("eval report output root is required");
+  }
+  const outputRoot = await fs.promises.realpath(path.resolve(options.outputRoot));
+  const baseName = normalizeIdentifier(options.baseName, "eval-report");
+  const machine = `${serializeMachineReport(machineReport)}\n`;
+  const markdown = `${renderMarkdownReport(machineReport)}\n`;
+  assertReportBound(machine, LOCAL_REPORT_LIMITS.machineBytes, "machine report");
+  assertReportBound(markdown, LOCAL_REPORT_LIMITS.markdownBytes, "markdown report");
+  const machinePath = localReportPath(outputRoot, `${baseName}.json`);
+  const markdownPath = localReportPath(outputRoot, `${baseName}.md`);
+  await fs.promises.writeFile(machinePath, machine, { encoding: "utf8", flag: "wx" });
+  await fs.promises.writeFile(markdownPath, markdown, { encoding: "utf8", flag: "wx" });
+  return Object.freeze({
+    machinePath,
+    markdownPath,
+    machineBytes: Buffer.byteLength(machine, "utf8"),
+    markdownBytes: Buffer.byteLength(markdown, "utf8"),
+  });
+}
+
+function localReportPath(outputRoot, filename) {
+  const target = path.resolve(outputRoot, filename);
+  if (path.dirname(target) !== outputRoot) throw new Error("eval report escaped output root");
+  return target;
+}
+
+function assertReportBound(value, maxBytes, label) {
+  if (Buffer.byteLength(value, "utf8") > maxBytes) throw new Error(`${label} exceeds local byte limit`);
 }
 
 function normalizeMachineReport(input) {
