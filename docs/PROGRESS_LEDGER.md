@@ -40,7 +40,7 @@ future implementation until the corresponding plan, tests, and evidence have lan
 | AIP-06 | [Agent output efficiency](implementation-plans/06-agent-output-efficiency.md) | AIP-01 result contract | APPROVED | queued behind AIP-01 result contract | pending |
 | AIP-07 | [MCP contract, provenance, and privacy](implementation-plans/07-mcp-contract-provenance-and-privacy.md) | AIP-04, AIP-06 | APPROVED | queued behind AIP-04/AIP-06 contracts | pending |
 | AIP-08 | [Driver TypeScript hardening](implementation-plans/08-driver-typescript-hardening.md) | AIP-01–AIP-07 stable | APPROVED | queued behind stable AIP-01 through AIP-07 behavior | pending |
-| AIP-09 | [Regression evals, observability, and release](implementation-plans/09-regression-evals-observability-and-release.md) | incremental; closes after AIP-08 | APPROVED | IN PROGRESS — W4 eval foundation; final closure pending AIP-01–AIP-08 | pending |
+| AIP-09 | [Regression evals, observability, and release](implementation-plans/09-regression-evals-observability-and-release.md) | incremental; closes after AIP-08 | APPROVED | IN PROGRESS — reviewed deterministic schema/replay/report foundation integrated; corpus, metrics, release wiring, and final closure pending | `78d7bb5`; focused eval evidence `30/30`; final gates pending |
 
 ## Program acceptance gates
 
@@ -86,6 +86,7 @@ include quarantined worker commits or satisfy the final packed-artifact release 
 | Check | Result | Date | Evidence |
 | --- | --- | --- | --- |
 | `pnpm test` | pass | 2026-08-08 | 203 tests: 201 passed, the same 2 platform-specific persistent-socket tests skipped, 0 failed after command-pump, transaction, and bounded-framing integration |
+| `node --test test/evals/replay.test.mjs` | pass | 2026-08-08 | 30 tests passed, 0 failed; strict schema, replay lifecycle, forbidden effects, privacy projection, forged-report integrity, and hard report caps |
 
 ## Historical product work
 
@@ -119,3 +120,4 @@ authorize public actions and are not silently folded into this engineering audit
 | 2026-08-08 | Independently reviewed and integrated the session transaction and command pump primitives after returning failing first drafts for correction. Focused regressions pass (`16/16` transaction, `11/11` pump); root lint and typecheck pass. Reused the same W1/W2 tasks for controller and host-contract integration. | `6be1ef3`; `53f5090`; focused Node tests |
 | 2026-08-08 | Integrated the bounded MCP parser and replaced the unbounded inline server parser after four adversarial review passes. Root framing integration passes `32/32` including exact caps, fragmented backlog efficiency, async callback ordering, typed EOF errors, mixed framing, and end/close races; root typecheck passes. Reused W3 for the non-overlapping AIP-03 registry primitive. | `7451008`–`98b3b2f`; `apps/mcp-server/test/framing.test.ts` |
 | 2026-08-08 | Re-ran the complete accepted integration suite after framing landed: 201 passed, 2 existing platform-specific persistent-socket tests skipped, and 0 failed. W1 controller, W2 host dispatch, W3 registry, and W4 eval drafts remain isolated pending independent correction and review. | `pnpm test`; 203 total tests |
+| 2026-08-08 | Integrated the provider-independent eval foundation after repeated adversarial review of malformed tasks, async fixture lifecycle, semantic ref resolution, forbidden-effect matching, report privacy/integrity, fixture path safety, and bounded task/step output. Focused evals pass `30/30`; root lint, typecheck, and the existing 203-test suite pass. The new eval suite is not yet wired into the root test/release scripts, so AIP-09 remains in progress. Reused W4 for the next non-overlapping output-efficiency slice. | `78d7bb5`; `test/evals/replay.test.mjs` |
