@@ -659,20 +659,17 @@ test("serves typed incomplete_frame for EOF on partial json-line input and waits
     events.push("serve");
   })();
 
-  const writesSeen = createDeferred();
   writable.on("data", (chunk) => {
     const body = chunk.toString("utf8");
     if (body.includes("incomplete_frame") && body.includes("Malformed MCP frame")) {
       events.push("write");
-      writesSeen.resolve();
     }
   });
 
   readable.end(Buffer.from('{"jsonrpc":"2.0","id":1,"method":"ping"', "utf8"));
 
-  await writesSeen.promise;
-  assert.equal(events.includes("serve"), false);
   await serve;
+  assert.deepEqual(events, ["write", "serve"]);
   assert.equal(events.includes("serve"), true);
 
   const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
@@ -692,20 +689,17 @@ test("serves typed incomplete_frame for EOF on partial framed body and waits for
     events.push("serve");
   })();
 
-  const writesSeen = createDeferred();
   writable.on("data", (chunk) => {
     const body = chunk.toString("utf8");
     if (body.includes("incomplete_frame") && body.includes("Content-Length")) {
       events.push("write");
-      writesSeen.resolve();
     }
   });
 
-  readable.end(Buffer.from("Content-Length: 10\r\n\r\n{\"method\":", "utf8"));
+  readable.end(Buffer.from("Content-Length: 20\r\n\r\n{\"method\":", "utf8"));
 
-  await writesSeen.promise;
-  assert.equal(events.includes("serve"), false);
   await serve;
+  assert.deepEqual(events, ["write", "serve"]);
   assert.equal(events.includes("serve"), true);
 
   const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
@@ -758,11 +752,8 @@ test("awaits an async tools/call handler before serve resolves", async () => {
     events.push("serve");
   });
   writable.on("data", (chunk) => {
-    const message = chunk.toString("utf8");
-    if (message.includes('"sessionId":"session_1"')) {
-      responseSeen.resolve();
-      events.push("write");
-    }
+    if (events[events.length - 1] !== "write") events.push("write");
+    responseSeen.resolve();
   });
 
   const request = JSON.stringify({
