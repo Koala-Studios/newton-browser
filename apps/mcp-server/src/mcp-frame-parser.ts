@@ -52,8 +52,8 @@ const ERROR_MESSAGES: Record<McpFrameParseErrorCode, string> = {
 };
 
 export class McpFrameParser {
-  private buffer = Buffer.alloc(0);
-  private pendingChunks: Buffer[] = [];
+  private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  private pendingChunks: Buffer<ArrayBufferLike>[] = [];
   private pendingByteCount = 0;
   private expectedBodyLength: number | null = null;
   private terminal = false;
@@ -80,7 +80,7 @@ export class McpFrameParser {
     return this.terminal;
   }
 
-  push(chunk: Buffer): void {
+  push(chunk: Buffer<ArrayBufferLike>): void {
     if (this.terminal || chunk.length === 0) return;
 
     const retained = this.bufferedByteCount;
@@ -346,7 +346,7 @@ export class McpFrameParser {
     );
   }
 
-  private peekMode(sample: Buffer): McpMessageMode {
+  private peekMode(sample: Buffer<ArrayBufferLike>): McpMessageMode {
     for (let index = 0; index < sample.length; index += 1) {
       const value = sample[index];
       if (this.isWhitespace(value)) continue;
@@ -355,7 +355,11 @@ export class McpFrameParser {
     return "json-line";
   }
 
-  private peekModeAcrossBuffers(first: Buffer, pending: Buffer[], second: Buffer): McpMessageMode {
+  private peekModeAcrossBuffers(
+    first: Buffer<ArrayBufferLike>,
+    pending: Buffer<ArrayBufferLike>[],
+    second: Buffer<ArrayBufferLike>,
+  ): McpMessageMode {
     let remaining = MODE_SCAN_LIMIT;
     for (let index = 0; index < first.length && remaining > 0; index += 1) {
       const value = first[index];
@@ -398,7 +402,7 @@ export class McpFrameParser {
       const next = this.pendingChunks[0];
       this.buffer = this.buffer.length === 0 ? next : Buffer.concat([this.buffer, next], totalLength);
     } else {
-      const chunks = [this.buffer, ...this.pendingChunks];
+      const chunks: Buffer<ArrayBufferLike>[] = [this.buffer, ...this.pendingChunks];
       this.buffer = Buffer.concat(chunks, totalLength);
     }
 
