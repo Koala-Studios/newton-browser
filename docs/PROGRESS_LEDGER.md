@@ -13,7 +13,7 @@ under [`../test/evidence/`](../test/evidence/).
 | Baseline release | `0.4.5` |
 | Baseline commit | `a6ff306` (`v0.4.5`) |
 | Program opened | 2026-08-08 |
-| Runtime implementation | Not started; conversational approval required |
+| Runtime implementation | In progress under the owner-approved AIP-01 through AIP-09 program goal |
 | Active planning source | `docs/implementation-plans/README.md` and Plans 01–09 |
 | Superseded source | Deleted monolithic `docs/IMPLEMENTATION_PLAN.md` |
 
@@ -32,14 +32,14 @@ future implementation until the corresponding plan, tests, and evidence have lan
 
 | ID | Plan | Dependency | Plan | Implementation | Completion evidence |
 | --- | --- | --- | --- | --- | --- |
-| AIP-01 | [Session command pump](implementation-plans/01-session-command-pump.md) | none | APPROVED | IN PROGRESS — W1 primitive; integrator owns protocol/controller/bridge | pending |
-| AIP-02 | [Transactional lifecycle and framing](implementation-plans/02-transactional-lifecycle-and-framing.md) | AIP-01 contract types | APPROVED | IN PROGRESS — W2 transaction + W3 framing; integrator owns lifecycle integration | pending |
-| AIP-03 | [Target/frame/session registry](implementation-plans/03-target-frame-session-registry.md) | AIP-01, AIP-02 | AUTHORED | awaiting approval | pending |
-| AIP-04 | [Preventive origin containment](implementation-plans/04-preventive-origin-containment.md) | AIP-03 | AUTHORED | awaiting approval | pending |
-| AIP-05 | [Input and renderer reliability](implementation-plans/05-input-and-renderer-reliability.md) | AIP-01, AIP-03 | AUTHORED | awaiting approval | pending |
-| AIP-06 | [Agent output efficiency](implementation-plans/06-agent-output-efficiency.md) | AIP-01 result contract | AUTHORED | awaiting approval | pending |
-| AIP-07 | [MCP contract, provenance, and privacy](implementation-plans/07-mcp-contract-provenance-and-privacy.md) | AIP-04, AIP-06 | AUTHORED | awaiting approval | pending |
-| AIP-08 | [Driver TypeScript hardening](implementation-plans/08-driver-typescript-hardening.md) | AIP-01–AIP-07 stable | AUTHORED | awaiting approval | pending |
+| AIP-01 | [Session command pump](implementation-plans/01-session-command-pump.md) | none | APPROVED | IN PROGRESS — reviewed primitive integrated; W1 controller integration + W2 host contracts active | `53f5090`; host/controller evidence pending |
+| AIP-02 | [Transactional lifecycle and framing](implementation-plans/02-transactional-lifecycle-and-framing.md) | AIP-01 contract types | APPROVED | IN PROGRESS — reviewed transaction primitive integrated; W3 framing correction active; lifecycle integration pending | `6be1ef3`; framing/lifecycle evidence pending |
+| AIP-03 | [Target/frame/session registry](implementation-plans/03-target-frame-session-registry.md) | AIP-01, AIP-02 | APPROVED | queued behind AIP-01/AIP-02 shared contracts | pending |
+| AIP-04 | [Preventive origin containment](implementation-plans/04-preventive-origin-containment.md) | AIP-03 | APPROVED | queued behind AIP-03 registry | pending |
+| AIP-05 | [Input and renderer reliability](implementation-plans/05-input-and-renderer-reliability.md) | AIP-01, AIP-03 | APPROVED | queued behind AIP-01/AIP-03 execution contracts | pending |
+| AIP-06 | [Agent output efficiency](implementation-plans/06-agent-output-efficiency.md) | AIP-01 result contract | APPROVED | queued behind AIP-01 result contract | pending |
+| AIP-07 | [MCP contract, provenance, and privacy](implementation-plans/07-mcp-contract-provenance-and-privacy.md) | AIP-04, AIP-06 | APPROVED | queued behind AIP-04/AIP-06 contracts | pending |
+| AIP-08 | [Driver TypeScript hardening](implementation-plans/08-driver-typescript-hardening.md) | AIP-01–AIP-07 stable | APPROVED | queued behind stable AIP-01 through AIP-07 behavior | pending |
 | AIP-09 | [Regression evals, observability, and release](implementation-plans/09-regression-evals-observability-and-release.md) | incremental; closes after AIP-08 | APPROVED | IN PROGRESS — W4 eval foundation; final closure pending AIP-01–AIP-08 | pending |
 
 ## Program acceptance gates
@@ -107,3 +107,4 @@ authorize public actions and are not silently folded into this engineering audit
 | --- | --- | --- |
 | 2026-08-08 | Completed the code-level comparative audit and authored AIP-01 through AIP-09. Replaced the stale WS0–WS12 execution ledger with this approval-gated program ledger. No runtime code was changed. | `docs/AGENT_BROWSER_COMPARATIVE_AUDIT.md`; `docs/implementation-plans/` |
 | 2026-08-08 | Owner approved the complete implementation program. Started four isolated GPT-5.3 Codex Spark worktrees: W1 command-pump primitive (`019fe444-277a-7322-b1a4-3ef54d170ff7`), W2 transaction primitive (`019fe444-278b-73c0-9d42-a32ad8a640d3`), W3 bounded framing (`019fe444-32c8-74b0-9ff8-19c6448c2d9e`), and W4 eval foundation (`019fe444-32f3-7783-92a7-8d643ade56f6`). Shared integration files remain orchestrator-owned. | `orchestrator_guide.md`; Codex thread worktrees |
+| 2026-08-08 | Independently reviewed and integrated the session transaction and command pump primitives after returning failing first drafts for correction. Focused regressions pass (`16/16` transaction, `11/11` pump); root lint and typecheck pass. Reused the same W1/W2 tasks for controller and host-contract integration. | `6be1ef3`; `53f5090`; focused Node tests |
