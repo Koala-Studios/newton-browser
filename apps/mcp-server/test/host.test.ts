@@ -52,7 +52,7 @@ test("session start requires an exact origin and waits for authenticated extensi
 
     const started = await toolCall(bridge, "browser.session.start", {
       origin: "https://example.com",
-      allowedOrigins: ["https://example.com"],
+      allowedOrigins: ["https://api.example.com"],
       tabMode: "owned_group",
     });
     assert.equal(started.isError, false);
@@ -60,6 +60,7 @@ test("session start requires an exact origin and waits for authenticated extensi
     assert.equal(started.json.session.liveOrigin, "https://example.com");
     assert.equal(started.json.session.attached, true);
     assert.equal(started.json.session.lifecycleState, "active");
+    assert.deepEqual(started.json.session.allowedOrigins, ["https://example.com", "https://api.example.com"]);
   } finally {
     extension.close();
     await bridge.close();

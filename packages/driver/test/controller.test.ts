@@ -335,6 +335,10 @@ test("BridgeRuntime rolls back every owned-session start failure stage", async (
     if (stage === "create_host") {
       assert.equal(order.some((item) => item.startsWith("stop_host:")), false);
       assert.equal(order.includes("detach_debugger"), false);
+    } else if (stage === "verify_origin") {
+      assert.equal(order.includes(`stop_host:failure-${stage}`), true);
+      assert.equal(order.includes("attach_debugger"), false, "origin preflight must reject before debugger attachment");
+      assert.equal(order.includes("detach_debugger"), false);
     } else {
       assert.equal(order.includes(`stop_host:failure-${stage}`), true);
       assert.equal(order.includes("detach_debugger"), true);
@@ -706,6 +710,32 @@ test("BridgeRuntime forwards debugger events into the active driver", async () =
   await runtime.handleDebuggerEvent({ tabId: 101 }, "Target.attachedToTarget", { sessionId: "child" });
   assert.equal(runtime.snapshot().lifecycleState, "degraded");
   assert.equal(runtime.snapshot().routingErrorCode, "child_routing_unavailable");
+});
+
+test("BridgeRuntime reports explicit navigation preflight as prevented without executing", async () => {
+  let executed = false;
+  const harness = createControllerHarness({
+    driverOverrides: {
+      containmentReady: true,
+      preflightAction(action: { kind?: string }) {
+        if (action.kind === "navigate") throw Object.assign(new Error("ungranted_navigation"), { code: "ungranted_navigation" });
+      },
+      async executeAction() {
+        executed = true;
+        return { status: "verified", changed: {} };
+      },
+    },
+  });
+  const sessionId = await harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
+  const handler = harness.getCommandHandler(sessionId);
+  assert.ok(handler);
+  const command = { commandId: "nav-denied", sessionId, actionKind: "navigate", action: { kind: "navigate", url: "https://denied.test" }, sessionEpoch: 1, sequence: 1 };
+  await handler?.(command);
+  const result = await harness.awaitCommandResult("nav-denied") as any;
+  assert.equal(executed, false);
+  assert.equal(result.errorCode, "ungranted_navigation");
+  assert.equal(result.outcome, "prevented");
+  assert.equal(result.retrySafe, true);
 });
 
 test("BridgeRuntime binds host sessions once when ensure runs concurrently", async () => {
@@ -1818,6 +1848,25 @@ test("BridgeRuntime posts finalize result after local cleanup and before host st
   assert.ok(order.indexOf("stopSession") > order.indexOf("postResult"));
   assert.equal(order.filter((item) => item === "postResult").length, 1);
   assert.deepEqual(notifications, ["finalized", "state"]);
+});
+
+test("BridgeRuntime preflights a new current-tab session before debugger attachment", async () => {
+  let attached = false;
+  const harness = createControllerHarness({
+    tabsOverrides: {
+      async getTab() { return { id: 202, url: "https://outside.test/private" }; },
+    },
+    driverOverrides: {
+      async attach() { attached = true; },
+    },
+  });
+  await assert.rejects(
+    harness.runtime.startSession({ tabId: 202, origin: "https://example.com", tabMode: "current" }),
+    /origin_not_granted/,
+  );
+  assert.equal(attached, false);
+  assert.equal(harness.runtime.snapshot().count, 0);
+  assert.deepEqual(harness.transport.stopCalls, ["s-session"]);
 });
 
 test("BridgeRuntime contains synchronous host-stop failures after a terminal finalize result", async () => {

@@ -656,7 +656,8 @@ function writeMessage(writable: Writable, message: JsonRpcResponse, mode: Messag
 function normalizeAllowedOrigins(value: unknown, origin: string): string[] {
   if (value === undefined) return [origin];
   if (!Array.isArray(value) || value.length === 0) throw new Error("invalid_origin");
-  return [...new Set(value.map(requiredHttpOrigin))];
+  if (value.length + 1 > 32) throw new Error("invalid_origin");
+  return [...new Set([origin, ...value.map(requiredHttpOrigin)])];
 }
 
 function requiredHttpOrigin(value: unknown): string {

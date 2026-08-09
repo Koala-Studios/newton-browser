@@ -96,6 +96,9 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
   if (input.signals?.crossOrigin) {
     return blocked(["cross_origin_target"], "none", [{ kind: "crossOrigin", value: true }]);
   }
+  if (input.signals?.containmentPrevention) {
+    return blocked([input.signals.containmentPrevention], "none", [{ kind: "containmentPrevention", value: true }]);
+  }
 
   if (["navigate", "back", "forward", "reload"].includes(input.action.kind)) {
     // Navigation within granted origins is non-committing (§7).

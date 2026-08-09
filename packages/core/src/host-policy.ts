@@ -47,6 +47,26 @@ export function normalizeOrigin(value: unknown): string {
   return redactBrowserOrigin(value);
 }
 
+// Session grants are stricter than display/policy URL normalization: callers
+// must provide an exact HTTP(S) origin, never a path, wildcard, or credentialed URL.
+export function normalizeHttpOrigin(value: unknown): string {
+  if (typeof value !== "string" || !value || value.length > 512 || /[\u0000-\u001f\u007f*]/.test(value)) return "";
+  try {
+    const url = new URL(value);
+    if (
+      !["http:", "https:"].includes(url.protocol)
+      || url.username
+      || url.password
+      || url.pathname !== "/"
+      || url.search
+      || url.hash
+    ) return "";
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
 export function hostMatchesBrowserPolicy(input: {
   origin: string;
   policy: BrowserHostPolicy;

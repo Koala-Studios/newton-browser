@@ -11,6 +11,7 @@
 // fire-and-forget and NEVER gates execution (§5.1).
 
 import { TargetRegistry } from "./target-registry.js";
+import { compileOriginGrant, decidePausedRequest, decidePausedTarget } from "./origin-containment.js";
 
 const CDP_VERSION = "1.3";
 const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Network", "Log"];
@@ -78,6 +79,11 @@ class NewtonBrowserDriver {
     this.allowedOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.containment = this.allowedOrigins.length
+      ? compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1))
+      : null;
+    this.containmentReady = false;
+    this.heldTargets = new Map();
   }
 
   isAttachedTo(tabId) {
@@ -87,6 +93,7 @@ class NewtonBrowserDriver {
   async attach(tabId) {
     if (this.attached && this.tabId === tabId) return;
     if (this.attached) await this.detach();
+    this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
     await chrome.debugger.attach({ tabId }, CDP_VERSION);
     this.tabId = tabId;
     this.attached = true;
@@ -94,19 +101,21 @@ class NewtonBrowserDriver {
     for (const domain of CDP_DOMAINS) {
       await this.cdp(`${domain}.enable`, {});
     }
+    await this.installContainment({});
     // Owned tabs stay inactive so they never steal the user's focus. Chrome
     // otherwise accepts pointer/key CDP commands for a background tab while
     // dropping their press/release events. Focus emulation makes only this
     // debugger target behave as active without activating the visible tab.
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
     // Child frames / popups attach to the same session (§7.5).
-    await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: false });
+    await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: true });
     await this.calibrate();
     // Re-apply a caller-chosen viewport (WS9.6) that a re-attach would otherwise drop.
     if (this.sessionViewport) {
       await this.cdp("Emulation.setDeviceMetricsOverride", { width: this.sessionViewport.width, height: this.sessionViewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
     }
     await this.reassertOverlay();
+    this.containmentReady = true;
   }
 
   // (Re)inject the overlay and re-announce the driving indicator. Called on attach
@@ -129,6 +138,9 @@ class NewtonBrowserDriver {
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.containment = null;
+    this.containmentReady = false;
+    this.heldTargets.clear();
   }
 
   // Chrome detached the debugger underneath us (e.g. a cross-process navigation
@@ -140,6 +152,9 @@ class NewtonBrowserDriver {
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.containment = null;
+    this.containmentReady = false;
+    this.heldTargets.clear();
   }
 
   recordDebuggerEvent(sourceOrMethod, methodOrParams = {}, eventParams = {}) {
@@ -266,10 +281,46 @@ class NewtonBrowserDriver {
       });
       await this.cdp(
         "Target.setAutoAttach",
-        { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+        { autoAttach: true, flatten: true, waitForDebuggerOnStart: true },
         { sessionId: params.sessionId },
       );
       for (const domain of CDP_DOMAINS) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
+      const route = { sessionId: params.sessionId };
+      await this.installContainment(route);
+      const parent = parentTargetId ? this.targetRegistry.listObservationRoutes().find((candidate) => candidate.targetId === parentTargetId) : null;
+      const targetDecision = decidePausedTarget({ url: info.url, initiatorUrl: parent?.origin }, this.containment);
+      if (targetDecision.action === "resume") {
+        await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
+      } else {
+        this.heldTargets.set(targetId, { targetId, sessionId: params.sessionId, type, reason: targetDecision.reason });
+        if (targetDecision.action === "block" && this.ownsTab && type !== "iframe") {
+          await this.cdp("Target.closeTarget", { targetId });
+        }
+      }
+      return;
+    }
+    if (method === "Target.targetInfoChanged" && params?.targetInfo?.targetId) {
+      const held = this.heldTargets.get(params.targetInfo.targetId);
+      if (!held) return;
+      const targetDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment);
+      if (targetDecision.action === "resume") {
+        this.heldTargets.delete(held.targetId);
+        await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: held.sessionId });
+      } else if (targetDecision.action === "block" && this.ownsTab && held.type !== "iframe") {
+        this.heldTargets.delete(held.targetId);
+        await this.cdp("Target.closeTarget", { targetId: held.targetId });
+      }
+      return;
+    }
+    if (method === "Fetch.requestPaused" && typeof params?.requestId === "string") {
+      const decision = decidePausedRequest(params, this.containment);
+      const route = sourceSessionId ? { sessionId: sourceSessionId } : {};
+      if (decision.action === "fail") {
+        if (this.activeActionSignals) this.activeActionSignals.containmentPrevention = decision.reason;
+        await this.cdp("Fetch.failRequest", { requestId: params.requestId, errorReason: "BlockedByClient" }, route);
+      } else {
+        await this.cdp("Fetch.continueRequest", { requestId: params.requestId }, route);
+      }
       return;
     }
     if (method === "Target.detachedFromTarget") {
@@ -277,7 +328,10 @@ class NewtonBrowserDriver {
         ? this.targetRegistry.targetForSession(params.sessionId)
         : undefined;
       const targetId = typeof params?.targetId === "string" ? params.targetId : target?.targetId;
-      if (targetId) this.targetRegistry.detachTarget(targetId);
+      if (targetId) {
+        this.heldTargets.delete(targetId);
+        this.targetRegistry.detachTarget(targetId);
+      }
       return;
     }
     if (method === "Page.frameDetached" && typeof params?.frameId === "string") {
@@ -302,6 +356,20 @@ class NewtonBrowserDriver {
       ...(typeof frame.parentId === "string" ? { parentFrameId: frame.parentId } : {}),
       origin: safeOrigin(frame.url),
     });
+  }
+
+  installContainment(route) {
+    return this.cdp("Fetch.enable", {
+      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+      handleAuthRequests: false,
+    }, route);
+  }
+
+  preflightAction(action) {
+    if (!this.containmentReady || !this.containment) throw Object.assign(new Error("origin_containment_unavailable"), { code: "origin_containment_unavailable" });
+    if (action?.kind === "navigate" && !this.containment.contains(action.url)) {
+      throw Object.assign(new Error("ungranted_navigation"), { code: "ungranted_navigation" });
+    }
   }
 
   // CSS-pixel calibration (§5.2 note): CDP Input coordinates are layout-viewport
@@ -727,6 +795,7 @@ class NewtonBrowserDriver {
   }
 
   async navigate(action) {
+    this.preflightAction(action);
     const startUrl = await this.evalString("location.href");
     await this.cdp("Page.navigate", { url: action.url });
     await this.waitForSettle();
@@ -1792,10 +1861,12 @@ function reconciliationChanges(signals) {
   for (const key of ["navigation", "networkWrite", "dialog", "download", "newTarget"]) {
     if (signals?.[key]) changed[key] = true;
   }
+  if (signals?.containmentPrevention) changed.containmentPrevention = signals.containmentPrevention;
   return changed;
 }
 
 function reconcilePostActionSignals(signals) {
+  if (signals?.containmentPrevention) return signals.containmentPrevention;
   if (signals?.networkWrite) return "post_action_network_write";
   if (signals?.download) return "post_action_download";
   if (signals?.newTarget) return "post_action_new_target";

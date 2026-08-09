@@ -169,6 +169,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           lifecycleState: "attaching_debugger",
         });
         registerProvisioningController(controller, defer);
+        controller.lifecycleState = "verifying_origin";
+        const preAttachOrigin = await liveTabOrigin(ownedTabId);
+        if (!controller.allowedOrigins.includes(preAttachOrigin)) throw new Error("origin_not_granted");
+        controller.lifecycleState = "attaching_debugger";
         defer("debugger", () => controller.driver.detach(), { dedupeKey: `debugger:${created.sessionId}` });
         await controller.driver.attach(ownedTabId);
         controller.lifecycleState = "verifying_origin";
@@ -437,6 +441,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         await emitTerminalResult({ ok: false, errorCode: controller.routingErrorCode }, OUTCOME_PREVENTED);
         return;
       }
+      if (controller.driver.containmentReady === false) {
+        await emitTerminalResult({ ok: false, errorCode: "origin_containment_unavailable" }, OUTCOME_PREVENTED);
+        return;
+      }
       if (!controller.driver.isAttachedTo(controller.tabId) && typeof controller.tabId === "number") {
         await controller.driver.attach(controller.tabId);
       }
@@ -454,6 +462,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         }
         return;
       }
+      await controller.driver.preflightAction?.(action);
       if (action.kind === "__focus") {
         executionStarted = true;
         await tabs.focusTab?.(controller.tabId);

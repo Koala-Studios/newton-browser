@@ -14,7 +14,7 @@ test("driver emulates focus for an inactive owned tab and restores it on detach"
     runtime: { lastError: null },
   };
   try {
-    const driver = createNewtonBrowserDriver();
+    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
     const commands = [];
     driver.cdp = async (method, params) => { commands.push({ method, params }); return {}; };
     driver.calibrate = async () => {};
@@ -24,6 +24,10 @@ test("driver emulates focus for an inactive owned tab and restores it on detach"
     await driver.attach(17);
     await driver.detach();
 
+    const fetchEnable = commands.findIndex((call) => call.method === "Fetch.enable");
+    const autoAttach = commands.findIndex((call) => call.method === "Target.setAutoAttach");
+    assert.equal(fetchEnable >= 0 && fetchEnable < autoAttach, true, "root Fetch containment is installed before child auto-attach");
+    assert.equal(commands[autoAttach].params.waitForDebuggerOnStart, true);
     assert.deepEqual(commands.filter((call) => call.method === "Emulation.setFocusEmulationEnabled"), [
       { method: "Emulation.setFocusEmulationEnabled", params: { enabled: true } },
       { method: "Emulation.setFocusEmulationEnabled", params: { enabled: false } },
@@ -50,7 +54,7 @@ test("driver routes flattened CDP commands through an exact child session", asyn
     runtime: { lastError: null },
   };
   try {
-    const driver = createNewtonBrowserDriver();
+    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
     driver.tabId = 17;
     await driver.cdp("Accessibility.getFullAXTree", {}, { sessionId: "child-session", timeoutMs: 100 });
     assert.deepEqual(calls, [{
@@ -64,7 +68,7 @@ test("driver routes flattened CDP commands through an exact child session", asyn
 });
 
 test("driver records flattened target/frame lifecycle without swallowing detach", async () => {
-  const driver = createNewtonBrowserDriver();
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com", "https://child.test", "https://nested.test"] });
   const cdpCalls = [];
   driver.cdp = async (method, params, route) => { cdpCalls.push({ method, params, route }); return {}; };
   driver.mainTargetId = "main-target";
@@ -84,7 +88,7 @@ test("driver records flattened target/frame lifecycle without swallowing detach"
   assert.equal(driver.targetRegistry.targetForSession("child-session").targetId, "child-frame");
   assert.deepEqual(cdpCalls[0], {
     method: "Target.setAutoAttach",
-    params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false },
+    params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: true },
     route: { sessionId: "child-session" },
   });
 
@@ -792,7 +796,7 @@ test("driver dialog_dismiss rejects the dialog and a no-op is typed when none is
 });
 
 test("driver resize applies an owned-tab viewport and persists it across re-attach", async () => {
-  const driver = createNewtonBrowserDriver({ ownsTab: true });
+  const driver = createNewtonBrowserDriver({ ownsTab: true, allowedOrigins: ["https://example.com"] });
   const calls = [];
   driver.cdp = async (method, params) => { calls.push({ method, params }); return {}; };
   driver.settleShort = async () => {};
@@ -886,6 +890,46 @@ test("driver network body fetch returns a same-origin body", async () => {
   const result = await driver.getNetwork({ requestId: "r2" });
   assert.equal(result.body.data, "{\"ok\":true}");
   assert.equal(result.body.base64Encoded, false);
+});
+
+test("driver Fetch containment blocks ungranted effects before continuation", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  const calls = [];
+  driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
+  const signalWindow = driver.beginActionSignals();
+
+  await driver.recordDebuggerEvent({}, "Fetch.requestPaused", {
+    requestId: "denied-post",
+    request: { url: "https://denied.test/save", method: "POST" },
+    resourceType: "Fetch",
+  });
+  await driver.recordDebuggerEvent({ sessionId: "child-session" }, "Fetch.requestPaused", {
+    requestId: "cdn-read",
+    request: { url: "https://cdn.test/image.png", method: "GET" },
+    resourceType: "Image",
+  });
+  await driver.recordDebuggerEvent({}, "Fetch.requestPaused", {
+    requestId: "allowed-post",
+    request: { url: "https://example.com/save", method: "POST" },
+    resourceType: "Fetch",
+  });
+
+  assert.deepEqual(calls[0], { method: "Fetch.failRequest", params: { requestId: "denied-post", errorReason: "BlockedByClient" }, route: {} });
+  assert.deepEqual(calls[1], { method: "Fetch.continueRequest", params: { requestId: "cdn-read" }, route: { sessionId: "child-session" } });
+  assert.deepEqual(calls[2], { method: "Fetch.continueRequest", params: { requestId: "allowed-post" }, route: {} });
+  assert.equal(signalWindow.finish().containmentPrevention, "ungranted_mutation");
+});
+
+test("driver preflights explicit navigation before Page.navigate", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  driver.containmentReady = true;
+  let pageNavigateCalls = 0;
+  driver.cdp = async (method) => { if (method === "Page.navigate") pageNavigateCalls += 1; return {}; };
+  await assert.rejects(
+    driver.executeAction({ kind: "navigate", url: "https://denied.test/path" }),
+    (error) => error?.code === "ungranted_navigation",
+  );
+  assert.equal(pageNavigateCalls, 0);
 });
 
 test("driver screenshot honors jpeg format and quality", async () => {

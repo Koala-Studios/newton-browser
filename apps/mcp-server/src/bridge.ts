@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 
 import {
+  normalizeHttpOrigin,
   validateIdempotencyKey,
   type BridgeCommand,
   type BrowserCommandOutcome,
@@ -174,12 +175,17 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
 
     createSession(init: BridgeSessionInit): { sessionId: string } {
       if (sessions.size >= limits.maxSessions) throw new Error("session_limit");
+      const origin = normalizeHttpOrigin(init.origin);
+      const requestedOrigins = Array.isArray(init.allowedOrigins) ? init.allowedOrigins : [init.origin];
+      if (!origin || requestedOrigins.length + 1 > 32) throw new Error("invalid_origin");
+      const allowedOrigins = [...new Set([origin, ...requestedOrigins.map(normalizeHttpOrigin)])];
+      if (allowedOrigins.some((candidate) => !candidate)) throw new Error("invalid_origin");
       const sessionId = `bbs_local_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
       sessions.set(sessionId, {
         sessionId,
         hostInstanceId,
-        origin: init.origin,
-        allowedOrigins: Array.isArray(init.allowedOrigins) ? init.allowedOrigins : [init.origin],
+        origin,
+        allowedOrigins,
         tabMode: init.tabMode,
         ownedTabId: init.ownedTabId ?? null,
         tabGroupId: init.tabGroupId ?? null,

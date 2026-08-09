@@ -217,6 +217,15 @@ export type BrowserSignals = {
   crossOrigin?: boolean;       // target frame origin differs from the granted origin
   newTarget?: boolean;         // a popup/new tab was created
   secretField?: boolean;       // resolved input is a password/secret field
+  containmentPrevention?: string; // preventive request/target decision reason
+};
+
+export type BrowserPreventiveDecision = {
+  stage: "preflight" | "request" | "target";
+  action: "continue" | "continue_without_body_access" | "resume" | "hold" | "fail" | "block";
+  reason: string;
+  granted: boolean;
+  origin?: string;
 };
 
 export type BrowserFloorEvidence = { kind: string; value: string | boolean };

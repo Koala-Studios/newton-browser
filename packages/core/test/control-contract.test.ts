@@ -3,12 +3,21 @@ import assert from "node:assert/strict";
 
 import {
   evaluateBrowserFloor,
+  normalizeHttpOrigin,
   redactBrowserAction,
   redactBrowserResult,
   type BrowserAction,
 } from "../src/index.ts";
 
 const youtubePolicy = { allowedOrigins: ["https://www.youtube.com"] };
+
+test("core session-origin normalization rejects paths, credentials, and wildcard hosts", () => {
+  assert.equal(normalizeHttpOrigin("https://example.com:443"), "https://example.com");
+  assert.equal(normalizeHttpOrigin("https://api.example.com:8443/"), "https://api.example.com:8443");
+  for (const value of ["https://example.com/path", "https://user@example.com", "https://*.example.com", "file:///tmp/a"]) {
+    assert.equal(normalizeHttpOrigin(value), "");
+  }
+});
 
 test("generic target descriptors are preserved without leaking fill values", () => {
   const action: BrowserAction = {
