@@ -3,6 +3,9 @@ import { type BrowserAction, type BrowserActionKind, type BrowserTarget, type Br
 const TEXT_CAP = 240;
 const ROLE_CAP = 80;
 const URL_CAP = 500;
+const IDEMPOTENCY_KEY_MIN_LENGTH = 8;
+const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
 type BrowserActionFieldSpec =
   | { kind: "target" }
@@ -80,6 +83,31 @@ export function parseBrowserAction(raw: unknown): BrowserAction {
   }
   return action;
 }
+
+export function normalizeIdempotencyKey(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (
+    trimmed.length < IDEMPOTENCY_KEY_MIN_LENGTH
+    || trimmed.length > IDEMPOTENCY_KEY_MAX_LENGTH
+  ) {
+    return undefined;
+  }
+  if (!IDEMPOTENCY_KEY_PATTERN.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+export function validateIdempotencyKey(value: unknown): string {
+  const key = normalizeIdempotencyKey(value);
+  if (key === undefined) {
+    throw new TypeError("idempotencyKey must be 8-128 URL-safe characters");
+  }
+  return key;
+}
+
+export const IDEMPOTENCY_KEY_MINIMUM_LENGTH = IDEMPOTENCY_KEY_MIN_LENGTH;
+export const IDEMPOTENCY_KEY_MAXIMUM_LENGTH = IDEMPOTENCY_KEY_MAX_LENGTH;
 
 function parseBrowserActionField(raw: unknown, spec: BrowserActionFieldSpec): unknown {
   if (spec.kind === "target") return parseBrowserTarget(raw);

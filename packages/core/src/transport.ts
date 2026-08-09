@@ -1,16 +1,46 @@
-import type { BrowserAction, BrowserFloorDecision, BrowserSignals } from "./protocol.ts";
+import type {
+  BrowserAction,
+  BrowserFloorDecision,
+  BrowserSignals,
+  BrowserCommandOutcome,
+  BridgeCommandResultMetadata,
+} from "./protocol.ts";
 import type { BrowserResolvedTarget } from "./risk.ts";
 
 export type BridgeCommand = {
   commandId: string;
   sessionId: string;
+  sessionEpoch: number;
+  sequence: number;
   actionKind: string;
   action: BrowserAction;
 };
 
-export type BridgeResultEvent =
-  | { commandId: string; ok: true; result: unknown; decision?: BrowserFloorDecision }
-  | { commandId: string; ok: false; errorCode: string; decision?: BrowserFloorDecision };
+type BridgeResultBase = BridgeCommandResultMetadata & {
+  commandId: string;
+  ok: boolean;
+};
+
+type BridgeResultSuccess = BridgeResultBase & {
+  ok: true;
+  outcome: "completed";
+  result: unknown;
+  decision?: BrowserFloorDecision;
+};
+
+type BridgeResultFailure = BridgeResultBase & {
+  ok: false;
+  outcome: BrowserCommandOutcome;
+  errorCode: string;
+  decision?: BrowserFloorDecision;
+};
+
+export type BridgeResultEvent = BridgeResultSuccess | BridgeResultFailure;
+
+export type BridgeDispatchOptions = {
+  timeoutMs?: number;
+  idempotencyKey?: string;
+};
 
 export type BridgeSessionInit = {
   origin: string;

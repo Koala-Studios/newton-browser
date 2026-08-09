@@ -145,12 +145,12 @@ test("authenticated ws transport queues, subscribes, and carries frames above 64
   const socket = await connectExtension(address.port, bridge.hostInstanceId);
   try {
     const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
     const dispatched = bridge.dispatch(sessionId, { kind: "observe", maxNodes: 5 }, 2000);
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
-    await extensionRequest(socket, "subscribeSession", { sessionId });
     const command = await commandPromise;
     const large = "x".repeat(3 * 1024 * 1024);
-    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: { large } } });
+    await postResult(socket, command, { ok: true, result: { large } });
     const result = await dispatched;
     assert.equal(result.ok, true);
     assert.equal((result as any).result.large.length, 3 * 1024 * 1024);
@@ -170,11 +170,11 @@ test("observation results are secret-redacted before reaching the MCP client", a
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
     const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "full" });
     const command = await commandPromise;
-    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+    await postResult(socket, command, { ok: true, result: {
       kind: "observation", mode: "cdp", origin: "https://example.com", title: "Checkout",
       nodes: [{ ref: "n0", role: "textbox", name: "Card number", value: "4111 1111 1111 1111" }],
       nodeCount: 1, truncated: false, capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
-    } } });
+    } });
     const result = await callPromise;
     assert.equal(result.isError, false);
     assert.equal(result.json.result.kind, "observation");
@@ -197,11 +197,11 @@ test("mode:text observations mask card/SSN sequences before reaching the client"
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
     const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "text" });
     const command = await commandPromise;
-    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+    await postResult(socket, command, { ok: true, result: {
       kind: "observation_text", mode: "text", origin: "https://example.com", title: "Receipt",
       text: "Your card 4111 1111 1111 1111 and SSN 123-45-6789 are on file.", chars: 60, truncated: false,
       capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
-    } } });
+    } });
     const result = await callPromise;
     assert.equal(result.isError, false);
     assert.equal(result.json.result.text.includes("4111"), false);
@@ -225,10 +225,13 @@ test("fill_form fills fields sequentially in one call", async () => {
     socket.on("message", (data) => {
       const message = JSON.parse(data.toString());
       if (message.type !== "bridge_command") return;
-      void extensionRequest(socket, "postResult", { event: { commandId: message.command.commandId, ok: true, result: {
+      void postResultFromEnvelope(socket, message, {
+        ok: true,
+        result: {
         kind: "observation", mode: "cdp", origin: "https://example.com", title: "Form", nodes: [], nodeCount: 0,
         truncated: false, capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
-      } } });
+      },
+      }).catch(() => {});
     });
     const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "fill_form", fields: [
       { label: "First name", value: "Ada" },
@@ -256,10 +259,10 @@ test("fill_form stops at a sensitive field before dispatching it", async () => {
       const message = JSON.parse(data.toString());
       if (message.type !== "bridge_command") return;
       dispatched += 1;
-      void extensionRequest(socket, "postResult", { event: { commandId: message.command.commandId, ok: true, result: {
+      void postResultFromEnvelope(socket, message, { ok: true, result: {
         kind: "observation", mode: "cdp", origin: "https://example.com", title: "Form", nodes: [], nodeCount: 0,
         truncated: false, capturedAt: "2026-07-10T00:00:00.000Z", actionStatus: "verified", verified: true,
-      } } });
+      } }).catch(() => {});
     });
     const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "fill_form", fields: [
       { label: "Username", value: "ada" },
@@ -288,10 +291,10 @@ test("browser.console returns the buffered log, secret-redacted", async () => {
     const callPromise = toolCall(bridge, "browser.console", { sessionId, level: "error" });
     const command = await commandPromise;
     assert.equal(command.command.action.kind, "console");
-    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+    await postResult(socket, command, { ok: true, result: {
       kind: "console_log", origin: "https://example.com", entries: [{ level: "error", text: "Failed with card 4111 1111 1111 1111", at: "2026-07-10T00:00:00.000Z" }],
       count: 1, dropped: 0, capturedAt: "2026-07-10T00:00:00.000Z",
-    } } });
+    } });
     const result = await callPromise;
     assert.equal(result.isError, false);
     assert.equal(result.json.result.kind, "console_log");
@@ -314,10 +317,10 @@ test("browser.network lists requests and never returns headers", async () => {
     const callPromise = toolCall(bridge, "browser.network", { sessionId });
     const command = await commandPromise;
     assert.equal(command.command.action.kind, "network");
-    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: {
+    await postResult(socket, command, { ok: true, result: {
       kind: "network_log", origin: "https://example.com", entries: [{ requestId: "r1", method: "POST", url: "https://example.com/api", status: 200, at: "2026-07-10T00:00:00.000Z" }],
       count: 1, dropped: 0, capturedAt: "2026-07-10T00:00:00.000Z",
-    } } });
+    } });
     const result = await callPromise;
     assert.equal(result.isError, false);
     assert.equal(result.json.result.entries[0].method, "POST");
@@ -400,9 +403,8 @@ test("simultaneous Chrome and Edge atomically claim one session without duplicat
     const commandPromise = waitForMessage(winner, (message) => message.type === "bridge_command");
     const dispatched = bridge.dispatch(sessionId, { kind: "observe", maxNodes: 5 }, 2000);
     const command = await commandPromise;
-    await extensionRequest(winner, "postResult", { event: { commandId: command.command.commandId, ok: true, result: { browser: chromeClaimed ? "chrome" : "edge" } } });
+    await postResult(winner, command, { ok: true, result: { browser: chromeClaimed ? "chrome" : "edge" } });
     assert.equal((await dispatched).ok, true);
-    await new Promise((resolve) => setTimeout(resolve, 20));
     loser.off("message", onLoserMessage);
     assert.equal(loserCommandCount, 0, "standby browser must never receive the claimed session command");
 
@@ -521,7 +523,7 @@ test("session, pending, result, and orphan bounds return typed outcomes", async 
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
     await extensionRequest(socket, "subscribeSession", { sessionId });
     const command = await commandPromise;
-    await extensionRequest(socket, "postResult", { event: { commandId: command.command.commandId, ok: true, result: { value: "x".repeat(2048) } } });
+    await postResult(socket, command, { ok: true, result: { value: "x".repeat(2048) } });
     const oversized = await pending;
     assert.equal(oversized.errorCode, "result_too_large");
     assert.equal(bridge.reapExpiredSessions(Date.now() + 2000), 1);
@@ -544,7 +546,7 @@ test("command timeout and session stop resolve pending work with typed outcomes"
 
     const second = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
     await extensionRequest(socket, "subscribeSession", { sessionId: second.sessionId });
-    const pending = bridge.dispatch(second.sessionId, { kind: "observe" }, 250);
+      const pending = bridge.dispatch(second.sessionId, { kind: "observe" }, 250);
     bridge.stopSession(second.sessionId);
     assert.equal((await pending).errorCode, "session_stopped");
   } finally {
@@ -553,6 +555,740 @@ test("command timeout and session stop resolve pending work with typed outcomes"
   }
 });
 
+test("per-session dispatch is serialized in FIFO order", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+
+    const observed: number[] = [];
+    const track = (data: any) => {
+      const message = JSON.parse(data.toString());
+      if (message.type === "bridge_command" && message.command?.sessionId === sessionId) {
+        observed.push(message.command.sequence);
+      }
+    };
+    socket.on("message", track);
+
+    const firstWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 1);
+    const first = bridge.dispatch(sessionId, { kind: "observe" });
+    const second = bridge.dispatch(sessionId, { kind: "observe" });
+    const third = bridge.dispatch(sessionId, { kind: "observe" });
+
+    const firstWire = await firstWirePromise;
+    assert.deepEqual(observed, [1]);
+
+    const secondWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 2);
+    await postResult(socket, firstWire, {
+        ok: true,
+        result: { value: "first" },
+    });
+    const secondWire = await secondWirePromise;
+    const thirdWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 3);
+    await postResult(socket, secondWire, {
+        ok: true,
+        result: { value: "second" },
+    });
+    const thirdWire = await thirdWirePromise;
+    await postResult(socket, thirdWire, {
+        ok: true,
+        result: { value: "third" },
+    });
+
+    const firstResult = await first;
+    const secondResult = await second;
+    const thirdResult = await third;
+    assert.deepEqual(observed, [1, 2, 3]);
+    assert.equal(firstResult.outcome, "completed");
+    assert.equal(secondResult.outcome, "completed");
+    assert.equal(thirdResult.outcome, "completed");
+    assert.equal(secondWire.command.sequence, 2);
+    assert.equal(thirdWire.command.sequence, 3);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("different sessions can dispatch concurrently", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const firstSession = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const secondSession = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: firstSession.sessionId });
+    await extensionRequest(socket, "subscribeSession", { sessionId: secondSession.sessionId });
+
+    const firstWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === firstSession.sessionId);
+    const secondWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === secondSession.sessionId);
+    const first = bridge.dispatch(firstSession.sessionId, { kind: "observe" });
+    const second = bridge.dispatch(secondSession.sessionId, { kind: "observe" });
+
+    const [firstWire, secondWire] = await Promise.all([firstWirePromise, secondWirePromise]);
+    await postResult(socket, firstWire, {
+        ok: true,
+        result: { value: "first" },
+    });
+    await postResult(socket, secondWire, {
+        ok: true,
+        result: { value: "second" },
+    });
+
+    const firstResult = await first;
+    const secondResult = await second;
+    assert.equal(firstResult.outcome, "completed");
+    assert.equal(secondResult.outcome, "completed");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("queued not-started and sent timeouts return typed outcome metadata", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const queuedSession = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const sentSession = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: queuedSession.sessionId });
+    await extensionRequest(socket, "subscribeSession", { sessionId: sentSession.sessionId });
+
+    const first = bridge.dispatch(queuedSession.sessionId, { kind: "observe" }, 120);
+    const second = bridge.dispatch(queuedSession.sessionId, { kind: "observe" }, 120);
+    await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === queuedSession.sessionId);
+    bridge.stopSession(queuedSession.sessionId);
+    const firstResult = await first;
+    const notStarted = await second;
+
+    assert.equal(firstResult.outcome, "outcome_unknown");
+    assert.equal(notStarted.outcome, "not_started");
+    assert.equal(notStarted.retrySafe, true);
+    assert.equal(notStarted.errorCode, "session_stopped");
+
+    const sentTimeout = bridge.dispatch(sentSession.sessionId, { kind: "observe" }, { timeoutMs: 80, idempotencyKey: "timeout_queue_key" });
+    const command = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sentSession.sessionId);
+    const sentResult = await sentTimeout;
+    assert.equal(sentResult.outcome, "outcome_unknown");
+    assert.equal(sentResult.retrySafe, false);
+    assert.equal(sentResult.errorCode, "command_timeout");
+    assert.equal(typeof command.command.sessionEpoch, "number");
+    assert.equal(typeof command.command.sequence, "number");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("queued command timeout returns not-started and late-result timeout cleanup", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const session = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: session.sessionId });
+    const first = bridge.dispatch(session.sessionId, { kind: "observe" }, 120);
+    const queued = bridge.dispatch(session.sessionId, { kind: "observe" }, 120);
+    const wire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId);
+    const firstResult = await first;
+    assert.equal(firstResult.outcome, "outcome_unknown");
+    const secondResult = await queued;
+    assert.equal(secondResult.outcome, "not_started");
+    assert.equal(secondResult.errorCode, "command_timeout");
+    assert.equal(wire.command.sessionId, session.sessionId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("late results are classified once and can satisfy idempotency cache", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const session = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: session.sessionId });
+
+    const options = { timeoutMs: 60, idempotencyKey: "late-result-key" };
+    const inFlight = bridge.dispatch(session.sessionId, { kind: "observe" }, options);
+    const command = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId);
+    const firstResult = await inFlight;
+    assert.equal(firstResult.outcome, "outcome_unknown");
+    assert.equal(firstResult.retrySafe, false);
+    await postResult(socket, command, {
+        ok: true,
+        result: { value: "late" },
+    });
+
+    const replay = await bridge.dispatch(session.sessionId, { kind: "observe" }, options);
+    const replayCommand = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId, 40);
+    const replayAgain = bridge.dispatch(session.sessionId, { kind: "observe" }, options);
+    assert.equal(replay.commandId, command.command.commandId);
+    assert.equal(replay.outcome, "completed");
+    await assert.rejects(replayCommand, /message timeout/);
+    assert.equal((await replayAgain).commandId, command.command.commandId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("late result cannot overwrite a newer idempotency generation", async () => {
+  const bridge = testBridge({ limits: { idempotencyTtlMs: 80, lateResultTtlMs: 2000, maxCommandTimeoutMs: 1000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const options = { timeoutMs: 100, idempotencyKey: "generation-fence" };
+
+    const oldWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const oldWork = bridge.dispatch(sessionId, { kind: "observe" }, options);
+    const oldWire = await oldWirePromise;
+    assert.equal((await oldWork).outcome, "outcome_unknown");
+
+    bridge.reapExpiredIdempotencyEntries(Date.now() + 200);
+    const freshWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 2);
+    const freshWork = bridge.dispatch(sessionId, { kind: "observe" }, { ...options, timeoutMs: 1000 });
+    const freshWire = await freshWirePromise;
+
+    await postResult(socket, oldWire, { ok: true, result: { value: "stale" } });
+    await postResult(socket, freshWire, { ok: true, result: { value: "fresh" } });
+    const fresh = await freshWork;
+    assert.equal(fresh.result.value, "fresh");
+    assert.equal(fresh.commandId, freshWire.command.commandId);
+
+    const replay = await bridge.dispatch(sessionId, { kind: "observe" }, options);
+    assert.equal(replay.result.value, "fresh");
+    assert.equal(replay.commandId, freshWire.command.commandId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("oversized late result does not overwrite timed-out metadata", async () => {
+  const bridge = testBridge({ limits: { maxResultBytes: 64, maxCommandTimeoutMs: 80, maxMessageBytes: 1024 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const session = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: session.sessionId });
+    const options = { timeoutMs: 50, idempotencyKey: "late-oversize-key" };
+    const inFlight = bridge.dispatch(session.sessionId, { kind: "observe" }, options);
+    const command = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId);
+    const timedOut = await inFlight;
+    assert.equal(timedOut.outcome, "outcome_unknown");
+    assert.equal(timedOut.errorCode, "command_timeout");
+
+    await postResult(socket, command, {
+        ok: false,
+        errorCode: "late_oversize_injected",
+        result: { value: "x".repeat(128) },
+    });
+
+    const replay = await bridge.dispatch(session.sessionId, { kind: "observe" }, options);
+    assert.equal(replay.outcome, "outcome_unknown");
+    assert.equal(replay.errorCode, "command_timeout");
+    assert.equal(replay.commandId, command.command.commandId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("stale command epoch or sequence do not resolve current work", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const work = bridge.dispatch(sessionId, { kind: "observe" }, 2000);
+    const command = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    await postResult(socket, command, {
+        ok: true,
+        sequence: command.command.sequence + 1,
+        result: { value: "stale" },
+    });
+    await postResult(socket, command, {
+        ok: true,
+        result: { value: "fresh" },
+    });
+    const result = await work;
+    assert.equal(result.ok, true);
+    assert.equal(result.result.value, "fresh");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("non-owner command result is rejected from settling in-flight or late work", async () => {
+  const bridge = testBridge({ limits: { maxCommandTimeoutMs: 500 } });
+  const address = await bridge.listen(0);
+  const owner = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "owner_client", browserFamily: "chrome" });
+  const intruder = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "intruder_client", browserFamily: "chrome" });
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(owner, "subscribeSession", { sessionId });
+    const work = bridge.dispatch(sessionId, { kind: "observe" }, 120);
+    const command = await waitForMessage(owner, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const tooLarge = "x".repeat(1024 * 1024);
+    await postResult(intruder, command, {
+        ok: false,
+        errorCode: "intruder_should_not_win",
+        result: { value: tooLarge },
+    });
+    await postResult(owner, command, {
+        ok: true,
+        result: { value: "owner" },
+    });
+    const result = await work;
+    assert.equal(result.ok, true);
+    assert.equal(result.result.value, "owner");
+  } finally {
+    owner.close();
+    intruder.close();
+    await bridge.close();
+  }
+});
+
+test("ok=false controller outcome can be completed while host ignores forged metadata", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const work = bridge.dispatch(sessionId, { kind: "observe" }, 2000);
+    const command = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+
+    await postResult(socket, command, {
+        ok: false,
+        outcome: "completed",
+        retrySafe: true,
+        errorCode: "forged_driver_error",
+    });
+
+    await postResult(socket, command, {
+        ok: false,
+        outcome: "completed",
+        retrySafe: true,
+        errorCode: "forged_driver_error",
+    });
+
+    const result = await work;
+    assert.equal(result.ok, false);
+    assert.equal(result.outcome, "completed");
+    assert.equal(result.retrySafe, false);
+    assert.equal(result.commandId, command.command.commandId);
+    assert.equal(result.sessionEpoch, command.command.sessionEpoch);
+    assert.equal(result.sequence, command.command.sequence);
+    assert.equal(result.errorCode, "forged_driver_error");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("malformed controller outcome is a protocol violation", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const work = bridge.dispatch(sessionId, { kind: "observe" }, 2000);
+    const command = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+
+    await postResult(socket, command, {
+        ok: false,
+        outcome: "invalid_outcome",
+        errorCode: "driver_broke_contract",
+    });
+
+    const result = await work;
+    assert.equal(result.ok, false);
+    assert.equal(result.outcome, "outcome_unknown");
+    assert.equal(result.retrySafe, false);
+    assert.equal(result.errorCode, "protocol_violation");
+    assert.equal(result.sessionEpoch, command.command.sessionEpoch);
+    assert.equal(result.sequence, command.command.sequence);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("terminal outcome releases the per-session next command", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+
+    const blocked = bridge.dispatch(sessionId, { kind: "observe" });
+    const first = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const queued = bridge.dispatch(sessionId, { kind: "observe" });
+    const second = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 2);
+
+    await postResult(socket, first, {
+        ok: false,
+        outcome: "prevented",
+        errorCode: "blocked_by_floor",
+    });
+    const secondWire = await second;
+    await postResult(socket, secondWire, {
+        ok: true,
+        result: { value: "continued" },
+    });
+
+    const [blockedResult, queuedResult] = await Promise.all([blocked, queued]);
+    assert.equal(blockedResult.outcome, "prevented");
+    assert.equal(queuedResult.outcome, "completed");
+    assert.equal(secondWire.command.sequence, 2);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("session queue caps are per-session for item", async () => {
+  const bridge = testBridge({ limits: { maxQueuedPerSession: 2, maxQueuedBytesPerSession: 4096, maxCommandTimeoutMs: 5000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const sessionA = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const sessionB = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: sessionA.sessionId });
+    await extensionRequest(socket, "subscribeSession", { sessionId: sessionB.sessionId });
+
+    const wireA1Promise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionA.sessionId && message.command.sequence === 1);
+    const wireB1Promise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionB.sessionId && message.command.sequence === 1);
+    const a1 = bridge.dispatch(sessionA.sessionId, { kind: "observe", value: "one" });
+    const a2 = bridge.dispatch(sessionA.sessionId, { kind: "observe", value: "two" });
+    const a3 = bridge.dispatch(sessionA.sessionId, { kind: "observe", value: "three" });
+    const b1 = bridge.dispatch(sessionB.sessionId, { kind: "observe", value: "one" });
+    const b2 = bridge.dispatch(sessionB.sessionId, { kind: "observe", value: "two" });
+    const b3 = bridge.dispatch(sessionB.sessionId, { kind: "observe", value: "three" });
+
+    const [a3Result, b3Result] = await Promise.all([a3, b3]);
+    assert.equal(a3Result.outcome, "not_started");
+    assert.equal(b3Result.outcome, "not_started");
+    assert.equal(a3Result.errorCode, "queue_full");
+    assert.equal(b3Result.errorCode, "queue_full");
+
+    const wireA1 = await wireA1Promise;
+    const wireA2Promise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionA.sessionId && message.command.sequence === 2);
+    await postResult(socket, wireA1, {
+        ok: true,
+        result: { value: "a1" },
+    });
+    const wireB1 = await wireB1Promise;
+    const wireB2Promise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionB.sessionId && message.command.sequence === 2);
+    await postResult(socket, wireB1, {
+        ok: true,
+        result: { value: "b1" },
+    });
+    const wireA2 = await wireA2Promise;
+    await postResult(socket, wireA2, {
+        ok: true,
+        result: { value: "a2" },
+    });
+    const wireB2 = await wireB2Promise;
+    await postResult(socket, wireB2, {
+        ok: true,
+        result: { value: "b2" },
+    });
+
+    assert.equal((await a1).outcome, "completed");
+    assert.equal((await a2).outcome, "completed");
+    assert.equal((await b1).outcome, "completed");
+    assert.equal((await b2).outcome, "completed");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("session queue caps are per-session for bytes", async () => {
+  const bridge = testBridge({ limits: { maxQueuedPerSession: 8, maxQueuedBytesPerSession: 1024, maxCommandTimeoutMs: 5000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const session = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId: session.sessionId });
+    const fit = "x".repeat(250);
+    const overflow = fit;
+
+    const wireFirstPromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId && message.command.sequence === 1);
+    const first = bridge.dispatch(session.sessionId, { kind: "observe", value: fit });
+    const second = bridge.dispatch(session.sessionId, { kind: "observe", value: fit });
+    const overflowed = bridge.dispatch(session.sessionId, { kind: "observe", value: overflow });
+    const overflowResult = await overflowed;
+    assert.equal(overflowResult.outcome, "not_started");
+    assert.equal(overflowResult.errorCode, "queue_full");
+
+    const wireFirst = await wireFirstPromise;
+    const wireSecondPromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === session.sessionId && message.command.sequence === 2);
+    await postResult(socket, wireFirst, {
+        ok: true,
+        result: { value: "fit1" },
+    });
+    const wireSecond = await wireSecondPromise;
+    await postResult(socket, wireSecond, {
+        ok: true,
+        result: { value: "fit2" },
+    });
+
+    assert.equal((await first).outcome, "completed");
+    assert.equal((await second).outcome, "completed");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("idempotency dedupe, conflict, and cache eviction", async () => {
+  const bridge = testBridge({ limits: { maxIdempotencyEntriesPerSession: 2, maxCommandTimeoutMs: 2000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+
+    const primary = bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "idem-base" });
+    const primaryWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const duplicate = bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "idem-base" });
+    await postResult(socket, primaryWire, {
+        ok: true,
+        result: { value: "primary" },
+    });
+    const primaryResult = await primary;
+    const duplicateResult = await duplicate;
+    assert.equal(primaryResult.commandId, primaryWire.command.commandId);
+    assert.equal(duplicateResult.commandId, primaryWire.command.commandId);
+
+    const conflict = await bridge.dispatch(sessionId, { kind: "click" }, { timeoutMs: 2000, idempotencyKey: "idem-base" });
+    assert.equal(conflict.outcome, "prevented");
+    assert.equal(conflict.errorCode, "idempotency_conflict");
+
+    const first = bridge.dispatch(sessionId, { kind: "observe", value: "one" }, { timeoutMs: 2000, idempotencyKey: "idem-one" });
+    const firstWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 2);
+    await postResult(socket, firstWire, {
+        ok: true,
+        result: { value: "one" },
+    });
+
+    const second = bridge.dispatch(sessionId, { kind: "observe", value: "two" }, { timeoutMs: 2000, idempotencyKey: "idem-two" });
+    const secondWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 3);
+    await postResult(socket, secondWire, {
+        ok: true,
+        result: { value: "two" },
+    });
+
+    const third = bridge.dispatch(sessionId, { kind: "observe", value: "three" }, { timeoutMs: 2000, idempotencyKey: "idem-three" });
+    const thirdWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 4);
+    await postResult(socket, thirdWire, {
+        ok: true,
+        result: { value: "three" },
+    });
+
+    const primaryDone = await primary;
+    const firstDone = await first;
+    const secondDone = await second;
+    const thirdDone = await third;
+    assert.equal(primaryDone.outcome, "completed");
+    assert.equal(firstDone.outcome, "completed");
+    assert.equal(secondDone.outcome, "completed");
+    assert.equal(thirdDone.outcome, "completed");
+
+    const evictedCommand = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const evictedReplay = bridge.dispatch(sessionId, { kind: "observe", value: "one" }, { timeoutMs: 2000, idempotencyKey: "idem-one" });
+    const evictedWire = await evictedCommand;
+    assert.notEqual(evictedWire.command.commandId, firstWire.command.commandId);
+    await postResult(socket, evictedWire, {
+        ok: true,
+        result: { value: "one-replayed" },
+    });
+    assert.equal((await evictedReplay).commandId, evictedWire.command.commandId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("idempotency TTL expiry forces a fresh replay path", async () => {
+  const bridge = testBridge({ limits: { idempotencyTtlMs: 80, maxCommandTimeoutMs: 2000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+
+    const first = bridge.dispatch(sessionId, { kind: "observe", value: "ttl" }, { timeoutMs: 2000, idempotencyKey: "idem-ttl" });
+    const firstWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    await postResult(socket, firstWire, {
+        ok: true,
+        result: { value: "ttl" },
+    });
+    assert.equal((await first).outcome, "completed");
+
+    bridge.reapExpiredIdempotencyEntries(Date.now() + 200);
+    const ttlWirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const ttlReplay = bridge.dispatch(sessionId, { kind: "observe", value: "ttl" }, { timeoutMs: 2000, idempotencyKey: "idem-ttl" });
+    const ttlWire = await ttlWirePromise;
+    await postResult(socket, ttlWire, {
+        ok: true,
+        result: { value: "ttl-refresh" },
+    });
+    assert.equal((await ttlReplay).commandId, ttlWire.command.commandId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("inflight idempotency entries are not expired while awaiting completion", async () => {
+  const bridge = testBridge({ limits: { idempotencyTtlMs: 80, maxCommandTimeoutMs: 2000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+
+    const primary = bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "inflight-ttl" });
+    const wire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    bridge.reapExpiredIdempotencyEntries(Date.now() + 200);
+
+    const joined = bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "inflight-ttl" });
+    await postResult(socket, wire, {
+        ok: true,
+        result: { value: "joined" },
+    });
+
+    const primaryResult = await primary;
+    const joinedResult = await joined;
+    assert.equal(primaryResult.commandId, joinedResult.commandId);
+    assert.equal(primaryResult.outcome, "completed");
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("idempotency ledger full with only inflight entries returns idempotency_ledger_full without insertion", async () => {
+  const bridge = testBridge({ limits: { maxIdempotencyEntriesPerSession: 1, maxCommandTimeoutMs: 2000 } });
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+
+    const first = bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "inflight-full-1" });
+    const firstWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const blocked = await bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "inflight-full-2" });
+    assert.equal(blocked.outcome, "prevented");
+    assert.equal(blocked.errorCode, "idempotency_ledger_full");
+    const joined = bridge.dispatch(sessionId, { kind: "observe" }, { timeoutMs: 2000, idempotencyKey: "inflight-full-1" });
+    await postResult(socket, firstWire, {
+        ok: true,
+        result: { value: "first" },
+    });
+    const firstResult = await first;
+    const joinedResult = await joined;
+    assert.equal(joinedResult.commandId, firstResult.commandId);
+    assert.equal(firstResult.outcome, "completed");
+
+    const next = bridge.dispatch(sessionId, { kind: "observe", value: "next" }, { timeoutMs: 2000, idempotencyKey: "inflight-full-3" });
+    const nextWire = await waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId && message.command.sequence === 2);
+    assert.equal(nextWire.command.sequence, 2);
+    await postResult(socket, nextWire, {
+        ok: true,
+        result: { value: "next" },
+    });
+    assert.equal((await next).commandId, nextWire.command.commandId);
+  } finally {
+    socket.close();
+    await bridge.close();
+  }
+});
+
+test("owner replacement and disconnect fence old owners", async () => {
+  const bridge = testBridge({ limits: { maxCommandTimeoutMs: 200 } });
+  const address = await bridge.listen(0);
+  const chrome = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "owner_chrome", browserFamily: "chrome" });
+  const edge = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "owner_edge", browserFamily: "edge" });
+  let chromeCommandCount = 0;
+  const chromeOnMessage = (data: any) => {
+    const message = JSON.parse(data.toString());
+    if (message.type === "bridge_command" && message.command?.sessionId === "") {
+      chromeCommandCount += 1;
+    }
+  };
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    const wrappedListener = (data: any) => {
+      const message = JSON.parse(data.toString());
+      if (message.type === "bridge_command" && message.command?.sessionId === sessionId) {
+        chromeCommandCount += 1;
+      }
+    };
+    chrome.on("message", wrappedListener);
+    await extensionRequest(chrome, "listSessions", {});
+    await extensionRequest(chrome, "subscribeSession", { sessionId });
+    const edgeSessions = await extensionRequest(edge, "listSessions", {});
+    assert.equal(edgeSessions.result.some((session: any) => session.sessionId === sessionId), false);
+    const deniedSubscription = await extensionRequest(edge, "subscribeSession", { sessionId });
+    assert.equal(deniedSubscription.ok, false);
+    assert.equal(deniedSubscription.error, "session_not_owned");
+
+    const firstWirePromise = waitForMessage(chrome, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const first = bridge.dispatch(sessionId, { kind: "observe" }, 120);
+    const firstWire = await firstWirePromise;
+    const second = bridge.dispatch(sessionId, { kind: "observe" }, 120);
+
+    await postResult(edge, firstWire, {
+        ok: true,
+        result: { value: "wrong-owner" },
+    });
+    assert.equal(chromeCommandCount, 1);
+    chrome.close();
+
+    const firstResult = await first;
+    const secondResult = await second;
+    assert.equal(firstResult.outcome, "outcome_unknown");
+    assert.equal(firstResult.errorCode, "owner_disconnected");
+    assert.equal(secondResult.outcome, "not_started");
+    assert.equal(secondResult.errorCode, "owner_disconnected");
+
+    const successor = await connectExtension(address.port, bridge.hostInstanceId, { clientId: "owner_successor", browserFamily: "chromium" });
+    await extensionRequest(successor, "listSessions", {});
+    await extensionRequest(successor, "subscribeSession", { sessionId });
+    const replacementWirePromise = waitForMessage(successor, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const replacement = bridge.dispatch(sessionId, { kind: "observe" });
+    const replacementWire = await replacementWirePromise;
+    assert.equal(replacementWire.command.sessionEpoch > firstWire.command.sessionEpoch, true);
+    await postResult(successor, replacementWire, {
+        ok: true,
+        result: { value: "replacement" },
+    });
+    assert.equal((await replacement).outcome, "completed");
+    successor.close();
+    chrome.off("message", wrappedListener);
+  } finally {
+    chrome.close();
+    edge.close();
+    chrome.off("message", chromeOnMessage);
+    await bridge.close();
+  }
+});
 test("stdio process emits MCP only and exits after stdin closes", async () => {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-test-"));
   const child = spawn(process.execPath, ["apps/mcp-server/src/index.ts"], {
@@ -714,9 +1450,35 @@ function autoBind(socket: WebSocket, liveOrigin: string) {
       void extensionRequest(socket, "attachTab", {
         sessionId: session.sessionId,
         tab: { ownedTabId: 101, tabGroupId: 201, attached: true, liveOrigin },
-      });
+      }).catch(() => {});
     }
   });
+}
+
+type PostResultTarget = { commandId: string; sessionEpoch: number; sequence: number } | { command?: { commandId: string; sessionEpoch: number; sequence: number } };
+
+function commandMetadata(target: PostResultTarget) {
+  return "commandId" in target ? target : target.command;
+}
+
+async function postResult(socket: WebSocket, target: PostResultTarget, event: Record<string, any>) {
+  const command = commandMetadata(target);
+  return extensionRequest(socket, "postResult", {
+    event: {
+      commandId: command.commandId,
+      sessionEpoch: command.sessionEpoch,
+      sequence: command.sequence,
+      ...event,
+    },
+  });
+}
+
+function postResultFromEnvelope(
+  socket: WebSocket,
+  envelope: { command?: { commandId: string; sessionEpoch: number; sequence: number } },
+  event: Record<string, any>,
+) {
+  return postResult(socket, envelope.command ?? envelope, event);
 }
 
 function extensionRequest(socket: WebSocket, method: string, params: unknown) {

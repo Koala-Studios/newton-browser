@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import {
   BROWSER_ACTION_FIELDS,
   BROWSER_ACTION_FIELD_SPECS,
+  IDEMPOTENCY_KEY_MAXIMUM_LENGTH,
+  IDEMPOTENCY_KEY_MINIMUM_LENGTH,
+  normalizeIdempotencyKey,
+  validateIdempotencyKey,
   parseBrowserAction,
   redactBrowserAction,
 } from "../src/index.ts";
@@ -91,4 +95,27 @@ test("only action value is replaced as the secret field", () => {
   assert.equal(redacted.value, "[REDACTED]");
   assert.equal(redacted.text, "Visible content");
   assert.equal(redacted.name, "Display name");
+});
+
+test("idempotency keys are validated with a bounded URL-safe format", () => {
+  assert.equal(normalizeIdempotencyKey("   abc_1234   "), "abc_1234");
+  assert.equal(normalizeIdempotencyKey("abc_1234"), "abc_1234");
+  assert.equal(normalizeIdempotencyKey("abc-1234"), "abc-1234");
+  assert.equal(normalizeIdempotencyKey(`${"a".repeat(IDEMPOTENCY_KEY_MINIMUM_LENGTH - 1)}`), undefined);
+  assert.equal(normalizeIdempotencyKey(`${"a".repeat(IDEMPOTENCY_KEY_MINIMUM_LENGTH)}`), "a".repeat(IDEMPOTENCY_KEY_MINIMUM_LENGTH));
+  assert.equal(normalizeIdempotencyKey(`${"a".repeat(IDEMPOTENCY_KEY_MAXIMUM_LENGTH)}`), "a".repeat(IDEMPOTENCY_KEY_MAXIMUM_LENGTH));
+  assert.equal(normalizeIdempotencyKey(`${"a".repeat(IDEMPOTENCY_KEY_MAXIMUM_LENGTH + 1)}`), undefined);
+  assert.equal(normalizeIdempotencyKey("has space"), undefined);
+  assert.equal(normalizeIdempotencyKey({ foo: "bar" }), undefined);
+  assert.equal(normalizeIdempotencyKey(undefined), undefined);
+});
+
+test("invalid idempotency keys are rejected and valid keys are preserved", () => {
+  assert.throws(() => {
+    validateIdempotencyKey({});
+  }, /idempotencyKey must be 8-128 URL-safe characters/);
+  assert.equal(validateIdempotencyKey(`${"x".repeat(IDEMPOTENCY_KEY_MINIMUM_LENGTH)}`), "x".repeat(IDEMPOTENCY_KEY_MINIMUM_LENGTH));
+  assert.throws(() => {
+    validateIdempotencyKey(`${"x".repeat(IDEMPOTENCY_KEY_MAXIMUM_LENGTH + 1)}`);
+  }, /idempotencyKey must be 8-128 URL-safe characters/);
 });

@@ -64,9 +64,23 @@ export const BROWSER_COMMAND_STATUSES = [
 
 export type BrowserCommandStatus = (typeof BROWSER_COMMAND_STATUSES)[number];
 
+export type BrowserCommandOutcome =
+  | "not_started"
+  | "completed"
+  | "prevented"
+  | "outcome_unknown";
+
 export const BROWSER_SESSION_STATUSES = ["active", "stopped", "expired"] as const;
 
 export type BrowserSessionStatus = (typeof BROWSER_SESSION_STATUSES)[number];
+
+export type BridgeCommandResultMetadata = {
+  sessionEpoch: number;
+  sequence: number;
+  outcome: BrowserCommandOutcome;
+  retrySafe: boolean;
+  lateResultDiscarded?: boolean;
+};
 
 export type BrowserTarget =
   | { ref: string }
