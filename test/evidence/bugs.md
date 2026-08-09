@@ -648,3 +648,12 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: snapshot occupied default ports before the first release stage and reject only ports that become newly occupied during the run.
 - Regression: `test/release-port-guard.test.mjs` preserves an existing baseline while detecting and sorting genuinely new listeners.
 - Status: closed; final three-pass release proof restarted from the corrected guard.
+
+## BB-072 - Successful readiness responses left timeout handles alive
+
+- Found: 2026-08-09 during the final bounded live-readiness probe.
+- Minimal repro: set `NEWTON_BROWSER_EXTENSION_PROBE_MS=10000` and run `pnpm smoke:extension-ready` against a disconnected extension; the script prints its result near 11 seconds but remains alive until the initialize request's 30-second timeout fires.
+- Root cause: successful MCP responses won `Promise.race`, but the losing timeout promises were never cancelled; response arrival between the initial map check and waiter registration was also vulnerable to a lost wakeup.
+- Fix: use a shared response waiter that registers one cancellable timer, removes it on success, cleans its map entry on either outcome, and rechecks the response map after registration.
+- Regression: `test/extension-readiness-lifecycle.test.mjs` proves timer cancellation for ordinary and registration-race responses; the real disconnected probe exits promptly after emitting its bounded result.
+- Status: closed.

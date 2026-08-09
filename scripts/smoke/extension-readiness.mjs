@@ -2,6 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import { waitForMcpResponse } from "./mcp-response-waiter.mjs";
+
 const version = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
 const tarball = path.resolve(`artifacts/newton-browser-${version}.tgz`);
 const extensionArtifact = path.resolve(`artifacts/newton-browser-extension-${version}.zip`);
@@ -67,11 +69,13 @@ try {
 async function request(method, params, responseTimeoutMs = 10_000) {
   const requestId = String(++id);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`);
-  if (!responses.has(requestId)) await Promise.race([
-    new Promise((resolve) => waiters.set(requestId, resolve)),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`MCP response timeout: ${stderr}`)), responseTimeoutMs)),
-  ]);
-  waiters.delete(requestId);
+  await waitForMcpResponse({
+    requestId,
+    responses,
+    waiters,
+    timeoutMs: responseTimeoutMs,
+    diagnostics: () => stderr,
+  });
   return responses.get(requestId);
 }
 
