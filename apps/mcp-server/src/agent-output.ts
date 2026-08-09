@@ -307,7 +307,7 @@ export function enforceObservationBudget<T>(
   const truncated = Boolean(sourceTruncated) || sourceCount > limit || nodesReturned < nodes.length;
   const canRaiseLimit = !sourceTruncated && nodesScanned > limit && limit < OBSERVATION_LIMIT_MAX;
   const isNodeLimited = sourceCount > limit;
-  const continuation = truncated
+  const continuation: ObservationBudgetContinuation | undefined = truncated
     ? {
         tool: "browser.observe" as const,
         strategy: sourceTruncated ? "refine_query_or_roles" : "raise_limit",
@@ -372,7 +372,7 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
 
   if (raw.kind === "observation_text") {
     const text = asSafeBoundedText(raw.text, OBS_TEXT_CAP);
-    const budget = enforceObservationBudget([], options, base.nodeCount, raw.truncated === true);
+    const { budget } = enforceObservationBudget([], options, base.nodeCount, raw.truncated === true);
 
     if (options.format === "json") {
       return {
@@ -401,7 +401,8 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
     };
   }
 
-  const sourceNodes = raw.kind === "observation"
+  const kind: "observation" | "observation_delta" = raw.kind === "observation" ? "observation" : "observation_delta";
+  const sourceNodes = kind === "observation"
     ? raw.nodes
     : [...(Array.isArray(raw.added) ? raw.added : []), ...(Array.isArray(raw.updated) ? raw.updated : [])];
 
@@ -415,7 +416,7 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
   const normalized = (Array.isArray(sourceNodes)
     ? sourceNodes
       .map((entry) => {
-        const node = raw.kind === "observation" ? normalizeObservationNode(entry, options.includeGeometry) : normalizeUpdatedNode(entry);
+        const node = kind === "observation" ? normalizeObservationNode(entry, options.includeGeometry) : normalizeUpdatedNode(entry);
         if (!node || !matchesRoles(node, options.roles) || !matchesQuery(node, options.query)) return undefined;
         return node;
       })
@@ -430,10 +431,10 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
     return {
       ok: true,
       projection: {
-        kind: raw.kind,
+        kind,
         format: "compact",
         nodes: [],
-        output: projectObservationLines(base, nodes, raw.kind, options),
+        output: projectObservationLines(base, nodes, kind, options),
         ...base,
         budget,
       },
@@ -443,7 +444,7 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
   return {
     ok: true,
     projection: {
-      kind: raw.kind,
+      kind,
       format: "json",
       nodes,
       ...base,
@@ -522,7 +523,7 @@ export function normalizeAgentActionResult(raw: unknown): AgentActionResultProje
   const errorCode = parseActionError(redacted.errorCode ?? redacted.error);
   const invalidError = ("errorCode" in redacted || "error" in redacted) && errorCode === undefined;
   const invalid = missingOutcome || outcomeInvalid || invalidError;
-  const normalizedOutcome = invalid ? "outcome_unknown" : outcome;
+  const normalizedOutcome: AgentActionOutcome = invalid || !outcome ? "outcome_unknown" : outcome;
   const provenance = parseActionProvenance(redacted.provenance);
   const decision = parseActionDecision(redacted.decision);
   const delta = parseActionDelta(redacted.delta);
