@@ -472,3 +472,48 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: import redaction, protocol, and idempotency validation through the compiled core package entrypoint.
 - Regression: the existing standalone boundary scanner rejects cross-package source escapes; `pnpm lint`, `pnpm typecheck`, and the complete source suite pass after correction.
 - Status: closed before the affected integration slice was accepted.
+
+## BB-053 — Equal command deadlines made a queue test scheduling-dependent
+
+- Minimal repro: run the complete host suite under contention with the sent command and its queued successor both configured with a 120 ms deadline; the first timer can release and send the successor immediately before the successor's own timer fires.
+- Root cause: the test assumed equal wall-clock deadlines prove the second command remained queued. The implementation legitimately transitioned it to sent state first, changing the honest result from `not_started` to `outcome_unknown`.
+- Fix: make the queued command's independent deadline earlier than the running command's deadline (100 ms versus 150 ms), preserving the production timeout bounds and avoiding a sleep or widened timeout.
+- Regression: the focused case and complete host/root suites pass deterministically with the queued command still unstarted at its deadline.
+- Fix commit: `d89543b`.
+- Status: closed.
+
+## BB-054 — Fragmented input paths could emit incomplete keys and leave pressed state
+
+- Minimal repro: use `press` with a chord or fail a click after `mousePressed`; the old driver emitted only `{type,key}` key events and had no owner that guaranteed a matching key/button release.
+- Root cause: key, text, mouse, and wheel commands were implemented inline in separate driver methods with no shared descriptor table or pressed-state cleanup contract.
+- Fix: route every CDP input event through `InputDispatcher`, use complete tested descriptors, use `Input.insertText` for printable Unicode, suppress char events for control/meta/alt chords, and release buttons/modifiers in `finally` without overwriting an already uncertain primary failure.
+- Regression: `packages/driver/test/input-dispatcher.test.js` covers Unicode/newline text, named/function/printable descriptors, chords, wheel routing, failure cleanup, cleanup diagnostics, and state-driven idle.
+- Fix commit: `db62f04`.
+- Status: source regression closed; live key-event fixture evidence remains pending under AIP-05.
+
+## BB-055 — Dialog and debugger recovery were not target-scoped or state-driven
+
+- Minimal repro: open a dialog in one flattened child session while another target is receiving input, or detach the debugger during a target swap. The old driver kept one global dialog flag and the controller retried attachment after fixed 250/500/750 ms delays.
+- Root cause: dialog correlation did not include target/session identity, input was not subscribed before dispatch, and renderer lifecycle was represented by booleans plus a timer loop.
+- Fix: add bounded target-scoped dialog races, retain multiple pending dialogs safely, wait for dispatcher idle after handling, add the explicit renderer-liveness machine, classify discard/conflict/gone/unresponsive states, and retry attachment only from detach/tab events with a strict attempt cap. Current-tab recovery performs no focus/reload/navigation.
+- Regression: input, liveness, driver, and controller tests prove cross-target isolation, cleanup after dialog races, event-driven reconciliation, conflict classification, discarded-tab classification, and no current-tab mutation.
+- Fix commit: `db62f04`.
+- Status: source regression closed; real dialog/discard/rebind evidence remains pending under AIP-05.
+
+## BB-056 — Invalid selectors and text-only changes were misclassified
+
+- Minimal repro: act or wait with selector `]`, or wait for a page that changes only a text node/input value. Selector errors were caught as target absence or a wait timeout, while settling compared URL and element counts that did not change.
+- Root cause: `DOM.querySelectorAll`/Runtime exceptions were swallowed, and the settle fingerprint observed structure rather than the relevant document state.
+- Fix: validate selectors before execution and preserve typed `invalid_selector`; settle on a document mutation/input revision plus bounded network-quiet state, with polling only for the actual state transition.
+- Regression: driver and controller tests prove zero input dispatch for invalid syntax, preflight before a wait loop, exact error propagation, and a MutationObserver/input-based fingerprint with no element-count proxy.
+- Fix commit: `db62f04`.
+- Status: source regression closed; live asynchronous text/value fixture evidence remains pending under AIP-05/AIP-06.
+
+## BB-057 — Extension builds omitted extracted driver runtime imports
+
+- Minimal repro: build the extension after the command-pump/target-registry extraction, then resolve `driver.js` and `controller.js` relative imports from `apps/extension/dist`; the imported support modules are absent.
+- Root cause: `scripts/build-extension.mjs` copied a historical fixed list containing only `driver.js`, `controller.js`, and `chrome-tabs-port.js`. Source tests imported directly from the workspace and therefore could not detect the packed module-closure break.
+- Fix: copy every explicit driver runtime module and traverse the generated service worker's complete relative-import closure in the extension regression.
+- Regression: `apps/extension/test/extension.test.ts` builds the standalone extension, asserts all support modules, and fails on any missing transitive relative import; the complete `pnpm build` and `pnpm test` pass.
+- Fix commit: `db62f04`.
+- Status: closed.

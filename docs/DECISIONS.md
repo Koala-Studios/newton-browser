@@ -382,3 +382,28 @@ retry-safe; a terminal controller response is `completed` and not automatically 
 sent work without a terminal response is `outcome_unknown` and not automatically retried.
 Late results are matched only to their exact command generation and cannot overwrite a
 newer idempotency entry.
+
+## 27. Centralized input and event-driven renderer recovery (2026-08-09)
+
+All CDP keyboard, pointer, and wheel events route through one per-session dispatcher.
+Printable text uses `Input.insertText`; named keys and chords use complete virtual-key,
+code, modifier, raw-down, optional-char, and key-up descriptors. The dispatcher owns
+pressed button/modifier state and performs balanced cleanup. If cleanup fails after an
+effect may have been released, the host reports `outcome_unknown` rather than suggesting
+an automatic retry.
+
+JavaScript dialogs are scoped by flattened CDP session and subscribed before input is
+released. A dialog in another frame cannot settle or block the current target's input,
+and dialog handling waits for the dispatcher's observable idle transition before the
+next command. Renderer state is explicit (`healthy`, `dialog_blocked`, `discarded`,
+`debugger_detached`, `target_gone`, `unresponsive`, `reconciling`, `terminal`). Debugger
+reattachment is triggered by detach/tab lifecycle events with a strict attempt bound;
+there is no delay loop, and current-tab recovery never focuses, reloads, or navigates the
+user's tab. Owned tabs are marked non-discardable, while a real discard remains a typed
+failure rather than an automatic reload.
+
+Completion settling uses document mutation/input revision plus network-quiet state. It
+does not use URL and element counts as a proxy, so text/value-only changes are visible.
+Invalid selectors are validated before dispatch and remain `invalid_selector` through
+the controller. A failed click hit test returns bounded blocker evidence and never falls
+back to blind coordinates.
