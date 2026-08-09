@@ -22,6 +22,15 @@ const LOCAL_TRANSPORTS = new Set<BrowserControlTransportMode>(BROWSER_CONTROL_TR
 const CURRENT_PROTOCOL = SUPPORTED_MCP_PROTOCOLS.at(-1)!;
 const INLINE_SCREENSHOT_CAP = 1_000_000;
 const SCREENSHOT_BYTES_CAP = 16 * 1024 * 1024;
+const FINALIZATION_LEDGER_CAP = 256;
+const FINALIZATION_LEDGER_TTL_MS = 10 * 60_000;
+type FinalizationDisposition = "close" | "deliverable" | "handoff";
+type FinalizationRecord = {
+  disposition: FinalizationDisposition;
+  event: Extract<BridgeResultEvent, { ok: true }>;
+  createdAt: number;
+};
+const finalizationLedgers = new WeakMap<NewtonBrowserHost, Map<string, FinalizationRecord>>();
 
 export async function startNewtonBrowserMcpServer(input: { bridge?: NewtonBrowserHost; port?: number; host?: string } = {}): Promise<void> {
   const readinessTimeoutMs = Number(process.env.NEWTON_BROWSER_READINESS_TIMEOUT_MS);
@@ -213,12 +222,35 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
   }
   if (name === "browser.tabs.finalize") {
     const sessionId = requiredString(args.sessionId, "sessionId");
-    const disposition = typeof args.disposition === "string" && ["close", "deliverable", "handoff"].includes(args.disposition)
+    const disposition: FinalizationDisposition | null = args.disposition === "close"
+      || args.disposition === "deliverable"
+      || args.disposition === "handoff"
       ? args.disposition
       : null;
     if (!disposition) return toolError("invalid_finalize_disposition", "Disposition must be close, deliverable, or handoff.");
+    const finalized = finalizationRecord(bridge, sessionId);
+    if (finalized) {
+      if (finalized.disposition !== disposition) {
+        return toolJson({
+          ok: false,
+          errorCode: "finalize_conflict",
+          sessionEpoch: finalized.event.sessionEpoch,
+          sequence: finalized.event.sequence,
+          outcome: "prevented",
+          retrySafe: true,
+          transport,
+        }, true);
+      }
+      return toolJson({
+        ok: true,
+        ...(isObject(finalized.event.result) ? finalized.event.result : {}),
+        ...publicCommandMetadata(finalized.event),
+        transport,
+      });
+    }
     const event = await bridge.dispatch(sessionId, { kind: "__finalize", disposition } as any);
     if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event), transport }, true);
+    storeFinalizationRecord(bridge, sessionId, disposition, event);
     return toolJson({ ok: true, ...(isObject(event.result) ? event.result : {}), ...publicCommandMetadata(event), transport });
   }
   if (name === "browser.stop_all") {
@@ -506,6 +538,48 @@ function publicCommandMetadata(event: BridgeResultEvent) {
     retrySafe: event.retrySafe,
     ...(event.lateResultDiscarded ? { lateResultDiscarded: true } : {}),
   };
+}
+
+function finalizationRecord(bridge: NewtonBrowserHost, sessionId: string): FinalizationRecord | null {
+  const ledger = finalizationLedgers.get(bridge);
+  if (!ledger) return null;
+  const now = Date.now();
+  for (const [key, record] of ledger) {
+    if (now - record.createdAt > FINALIZATION_LEDGER_TTL_MS) ledger.delete(key);
+  }
+  return ledger.get(sessionId) ?? null;
+}
+
+function storeFinalizationRecord(
+  bridge: NewtonBrowserHost,
+  sessionId: string,
+  disposition: FinalizationDisposition,
+  event: Extract<BridgeResultEvent, { ok: true }>,
+): void {
+  const ledger = finalizationLedgers.get(bridge) ?? new Map<string, FinalizationRecord>();
+  const rawResult = isObject(event.result) ? event.result : {};
+  const storedEvent: Extract<BridgeResultEvent, { ok: true }> = {
+    commandId: event.commandId,
+    sessionEpoch: event.sessionEpoch,
+    sequence: event.sequence,
+    ok: true,
+    outcome: "completed",
+    retrySafe: false,
+    result: {
+      finalized: rawResult.finalized === true,
+      disposition,
+      ...(Number.isSafeInteger(rawResult.tabId) ? { tabId: rawResult.tabId } : {}),
+      ...(typeof rawResult.tabKept === "boolean" ? { tabKept: rawResult.tabKept } : {}),
+    },
+  };
+  ledger.delete(sessionId);
+  ledger.set(sessionId, { disposition, event: storedEvent, createdAt: Date.now() });
+  while (ledger.size > FINALIZATION_LEDGER_CAP) {
+    const oldest = ledger.keys().next().value;
+    if (oldest === undefined) break;
+    ledger.delete(oldest);
+  }
+  finalizationLedgers.set(bridge, ledger);
 }
 
 function toolJson(value: unknown, isError = false, errorCodeValue?: string): ToolCallResult {

@@ -193,6 +193,54 @@ test("browser.act forwards idempotency keys and exposes host-owned outcome metad
   }
 });
 
+test("browser.tabs.finalize replays one terminal disposition and rejects conflicts", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  let commandCount = 0;
+  const countCommands = (data: any) => {
+    if (JSON.parse(data.toString()).type === "bridge_command") commandCount += 1;
+  };
+  socket.on("message", countCommands);
+  try {
+    const { sessionId } = bridge.createSession({
+      origin: "https://example.com",
+      allowedOrigins: ["https://example.com"],
+      tabMode: "owned_group",
+    });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const wirePromise = waitForMessage(
+      socket,
+      (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId,
+    );
+    const firstCall = toolCall(bridge, "browser.tabs.finalize", { sessionId, disposition: "handoff" });
+    const wire = await wirePromise;
+    await postResult(socket, wire, {
+      ok: true,
+      result: { finalized: true, disposition: "handoff", tabId: 101, tabKept: true },
+    });
+    const first = await firstCall;
+    assert.equal(first.isError, false);
+    assert.equal(first.json.disposition, "handoff");
+
+    const replay = await toolCall(bridge, "browser.tabs.finalize", { sessionId, disposition: "handoff" });
+    assert.equal(replay.isError, false);
+    assert.equal(replay.json.sequence, wire.command.sequence);
+    assert.equal(commandCount, 1);
+
+    const conflict = await toolCall(bridge, "browser.tabs.finalize", { sessionId, disposition: "close" });
+    assert.equal(conflict.isError, true);
+    assert.equal(conflict.json.errorCode, "finalize_conflict");
+    assert.equal(conflict.json.outcome, "prevented");
+    assert.equal(conflict.json.retrySafe, true);
+    assert.equal(commandCount, 1);
+  } finally {
+    socket.off("message", countCommands);
+    socket.close();
+    await bridge.close();
+  }
+});
+
 test("authenticated ws transport queues, subscribes, and carries frames above 64 KiB", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);
