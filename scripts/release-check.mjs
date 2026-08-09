@@ -1,5 +1,10 @@
 import { spawnSync } from "node:child_process";
-import net from "node:net";
+import { newlyOccupiedPorts, probeOccupiedPorts } from "./release-port-guard.mjs";
+
+// Other active local MCP clients may legitimately own Newton's bounded default
+// ports before this release begins. Preserve that baseline and reject only a
+// listener created and leaked by one of the stages below.
+const baselineOccupied = await probeOccupiedPorts();
 
 // `build` runs before `typecheck`/`test`: @newton-browser/core resolves its types and
 // runtime entry from dist, so tsc and the by-name package imports in the test suite
@@ -13,17 +18,7 @@ for (const command of stages) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`release stage ${command} failed (${result.status})`);
 }
-const occupied = [];
-for (let port = 17321; port <= 17340; port += 1) if (await canConnect(port)) occupied.push(port);
-if (occupied.length) throw new Error(`orphan Newton Browser host ports remain: ${occupied.join(", ")}`);
-process.stdout.write(`${JSON.stringify({ ok: true, stages: stages.length, orphanHostPorts: 0 })}\n`);
-
-function canConnect(port) {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: "127.0.0.1", port });
-    const finish = (value) => { socket.destroy(); resolve(value); };
-    socket.setTimeout(150, () => finish(false));
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-  });
-}
+const occupiedAfter = await probeOccupiedPorts();
+const unexpected = newlyOccupiedPorts(baselineOccupied, occupiedAfter);
+if (unexpected.length) throw new Error(`new orphan Newton Browser host ports remain: ${unexpected.join(", ")}`);
+process.stdout.write(`${JSON.stringify({ ok: true, stages: stages.length, preexistingHostPorts: baselineOccupied.size, orphanHostPorts: 0 })}\n`);

@@ -639,3 +639,12 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   fails on the prior projector and passes after correction; the live frame-churn harness
   consumes the JSON form.
 - Status: closed at source/packed projection level; connected OOPIF evidence remains open.
+
+## BB-071 - Release gate mistook active client hosts for leaked processes
+
+- Found: 2026-08-09 during the first final three-pass release attempt.
+- Minimal repro: start Newton MCP hosts from existing Codex tasks on ports in `17321..17340`, then run `pnpm release:check`.
+- Root cause: the final port guard required the entire bounded default range to be empty, even when listeners predated the release process and belonged to active local clients.
+- Fix: snapshot occupied default ports before the first release stage and reject only ports that become newly occupied during the run.
+- Regression: `test/release-port-guard.test.mjs` preserves an existing baseline while detecting and sorting genuinely new listeners.
+- Status: closed; final three-pass release proof restarted from the corrected guard.
