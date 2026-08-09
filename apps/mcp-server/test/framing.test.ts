@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PassThrough } from "node:stream";
+import { PassThrough, type Readable, type Writable } from "node:stream";
 
 import {
   McpFrameParser,
@@ -9,7 +9,6 @@ import {
   MAX_MCP_BUFFER_BYTES,
   MAX_MCP_HEADER_BYTES,
 } from "../src/mcp-frame-parser.ts";
-import { serveNewtonBrowserMcpConnection } from "../src/mcp-server.ts";
 
 type Deferred = {
   promise: Promise<void>;
@@ -90,6 +89,18 @@ function jsonLinePayload(length: number): Buffer {
 
 function terminatorFor(newline: "\r\n" | "\n"): string {
   return newline === "\r\n" ? "\r\n\r\n" : "\n\n";
+}
+
+type ServeMcpInput = {
+  bridge: Record<string, unknown>;
+  readable: Readable;
+  writable: Writable;
+  startupErrorCode?: string;
+};
+
+async function runServeNewtonBrowserMcpConnection(input: ServeMcpInput): Promise<void> {
+  const { serveNewtonBrowserMcpConnection } = await import("../src/mcp-server.ts");
+  await serveNewtonBrowserMcpConnection(input);
 }
 
 type CapturedFrame = { mode: "framed" | "json-line"; message: unknown; raw: Buffer };
@@ -644,7 +655,7 @@ test("serves typed incomplete_frame for EOF on partial json-line input and waits
   const events: string[] = [];
 
   const serve = (async () => {
-    await serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+    await runServeNewtonBrowserMcpConnection({ bridge: {} as Record<string, unknown>, readable, writable });
     events.push("serve");
   })();
 
@@ -677,7 +688,7 @@ test("serves typed incomplete_frame for EOF on partial framed body and waits for
   const events: string[] = [];
 
   const serve = (async () => {
-    await serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+    await runServeNewtonBrowserMcpConnection({ bridge: {} as Record<string, unknown>, readable, writable });
     events.push("serve");
   })();
 
@@ -705,6 +716,22 @@ test("serves typed incomplete_frame for EOF on partial framed body and waits for
   assert.equal(response?.error?.data?.errorCode, "incomplete_frame");
 });
 
+test("normalizes readable string chunks when encoding is set", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+
+  const serve = runServeNewtonBrowserMcpConnection({ bridge: {} as Record<string, unknown>, readable, writable });
+  readable.setEncoding("utf8");
+  readable.end(JSON.stringify({ jsonrpc: "2.0", id: 11, method: "ping" }) + "\n");
+
+  await serve;
+
+  const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].mode, "json-line");
+  assert.equal((parsed[0].message as any).id, 11);
+  assert.deepEqual((parsed[0].message as any).result, {});
+});
+
 test("awaits an async tools/call handler before serve resolves", async () => {
   const { readable, writable, chunks } = createServeStreams();
 
@@ -721,7 +748,7 @@ test("awaits an async tools/call handler before serve resolves", async () => {
     stopSession: () => {},
   } as any;
 
-  const serve = serveNewtonBrowserMcpConnection({ bridge, readable, writable });
+  const serve = runServeNewtonBrowserMcpConnection({ bridge, readable, writable });
   const responseSeen = createDeferred();
   const events: string[] = [];
 
@@ -772,7 +799,7 @@ test("preserves response framing and ordering for mixed input messages", async (
     Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "ping" }) + "\n", "utf8"),
   ]);
 
-  const serve = serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+  const serve = runServeNewtonBrowserMcpConnection({ bridge: {} as Record<string, unknown>, readable, writable });
   readable.end(input);
 
   await serve;
@@ -792,7 +819,7 @@ test("malformed or oversized framed input emits one framed typed protocol error 
   const secret = "SECRET_SENTINEL_TOKEN_123";
   const longSecret = `X-Secret: ${secret}\n${"A".repeat(MAX_MCP_HEADER_BYTES)}`;
   const header = `Content-Length: 1\r\n${longSecret}\r\n\r\n`;
-  const serve = serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+  const serve = runServeNewtonBrowserMcpConnection({ bridge: {} as Record<string, unknown>, readable, writable });
   readable.end(Buffer.from(header + "{}", "utf8"));
 
   await serve;
@@ -807,7 +834,7 @@ test("malformed or oversized framed input emits one framed typed protocol error 
 
 test("end+close race resolves once and emits one incomplete_frame", async () => {
   const { readable, writable, chunks } = createServeStreams();
-  const serve = serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+  const serve = runServeNewtonBrowserMcpConnection({ bridge: {} as Record<string, unknown>, readable, writable });
   const events: string[] = [];
   readable.end(Buffer.from('{"jsonrpc":"2.0","id":9,"method":"ping"', "utf8"));
   readable.emit("close");

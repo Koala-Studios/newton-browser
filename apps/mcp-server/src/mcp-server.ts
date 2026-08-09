@@ -49,15 +49,18 @@ export async function serveNewtonBrowserMcpConnection(input: {
   writable: Writable;
   startupErrorCode?: string;
 }): Promise<void> {
-  let observedMode: MessageMode | null = null;
   let complete = false;
   let errorResponded = false;
-  let serveResolve: () => void = () => {};
-  let serveReject: (error: unknown) => void = () => {};
+  let resolveServe: () => void = () => {};
+  let rejectServe: (error: unknown) => void = () => {};
   const serveDone = new Promise<void>((resolve, reject) => {
-    serveResolve = resolve;
-    serveReject = reject;
+    resolveServe = resolve;
+    rejectServe = reject;
   });
+
+  const typedParserErrorResponse = (error: McpFrameParseError, mode: MessageMode): JsonRpcResponse => {
+    return errorResponse(null, -32700, `Malformed MCP frame (${mode} mode).`, { errorCode: error.code });
+  };
 
   const writeErrorResponse = (error: McpFrameParseError, mode: MessageMode): void => {
     if (errorResponded) return;
@@ -67,7 +70,7 @@ export async function serveNewtonBrowserMcpConnection(input: {
 
   const parser = new McpFrameParser(
     async (message, mode) => {
-      const response = await handleMcpMessage(input.bridge, message, { startupErrorCode: input.startupErrorCode });
+      const response = await handleMcpMessage(input.bridge, message as JsonRpcRequest, { startupErrorCode: input.startupErrorCode });
       if (response) writeMessage(input.writable, response, mode);
     },
     async (error, mode) => writeErrorResponse(error, mode),
@@ -86,9 +89,9 @@ export async function serveNewtonBrowserMcpConnection(input: {
     try {
       parser.end();
       await parser.flush();
-      serveResolve();
+      resolveServe();
     } catch (error) {
-      serveReject(error);
+      rejectServe(error);
     } finally {
       cleanup();
     }
@@ -102,9 +105,8 @@ export async function serveNewtonBrowserMcpConnection(input: {
     void finalize();
   };
 
-  const onData = (chunk: Buffer) => {
-    if (observedMode === null) observedMode = detectIncomingMode(chunk);
-    parser.push(chunk);
+  const onData = (chunk: Buffer | string) => {
+    parser.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   };
 
   input.readable.on("data", onData);
@@ -115,20 +117,6 @@ export async function serveNewtonBrowserMcpConnection(input: {
 
   await serveDone;
   return;
-
-  function typedParserErrorResponse(error: McpFrameParseError, mode: MessageMode): JsonRpcResponse {
-    return errorResponse(null, -32700, `Malformed MCP frame (${mode} mode).`, { errorCode: error.code });
-  }
-
-  function detectIncomingMode(chunk: Buffer): MessageMode | null {
-    for (const value of chunk) {
-      if (value === 0x20 || value === 0x09 || value === 0x0a || value === 0x0d || value === 0x0b || value === 0x0c) {
-        continue;
-      }
-      return value === 0x7b ? "json-line" : "framed";
-    }
-    return null;
-  }
 }
 
 export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonRpcRequest, input: { startupErrorCode?: string } = {}): Promise<JsonRpcResponse | null> {
