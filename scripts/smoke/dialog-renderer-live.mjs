@@ -33,5 +33,4 @@ await runInputReliabilityLive("dialog-renderer-live", async ({ mcp, sessionId, r
 }, {
   mainPort: Number(process.env.NEWTON_BROWSER_DIALOG_FIXTURE_PORT ?? 18331),
   crossPort: Number(process.env.NEWTON_BROWSER_DIALOG_CROSS_PORT ?? 18332),
-  hostPort: Number(process.env.NEWTON_BROWSER_PORT ?? 17321),
 });

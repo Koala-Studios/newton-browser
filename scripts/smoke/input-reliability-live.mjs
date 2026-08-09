@@ -43,5 +43,4 @@ await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId,
 }, {
   mainPort: Number(process.env.NEWTON_BROWSER_INPUT_FIXTURE_PORT ?? 18321),
   crossPort: Number(process.env.NEWTON_BROWSER_INPUT_CROSS_PORT ?? 18322),
-  hostPort: Number(process.env.NEWTON_BROWSER_PORT ?? 17321),
 });

@@ -17,7 +17,9 @@ extension builds, packed clean-install, isolated clean-user directories, fixture
 Node 24/25, chaos, and concurrent two-host checks. The driver
 artifact must contain only compiled JavaScript and overlay assets—no TypeScript, source
 maps, tests, fixtures, absolute checkout paths, or declaration-only runtime module. The
-gate must leave all ports in `127.0.0.1:17321-17340` closed.
+gate snapshots `127.0.0.1:17321-17340` before it starts: pre-existing local MCP
+listeners may remain, but every port that was free at the start must still be free at the
+end. A newly occupied port is a release failure.
 
 Expected release artifacts:
 
@@ -33,6 +35,40 @@ Real-browser acceptance is separate from the hermetic release command because it
 an already loaded Chrome/Edge extension. Run `pnpm eval:live` for each required browser
 target, record browser/extension versions and fixture counters, and do not treat
 `extension_disconnected` as a passing live result.
+
+The live harness defaults deterministically to Chrome and selects the first free host port
+in `17321-17340`. Set `NEWTON_BROWSER_QA_OWNER=edge` to repeat the same matrix in Edge;
+set `NEWTON_BROWSER_PORT` only when an exact free port in that range is required. Do not
+use `browserTarget:auto` for release evidence because it does not prove which browser won
+the session claim.
+
+On PowerShell, run one selected browser at a time and leave the port unset so the harness
+can avoid other local MCP tasks:
+
+```powershell
+$env:NEWTON_BROWSER_QA_OWNER = "chrome"
+Remove-Item Env:NEWTON_BROWSER_PORT -ErrorAction SilentlyContinue
+pnpm eval:live
+
+$env:NEWTON_BROWSER_QA_OWNER = "edge"
+pnpm eval:live
+```
+
+On POSIX shells, the equivalent commands are
+`NEWTON_BROWSER_QA_OWNER=chrome pnpm eval:live` and
+`NEWTON_BROWSER_QA_OWNER=edge pnpm eval:live`.
+
+The MV3 restart proof is a separate manually coordinated run:
+
+```powershell
+$env:NEWTON_BROWSER_QA_OWNER = "chrome"
+$env:NEWTON_BROWSER_QA_STATE_FILE = Join-Path $env:TEMP "newton-worker-restart.json"
+node scripts/smoke/live-worker-restart.mjs
+```
+
+When the state file reports `reload_now`, reload only the unpacked Newton extension's
+service worker in the selected browser. The harness must report the same owned tab after
+recovery. Repeat with `NEWTON_BROWSER_QA_OWNER=edge` where Edge is available.
 
 Final 0.4 candidate evidence (2026-07-11): the unshortened packed release gate passed
 three consecutive times after incognito support and release-scope closure—381.5s,

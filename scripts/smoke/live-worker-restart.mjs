@@ -2,10 +2,11 @@ import fs from "node:fs";
 
 import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
+import { resolveLiveBrowserTarget, resolveLiveHostPort } from "./live-config.mjs";
 
-const browserTarget = process.env.NEWTON_BROWSER_QA_OWNER === "chrome" ? "chrome" : "edge";
+const browserTarget = resolveLiveBrowserTarget();
 const fixturePort = Number(process.env.NEWTON_BROWSER_QA_FIXTURE_PORT ?? 18231);
-const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const hostPort = resolveLiveHostPort();
 const statePath = process.env.NEWTON_BROWSER_QA_STATE_FILE;
 if (!statePath) throw new Error("NEWTON_BROWSER_QA_STATE_FILE is required");
 
@@ -14,7 +15,7 @@ const bridge = createNewtonBrowserHost({ authMode: "local_trust", browserTarget 
 let sessionId = "";
 
 try {
-  await bridge.listen(hostPort, "127.0.0.1");
+  const listener = await bridge.listen(hostPort, "127.0.0.1");
   sessionId = bridge.createSession({
     origin: fixture.origin,
     allowedOrigins: [fixture.origin],
@@ -23,7 +24,7 @@ try {
     instanceLabel: "live-worker-restart",
   }).sessionId;
   const first = await bridge.waitForSessionReady(sessionId, 90_000);
-  writeState({ phase: "reload_now", browserTarget, sessionId, tabId: first.ownedTabId, groupId: first.tabGroupId });
+  writeState({ phase: "reload_now", browserTarget, hostPort: listener.port, sessionId, tabId: first.ownedTabId, groupId: first.tabGroupId });
 
   const interrupted = await bridge.dispatch(sessionId, {
     kind: "wait_for",
@@ -40,6 +41,7 @@ try {
   const report = {
     ok: true,
     browserTarget,
+    hostPort: listener.port,
     sessionId,
     tabId: recovered.ownedTabId,
     sameOwnedTab: true,

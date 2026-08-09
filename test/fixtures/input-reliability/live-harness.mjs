@@ -5,19 +5,22 @@ import { fileURLToPath } from "node:url";
 
 import { createNewtonBrowserHost } from "../../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../../apps/mcp-server/src/mcp-server.ts";
+import { resolveLiveBrowserTarget, resolveLiveHostPort } from "../../../scripts/smoke/live-config.mjs";
 
 const fixtureRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export async function runInputReliabilityLive(name, execute, options = {}) {
   const mainPort = Number(options.mainPort);
   const crossPort = Number(options.crossPort);
-  const hostPort = Number(options.hostPort);
-  if (![mainPort, crossPort, hostPort].every((value) => Number.isSafeInteger(value) && value > 0)) {
-    throw new Error("live smoke ports must be positive integers");
+  const hostPort = options.hostPort === undefined ? resolveLiveHostPort() : Number(options.hostPort);
+  const browserTarget = options.browserTarget ?? resolveLiveBrowserTarget();
+  if (![mainPort, crossPort].every((value) => Number.isSafeInteger(value) && value > 0)
+    || (hostPort !== undefined && (!Number.isSafeInteger(hostPort) || hostPort < 17_321 || hostPort > 17_340))) {
+    throw new Error("live smoke fixture ports must be positive integers and the optional host port must be within 17321-17340");
   }
   const main = await startStaticServer(mainPort);
   const cross = await startStaticServer(crossPort);
-  const bridge = createNewtonBrowserHost();
+  const bridge = createNewtonBrowserHost({ browserTarget });
   let sessionId = "";
   let requestId = 1;
   const origin = `http://127.0.0.1:${mainPort}`;
@@ -34,7 +37,7 @@ export async function runInputReliabilityLive(name, execute, options = {}) {
     return JSON.parse(text);
   };
   try {
-    await bridge.listen(hostPort, "127.0.0.1");
+    const listener = await bridge.listen(hostPort, "127.0.0.1");
     await waitForState(() => bridge.getStatus().extensionConnected === true, "extension connection", 45_000);
     const started = await mcp("browser.session.start", {
       origin,
@@ -56,13 +59,16 @@ export async function runInputReliabilityLive(name, execute, options = {}) {
       sessionId,
       origin,
       crossOrigin,
+      browserTarget,
+      hostPort: listener.port,
       resultOf(value) { return value?.result ?? value; },
       statusOf(value) { return value?.errorCode ?? value?.result?.actionStatus ?? value?.result?.status ?? value?.status; },
       assert,
       log(step, detail = {}) { process.stdout.write(`${JSON.stringify({ smoke: name, step, ...detail })}\n`); },
     };
+    api.log("connected", { browserTarget, hostPort: listener.port });
     await execute(api);
-    api.log("pass");
+    api.log("pass", { browserTarget, hostPort: listener.port });
   } finally {
     try { if (sessionId) await mcp("browser.session.stop", { sessionId }); } catch {}
     try { bridge.stopAll(); await bridge.close(); } catch {}

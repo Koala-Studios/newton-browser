@@ -2,18 +2,20 @@ import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 import { scheduler } from "node:timers/promises";
+import { resolveLiveBrowserTarget, resolveLiveHostPort } from "./live-config.mjs";
 
 const fixturePort = Number(process.env.NEWTON_BROWSER_CONTAINMENT_FIXTURE_PORT ?? 18341);
-const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const hostPort = resolveLiveHostPort();
+const browserTarget = resolveLiveBrowserTarget();
 let fixture;
 let bridge;
 
 try {
   fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
-  bridge = createNewtonBrowserHost();
-  await bridge.listen(hostPort, "127.0.0.1");
+  bridge = createNewtonBrowserHost({ browserTarget });
+  const listener = await bridge.listen(hostPort, "127.0.0.1");
   await waitFor(() => bridge.getStatus().extensionConnected ? bridge.getStatus() : null, "extension connection", 45_000);
-  log("origin_containment_servers_ready", { origin: fixture.origin, destination: fixture.crossOrigin });
+  log("origin_containment_servers_ready", { browserTarget, hostPort: listener.port, origin: fixture.origin, destination: fixture.crossOrigin });
 
   const restrictedSession = await startSession([fixture.origin], "origin-containment-restricted");
   resultOf(await mcp("browser.act", { sessionId: restrictedSession, action: { kind: "navigate", url: `${fixture.origin}/origin-containment/primary.html` } }));

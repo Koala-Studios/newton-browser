@@ -657,3 +657,12 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: use a shared response waiter that registers one cancellable timer, removes it on success, cleans its map entry on either outcome, and rechecks the response map after registration.
 - Regression: `test/extension-readiness-lifecycle.test.mjs` proves timer cancellation for ordinary and registration-race responses; the real disconnected probe exits promptly after emitting its bounded result.
 - Status: closed.
+
+## BB-073 - Live eval selected inconsistent browsers and a busy fixed port
+
+- Found: 2026-08-09 during the connected-browser completion audit.
+- Minimal repro: run `pnpm eval:live` with only Chrome connected while port 17321 belongs to another local MCP task. The first harness targets Edge by default and every harness requests the occupied port even though the host supports bounded discovery.
+- Root cause: older QA scripts interpreted an absent `NEWTON_BROWSER_QA_OWNER` as Edge, newer scripts inherited `browserTarget:auto`, and each wrapper converted an absent port override into literal 17321.
+- Fix: one strict live configuration resolver defaults to Chrome, accepts an explicit Chrome/Edge owner, rejects ambiguous `auto`, and leaves the port undefined so the host scans its bounded loopback range. Every audit live harness now records the selected family and actual port.
+- Regression: `test/live-smoke-config.test.mjs` covers target precedence, ambiguity rejection, automatic port selection, exact bounds, and malformed overrides.
+- Status: closed at source level; connected Chrome/Edge execution remains pending.

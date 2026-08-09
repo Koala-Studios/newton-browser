@@ -2,18 +2,20 @@ import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 import { scheduler } from "node:timers/promises";
+import { resolveLiveBrowserTarget, resolveLiveHostPort } from "./live-config.mjs";
 
 const fixturePort = Number(process.env.NEWTON_BROWSER_FRAME_FIXTURE_PORT ?? 18331);
-const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const hostPort = resolveLiveHostPort();
+const browserTarget = resolveLiveBrowserTarget();
 let fixture;
 let bridge;
 
 try {
   fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1, thirdOriginPort: fixturePort + 2 });
-  bridge = createNewtonBrowserHost();
-  await bridge.listen(hostPort, "127.0.0.1");
+  bridge = createNewtonBrowserHost({ browserTarget });
+  const listener = await bridge.listen(hostPort, "127.0.0.1");
   await waitFor(() => bridge.getStatus().extensionConnected ? bridge.getStatus() : null, "extension connection", 45_000);
-  log("frame_churn_servers_ready", { origin: fixture.origin, crossOrigin: fixture.crossOrigin, thirdOrigin: fixture.thirdOrigin });
+  log("frame_churn_servers_ready", { browserTarget, hostPort: listener.port, origin: fixture.origin, crossOrigin: fixture.crossOrigin, thirdOrigin: fixture.thirdOrigin });
 
   const restrictedSession = await startSession([fixture.origin], "frame-excluded-provenance");
   const restricted = await observeUntil(restrictedSession, (observation) => hasName(observation, "Same-origin frame button") && (observation.excludedFrames ?? []).some((frame) => frame.frameOrigin === fixture.crossOrigin), "excluded OOPIF provenance");

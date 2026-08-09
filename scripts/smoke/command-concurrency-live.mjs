@@ -2,17 +2,18 @@ import fs from "node:fs";
 
 import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
+import { resolveLiveBrowserTarget, resolveLiveHostPort } from "./live-config.mjs";
 
-const browserTarget = process.env.NEWTON_BROWSER_QA_OWNER === "chrome" ? "chrome" : "edge";
+const browserTarget = resolveLiveBrowserTarget();
 const fixturePort = Number(process.env.NEWTON_BROWSER_QA_FIXTURE_PORT ?? 18231);
-const hostPort = Number(process.env.NEWTON_BROWSER_PORT ?? 17321);
+const hostPort = resolveLiveHostPort();
 const statePath = process.env.NEWTON_BROWSER_QA_STATE_FILE;
 
 const fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
 const bridge = createNewtonBrowserHost({ authMode: "local_trust", browserTarget });
 
 try {
-  await bridge.listen(hostPort, "127.0.0.1");
+  const listener = await bridge.listen(hostPort, "127.0.0.1");
   const sessions = await Promise.all(["fifo", "parallel"].map(async (worker) => {
     const sessionId = bridge.createSession({
       origin: fixture.origin,
@@ -27,7 +28,7 @@ try {
   const fifo = sessions.find((session) => session.worker === "fifo");
   const parallel = sessions.find((session) => session.worker === "parallel");
   assert(fifo && parallel, "acceptance sessions were not created");
-  writeState({ phase: "running", browserTarget, sessions });
+  writeState({ phase: "running", browserTarget, hostPort: listener.port, sessions });
 
   let blockedSettled = false;
   let firstClickSettled = false;
@@ -79,6 +80,7 @@ try {
   const report = {
     ok: true,
     browserTarget,
+    hostPort: listener.port,
     sameSessionFifo: true,
     sameSessionOverlap: 0,
     crossSessionProgress: true,
