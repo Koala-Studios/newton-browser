@@ -1,6 +1,13 @@
 // @ts-check
-
-const MUTATING_KINDS = new Set(["click", "press", "fill", "type", "select", "clear"]);
+import { SessionCommandPump } from "./session-command-pump.js";
+const DEFAULT_SESSION_MAX_ITEMS = 32;
+const DEFAULT_SESSION_MAX_BYTES = 1024 * 1024;
+const STALE_COMMAND_EPOCH_ERROR = "stale_command_epoch";
+const INVALID_COMMAND_SEQUENCE_ERROR = "invalid_command_sequence";
+const OUTCOME_COMPLETED = "completed";
+const OUTCOME_PREVENTED = "prevented";
+const OUTCOME_NOT_STARTED = "not_started";
+const commandByteEncoder = new TextEncoder();
 
 const DEFAULT_GROUP_THEMES = [
   { color: "blue", accent: "31, 111, 235" },
@@ -26,8 +33,18 @@ class SessionController {
     // cross-origin request's body.
     this.driver.allowedOrigins = this.allowedOrigins;
     this.streaming = false;
+    this.closing = false;
+    this.sessionEpoch = null;
+    this.nextSequence = 1;
     this.unsubscribe = null;
     this.reattaching = false;
+    this._commandShutdown = null;
+    this._shutdownState = null;
+    this._stopSession = null;
+    this.pump = new SessionCommandPump({
+      maxItems: DEFAULT_SESSION_MAX_ITEMS,
+      maxBytes: DEFAULT_SESSION_MAX_BYTES,
+    });
   }
 
   snapshot() {
@@ -40,6 +57,7 @@ class SessionController {
       ownsTab: this.ownsTab,
       streaming: this.streaming,
       attached: this.driver.attached,
+      commandPump: this.pump.snapshot(),
     };
   }
 }
@@ -57,6 +75,14 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   const emit = async (event) => {
     if (typeof notify !== "function") return;
     await Promise.resolve(notify(event)).catch(() => {});
+  };
+
+  const postResult = async (event) => {
+    try {
+      await Promise.resolve(transport.postResult(event)).catch(() => {});
+    } catch {
+      // Transport failures are terminal diagnostics and must not block controller progress.
+    }
   };
 
   const bridgeSnapshot = () => {
@@ -168,14 +194,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     async stop(sessionId) {
       const controller = sessionId ? sessions.get(sessionId) : firstController();
       if (!controller) return { stopped: false };
-      sessions.delete(controller.sessionId);
-      stopSubscription(controller);
-      await controller.driver.detach().catch(() => {});
-      if (controller.ownsTab && typeof controller.tabId === "number") {
-        await tabs.removeTab(controller.tabId).catch(() => {});
+      await shutdownController(controller, { awaitCurrent: true });
+      if (!controller._commandShutdown?.notifiedState) {
+        await notifyState();
       }
-      await transport.stopSession(controller.sessionId).catch(() => {});
-      await notifyState();
       return { stopped: true };
     },
 
@@ -195,7 +217,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       for (const controller of [...sessions.values()]) {
         if (!liveIds.has(controller.sessionId)) {
           await runtime.stop(controller.sessionId).catch(() => {});
-        } else if (!controller.streaming) {
+        } else if (!controller.streaming && !controller.closing) {
           startSubscription(controller);
         }
       }
@@ -333,10 +355,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   }
 
   function startSubscription(controller) {
-    if (controller.streaming || !sessions.has(controller.sessionId)) return;
+    if (controller.streaming || controller.closing || !sessions.has(controller.sessionId)) return;
     controller.streaming = true;
     controller.unsubscribe = transport.subscribe(controller.sessionId, async (command) => {
-      await runCommand(controller, command).catch(() => {});
+      await enqueueCommand(controller, command);
     });
   }
 
@@ -350,10 +372,17 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     const commandId = command.commandId;
     if (!commandId || command.sessionId !== controller.sessionId) return;
     await transport.postEvent(commandId, "running", { actionKind: command.actionKind }).catch(() => {});
+    let executionStarted = false;
+    let terminalResultAttempted = false;
+    const emitTerminalResult = async (details, outcome) => {
+      if (terminalResultAttempted) return;
+      terminalResultAttempted = true;
+      await reportCommandResult(command, details, outcome);
+    };
     try {
       const liveOrigin = await liveTabOrigin(controller.tabId);
       if (!controller.allowedOrigins.includes(liveOrigin)) {
-        await transport.postResult({ commandId, ok: false, errorCode: "origin_not_granted" }).catch(() => {});
+        await emitTerminalResult({ ok: false, errorCode: "origin_not_granted" }, OUTCOME_PREVENTED);
         return;
       }
       if (!controller.driver.isAttachedTo(controller.tabId) && typeof controller.tabId === "number") {
@@ -363,52 +392,75 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       if (action.kind === "__finalize") {
         const disposition = ["close", "deliverable", "handoff"].includes(action.disposition) ? action.disposition : null;
         if (!disposition) throw new Error("invalid_finalize_disposition");
-        const finalized = await finalizeLocal(controller, disposition);
-        await transport.postResult({ commandId, ok: true, result: finalized }).catch(() => {});
-        await transport.stopSession(controller.sessionId).catch(() => {});
+        executionStarted = true;
+        prepareShutdown(controller, { notifyState: true, awaitCurrent: false });
+        const finalized = await commandShutdown(controller, { disposition, notifyState: true });
+        try {
+          await emitTerminalResult({ ok: true, result: finalized }, OUTCOME_COMPLETED);
+        } finally {
+          await stopHostSession(controller);
+        }
         return;
       }
       if (action.kind === "__focus") {
+        executionStarted = true;
         await tabs.focusTab?.(controller.tabId);
-        await transport.postResult({ commandId, ok: true, result: { focused: true, tabId: controller.tabId } }).catch(() => {});
+        await emitTerminalResult({ ok: true, result: { focused: true, tabId: controller.tabId } }, OUTCOME_COMPLETED);
         return;
       }
       if (action.kind === "__trusted_fill") {
+        executionStarted = true;
         await controller.driver.executeAction({ kind: "fill", target: action.target, value: action.value });
         const postFillOrigin = await liveTabOrigin(controller.tabId);
         if (!controller.allowedOrigins.includes(postFillOrigin)) {
-          await transport.postResult({ commandId, ok: false, errorCode: "origin_not_granted" }).catch(() => {});
-          await finalizeLocal(controller, "close").catch(() => {});
-          await transport.stopSession(controller.sessionId).catch(() => {});
+          prepareShutdown(controller, { notifyState: true, awaitCurrent: false });
+          await emitTerminalResult({ ok: false, errorCode: "origin_not_granted" }, OUTCOME_COMPLETED);
+          try {
+            await commandShutdown(controller, { disposition: "close", notifyState: true });
+          } finally {
+            await stopHostSession(controller);
+          }
           return;
         }
-        await transport.postResult({ commandId, ok: true, result: { filled: true } }).catch(() => {});
+        await reportCommandResult(command, { ok: true, result: { filled: true } }, OUTCOME_COMPLETED);
         await emit({ type: "activity", commandId, actionKind: "trusted_fill", status: "verified", changed: { filled: true } });
         return;
       }
-      const verdict = await preDispatchFloor(controller, action).catch(() => null);
+      const verdict = await preDispatchFloor(controller, action);
       if (verdict?.stop === "blocked") {
-        await transport.postResult({ commandId, ok: false, errorCode: "blocked_by_floor", decision: verdict.decision }).catch(() => {});
+        await emitTerminalResult({ ok: false, errorCode: "blocked_by_floor", decision: verdict.decision }, OUTCOME_PREVENTED);
         await emit({ type: "activity", commandId, actionKind: command.actionKind, status: "blocked", changed: {} });
         return;
       }
+      executionStarted = true;
       const delta = await controller.driver.executeAction(action);
       const postActionOrigin = await liveTabOrigin(controller.tabId);
       if (!controller.allowedOrigins.includes(postActionOrigin)) {
-        await transport.postResult({ commandId, ok: false, errorCode: "origin_not_granted" }).catch(() => {});
-        await finalizeLocal(controller, "close").catch(() => {});
-        await transport.stopSession(controller.sessionId).catch(() => {});
+        prepareShutdown(controller, { notifyState: true, awaitCurrent: false });
+        await emitTerminalResult({ ok: false, errorCode: "origin_not_granted" }, OUTCOME_COMPLETED);
+        try {
+          await commandShutdown(controller, { disposition: "close", notifyState: true });
+        } finally {
+          await stopHostSession(controller);
+        }
         return;
       }
-      await transport.postResult({ commandId, ok: true, result: deltaToResult(delta), ...(verdict?.decision ? { decision: verdict.decision } : {}) }).catch(() => {});
+      await emitTerminalResult({
+        ok: true,
+        result: deltaToResult(delta),
+        ...(verdict?.decision ? { decision: verdict.decision } : {}),
+      }, OUTCOME_COMPLETED);
       await emit({ type: "activity", commandId, actionKind: command.actionKind, status: delta.status, changed: delta.changed ?? {} });
     } catch (error) {
-      await transport.postResult({ commandId, ok: false, errorCode: errorCode(error) }).catch(() => {});
+      const stageOutcome = executionStarted ? OUTCOME_COMPLETED : OUTCOME_PREVENTED;
+      const detail = errorCode(error);
+      await emitTerminalResult({ ok: false, errorCode: detail }, stageOutcome);
     }
   }
 
   async function preDispatchFloor(controller, action) {
-    const evidence = await controller.driver.resolveEvidence(action).catch(() => null);
+    try {
+      const evidence = await controller.driver.resolveEvidence(action);
     if (!evidence) return null;
     const origin = evidence.resolved?.origin || controller.origin || undefined;
     const decision = await Promise.resolve(evaluateFloor({
@@ -417,27 +469,18 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       allowedOrigins: controller.allowedOrigins,
       resolved: evidence.resolved,
       signals: evidence.signals,
-    })).catch(() => null);
+    }));
     if (!decision) return null;
+    if (decision && typeof decision !== "object") return null;
     if (decision.blocked) return { stop: "blocked", decision };
     return { stop: null, decision };
+    } catch (error) {
+      throw new Error("floor_evaluation_failed");
+    }
   }
 
-  async function finalizeLocal(controller, disposition) {
-    sessions.delete(controller.sessionId);
-    stopSubscription(controller);
-    await controller.driver.detach().catch(() => {});
-    const tabId = controller.tabId;
-    let tabKept = true;
-    if (disposition === "close" && controller.ownsTab && typeof tabId === "number") {
-      await tabs.removeTab(tabId).catch(() => {});
-      tabKept = false;
-    } else if (typeof tabId === "number") {
-      await tabs.finalizeTab?.(tabId, disposition).catch(() => {});
-    }
-    await emit({ type: "finalized", sessionId: controller.sessionId, disposition, tabId, tabKept });
-    await notifyState();
-    return { finalized: true, disposition, tabId, tabKept };
+  function finalizeCurrentCommand(controller, disposition) {
+    return commandShutdown(controller, { disposition });
   }
 
   function firstController() {
@@ -456,6 +499,234 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     if (typeof tabId !== "number") return "";
     const tab = await tabs.getTab(tabId).catch(() => null);
     return safeOrigin(tab?.pendingUrl) || safeOrigin(tab?.url);
+  }
+
+  async function shutdownController(controller, { awaitCurrent = true } = {}) {
+    return completeShutdown(controller, { awaitCurrent });
+  }
+
+  async function completeShutdown(controller, { awaitCurrent = true, disposition = null, notifyState = false } = {}) {
+    const shutdownState = prepareShutdown(controller, { awaitCurrent, notifyState });
+    if (!shutdownState.promise) {
+      shutdownState.promise = (async () => {
+        if (shutdownState.awaitCurrent) {
+          await shutdownState.closePromise;
+        }
+        const finalized = await commandShutdown(controller, { disposition, notifyState: shutdownState.notifyState });
+        await stopHostSession(controller);
+        return finalized;
+      })();
+    }
+    return shutdownState.promise;
+  }
+
+  function prepareShutdown(controller, { awaitCurrent = true, notifyState = false } = {}) {
+    if (!controller._shutdownState) {
+      controller.closing = true;
+      const closePromise = controller.pump.closeAfterCurrent();
+      stopSubscription(controller);
+      controller._shutdownState = {
+        awaitCurrent: Boolean(awaitCurrent),
+        closePromise,
+        notifyState: Boolean(notifyState),
+        promise: null,
+      };
+    }
+    if (awaitCurrent) {
+      controller._shutdownState.awaitCurrent = true;
+    }
+    if (notifyState) {
+      controller._shutdownState.notifyState = true;
+    }
+    return controller._shutdownState;
+  }
+
+  function stopHostSession(controller) {
+    if (controller._stopSession) return controller._stopSession;
+    controller._stopSession = Promise.resolve()
+      .then(() => transport.stopSession(controller.sessionId))
+      .catch(() => {});
+    return controller._stopSession;
+  }
+
+  function commandShutdown(controller, { disposition = null, notifyState: shouldNotifyState = false } = {}) {
+    if (!controller._commandShutdown) {
+      const state = {
+        notifyState: Boolean(shouldNotifyState),
+        notifiedState: false,
+        promise: null,
+      };
+
+      const commandResult = (async () => {
+        let tabKept = true;
+        const tabId = controller.tabId;
+
+        const shutdownResult = {
+          finalized: Boolean(disposition),
+          disposition,
+          tabId,
+          tabKept,
+        };
+
+        if (typeof tabId === "number" && (disposition === null || disposition === "close") && controller.ownsTab) {
+          shutdownResult.tabKept = false;
+        }
+
+        sessions.delete(controller.sessionId);
+        stopSubscription(controller);
+        await controller.driver.detach().catch(() => {});
+
+        if (typeof tabId === "number" && (disposition === null || disposition === "close") && controller.ownsTab) {
+          tabKept = false;
+          shutdownResult.tabKept = false;
+          await tabs.removeTab(tabId).catch(() => {});
+        } else if (typeof tabId === "number" && disposition) {
+          await tabs.finalizeTab?.(tabId, disposition).catch(() => {});
+        }
+
+        if (disposition) {
+          await emit({ type: "finalized", sessionId: controller.sessionId, disposition, tabId, tabKept });
+        }
+        if (state.notifyState) {
+          await notifyState();
+          state.notifiedState = true;
+        }
+        return shutdownResult;
+      })();
+
+      state.promise = commandResult;
+      controller._commandShutdown = state;
+    } else if (shouldNotifyState) {
+      controller._commandShutdown.notifyState = true;
+    }
+    return controller._commandShutdown.promise;
+  }
+
+  async function enqueueCommand(controller, command) {
+    if (!command || typeof command !== "object") return;
+    const commandId = command.commandId;
+    if (typeof commandId !== "string" || commandId.length === 0) return;
+    if (command.sessionId !== controller.sessionId) return;
+    const envelope = commandEnvelope(command);
+    if (!envelope) return;
+    const sequenceValidation = validateAndTrackCommandSequence(controller, envelope);
+    if (sequenceValidation.rejected) {
+      const outcome = sequenceValidation.outcome ?? OUTCOME_PREVENTED;
+      const code = sequenceValidation.code ?? INVALID_COMMAND_SEQUENCE_ERROR;
+      await reportCommandResult(envelope, { ok: false, errorCode: code }, outcome);
+      if (sequenceValidation.fence) {
+        await completeShutdown(controller, { awaitCurrent: true });
+      }
+      return;
+    }
+
+    const bytes = commandByteCount(envelope);
+    if (!Number.isSafeInteger(bytes)) {
+      await reportCommandResult(envelope, { ok: false, errorCode: "invalid_command_size" }, OUTCOME_PREVENTED);
+      return;
+    }
+
+    const execute = () => runCommand(controller, envelope);
+    const queued = controller.pump.enqueue(envelope, bytes, execute);
+    const handled = queued.catch(async (error) => {
+      const code = pumpRejectionCode(error);
+      await reportCommandResult(envelope, { ok: false, errorCode: code }, OUTCOME_NOT_STARTED);
+    });
+    return handled;
+  }
+
+  function commandEnvelope(command) {
+    const commandId = command?.commandId;
+    const sessionId = command?.sessionId;
+    if (typeof commandId !== "string" || commandId.length === 0) return null;
+    if (typeof sessionId !== "string" || sessionId.length === 0) return null;
+    return {
+      ...command,
+      commandId,
+      sessionId,
+    };
+  }
+
+  async function reportCommandResult(command, details, outcome) {
+    const commandId = command?.commandId;
+    const sessionEpoch = command?.sessionEpoch;
+    const sequence = command?.sequence;
+    if (typeof commandId !== "string" || commandId.length === 0) return;
+    const retrySafe = stageRetrySafe(outcome);
+    await postResult({
+      commandId,
+      sessionEpoch,
+      sequence,
+      ...details,
+      outcome,
+      retrySafe,
+    });
+  }
+
+  function validateAndTrackCommandSequence(controller, command) {
+    const sessionEpoch = positiveSafeInteger(command?.sessionEpoch);
+    const sequence = positiveSafeInteger(command?.sequence);
+    if (sessionEpoch == null || sequence == null) {
+      return {
+        rejected: true,
+        code: INVALID_COMMAND_SEQUENCE_ERROR,
+        outcome: OUTCOME_PREVENTED,
+      };
+    }
+    if (!Number.isSafeInteger(controller.sessionEpoch) || controller.sessionEpoch <= 0) {
+      if (sequence !== 1) {
+        return {
+          rejected: true,
+          code: INVALID_COMMAND_SEQUENCE_ERROR,
+          outcome: OUTCOME_PREVENTED,
+        };
+      }
+      controller.sessionEpoch = sessionEpoch;
+      controller.nextSequence = 2;
+      return { rejected: false };
+    }
+    if (sessionEpoch < controller.sessionEpoch) {
+      return { rejected: true, code: STALE_COMMAND_EPOCH_ERROR, outcome: OUTCOME_PREVENTED };
+    }
+    if (sessionEpoch > controller.sessionEpoch) {
+      if (sequence !== 1) {
+        return { rejected: true, code: INVALID_COMMAND_SEQUENCE_ERROR, outcome: OUTCOME_PREVENTED };
+      }
+      controller.sessionEpoch = sessionEpoch;
+      controller.nextSequence = 2;
+      return { rejected: false };
+    }
+
+    if (sequence !== controller.nextSequence) {
+      const isForwardGap = sequence > controller.nextSequence;
+      return {
+        rejected: true,
+        code: INVALID_COMMAND_SEQUENCE_ERROR,
+        outcome: OUTCOME_PREVENTED,
+        fence: isForwardGap,
+      };
+    }
+    controller.nextSequence += 1;
+    return { rejected: false };
+  }
+
+  function commandByteCount(command) {
+    try {
+      const json = JSON.stringify(command);
+      if (typeof json !== "string") return null;
+      return commandByteEncoder.encode(json).byteLength;
+    } catch {
+      return null;
+    }
+  }
+
+  function pumpRejectionCode(error) {
+    if (error && typeof error.code === "string") return error.code;
+    const code = String(error?.message ?? "");
+    if (code === "invalid_command_size") return "invalid_command_size";
+    if (code === "session_queue_full") return "session_queue_full";
+    if (code === "session_finalizing") return "session_finalizing";
+    return "driver_error";
   }
 
   return runtime;
@@ -515,4 +786,12 @@ function delay(ms) {
 function errorCode(error) {
   const message = String(error?.message ?? error ?? "driver_error");
   return message.slice(0, 80).replace(/[^a-z0-9_]+/gi, "_").toLowerCase() || "driver_error";
+}
+
+function stageRetrySafe(outcome) {
+  return outcome === OUTCOME_NOT_STARTED || outcome === OUTCOME_PREVENTED;
+}
+
+function positiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
