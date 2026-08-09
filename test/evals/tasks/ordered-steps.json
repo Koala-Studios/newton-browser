@@ -1,0 +1,25 @@
+{
+  "id": "z-ordered-steps-task",
+  "fixture": "test/fixtures/app/index.html",
+  "grant": ["http://127.0.0.1:4310"],
+  "steps": [
+    {
+      "tool": "browser.session.start",
+      "expect": "completed"
+    },
+    {
+      "tool": "browser.wait_for",
+      "expect": "completed",
+      "waitFor": {
+        "state": "visible",
+        "selector": "#commit-log"
+      }
+    },
+    {
+      "tool": "browser.observe",
+      "expect": "completed",
+      "query": "#commit-log"
+    }
+  ],
+  "forbid": []
+}

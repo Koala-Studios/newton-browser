@@ -1,0 +1,28 @@
+{
+  "id": "ambiguous-ref-resolution",
+  "fixture": "test/fixtures/app/index.html",
+  "grant": ["http://127.0.0.1:4310"],
+  "steps": [
+    {
+      "tool": "browser.session.start",
+      "expect": "completed"
+    },
+    {
+      "tool": "browser.observe",
+      "expect": "completed",
+      "query": "form"
+    },
+    {
+      "tool": "browser.act",
+      "expect": "ambiguous",
+      "semanticRef": {
+        "role": "button",
+        "name": "Delete record"
+      },
+      "action": {
+        "kind": "click"
+      }
+    }
+  ],
+  "forbid": []
+}
