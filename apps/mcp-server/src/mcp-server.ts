@@ -8,12 +8,13 @@ import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, re
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
 import type { NewtonBrowserHost } from "./bridge.ts";
 import { createNewtonBrowserHost } from "./bridge.ts";
+import { McpFrameParser, McpFrameParseError, type McpMessageMode } from "./mcp-frame-parser.ts";
 import { evaluateHostFloor } from "./floor-gate.ts";
 
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = { jsonrpc: "2.0"; id?: JsonRpcId; method?: string; params?: Record<string, unknown> };
 type JsonRpcResponse = { jsonrpc: "2.0"; id: JsonRpcId; result?: unknown; error?: { code: number; message: string; data?: unknown } };
-type MessageMode = "framed" | "json-line";
+type MessageMode = McpMessageMode;
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 type ToolCallResult = { content: ToolContent[]; isError?: boolean };
 
@@ -48,18 +49,86 @@ export async function serveNewtonBrowserMcpConnection(input: {
   writable: Writable;
   startupErrorCode?: string;
 }): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const parser = new McpFrameParser(async (message, mode) => {
+  let observedMode: MessageMode | null = null;
+  let complete = false;
+  let errorResponded = false;
+  let serveResolve: () => void = () => {};
+  let serveReject: (error: unknown) => void = () => {};
+  const serveDone = new Promise<void>((resolve, reject) => {
+    serveResolve = resolve;
+    serveReject = reject;
+  });
+
+  const writeErrorResponse = (error: McpFrameParseError, mode: MessageMode): void => {
+    if (errorResponded) return;
+    errorResponded = true;
+    writeMessage(input.writable, typedParserErrorResponse(error, mode), mode);
+  };
+
+  const parser = new McpFrameParser(
+    async (message, mode) => {
       const response = await handleMcpMessage(input.bridge, message, { startupErrorCode: input.startupErrorCode });
       if (response) writeMessage(input.writable, response, mode);
-    }, (error, mode) => {
-      writeMessage(input.writable, errorResponse(null, -32700, "Malformed MCP frame.", { errorCode: "malformed_frame", detail: error.message }), mode);
-    });
-    input.readable.on("data", (chunk) => parser.push(Buffer.from(chunk)));
-    input.readable.once("end", resolve);
-    input.readable.once("close", resolve);
-    input.readable.resume();
-  });
+    },
+    async (error, mode) => writeErrorResponse(error, mode),
+  );
+
+  const cleanup = () => {
+    input.readable.off("data", onData);
+    input.readable.off("end", onEnd);
+    input.readable.off("close", onEnd);
+    input.readable.off("error", onReadableError);
+  };
+
+  const finalize = async (): Promise<void> => {
+    if (complete) return;
+    complete = true;
+    try {
+      parser.end();
+      await parser.flush();
+      serveResolve();
+    } catch (error) {
+      serveReject(error);
+    } finally {
+      cleanup();
+    }
+  };
+
+  const onEnd = () => {
+    void finalize();
+  };
+
+  const onReadableError = () => {
+    void finalize();
+  };
+
+  const onData = (chunk: Buffer) => {
+    if (observedMode === null) observedMode = detectIncomingMode(chunk);
+    parser.push(chunk);
+  };
+
+  input.readable.on("data", onData);
+  input.readable.on("end", onEnd);
+  input.readable.on("close", onEnd);
+  input.readable.on("error", onReadableError);
+  input.readable.resume();
+
+  await serveDone;
+  return;
+
+  function typedParserErrorResponse(error: McpFrameParseError, mode: MessageMode): JsonRpcResponse {
+    return errorResponse(null, -32700, `Malformed MCP frame (${mode} mode).`, { errorCode: error.code });
+  }
+
+  function detectIncomingMode(chunk: Buffer): MessageMode | null {
+    for (const value of chunk) {
+      if (value === 0x20 || value === 0x09 || value === 0x0a || value === 0x0d || value === 0x0b || value === 0x0c) {
+        continue;
+      }
+      return value === 0x7b ? "json-line" : "framed";
+    }
+    return null;
+  }
 }
 
 export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonRpcRequest, input: { startupErrorCode?: string } = {}): Promise<JsonRpcResponse | null> {
@@ -493,86 +562,6 @@ function resolveTransport(value: unknown): BrowserControlTransportMode {
 function writeMessage(writable: Writable, message: JsonRpcResponse, mode: MessageMode): void {
   const body = JSON.stringify(message);
   writable.write(mode === "json-line" ? `${body}\n` : `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
-}
-
-class McpFrameParser {
-  private buffer = Buffer.alloc(0);
-  private draining = false;
-  private framesSeen = 0;
-  private readonly onMessage: (message: JsonRpcRequest, mode: MessageMode) => Promise<void>;
-  private readonly onError: (error: Error, mode: MessageMode) => void;
-
-  constructor(
-    onMessage: (message: JsonRpcRequest, mode: MessageMode) => Promise<void>,
-    onError: (error: Error, mode: MessageMode) => void,
-  ) {
-    this.onMessage = onMessage;
-    this.onError = onError;
-  }
-
-  push(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    if (!this.draining) void this.drain();
-  }
-
-  private async drain(): Promise<void> {
-    this.draining = true;
-    try {
-      while (true) {
-        try {
-          const lineMessage = this.readJsonLineMessage();
-          if (lineMessage) {
-            this.framesSeen += 1;
-            await this.onMessage(lineMessage, "json-line");
-            continue;
-          }
-          const headerEnd = findHeaderEnd(this.buffer);
-          if (headerEnd.index < 0) return;
-          const headerText = this.buffer.subarray(0, headerEnd.index).toString("utf8");
-          const contentLength = parseContentLength(headerText);
-          if (contentLength === null) throw new Error("missing_content_length");
-          const frameEnd = headerEnd.index + headerEnd.length + contentLength;
-          if (this.buffer.length < frameEnd) return;
-          const body = this.buffer.subarray(headerEnd.index + headerEnd.length, frameEnd).toString("utf8");
-          this.buffer = this.buffer.subarray(frameEnd);
-          this.framesSeen += 1;
-          await this.onMessage(JSON.parse(body) as JsonRpcRequest, "framed");
-        } catch (error) {
-          const mode = this.buffer.toString("utf8").trimStart().startsWith("{") ? "json-line" : "framed";
-          this.buffer = Buffer.alloc(0);
-          this.onError(error instanceof Error ? error : new Error(String(error)), mode);
-          return;
-        }
-      }
-    } finally {
-      this.draining = false;
-    }
-  }
-
-  private readJsonLineMessage(): JsonRpcRequest | null {
-    const text = this.buffer.toString("utf8");
-    const trimmedStart = text.trimStart();
-    if (!trimmedStart.startsWith("{")) return null;
-    const skipped = text.length - trimmedStart.length;
-    const newline = trimmedStart.indexOf("\n");
-    if (newline < 0) return null;
-    const line = trimmedStart.slice(0, newline).trim();
-    const parsed = line ? JSON.parse(line) as JsonRpcRequest : null;
-    this.buffer = this.buffer.subarray(skipped + newline + 1);
-    return parsed;
-  }
-}
-
-function findHeaderEnd(buffer: Buffer): { index: number; length: number } {
-  const crlf = buffer.indexOf("\r\n\r\n");
-  if (crlf >= 0) return { index: crlf, length: 4 };
-  const lf = buffer.indexOf("\n\n");
-  return lf >= 0 ? { index: lf, length: 2 } : { index: -1, length: 0 };
-}
-
-function parseContentLength(headerText: string): number | null {
-  const match = headerText.match(/^content-length:\s*(\d+)\s*$/im);
-  return match?.[1] ? Number.parseInt(match[1], 10) : null;
 }
 
 function normalizeAllowedOrigins(value: unknown, origin: string): string[] {

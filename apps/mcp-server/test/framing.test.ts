@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
 
 import {
   McpFrameParser,
@@ -8,6 +9,7 @@ import {
   MAX_MCP_BUFFER_BYTES,
   MAX_MCP_HEADER_BYTES,
 } from "../src/mcp-frame-parser.ts";
+import { serveNewtonBrowserMcpConnection } from "../src/mcp-server.ts";
 
 type Deferred = {
   promise: Promise<void>;
@@ -88,6 +90,63 @@ function jsonLinePayload(length: number): Buffer {
 
 function terminatorFor(newline: "\r\n" | "\n"): string {
   return newline === "\r\n" ? "\r\n\r\n" : "\n\n";
+}
+
+type CapturedFrame = { mode: "framed" | "json-line"; message: unknown; raw: Buffer };
+
+function parseMcpOutputFrames(buffer: Buffer): CapturedFrame[] {
+  const frames: CapturedFrame[] = [];
+  let cursor = 0;
+
+  while (cursor < buffer.length) {
+    const slice = buffer.subarray(cursor);
+    if (slice.length === 0) break;
+
+    if (slice[0] === 0x43 && slice.toString("utf8", 0, 15).startsWith("Content-Length:")) {
+      const delimiter = slice.indexOf("\r\n\r\n");
+      if (delimiter < 0) break;
+      const headerText = slice.subarray(0, delimiter).toString("utf8");
+      const match = headerText.match(/content-length:\s*(\d+)\s*$/i);
+      if (!match) break;
+      const bodyLength = Number.parseInt(match[1], 10);
+      if (!Number.isFinite(bodyLength) || bodyLength < 0) break;
+      const bodyStart = delimiter + 4;
+      if (slice.length < bodyStart + bodyLength) break;
+      const body = slice.subarray(bodyStart, bodyStart + bodyLength).toString("utf8");
+      frames.push({
+        mode: "framed",
+        message: JSON.parse(body),
+        raw: slice.subarray(0, bodyStart + bodyLength),
+      });
+      cursor += bodyStart + bodyLength;
+      continue;
+    }
+
+    const newline = slice.indexOf(0x0a);
+    if (newline < 0) break;
+    const line = slice.subarray(0, newline).toString("utf8");
+    if (line.length > 0) {
+      frames.push({
+        mode: "json-line",
+        message: JSON.parse(line),
+        raw: slice.subarray(0, newline + 1),
+      });
+    }
+    cursor += newline + 1;
+  }
+
+  return frames;
+}
+
+function createServeStreams() {
+  const readable = new PassThrough();
+  const writable = new PassThrough();
+  const chunks: Buffer[] = [];
+  writable.on("data", (chunk) => {
+    chunks.push(Buffer.from(chunk as Buffer));
+  });
+
+  return { readable, writable, chunks };
 }
 
 test("parses mixed json-line and framed MCP messages from exact bytewise boundaries", async () => {
@@ -578,4 +637,191 @@ test("orders end handling after in-flight callbacks and incomplete frame", async
   assert.deepEqual(events, ["message", "error:incomplete_frame"]);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].code, "incomplete_frame");
+});
+
+test("serves typed incomplete_frame for EOF on partial json-line input and waits for error write before resolving", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+  const events: string[] = [];
+
+  const serve = (async () => {
+    await serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+    events.push("serve");
+  })();
+
+  const writesSeen = createDeferred();
+  writable.on("data", (chunk) => {
+    const body = chunk.toString("utf8");
+    if (body.includes("incomplete_frame") && body.includes("Malformed MCP frame")) {
+      events.push("write");
+      writesSeen.resolve();
+    }
+  });
+
+  readable.end(Buffer.from('{"jsonrpc":"2.0","id":1,"method":"ping"', "utf8"));
+
+  await writesSeen.promise;
+  assert.equal(events.includes("serve"), false);
+  await serve;
+  assert.equal(events.includes("serve"), true);
+
+  const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].mode, "json-line");
+  const response = parsed[0].message as any;
+  assert.equal(response?.error?.code, -32700);
+  assert.equal(response?.error?.data?.errorCode, "incomplete_frame");
+});
+
+test("serves typed incomplete_frame for EOF on partial framed body and waits for error write before resolving", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+  const events: string[] = [];
+
+  const serve = (async () => {
+    await serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+    events.push("serve");
+  })();
+
+  const writesSeen = createDeferred();
+  writable.on("data", (chunk) => {
+    const body = chunk.toString("utf8");
+    if (body.includes("incomplete_frame") && body.includes("Content-Length")) {
+      events.push("write");
+      writesSeen.resolve();
+    }
+  });
+
+  readable.end(Buffer.from("Content-Length: 10\r\n\r\n{\"method\":", "utf8"));
+
+  await writesSeen.promise;
+  assert.equal(events.includes("serve"), false);
+  await serve;
+  assert.equal(events.includes("serve"), true);
+
+  const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].mode, "framed");
+  const response = parsed[0].message as any;
+  assert.equal(response?.error?.code, -32700);
+  assert.equal(response?.error?.data?.errorCode, "incomplete_frame");
+});
+
+test("awaits an async tools/call handler before serve resolves", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+
+  const started = createDeferred();
+  const release = createDeferred();
+
+  const bridge = {
+    createSession: () => ({ sessionId: "session_1" }),
+    waitForSessionReady: async () => {
+      started.resolve();
+      await release.promise;
+      return { liveOrigin: "https://example.com" };
+    },
+    stopSession: () => {},
+  } as any;
+
+  const serve = serveNewtonBrowserMcpConnection({ bridge, readable, writable });
+  const responseSeen = createDeferred();
+  const events: string[] = [];
+
+  let serveDone = false;
+  void serve.then(() => {
+    serveDone = true;
+    events.push("serve");
+  });
+  writable.on("data", (chunk) => {
+    const message = chunk.toString("utf8");
+    if (message.includes('"sessionId":"session_1"')) {
+      responseSeen.resolve();
+      events.push("write");
+    }
+  });
+
+  const request = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "tools/call",
+    params: { name: "browser.session.start", arguments: { origin: "https://example.com", allowedOrigins: ["https://example.com"] } },
+  }) + "\n";
+  readable.end(request);
+
+  await started.promise;
+  assert.equal(serveDone, false);
+  release.resolve();
+  await responseSeen.promise;
+  assert.equal(serveDone, false);
+  await serve;
+  assert.equal(serveDone, true);
+  assert.equal(events.join(","), "write,serve");
+
+  const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].mode, "json-line");
+  const response = parsed[0].message as any;
+  const toolResult = JSON.parse(response.result?.content?.[0]?.text ?? "{}");
+  assert.equal(toolResult.sessionId, "session_1");
+});
+
+test("preserves response framing and ordering for mixed input messages", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+
+  const input = Buffer.concat([
+    Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n", "utf8"),
+    makeFramedMessage({ jsonrpc: "2.0", id: 2, method: "ping" }),
+    Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "ping" }) + "\n", "utf8"),
+  ]);
+
+  const serve = serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+  readable.end(input);
+
+  await serve;
+
+  const parsed = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(parsed.length, 3);
+  assert.equal(parsed[0].mode, "json-line");
+  assert.equal(parsed[1].mode, "framed");
+  assert.equal(parsed[2].mode, "json-line");
+  assert.equal((parsed[0].message as any).id, 1);
+  assert.equal((parsed[1].message as any).id, 2);
+  assert.equal((parsed[2].message as any).id, 3);
+});
+
+test("malformed or oversized framed input emits one framed typed protocol error and no secret text in stdout", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+  const secret = "SECRET_SENTINEL_TOKEN_123";
+  const longSecret = `X-Secret: ${secret}\n${"A".repeat(MAX_MCP_HEADER_BYTES)}`;
+  const header = `Content-Length: 1\r\n${longSecret}\r\n\r\n`;
+  const serve = serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+  readable.end(Buffer.from(header + "{}", "utf8"));
+
+  await serve;
+  const output = Buffer.concat(chunks).toString("utf8");
+  const frames = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].mode, "framed");
+  assert.equal((frames[0].message as any).error?.code, -32700);
+  assert.equal((frames[0].message as any).error?.data?.errorCode, "header_too_large");
+  assert.equal(output.includes(secret), false);
+});
+
+test("end+close race resolves once and emits one incomplete_frame", async () => {
+  const { readable, writable, chunks } = createServeStreams();
+  const serve = serveNewtonBrowserMcpConnection({ bridge: {} as any, readable, writable });
+  const events: string[] = [];
+  readable.end(Buffer.from('{"jsonrpc":"2.0","id":9,"method":"ping"', "utf8"));
+  readable.emit("close");
+
+  let resolvedCount = 0;
+  await serve.then(() => {
+    resolvedCount += 1;
+  });
+
+  events.push(`resolved:${resolvedCount}`);
+  const frames = parseMcpOutputFrames(Buffer.concat(chunks));
+  assert.equal(resolvedCount, 1);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].mode, "json-line");
+  assert.equal((frames[0].message as any).error?.data?.errorCode, "incomplete_frame");
+  assert.deepEqual(events, ["resolved:1"]);
 });
