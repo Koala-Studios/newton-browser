@@ -19,9 +19,8 @@ but a real connected Chrome/Edge extension is still required for the named brows
 | MCP schemas and annotations match runtime behavior | AIP-07 | Canonical action variants, annotation matrix, packed initialization/contract smoke | Pass |
 | Critical driver logic is compiler checked without artifact bloat | AIP-08 | Strict TypeScript, exhaustive negative fixture, deterministic build parity, artifact allowlist | Pass |
 | Tests avoid the real user profile | AIP-02/AIP-09 | Clean-user gate, validated temporary roots, packed install in an isolated spaced path | Pass |
-| Regression tasks, budgets, and local diagnostics prevent maturity drift | AIP-09 | Provider-free replay/report corpus, exact token gates, bounded host command metrics and doctor framing facts | In progress |
-| Exact packed artifacts pass the release gate three consecutive times | AIP-09 | `pnpm release:check` and recorded hashes/results | Pending final three-pass gate |
+| Regression tasks, budgets, and local diagnostics prevent maturity drift | AIP-09 | Provider-free replay/report corpus, exact token gates, bounded host command metrics and doctor framing facts | Pass; connected live task replay pending |
+| Exact packed artifacts pass the release gate three consecutive times | AIP-09 | Three 13-stage `pnpm release:check` passes on `4577a3f`; exact hashes/results in QA-AIP-009B | Pass |
 
 The authoritative execution state remains `docs/PROGRESS_LEDGER.md`; this file is the
 requirement-to-evidence index, not a substitute for live run records.
-

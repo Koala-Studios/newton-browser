@@ -1,6 +1,6 @@
 # Plan 09 — Regression Evals, Observability, and Release Gates
 
-- **Status:** Approved; deterministic corpus, metrics, and release wiring complete, live/final release evidence pending
+- **Status:** Approved; deterministic corpus, metrics, and three-pass packed release evidence complete; connected live-browser matrix pending
 - **Depends on:** Added incrementally with every plan; final release gate follows Plan 08
 - **Primary outcome:** Newton measures successful agent workflows, detects regressions copied from real browser-automation failure classes, diagnoses its own state, and releases only from reproducible packed artifacts.
 

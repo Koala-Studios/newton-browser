@@ -49,7 +49,7 @@ containment, input, observation, or regression work.
 | [06](06-agent-output-efficiency.md) | Compact observations/results, scoping, initial observation | 01 result contract | complete |
 | [07](07-mcp-contract-provenance-and-privacy.md) | Strict schemas, annotations, provenance, opaque-body policy | 04, 06 | complete |
 | [08](08-driver-typescript-hardening.md) | Checked/compiled TypeScript for critical extension driver code | 01-07 behavior stable | source/packed complete; live pending |
-| [09](09-regression-evals-observability-and-release.md) | Regression corpus, task replay, budgets, doctor, live CI | incrementally consumes 01-08 | deterministic/release wiring complete; live/final gate pending |
+| [09](09-regression-evals-observability-and-release.md) | Regression corpus, task replay, budgets, doctor, live CI | incrementally consumes 01-08 | deterministic and three-pass release complete; live matrix pending |
 
 ## Dependency and integration order
 
