@@ -122,6 +122,8 @@ export type BrowserAction = {
   selector?: string;
   query?: string;
   maxNodes?: number;
+  roles?: string[];
+  includeInteractive?: boolean;
   timeoutMs?: number;
   x?: number;
   y?: number;
@@ -248,6 +250,13 @@ export type BrowserObservationNode = {
   name?: string;
   value?: string;
   disabled?: boolean;
+  checked?: boolean | "mixed";
+  selected?: boolean;
+  expanded?: boolean;
+  required?: boolean;
+  level?: number;
+  href?: string;
+  elementType?: string;
   bbox?: { x: number; y: number; width: number; height: number };
   target?: BrowserTarget;
   documentEpoch?: number;
@@ -307,7 +316,12 @@ export type BrowserObservationDelta = {
   title: string;
   added: BrowserObservationNode[];
   removed: string[];
-  updated: Array<{ ref: string; name?: string; value?: string }>;
+  updated: Array<{
+    ref: string; role?: string; name?: string; value?: string; disabled?: boolean;
+    checked?: boolean | "mixed"; selected?: boolean; expanded?: boolean; required?: boolean;
+    level?: number; href?: string; elementType?: string; documentEpoch?: number;
+    frameId?: string; frameOrigin?: string;
+  }>;
   nodeCount: number;
   capturedAt: string;
   actionStatus?: BrowserActionResultStatus;
@@ -412,7 +426,12 @@ export type ObserveInput = {
   sessionId?: string;
   query?: string;
   maxNodes?: number;
+  roles?: string[];
   mode?: "full" | "diff";
+  format?: "compact" | "json";
+  includeGeometry?: boolean;
+  includeInteractive?: boolean;
+  limit?: number;
 };
 
 export type ScreenshotInput = {

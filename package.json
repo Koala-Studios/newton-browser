@@ -37,6 +37,7 @@
     "smoke:cold-starts": "node scripts/smoke/cold-start-distribution.mjs",
     "smoke:real-clients": "node scripts/smoke/real-clients.mjs",
     "smoke:extension-ready": "node scripts/smoke/extension-readiness.mjs",
+    "eval:agent-cost": "node scripts/measure-agent-cost.mjs --json",
     "release:check": "node scripts/release-check.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/run-tests.mjs",
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.1",
+    "js-tiktoken": "1.0.21",
     "sharp": "^0.35.3",
     "typescript": "^5.9.0"
   }

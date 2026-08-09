@@ -10,6 +10,7 @@ import type { NewtonBrowserHost } from "./bridge.ts";
 import { createNewtonBrowserHost } from "./bridge.ts";
 import { McpFrameParser, McpFrameParseError, type McpMessageMode } from "./mcp-frame-parser.ts";
 import { evaluateHostFloor } from "./floor-gate.ts";
+import { normalizeAgentActionResult, projectObservation, type AgentObservationOptionsInput } from "./agent-output.ts";
 
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = { jsonrpc: "2.0"; id?: JsonRpcId; method?: string; params?: Record<string, unknown> };
@@ -176,7 +177,7 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
     const nextAction = versionSkew === "incompatible"
       ? status.extensionVersion && status.extensionVersion > NEWTON_BROWSER_VERSION ? "update the npm package" : "update the extension"
       : undefined;
-    return toolJson({
+    const fullStatus = {
       ready: status.extensionConnected,
       version: NEWTON_BROWSER_VERSION,
       protocolVersions: SUPPORTED_MCP_PROTOCOLS,
@@ -188,7 +189,18 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       extensionVersion: status.extensionVersion,
       versionSkew: versionSkew === "unknown" ? "none" : versionSkew,
       ...(nextAction ? { nextAction } : {}),
-    }, !status.extensionConnected, status.extensionConnected ? undefined : "extension_disconnected");
+    };
+    const compactStatus = {
+      ready: status.extensionConnected,
+      version: NEWTON_BROWSER_VERSION,
+      authMode: status.authMode,
+      browserTarget: status.browserTarget,
+      minimumBrowserMajor: status.minimumBrowserMajor,
+      extensionVersion: status.extensionVersion,
+      versionSkew: versionSkew === "unknown" ? "none" : versionSkew,
+      ...(nextAction ? { nextAction } : {}),
+    };
+    return toolJson(args.detail === "full" ? fullStatus : compactStatus, !status.extensionConnected, status.extensionConnected ? undefined : "extension_disconnected");
   }
 
   if (name === "browser.session.start") {
@@ -208,6 +220,19 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       if (!session.liveOrigin || !allowedOrigins.includes(session.liveOrigin)) {
         bridge.stopSession(created.sessionId);
         return toolError("origin_not_granted", "The attached tab is outside the session origin grant.");
+      }
+      if (isObject(args.observe)) {
+        const event = await bridge.dispatch(created.sessionId, prepareActionForRelay(actionForTool("browser.observe", args.observe)) as never);
+        if (!event.ok) {
+          bridge.stopSession(created.sessionId);
+          return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
+        }
+        const observation = observationEnvelope(event, args.observe);
+        if (!observation.ok) {
+          bridge.stopSession(created.sessionId);
+          return toolJson(observation, true);
+        }
+        return toolJson({ sessionId: created.sessionId, session, observation });
       }
       return toolJson({ sessionId: created.sessionId, transport, session });
     } catch (error) {
@@ -288,28 +313,86 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       return await runFillForm(bridge, sessionId, session, action, transport, typeof args.idempotencyKey === "string" ? args.idempotencyKey : undefined);
     }
     const verdict = evaluateHostFloor({ session, action });
-    if (!verdict.relay) return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision), transport }, true);
+    if (!verdict.relay) {
+      if (name === "browser.act") return toolJson(preventedActionEnvelope(verdict.errorCode ?? "blocked_by_floor", verdict.decision), true);
+      return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision), transport }, true);
+    }
     const dispatchOptions = name === "browser.act" && args.idempotencyKey !== undefined
       ? { idempotencyKey: args.idempotencyKey as string }
       : undefined;
     const event = await bridge.dispatch(sessionId, verdict.action, dispatchOptions);
-    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), ...publicCommandMetadata(event), transport }, true);
+    if (!event.ok) {
+      if (name === "browser.act") return toolJson(agentActionEnvelope(event, event.decision ?? verdict.decision, session), true);
+      return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), ...publicCommandMetadata(event), transport }, true);
+    }
     const decision = strongestDecision(verdict.decision, event.decision);
     if (name === "browser.screenshot") return screenshotToolResult(event, decision, args);
     if (name === "browser.act") {
-      const result = isObject(event.result) ? redactObservationResult(event.result) : { value: event.result };
-      return toolJson({
-        ok: true,
-        actionStatus: typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified",
-        decision: publicDecision(decision),
-        result,
-        ...publicCommandMetadata(event),
-        transport,
-      });
+      return toolJson(agentActionEnvelope(event, decision, session));
     }
-    return toolJson({ ok: true, result: redactObservationResult(event.result), ...publicCommandMetadata(event), transport });
+    const observation = observationEnvelope(event, args);
+    return toolJson(observation, !observation.ok);
   }
   return toolError("unknown_tool", `Unknown tool: ${name}`);
+}
+
+function observationEnvelope(event: Extract<BridgeResultEvent, { ok: true }>, args: AgentObservationOptionsInput) {
+  const projected = projectObservation(event.result, args);
+  if (!projected.ok) {
+    return { ok: false, errorCode: projected.errorCode, reason: projected.reason, ...publicCommandMetadata(event) };
+  }
+  const { projection } = projected;
+  if (projection.format === "compact") {
+    return {
+      ok: true,
+      output: projection.output ?? "",
+      ...(projection.budget.truncated ? { budget: projection.budget } : {}),
+      ...publicCommandMetadata(event),
+    };
+  }
+  return { ok: true, result: projection, ...publicCommandMetadata(event) };
+}
+
+function agentActionEnvelope(event: BridgeResultEvent, decision: BrowserFloorDecision, session: unknown) {
+  const result = event.ok && isObject(event.result) ? redactObservationResult(event.result) : {};
+  const changedRecord = isObject(result.changed) ? result.changed : {};
+  const origin = isObject(session) && typeof session.liveOrigin === "string"
+    ? session.liveOrigin
+    : isObject(session) && typeof session.origin === "string" ? session.origin : "unknown";
+  const reason = event.ok
+    ? typeof result.reason === "string" ? result.reason : undefined
+    : event.errorCode;
+  const projection = normalizeAgentActionResult({
+    status: event.ok
+      ? typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified"
+      : "failed",
+    outcome: event.outcome,
+    ...(reason ? { reason } : {}),
+    ...(!event.ok ? { errorCode: event.errorCode } : {}),
+    decision: {
+      code: decision.class,
+      ...(decision.reasons.at(-1) ? { reason: decision.reasons.at(-1) } : {}),
+    },
+    changed: Object.keys(changedRecord).length > 0,
+    ...(Object.keys(changedRecord).length > 0
+      ? { delta: Object.entries(changedRecord).slice(0, 10).map(([key, value]) => `${key}=${JSON.stringify(value)}`) }
+      : {}),
+    ...(event.ok && typeof result.kind === "string" && result.kind.startsWith("observation")
+      ? { provenance: { origin, sessionEpoch: event.sessionEpoch } }
+      : {}),
+  });
+  return { ...projection, sessionEpoch: event.sessionEpoch, sequence: event.sequence };
+}
+
+function preventedActionEnvelope(errorCode: string, decision: BrowserFloorDecision) {
+  return normalizeAgentActionResult({
+    status: "blocked",
+    outcome: "prevented",
+    errorCode,
+    reason: decision.reasons.at(-1) ?? errorCode,
+    decision: { code: decision.class, ...(decision.reasons.at(-1) ? { reason: decision.reasons.at(-1) } : {}) },
+    changed: false,
+  });
 }
 
 // fill_form (WS9.8): one MCP call fills an ordered set of fields. The batch is
@@ -330,35 +413,36 @@ async function runFillForm(
   if (fields.length === 0) return toolError("fill_form_requires_fields", "fill_form needs a non-empty fields array, each with a target and value.");
   const results: Array<{ index: number; status: string; reason?: string }> = [];
   let strongest: BrowserFloorDecision | undefined;
-  let lastObservation: unknown;
-  let lastCommandMetadata: ReturnType<typeof publicCommandMetadata> | undefined;
+  let lastEvent: Extract<BridgeResultEvent, { ok: true }> | undefined;
   for (let index = 0; index < fields.length; index += 1) {
     const fillAction = { kind: "fill", ...fields[index] };
     const verdict = evaluateHostFloor({ session: session as never, action: fillAction });
     strongest = strongest ? strongestDecision(strongest, verdict.decision) : verdict.decision;
     if (!verdict.relay) {
       results.push({ index, status: "blocked", reason: verdict.decision.reasons.at(-1) ?? "blocked_by_floor" });
-      return toolJson({ ok: false, errorCode: "blocked_by_floor", stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
+      return toolJson({ ...preventedActionEnvelope("blocked_by_floor", strongest), stoppedAt: index, fields: results }, true);
     }
     const fieldIdempotencyKey = idempotencyKey
       ? createHash("sha256").update(`${idempotencyKey}:${index}`).digest("base64url")
       : undefined;
     const event = await bridge.dispatch(sessionId, verdict.action, fieldIdempotencyKey ? { idempotencyKey: fieldIdempotencyKey } : undefined);
-    lastCommandMetadata = publicCommandMetadata(event);
     if (!event.ok) {
       results.push({ index, status: "failed", reason: event.errorCode });
-      return toolJson({ ok: false, errorCode: event.errorCode, stoppedAt: index, fields: results, decision: publicDecision(strongest), ...lastCommandMetadata, transport }, true);
+      return toolJson({ ...agentActionEnvelope(event, event.decision ?? strongest, session), stoppedAt: index, fields: results }, true);
     }
+    lastEvent = event;
     strongest = event.decision ? strongestDecision(strongest, event.decision) : strongest;
     const result = isObject(event.result) ? event.result : {};
-    lastObservation = redactObservationResult(event.result);
     const status = typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified";
     results.push({ index, status, ...(typeof result.reason === "string" ? { reason: result.reason } : {}) });
     if (status !== "verified" && status !== "dispatched_unverified") {
-      return toolJson({ ok: false, errorCode: "fill_form_field_incomplete", stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
+      return toolJson({ ...agentActionEnvelope(event, strongest, session), ok: false, errorCode: "fill_form_field_incomplete", stoppedAt: index, fields: results }, true);
     }
   }
-  return toolJson({ ok: true, actionStatus: "verified", filled: results.length, fields: results, decision: publicDecision(strongest), observation: lastObservation, ...lastCommandMetadata, transport });
+  const normalized = lastEvent
+    ? agentActionEnvelope(lastEvent, strongest!, session)
+    : normalizeAgentActionResult({ status: "verified", outcome: "completed" });
+  return toolJson({ ...normalized, filled: results.length, fields: results });
 }
 
 function actionForTool(name: string, args: Record<string, unknown>): unknown {
@@ -366,7 +450,14 @@ function actionForTool(name: string, args: Record<string, unknown>): unknown {
     if (args.mode === "text") {
       return { kind: "observe", mode: "text", maxChars: clampNumber(args.maxChars, 20_000, 200, 200_000) };
     }
-    return { kind: "observe", mode: args.mode === "diff" ? "diff" : "full", maxNodes: clampNumber(args.maxNodes, 80, 1, 250) };
+    return {
+      kind: "observe",
+      mode: args.mode === "diff" ? "diff" : "full",
+      maxNodes: clampNumber(args.maxNodes, 80, 1, 250),
+      ...(typeof args.query === "string" ? { query: args.query } : {}),
+      ...(Array.isArray(args.roles) ? { roles: args.roles } : {}),
+      ...(args.includeInteractive === true ? { includeInteractive: true } : {}),
+    };
   }
   if (name === "browser.screenshot") {
     const region = isObject(args.region) ? args.region : null;
@@ -476,10 +567,21 @@ function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, 
   };
 }
 
-function toolList(): Array<Record<string, unknown>> {
+export function toolList(): Array<Record<string, unknown>> {
   const transport = { type: "string", enum: BROWSER_CONTROL_TRANSPORTS };
+  const observationOutput = {
+    format: { type: "string", enum: ["compact", "json"] },
+    includeGeometry: { type: "boolean" },
+    includeInteractive: { type: "boolean" },
+    query: { type: "string", maxLength: 120 },
+    roles: { type: "array", maxItems: 12, items: { type: "string", maxLength: 80 } },
+    limit: { type: "number", minimum: 1, maximum: 200 },
+    mode: { type: "string", enum: ["full", "diff", "text"] },
+    maxNodes: { type: "number", minimum: 1, maximum: 250 },
+    maxChars: { type: "number", minimum: 200, maximum: 200_000 },
+  };
   return [
-    tool("browser.status", "Report local host, extension, protocol, authentication mode, and limit readiness.", { transport }),
+    tool("browser.status", "Report readiness. Compact is the default; request full diagnostics explicitly.", { transport, detail: { type: "string", enum: ["compact", "full"] } }),
     tool("browser.session.start", "Start and attach an origin-scoped browser session.", {
       transport,
       origin: { type: "string" },
@@ -488,8 +590,14 @@ function toolList(): Array<Record<string, unknown>> {
       tabMode: { type: "string", enum: ["owned_group", "current"] },
       instanceLabel: { type: "string" },
       incognito: { type: "boolean" },
+      observe: {
+        anyOf: [
+          { type: "boolean", const: false },
+          { type: "object", properties: observationOutput, additionalProperties: false },
+        ],
+      },
     }, ["origin"]),
-    tool("browser.observe", "Observe the current session tab. mode:\"text\" returns bounded, redacted readable page text instead of the accessibility tree.", { transport, sessionId: { type: "string" }, mode: { type: "string", enum: ["full", "diff", "text"] }, maxNodes: { type: "number" }, maxChars: { type: "number" } }, ["sessionId"]),
+    tool("browser.observe", "Observe the current session tab. Compact, geometry-free output is the default; format:\"json\" is the diagnostic compatibility form.", { transport, sessionId: { type: "string" }, ...observationOutput }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", {
       transport,
       sessionId: { type: "string" },

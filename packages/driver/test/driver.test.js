@@ -316,6 +316,96 @@ test("driver observes same-origin iframe AX trees and excludes cross-origin fram
   assert.deepEqual(observation.excludedFrames, [{ frameId: "cross", frameOrigin: "https://other.example", reason: "origin_not_granted" }]);
 });
 
+test("driver enriches AX state and same-origin DOM facts without mutating the page", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  const calls = [];
+  driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/form" : expression === "document.title" ? "Form" : "";
+  driver.evalNumber = async () => 0;
+  driver.isOwnedOverlayNodeCached = async () => false;
+  driver.boxFor = async (backendNodeId) => ({ x: backendNodeId, y: 1, width: 20, height: 10 });
+  driver.cdp = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", url: "https://example.com/form" } } };
+    if (method === "Accessibility.getFullAXTree") return { nodes: [
+      { ...axNode(201, "checkbox", "Terms"), properties: [{ name: "checked", value: { value: "mixed" } }, { name: "required", value: { value: true } }] },
+      axNode(202, "link", "Account"),
+      { ...axNode(203, "heading", "Details"), properties: [{ name: "level", value: { value: 2 } }] },
+      axNode(204, "link", "External"),
+    ] };
+    if (method === "DOM.describeNode") {
+      const facts = {
+        201: { localName: "input", attributes: ["type", "checkbox"] },
+        202: { localName: "a", attributes: ["href", "/account?token=secret#profile"] },
+        203: { localName: "h2", attributes: [] },
+        204: { localName: "a", attributes: ["href", "https://outside.test/path"] },
+      };
+      return { node: facts[params.backendNodeId] };
+    }
+    return {};
+  };
+
+  const observation = await driver.observe({ roles: ["checkbox", "link", "heading"] });
+  assert.deepEqual(observation.nodes.map((node) => node.role), ["checkbox", "link", "heading", "link"]);
+  assert.equal(observation.nodes[0].checked, "mixed");
+  assert.equal(observation.nodes[0].required, true);
+  assert.equal(observation.nodes[0].elementType, "input:checkbox");
+  assert.equal(observation.nodes[1].href, "https://example.com/account");
+  assert.equal(observation.nodes[2].level, 2);
+  assert.equal(observation.nodes[3].href, undefined);
+  assert.equal(calls.some((call) => /setAttribute|removeAttribute|Runtime\.evaluate/.test(call.method)), false);
+});
+
+test("optional interactive discovery recovers an AX-missing control with zero DOM writes", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  const calls = [];
+  driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/app" : expression === "document.title" ? "App" : "";
+  driver.evalNumber = async () => 0;
+  driver.isOwnedOverlayNodeCached = async () => false;
+  driver.boxFor = async () => ({ x: 1, y: 2, width: 30, height: 12 });
+  driver.axNameFor = async () => "Custom action";
+  driver.elementFacts = async () => ({ role: "button", accessibleName: "Custom action", disabled: false });
+  driver.cdp = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", url: "https://example.com/app" } } };
+    if (method === "Accessibility.getFullAXTree") return { nodes: [] };
+    if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+    if (method === "DOM.querySelectorAll") return { nodeIds: [9] };
+    if (method === "DOM.describeNode") return { node: { backendNodeId: 209, localName: "button", attributes: ["tabindex", "0"] } };
+    return {};
+  };
+
+  const observation = await driver.observe({ includeInteractive: true });
+  assert.equal(observation.nodes.length, 1);
+  assert.equal(observation.nodes[0].role, "button");
+  assert.equal(observation.nodes[0].name, "Custom action");
+  assert.equal(calls.some((call) => /setAttribute|removeAttribute|Runtime\.evaluate/.test(call.method)), false);
+});
+
+test("diff observation reports state-only AX changes", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  let checked = false;
+  driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/form" : expression === "document.title" ? "Form" : "";
+  driver.evalNumber = async () => 0;
+  driver.isOwnedOverlayNodeCached = async () => false;
+  driver.describedNodeFactsCached = async () => ({ localName: "input", attributes: { type: "checkbox" } });
+  driver.boxFor = async () => ({ x: 1, y: 1, width: 20, height: 20 });
+  driver.cdp = async (method) => {
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main", url: "https://example.com/form" } } };
+    if (method === "Accessibility.getFullAXTree") return { nodes: [{
+      ...axNode(301, "checkbox", "Remember me"),
+      properties: [{ name: "checked", value: { value: checked } }],
+    }] };
+    return {};
+  };
+
+  await driver.observe({ mode: "full" });
+  checked = true;
+  const delta = await driver.observe({ mode: "diff" });
+  assert.equal(delta.kind, "observation_delta");
+  assert.equal(delta.updated[0].ref, "d1:e301");
+  assert.equal(delta.updated[0].checked, true);
+});
+
 test("driver reports invalid selector syntax before action dispatch", async () => {
   const driver = createNewtonBrowserDriver();
   let inputDispatched = false;

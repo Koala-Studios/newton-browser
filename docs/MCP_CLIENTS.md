@@ -103,4 +103,11 @@ Set `NEWTON_BROWSER_PACKAGE_SPEC` to an absolute tarball path only when validati
 - Clients that cannot render image blocks should request `delivery:"file"` with an absolute output directory.
 - Browser-only chat sessions cannot start a package installed on your local machine unless that product explicitly supports local MCP servers.
 
-After configuration, start a new client session and call `browser.status` before opening the first browser session.
+After configuration, start a new client session and call `browser.status` before opening
+the first browser session. The default status is compact; request `detail: "full"` only
+for setup diagnostics. To avoid a second round trip, pass
+`observe: {format:"compact", roles:[...], limit:40}` to `browser.session.start`.
+Subsequent `browser.observe` calls default to compact output without geometry; use
+`query`, `roles`, and `limit` before increasing `maxNodes`, and reserve `format:"json"`
+or `includeGeometry:true` for diagnostics. `includeInteractive:true` opts into bounded,
+read-only DOM discovery for controls missing from the accessibility tree.

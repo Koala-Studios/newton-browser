@@ -407,3 +407,25 @@ does not use URL and element counts as a proxy, so text/value-only changes are v
 Invalid selectors are validated before dispatch and remain `invalid_selector` through
 the controller. A failed click hit test returns bounded blocker evidence and never falls
 back to blind coordinates.
+
+## 28. Compact agent output with full internal evidence (2026-08-09)
+
+The MCP boundary now projects the full, redacted driver observation into a compact
+geometry-free form by default. Agents can bound work with `query`, `roles`, and `limit`;
+lean JSON and geometry remain explicit diagnostic options. Truncation is deterministic
+and returns a typed continuation. The internal AX/target model is not reduced: checked,
+selected, expanded, disabled, required, heading level, value, sanitized same-origin
+links, element type, document epoch, and frame provenance survive redaction and either
+renderer. Optional interactive discovery uses bounded CDP DOM reads and isolated
+read-only element facts; it never writes discovery attributes into the page.
+
+Action calls use one host-normalized outcome envelope instead of repeating status,
+decision, origin, and observation data. Host-owned `outcome`, retry safety, session
+epoch, and sequence remain public. `browser.session.start` can include the initial
+observation, and `browser.status` is compact unless `detail: "full"` is requested.
+
+Cost gates serialize the actual public envelope and use the pinned development-only
+`js-tiktoken@1.0.21` `o200k_base` encoding. No tokenizer, provider call, telemetry, or
+adaptive model logic exists in the runtime. The checked-in representative fixture must
+remain within the Plan 06 catalog, compact/JSON observation, action, and workflow token
+budgets on Windows and Linux.

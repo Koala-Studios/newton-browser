@@ -5,12 +5,17 @@ authoritative for exact schemas and bounds.
 
 ## Tools
 
-- `browser.status`: report readiness, auth mode, host/extension/protocol versions,
-  version skew, browser selection, sessions, and limits without opening a tab.
+- `browser.status`: report compact readiness without opening a tab. Pass
+  `detail: "full"` for auth mode, host/extension/protocol versions, browser selection,
+  sessions, and limits.
 - `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab,
-  reconcile its live origin, and return a ready session. `incognito: true` opens an
+  reconcile its live origin, and return a ready session. `observe` accepts compact/JSON
+  options and returns initial state in the same call; `false` disables it. `incognito: true` opens an
   owned tab in an incognito window and requires extension permission there.
-- `browser.observe`: return `full` accessibility state, a `diff`, or bounded/redacted
+- `browser.observe`: compact and geometry-free by default; filter with `query`, `roles`,
+  and `limit`, or explicitly request `format: "json"`/`includeGeometry: true`.
+  `includeInteractive: true` performs bounded, read-only DOM discovery. Return `full`
+  accessibility state, a `diff`, or bounded/redacted
   readable `text` (`maxChars` 200–200,000).
 - `browser.act`: execute one typed action and return deterministic floor metadata.
 - `browser.screenshot`: deliver PNG/JPEG through `image`, caller-designated `file`, or
@@ -49,13 +54,17 @@ Every act result includes floor metadata similar to:
 ```json
 {
   "ok": true,
-  "actionStatus": "verified",
-  "decision": {
-    "class": "agentic",
-    "commitBoundary": "none",
-    "reasons": ["origin_granted"]
-  },
-  "result": {}
+  "status": "verified",
+  "outcome": "completed",
+  "retrySafe": false,
+  "decision": { "code": "agentic", "reason": "origin_granted" },
+  "changed": true,
+  "delta": ["value=\"saved\""],
+  "provenance": {
+    "trust": "untrusted_page_content",
+    "origin": "https://example.com",
+    "sessionEpoch": 1
+  }
 }
 ```
 

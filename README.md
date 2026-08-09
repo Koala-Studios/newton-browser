@@ -133,7 +133,9 @@ Ask your MCP client to call:
 browser.status
 ```
 
-A working setup reports `ready: true` and `extensionConnected: true`. The optional doctor command provides typed setup diagnostics:
+A working setup reports `ready: true`. `browser.status` is compact by default; pass
+`detail: "full"` when host, extension, protocol, and limit diagnostics are needed. The
+optional doctor command provides typed setup diagnostics:
 
 ```bash
 npx -y newton-browser@0.4.1 --doctor
@@ -153,11 +155,15 @@ Every session requires an exact origin. A typical tool sequence is:
      "origin": "https://example.com",
      "allowedOrigins": ["https://example.com"],
      "tabMode": "owned_group",
-     "instanceLabel": "example-task"
+     "instanceLabel": "example-task",
+     "observe": { "format": "compact", "roles": ["button", "textbox"], "limit": 40 }
    }
    ```
 
-3. Call `browser.observe` with the returned `sessionId`.
+3. Use the initial compact observation returned by session start. Call
+   `browser.observe` again only when you need fresh state; compact, geometry-free output
+   is the default. Use `query`, `roles`, and `limit` to narrow it, or `format: "json"`
+   for diagnostic compatibility.
 4. Use `browser.act` with fresh accessible references from the observation.
 5. Re-observe after navigation or a page rerender.
 6. Finish with `browser.tabs.finalize` using `close`, `deliverable`, or `handoff`.

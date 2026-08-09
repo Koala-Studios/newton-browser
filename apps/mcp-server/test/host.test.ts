@@ -31,6 +31,19 @@ test("MCP negotiates required protocol versions and lists release tools", async 
   for (const name of ["browser.status", "browser.session.start", "browser.observe", "browser.act", "browser.screenshot", "browser.console", "browser.network", "browser.tabs.list", "browser.session.stop", "browser.stop_all"]) {
     assert.ok(names.includes(name), name);
   }
+  const observeTool = ((tools?.result as any).tools as any[]).find((tool) => tool.name === "browser.observe");
+  assert.deepEqual(observeTool.inputSchema.properties.format.enum, ["compact", "json"]);
+  assert.equal(observeTool.inputSchema.properties.includeGeometry.type, "boolean");
+});
+
+test("browser.status defaults to compact and keeps full diagnostics explicit", async () => {
+  const bridge = testBridge();
+  const compact = await toolCall(bridge, "browser.status", {});
+  const full = await toolCall(bridge, "browser.status", { detail: "full" });
+  assert.equal(compact.json.ready, false);
+  assert.equal("protocolVersions" in compact.json, false);
+  assert.equal(Array.isArray(full.json.protocolVersions), true);
+  assert.equal("eligibleClientCount" in full.json, true);
 });
 
 test("session start requires an exact origin and waits for authenticated extension attachment", async () => {
@@ -137,8 +150,51 @@ test("MCP blocks a sensitive fill before any extension dispatch", async () => {
   const result = await toolCall(bridge, "browser.act", { sessionId, action: { kind: "fill", label: "One-time code", value: "123456" } });
   assert.equal(result.isError, true);
   assert.equal(result.json.errorCode, "blocked_by_floor");
-  assert.ok(result.json.decision.reasons.includes("secret_or_password_field"));
+  assert.equal(result.json.decision.reason, "secret_or_password_field");
+  assert.equal(result.json.outcome, "prevented");
+  assert.equal(result.json.retrySafe, true);
   assert.ok(Date.now() - started < 250, "a pre-dispatch block must not wait for an extension or command timeout");
+});
+
+test("session start can return a projected initial observation without a second MCP call", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const extension = await connectExtension(address.port, bridge.hostInstanceId);
+  extension.on("message", (data) => {
+    const message = JSON.parse(data.toString());
+    if (message.type !== "sessions_changed") return;
+    for (const session of message.sessions ?? []) {
+      if (session.attached) continue;
+      void (async () => {
+        await extensionRequest(extension, "attachTab", {
+          sessionId: session.sessionId,
+          tab: { ownedTabId: 101, tabGroupId: 201, attached: true, liveOrigin: "https://example.com" },
+        });
+        await extensionRequest(extension, "subscribeSession", { sessionId: session.sessionId });
+      })();
+    }
+  });
+  try {
+    const commandPromise = waitForMessage(extension, (message) => message.type === "bridge_command");
+    const startPromise = toolCall(bridge, "browser.session.start", {
+      origin: "https://example.com",
+      observe: { format: "compact", roles: ["button"], limit: 5 },
+    });
+    const wire = await commandPromise;
+    await postResult(extension, wire, { ok: true, result: {
+      kind: "observation", mode: "cdp", origin: "https://example.com", title: "Ready",
+      nodes: [{ ref: "d1:e1", role: "button", name: "Begin" }], nodeCount: 1, truncated: false,
+      capturedAt: "2026-08-09T00:00:00.000Z", actionStatus: "verified", verified: true,
+    } });
+    const started = await startPromise;
+    assert.equal(started.isError, false);
+    assert.match(started.json.sessionId, /^bbs_local_/);
+    assert.match(started.json.observation.output, /Begin/);
+    assert.equal(started.json.observation.outcome, "completed");
+  } finally {
+    extension.close();
+    await bridge.close();
+  }
 });
 
 test("browser.act forwards idempotency keys and exposes host-owned outcome metadata", async () => {
@@ -271,7 +327,7 @@ test("observation results are secret-redacted before reaching the MCP client", a
     const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
     await extensionRequest(socket, "subscribeSession", { sessionId });
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
-    const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "full" });
+    const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "full", format: "json" });
     const command = await commandPromise;
     await postResult(socket, command, { ok: true, result: {
       kind: "observation", mode: "cdp", origin: "https://example.com", title: "Checkout",
@@ -298,7 +354,7 @@ test("mode:text observations mask card/SSN sequences before reaching the client"
     const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
     await extensionRequest(socket, "subscribeSession", { sessionId });
     const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
-    const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "text" });
+    const callPromise = toolCall(bridge, "browser.observe", { sessionId, mode: "text", format: "json" });
     const command = await commandPromise;
     await postResult(socket, command, { ok: true, result: {
       kind: "observation_text", mode: "text", origin: "https://example.com", title: "Receipt",
@@ -475,6 +531,36 @@ test("zero-touch local trust accepts an extension without a pairing key and stil
     assert.equal(bridge.getStatus().authMode, "local_trust");
     socket.close();
   } finally {
+    await bridge.close();
+  }
+});
+
+test("browser.observe defaults to compact filtered output and omits geometry", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const commandPromise = waitForMessage(socket, (message) => message.type === "bridge_command");
+    const callPromise = toolCall(bridge, "browser.observe", { sessionId, query: "continue", roles: ["button"], limit: 1 });
+    const wire = await commandPromise;
+    assert.equal(wire.command.action.query, "continue");
+    assert.deepEqual(wire.command.action.roles, ["button"]);
+    await postResult(socket, wire, { ok: true, result: {
+      kind: "observation", mode: "cdp", origin: "https://example.com", title: "Checkout",
+      nodes: [{ ref: "d1:e1", role: "button", name: "Continue", bbox: [1, 2, 3, 4], checked: false, documentEpoch: 1 }],
+      nodeCount: 1, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z", actionStatus: "verified", verified: true,
+    } });
+    const result = await callPromise;
+    assert.equal(result.isError, false);
+    assert.match(result.json.output, /"button"/);
+    assert.match(result.json.output, /checked=false/);
+    assert.doesNotMatch(result.json.output, /geometry=/);
+    assert.equal(result.json.outcome, "completed");
+    assert.equal(result.json.sequence, wire.command.sequence);
+  } finally {
+    socket.close();
     await bridge.close();
   }
 });

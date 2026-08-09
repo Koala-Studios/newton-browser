@@ -517,3 +517,19 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression: `apps/extension/test/extension.test.ts` builds the standalone extension, asserts all support modules, and fails on any missing transitive relative import; the complete `pnpm build` and `pnpm test` pass.
 - Fix commit: `db62f04`.
 - Status: closed.
+
+## BB-058 - Token-efficient projection existed only in isolated tests
+
+- Minimal repro: call `browser.observe` after the initial projection foundation; the MCP server returned the original verbose redacted observation and `browser.act` repeated action status, decision, nested result, origin, and command metadata.
+- Root cause: `agent-output.ts` and its fixture suite were implemented as pure prototypes but were never imported by the production MCP server, so their passing tests did not describe agent-visible output.
+- Fix: route public observations through redaction, filtering, deterministic projection, and budget metadata; default to compact/no geometry; normalize action results; add compact status and optional observe-on-start; enrich the retained internal model rather than deleting evidence.
+- Regression: MCP host tests exercise default compact output, explicit JSON compatibility, redaction, public outcome sequencing, strict schemas, and observe-on-start. Driver/projection tests cover AX state, provenance, same-origin links, hostile text escaping, and zero-write interactive discovery.
+- Status: source regression closed; packed/client evidence remains pending under AIP-06/AIP-09.
+
+## BB-059 - Pinned tokenizer counts were mislabeled as heuristic
+
+- Minimal repro: run `node scripts/measure-agent-cost.mjs --json` with the pinned local counter. Counts were exact, but metadata origin `local` failed an `origin === "injected"` check, so every budget remained deferred.
+- Root cause: exactness was inferred from the counter's provenance label instead of the measurement method; function-valued counter metadata was also excluded by an object-only guard.
+- Fix: classify exact measurements by `method === "token_counter"`, accept bounded metadata on function counters, and measure the serialized public MCP envelopes plus the live tool catalog with pinned `js-tiktoken@1.0.21` `o200k_base`.
+- Regression: the budget script reports zero failures/deferred cases with catalog 1,369, compact 347, lean JSON 376, fill 32, click 32, and workflow 688 tokens against the approved ceilings.
+- Status: closed.

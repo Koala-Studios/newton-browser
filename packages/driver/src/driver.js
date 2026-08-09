@@ -508,7 +508,7 @@ class NewtonBrowserDriver {
   // ── Observation (the read half) ───────────────────────────────────────────
   // Compact AX observation with backendNodeId-keyed refs (§7.5). Excludes
   // the bridge overlay UI so the agent never targets the bubble.
-  async observe({ maxNodes = NODE_CAP, query, mode = "full", maxChars } = {}) {
+  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars } = {}) {
     if (mode === "text") return this.observeText({ maxChars });
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
     const url = await this.evalString("location.href");
@@ -527,21 +527,25 @@ class NewtonBrowserDriver {
     const trees = Array.isArray(frameObservation) ? frameObservation : frameObservation.trees;
     const excludedFrames = Array.isArray(frameObservation) ? [] : frameObservation.excludedFrames;
     const filterText = typeof query === "string" ? query.toLowerCase() : "";
+    const requestedRoles = new Set(Array.isArray(roles) ? roles.map((value) => String(value).toLowerCase()).slice(0, 12) : []);
     const nodes = [];
     this.refIndex.clear();
     let truncated = false;
     for (const tree of trees) for (const axNode of tree.nodes ?? []) {
       if (nodes.length >= cap) { truncated = true; break; }
       const role = axNode.role?.value;
-      if (!role || !ACTIONABLE_ROLES.has(role)) continue;
+      if (!role || (!ACTIONABLE_ROLES.has(role) && !requestedRoles.has(role))) continue;
+      if (requestedRoles.size > 0 && !requestedRoles.has(role)) continue;
       if (axNode.ignored) continue;
       const backendNodeId = axNode.backendDOMNodeId;
       if (typeof backendNodeId !== "number") continue;
       const route = tree.route ?? { targetId: this.mainTargetId, sessionId: null, frameId: null, origin: safeOrigin(url) };
       if (await this.isOwnedOverlayNodeCached(backendNodeId, route)) continue;
+      const nodeFacts = await this.describedNodeFactsCached(backendNodeId, route);
       const name = String(axNode.name?.value ?? "").slice(0, 240);
       if (filterText && !name.toLowerCase().includes(filterText)) continue;
       const value = axNode.value?.value ? String(axNode.value.value).slice(0, 240) : undefined;
+      const states = axObservationStates(axNode);
       // Stable, element-keyed ref (S21): the same element keeps the same ref
       // across observations. Reuse the prior bbox for an unchanged node when the
       // page has not scrolled — skipping the per-node measurement round-trips
@@ -559,10 +563,18 @@ class NewtonBrowserDriver {
       const resolvedRoute = this.targetRegistry.resolveRef(ref);
       this.refIndex.set(ref, resolvedRoute);
       nodes.push({
-        ref, role, name, ...(value ? { value } : {}), bbox, target: { ref },
+        ref, role, name, ...(value ? { value } : {}), ...states, ...publicNodeFacts(nodeFacts, route.origin), bbox, target: { ref },
         documentEpoch: resolvedRoute.documentEpoch,
         ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
       });
+    }
+    if (includeInteractive && nodes.length < cap) {
+      const discovered = await this.interactiveObservationNodes(cap - nodes.length, new Set(nodes.map((node) => node.ref)), { requestedRoles, filterText });
+      for (const node of discovered) {
+        this.refIndex.set(node.ref, node.route);
+        const { route: _route, ...publicNode } = node;
+        nodes.push(publicNode);
+      }
     }
     for (const fileNode of await this.fileInputObservationNodes(cap - nodes.length)) {
       if (nodes.some((node) => node.ref === fileNode.ref)) continue;
@@ -580,7 +592,7 @@ class NewtonBrowserDriver {
     // not query-filtered). If the page churned heavily, fall back to a full snapshot.
     const canDiff = mode === "diff" && !filterText && this.lastNodes.size > 0;
     const baseline = this.lastNodes;
-    this.lastNodes = new Map(nodes.map((node) => [node.ref, { role: node.role, name: node.name, value: node.value, bbox: node.bbox }]));
+    this.lastNodes = new Map(nodes.map((node) => [node.ref, observationNodeSnapshot(node)]));
     if (canDiff) {
       const delta = computeObservationDelta(baseline, nodes);
       const churn = delta.added.length + delta.removed.length + delta.updated.length;
@@ -665,6 +677,20 @@ class NewtonBrowserDriver {
     const owned = await this.isOwnedOverlayNode(backendNodeId, route);
     this.ownedNodeCache.set(key, owned);
     return owned;
+  }
+
+  async describedNodeFactsCached(backendNodeId, route = {}) {
+    const key = `${route.sessionId ?? "root"}:${backendNodeId}:facts`;
+    if (this.ownedNodeCache.has(key)) return this.ownedNodeCache.get(key);
+    const described = await this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null);
+    const node = described?.node ?? {};
+    const attributes = {};
+    for (let index = 0; index < (node.attributes ?? []).length; index += 2) {
+      attributes[String(node.attributes[index]).toLowerCase()] = String(node.attributes[index + 1] ?? "");
+    }
+    const facts = { localName: String(node.localName || node.nodeName || "").toLowerCase(), attributes };
+    this.ownedNodeCache.set(key, facts);
+    return facts;
   }
 
   // Vision capture (Proposal 29 / D5): viewport (default), full scroll-down page,
@@ -784,7 +810,7 @@ class NewtonBrowserDriver {
     this.assertRendererLive("root", kind);
     this.activeCommandId = typeof context?.commandId === "string" ? context.commandId : null;
     try {
-      if (kind === "observe") return this.withObservationMeta("verified", {}, await this.observe({ maxNodes: action.maxNodes, query: action.query, mode: action.mode }));
+      if (kind === "observe") return this.withObservationMeta("verified", {}, await this.observe({ maxNodes: action.maxNodes, query: action.query, roles: action.roles, includeInteractive: action.includeInteractive, mode: action.mode }));
       if (kind === "screenshot") return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({ sensitiveZones: action.sensitiveZones, fullPage: action.fullPage, waitMs: action.waitMs, device: action.device, clip: action.clip, inline: action.inline, format: action.format, quality: action.quality }) };
       if (kind === "navigate") return this.navigate(action);
       if (kind === "back" || kind === "forward" || kind === "reload") return this.historyAction(kind);
@@ -1058,6 +1084,55 @@ class NewtonBrowserDriver {
     return this.withObservationMeta("verified", diffElement(beforeState, afterState), observation);
   }
 
+  async interactiveObservationNodes(limit, existingRefs = new Set(), filters = {}) {
+    if (limit <= 0) return [];
+    const output = [];
+    const allowed = new Set(this.allowedOrigins);
+    const selector = "a[href],button,input,select,textarea,[role],[tabindex]";
+    for (const route of this.targetRegistry.listObservationRoutes()) {
+      if (output.length >= limit) break;
+      if (route.origin && !allowed.has(route.origin)) continue;
+      const document = await this.cdp("DOM.getDocument", { depth: 0, pierce: true }, route).catch(() => null);
+      if (!document?.root?.nodeId) continue;
+      const queried = await this.cdp("DOM.querySelectorAll", { nodeId: document.root.nodeId, selector }, route).catch(() => null);
+      for (const nodeId of (queried?.nodeIds ?? []).slice(0, Math.min(500, Math.max(50, limit * 10)))) {
+        if (output.length >= limit) break;
+        const described = await this.cdp("DOM.describeNode", { nodeId }, route).catch(() => null);
+        const backendNodeId = described?.node?.backendNodeId;
+        if (!Number.isInteger(backendNodeId) || await this.isOwnedOverlayNodeCached(backendNodeId, route)) continue;
+        const ref = this.targetRegistry.createRef(route.targetId, backendNodeId, route.frameId ? { frameId: route.frameId } : {});
+        if (existingRefs.has(ref)) continue;
+        const [facts, name, bbox, nodeFacts] = await Promise.all([
+          this.elementFacts(backendNodeId, route),
+          this.axNameFor(backendNodeId, route),
+          this.boxFor(backendNodeId, route),
+          this.describedNodeFactsCached(backendNodeId, route),
+        ]);
+        if (!bbox || !facts.role) continue;
+        const role = String(facts.role).toLowerCase();
+        const accessibleName = String(name || facts.accessibleName || "").slice(0, 240);
+        if (filters.requestedRoles?.size > 0 && !filters.requestedRoles.has(role)) continue;
+        if (filters.filterText && !`${role} ${accessibleName}`.toLowerCase().includes(filters.filterText)) continue;
+        const resolvedRoute = this.targetRegistry.resolveRef(ref);
+        existingRefs.add(ref);
+        output.push({
+          ref,
+          role: role.slice(0, 80),
+          name: accessibleName,
+          ...(typeof facts.disabled === "boolean" ? { disabled: facts.disabled } : {}),
+          ...(typeof facts.checked === "boolean" ? { checked: facts.checked } : {}),
+          ...publicNodeFacts(nodeFacts, route.origin),
+          bbox: [Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.width), Math.round(bbox.height)],
+          target: { ref },
+          documentEpoch: resolvedRoute.documentEpoch,
+          ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
+          route: resolvedRoute,
+        });
+      }
+    }
+    return output;
+  }
+
   async fileInputObservationNodes(limit) {
     if (limit <= 0) return [];
     const route = this.targetRegistry.listObservationRoutes()[0];
@@ -1300,6 +1375,8 @@ class NewtonBrowserDriver {
           formOwner: form,
           inputType: this.type || "",
           autocomplete: attr("autocomplete"),
+          disabled: Boolean(this.disabled || attr("aria-disabled") === "true"),
+          checked: typeof this.checked === "boolean" ? this.checked : undefined,
           formSubmit: Boolean(isSubmit && form),
         };
       }`,
@@ -1817,6 +1894,44 @@ class NewtonBrowserDriver {
   }
 }
 
+function axObservationStates(axNode) {
+  const properties = new Map((axNode?.properties ?? []).map((property) => [property?.name, property?.value?.value]));
+  const output = {};
+  for (const name of ["disabled", "selected", "expanded", "required"]) {
+    if (typeof properties.get(name) === "boolean") output[name] = properties.get(name);
+  }
+  const checked = properties.get("checked");
+  if (typeof checked === "boolean" || checked === "mixed") output.checked = checked;
+  const level = Number(properties.get("level"));
+  if (Number.isSafeInteger(level) && level > 0 && level <= 9) output.level = level;
+  return output;
+}
+
+function publicNodeFacts(facts, routeOrigin) {
+  const localName = String(facts?.localName ?? "").slice(0, 80);
+  const attributes = facts?.attributes ?? {};
+  const elementType = localName === "input" && attributes.type
+    ? `input:${String(attributes.type).toLowerCase().slice(0, 40)}`
+    : localName;
+  let href;
+  if (typeof attributes.href === "string" && routeOrigin) {
+    try {
+      const destination = new URL(attributes.href, `${routeOrigin}/`);
+      if (destination.origin === routeOrigin) {
+        destination.username = "";
+        destination.password = "";
+        destination.search = "";
+        destination.hash = "";
+        href = destination.toString();
+      }
+    } catch {}
+  }
+  return {
+    ...(elementType ? { elementType } : {}),
+    ...(href ? { href } : {}),
+  };
+}
+
 // Compute a compact observation delta (D6). `added` are nodes whose ref is new
 // (carry full node incl. bbox for targeting); `removed` are refs gone; `updated`
 // are refs whose accessible name/value changed. bbox is deliberately NOT a change
@@ -1829,12 +1944,9 @@ function computeObservationDelta(baseline, nodes) {
     seen.add(node.ref);
     const prev = baseline.get(node.ref);
     if (!prev) { added.push(node); continue; }
-    if (prev.name !== node.name || prev.value !== node.value || prev.role !== node.role) {
-      updated.push({
-        ref: node.ref,
-        ...(prev.name !== node.name ? { name: node.name } : {}),
-        ...(prev.value !== node.value ? { value: node.value } : {}),
-      });
+    const current = observationNodeSnapshot(node);
+    if (JSON.stringify(current.state) !== JSON.stringify(prev.state)) {
+      updated.push({ ref: node.ref, ...current.state });
     }
   }
   const removed = [];
@@ -1863,6 +1975,26 @@ function normalizedTarget(action) {
   if (action.text) return { text: String(action.text), ...(action.exact ? { exact: true } : {}) };
   if (Number.isFinite(action.x) && Number.isFinite(action.y)) return { coordinates: { x: Math.round(action.x), y: Math.round(action.y) } };
   return null;
+}
+
+function observationNodeSnapshot(node) {
+  const state = {
+    role: node.role,
+    ...(node.name !== undefined ? { name: node.name } : {}),
+    ...(node.value !== undefined ? { value: node.value } : {}),
+    ...(node.disabled !== undefined ? { disabled: node.disabled } : {}),
+    ...(node.checked !== undefined ? { checked: node.checked } : {}),
+    ...(node.selected !== undefined ? { selected: node.selected } : {}),
+    ...(node.expanded !== undefined ? { expanded: node.expanded } : {}),
+    ...(node.required !== undefined ? { required: node.required } : {}),
+    ...(node.level !== undefined ? { level: node.level } : {}),
+    ...(node.href !== undefined ? { href: node.href } : {}),
+    ...(node.elementType !== undefined ? { elementType: node.elementType } : {}),
+    ...(node.documentEpoch !== undefined ? { documentEpoch: node.documentEpoch } : {}),
+    ...(node.frameId !== undefined ? { frameId: node.frameId } : {}),
+    ...(node.frameOrigin !== undefined ? { frameOrigin: node.frameOrigin } : {}),
+  };
+  return { ...state, state, bbox: node.bbox };
 }
 
 function selectorFromAction(action) {

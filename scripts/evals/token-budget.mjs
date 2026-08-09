@@ -1,7 +1,7 @@
 const COUNTER_FIELD_WHITELIST = ["name", "algorithm", "version", "provenance", "origin"];
 
 function asSafeCounterMeta(raw) {
-  if (!raw || typeof raw !== "object") return undefined;
+  if (!raw || (typeof raw !== "object" && typeof raw !== "function")) return undefined;
   const metadata = {};
   for (const field of COUNTER_FIELD_WHITELIST) {
     if (typeof raw[field] === "string" && raw[field].trim()) {

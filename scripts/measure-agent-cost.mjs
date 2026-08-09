@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { getEncoding } from "js-tiktoken";
 
 import {
   projectCompactObservation,
   projectLeanObservation,
   normalizeAgentActionResult,
 } from "../apps/mcp-server/src/agent-output.ts";
+import { toolList } from "../apps/mcp-server/src/mcp-server.ts";
 import { estimateTokensFromString, serializeForBudget, extractCounterMeta } from "./evals/token-budget.mjs";
 
 const PROJECT_ROOT = process.cwd();
@@ -19,10 +21,11 @@ const ALLOWED_CASE_FIELDS = {
   action: new Set(["id", "caseType", "maxTokens", "input"]),
   workflow: new Set(["id", "caseType", "maxTokens", "steps", "reason"]),
   deferred: new Set(["id", "caseType", "reason", "maxTokens"]),
+  catalog: new Set(["id", "caseType", "maxTokens"]),
   invalid: new Set(["id", "caseType", "reason"]),
 };
 const ALLOWED_WORKFLOW_STEP_FIELDS = new Set(["id", "type", "maxTokens", "input", "inputRef", "options", "reason"]);
-const ALLOWED_WORKFLOW_OBSERVATION_OPTION_FIELDS = new Set(["format", "query", "roles", "limit", "includeGeometry"]);
+const ALLOWED_WORKFLOW_OBSERVATION_OPTION_FIELDS = new Set(["format", "query", "roles", "limit", "includeGeometry", "includeInteractive"]);
 const OBSERVATION_FORMAT_DEFAULT = "compact";
 
 function isObjectRecord(raw) {
@@ -184,6 +187,10 @@ export function parseFixtureCase(raw, filePath = "fixture.json") {
   if (caseType === "action") return parseActionCase(raw, filePath);
   if (caseType === "workflow") return parseWorkflowCase(raw, filePath);
   if (caseType === "deferred") return parseDeferredCase(raw, filePath);
+  if (caseType === "catalog") {
+    assertNoUnknownKeys(raw, ALLOWED_CASE_FIELDS.catalog, `${filePath}: catalog`);
+    return { id: safeString(raw.id, path.basename(filePath)), caseType, maxTokens: parseMaxTokens(raw.maxTokens, `${filePath}: catalog`) };
+  }
   throw new Error(`${filePath}: unsupported caseType ${caseType}`);
 }
 
@@ -207,8 +214,16 @@ export function readFixtures(root = DEFAULT_FIXTURE_ROOT) {
 }
 
 function serializeObservationProjection(projection, format) {
-  if (format === "compact") return String(projection.output ?? "");
-  return serializeForBudget(projection);
+  const metadata = { outcome: "completed", retrySafe: false, sessionEpoch: 1, sequence: 1 };
+  if (format === "compact") {
+    return serializeForBudget({
+      ok: true,
+      output: String(projection.output ?? ""),
+      ...(projection.budget?.truncated ? { budget: projection.budget } : {}),
+      ...metadata,
+    });
+  }
+  return serializeForBudget({ ok: true, result: projection, ...metadata });
 }
 
 export function measureObservationCase(entry, tokenCounter) {
@@ -231,7 +246,7 @@ export function measureObservationCase(entry, tokenCounter) {
 
   const serialized = serializeObservationProjection(projection.projection, format);
   const measured = estimateTokensFromString(serialized, tokenCounter);
-  const exact = measured.origin === "injected";
+  const exact = measured.method === "token_counter";
   const pass = exact ? measured.count <= entry.maxTokens : undefined;
   return {
     id: entry.id,
@@ -257,8 +272,8 @@ export function measureActionCase(entry, tokenCounter) {
       maxTokens: entry.maxTokens,
     };
   }
-  const measured = estimateTokensFromString(serializeForBudget(projection), tokenCounter);
-  const exact = measured.origin === "injected";
+  const measured = estimateTokensFromString(serializeForBudget({ ...projection, sessionEpoch: 1, sequence: 1 }), tokenCounter);
+  const exact = measured.method === "token_counter";
   const pass = exact ? measured.count <= entry.maxTokens : undefined;
   return {
     id: entry.id,
@@ -281,6 +296,7 @@ function measureWorkflowObservationStep(step, tokenCounter) {
     ...(step.options?.query !== undefined ? { query: step.options.query } : {}),
     ...(step.options?.roles !== undefined ? { roles: step.options.roles } : {}),
     ...(step.options?.includeGeometry === true ? { includeGeometry: true } : {}),
+    ...(step.options?.includeInteractive === true ? { includeInteractive: true } : {}),
   };
 
   const projection = projector(step.input, options);
@@ -298,7 +314,7 @@ function measureWorkflowObservationStep(step, tokenCounter) {
 
   const serialized = serializeObservationProjection(projection.projection, format);
   const measured = estimateTokensFromString(serialized, tokenCounter);
-  const exact = measured.origin === "injected";
+  const exact = measured.method === "token_counter";
   const pass = exact ? measured.count <= (step.maxTokens ?? 0) : undefined;
   return {
     id: step.id,
@@ -360,6 +376,19 @@ export function measureCase(entry, tokenCounter) {
   if (entry.caseType === "action") return measureActionCase(entry, tokenCounter);
   if (entry.caseType === "workflow") return measureWorkflowCase(entry, tokenCounter);
   if (entry.caseType === "deferred") return measureDeferredCase(entry);
+  if (entry.caseType === "catalog") {
+    const measured = estimateTokensFromString(serializeForBudget({ tools: toolList() }), tokenCounter);
+    const exact = measured.method === "token_counter";
+    const pass = exact ? measured.count <= entry.maxTokens : undefined;
+    return {
+      id: entry.id,
+      type: "catalog",
+      status: exact ? (pass ? "pass" : "fail") : "deferred",
+      ...(exact ? { pass, tokens: measured.count } : { bytes: measured.count }),
+      measured,
+      maxTokens: entry.maxTokens,
+    };
+  }
   return { id: entry.id ?? "unknown", type: "invalid", status: "fail", reason: entry.reason || "unsupported caseType", pass: false };
 }
 
@@ -403,16 +432,26 @@ export async function loadInjectedTokenCounter() {
   }
 }
 
+export function createPinnedTokenCounter() {
+  const encoding = getEncoding("o200k_base");
+  const counter = (value) => encoding.encode(typeof value === "string" ? value : "").length;
+  counter.algorithm = "o200k_base";
+  counter.version = "js-tiktoken@1.0.21";
+  counter.provenance = "workspace-dev-dependency";
+  counter.origin = "local";
+  return counter;
+}
+
 export async function runMeasurement(opts = {}) {
   const fixtureRoot = safeString(opts.fixtureRoot, DEFAULT_FIXTURE_ROOT);
-  const tokenCounter = opts.tokenCounter;
+  const tokenCounter = opts.tokenCounter ?? createPinnedTokenCounter();
   const fixtures = readFixtures(fixtureRoot);
   return buildReport(fixtures, tokenCounter);
 }
 
 export async function runMeasurementCli() {
   const fixtureRoot = safeString(process.env.AGENT_OUTPUT_FIXTURE_ROOT, DEFAULT_FIXTURE_ROOT);
-  const tokenCounter = await loadInjectedTokenCounter();
+  const tokenCounter = await loadInjectedTokenCounter() ?? createPinnedTokenCounter();
   return buildReport(readFixtures(fixtureRoot), tokenCounter);
 }
 

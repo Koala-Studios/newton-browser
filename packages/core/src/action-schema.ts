@@ -39,6 +39,8 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   text: { kind: "text", cap: TEXT_CAP },
   selector: { kind: "text", cap: TEXT_CAP },
   query: { kind: "text", cap: TEXT_CAP },
+  roles: { kind: "stringArray", cap: 12, itemCap: ROLE_CAP },
+  includeInteractive: { kind: "bool" },
   maxNodes: { kind: "int", min: 1, max: 250 },
   timeoutMs: { kind: "int", min: 100, max: 120_000 },
   x: { kind: "num" },

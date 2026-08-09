@@ -197,7 +197,7 @@ test("compact output escapes title and origin for output safety", () => {
 
   assert.equal(projection.ok, true);
   assert.equal(projection.projection.output.includes("\\\""), true);
-  assert.match(projection.projection.output, /^page title="line\\" with quote" origin="https:\/\/example\.com" observation$/m);
+  assert.match(projection.projection.output, /^page trust=untrusted_page_content title="line\\" with quote" origin="https:\/\/example\.com" observation$/m);
 });
 
 test("geometry is omitted by default", () => {
@@ -221,6 +221,28 @@ test("geometry appears only when includeGeometry is true", () => {
   );
   assert.equal(projection.ok, true);
   assert.equal((projection.projection.nodes as any)[0].geometry !== undefined, true);
+});
+
+test("compact and lean projections preserve rich state and target provenance", () => {
+  const rich = {
+    ...sample,
+    nodes: [{
+      ref: "d4:fchild:e9", role: "checkbox", name: "Terms", checked: "mixed", selected: false,
+      expanded: true, disabled: false, required: true, level: 2, href: "https://shop.example/terms",
+      elementType: "input:checkbox", documentEpoch: 4, frameId: "child", frameOrigin: "https://shop.example",
+    }],
+    nodeCount: 1,
+  };
+  const compact = projectCompactObservation(rich);
+  const lean = projectLeanObservation(rich);
+  assert.equal(compact.ok, true);
+  assert.equal(lean.ok, true);
+  if (!compact.ok || !lean.ok) assert.fail("rich observations must project");
+  assert.match(compact.projection.output ?? "", /checked="mixed"/);
+  assert.match(compact.projection.output ?? "", /frame=/);
+  assert.equal((lean.projection.nodes[0] as any).required, true);
+  assert.equal((lean.projection.nodes[0] as any).documentEpoch, 4);
+  assert.equal((lean.projection.nodes[0] as any).elementType, "input:checkbox");
 });
 
 test("dedupe removes duplicate semantic rows while preserving first ref order", () => {
@@ -518,7 +540,7 @@ test("projection header preserves title and avoids origin duplication", () => {
   const result = projectCompactObservation(parsed.input, { format: "compact", limit: 2 });
   assert.equal(result.ok, true);
   const output = (result.projection as any).output;
-  assert.equal(output.includes("page title=\"Checkout\""), true);
+  assert.equal(output.includes("trust=untrusted_page_content title=\"Checkout\""), true);
   assert.equal(output.includes(`origin=${JSON.stringify(new URL(parsed.input.origin).origin)}`), true);
 });
 
@@ -526,6 +548,7 @@ test("projection keeps base fields for MCP result shapes", () => {
   const projection = projectCompactObservation(sample);
   assert.equal(projection.ok, true);
   assert.equal(typeof projection.projection.origin, "string");
+  assert.equal(projection.projection.trust, "untrusted_page_content");
   assert.equal(typeof projection.projection.mode, "string");
   assert.equal(typeof projection.projection.nodeCount, "number");
   assert.equal(typeof projection.projection.capturedAt, "string");
@@ -549,9 +572,9 @@ test("measurement parser resolves shared inputRef and keeps compact/lean parity"
   assert.equal("tokens" in leanProjected, false);
   assert.equal(compactResult.results.some((entry) => entry.id === "tool-catalog"), true);
   const toolCatalog = compactResult.results.find((entry) => entry.id === "tool-catalog");
-  assert.equal(toolCatalog?.status, "deferred");
-  assert.equal(compactResult.status, "deferred");
-  assert.equal(compactResult.passed, false);
+  assert.equal(toolCatalog?.status, "pass");
+  assert.equal(compactResult.status, "pass");
+  assert.equal(compactResult.passed, true);
 });
 
 test("measurement rejects malformed case payloads from malformed fixtures", () => {

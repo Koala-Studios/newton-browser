@@ -180,6 +180,7 @@ test("observation deltas are redacted and carry only added/removed/updated (D6)"
     updated: [
       { ref: "e3", name: "Cart (2)" },
       { ref: "e4", name: "Card number", value: "4111 1111 1111 1111" },
+      { ref: "e5", role: "checkbox", name: "Terms", checked: true, required: true, documentEpoch: 2 },
     ],
     nodeCount: 12,
     capturedAt: "2026-06-29T00:00:00.000Z",
@@ -190,16 +191,18 @@ test("observation deltas are redacted and carry only added/removed/updated (D6)"
   assert.equal(result.added.length, 1);
   assert.equal(result.added[0].ref, "e9");
   assert.deepEqual(result.removed, ["e1", "e2"]);
-  assert.equal(result.updated.length, 2);
+  assert.equal(result.updated.length, 3);
   // A sensitive value in an updated field is masked like an observation value (S18).
   assert.equal(result.updated[1].value, "[REDACTED]");
+  assert.equal(result.updated[2].checked, true);
+  assert.equal(result.updated[2].documentEpoch, 2);
   assert.equal(result.nodeCount, 12);
 
   const summary = summarizeBrowserResult(result);
   assert.equal(summary.kind, "observation_delta");
   assert.equal(summary.added, 1);
   assert.equal(summary.removed, 2);
-  assert.equal(summary.updated, 2);
+  assert.equal(summary.updated, 3);
   assert.equal("nodes" in summary, false);
 });
 

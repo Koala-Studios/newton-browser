@@ -41,6 +41,8 @@ test("action schema fields survive parse and redact", () => {
     selector: "#primary",
     query: "Visible",
     maxNodes: 999,
+    roles: ["button", "textbox"],
+    includeInteractive: true,
     timeoutMs: 999_999,
     x: 10.4,
     y: 20.6,

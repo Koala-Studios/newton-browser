@@ -364,6 +364,13 @@ function normalizeNode(value: unknown, index: number) {
     ...(typeof input.name === "string" ? { name: redactText(input.name).slice(0, TEXT_CAP) } : {}),
     ...(typeof input.value === "string" ? { value: redactSensitiveValue(String(input.name ?? ""), input.value) } : {}),
     ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
+    ...(typeof input.checked === "boolean" ? { checked: input.checked } : input.checked === "mixed" ? { checked: "mixed" as const } : {}),
+    ...(typeof input.selected === "boolean" ? { selected: input.selected } : {}),
+    ...(typeof input.expanded === "boolean" ? { expanded: input.expanded } : {}),
+    ...(typeof input.required === "boolean" ? { required: input.required } : {}),
+    ...(Number.isSafeInteger(input.level) && Number(input.level) > 0 && Number(input.level) <= 9 ? { level: Number(input.level) } : {}),
+    ...(typeof input.href === "string" && input.href.trim() ? { href: redactBrowserUrl(input.href) } : {}),
+    ...(typeof input.elementType === "string" && input.elementType.trim() ? { elementType: redactText(input.elementType).slice(0, 80) } : {}),
     ...(normalizeBbox(input.bbox) ? { bbox: normalizeBbox(input.bbox)! } : {}),
     ...(redactBrowserTarget(input.target) ? { target: redactBrowserTarget(input.target)! } : {}),
     ...(Number.isSafeInteger(input.documentEpoch) && Number(input.documentEpoch) > 0 ? { documentEpoch: Number(input.documentEpoch) } : {}),
@@ -389,8 +396,20 @@ function normalizeUpdated(value: unknown) {
   if (typeof input.ref !== "string" || !input.ref.trim()) return [];
   return [{
     ref: redactText(input.ref).slice(0, TEXT_CAP),
+    ...(typeof input.role === "string" ? { role: redactText(input.role).slice(0, 80) } : {}),
     ...(typeof input.name === "string" ? { name: redactText(input.name).slice(0, TEXT_CAP) } : {}),
     ...(typeof input.value === "string" ? { value: redactSensitiveValue(String(input.name ?? ""), input.value) } : {}),
+    ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
+    ...(typeof input.checked === "boolean" ? { checked: input.checked } : input.checked === "mixed" ? { checked: "mixed" as const } : {}),
+    ...(typeof input.selected === "boolean" ? { selected: input.selected } : {}),
+    ...(typeof input.expanded === "boolean" ? { expanded: input.expanded } : {}),
+    ...(typeof input.required === "boolean" ? { required: input.required } : {}),
+    ...(Number.isSafeInteger(input.level) && Number(input.level) > 0 && Number(input.level) <= 9 ? { level: Number(input.level) } : {}),
+    ...(typeof input.href === "string" && input.href.trim() ? { href: redactBrowserUrl(input.href) } : {}),
+    ...(typeof input.elementType === "string" && input.elementType.trim() ? { elementType: redactText(input.elementType).slice(0, 80) } : {}),
+    ...(Number.isSafeInteger(input.documentEpoch) && Number(input.documentEpoch) > 0 ? { documentEpoch: Number(input.documentEpoch) } : {}),
+    ...(typeof input.frameId === "string" && input.frameId.trim() ? { frameId: redactText(input.frameId).slice(0, 128) } : {}),
+    ...(typeof input.frameOrigin === "string" && redactBrowserOrigin(input.frameOrigin) ? { frameOrigin: redactBrowserOrigin(input.frameOrigin) } : {}),
   }];
 }
 

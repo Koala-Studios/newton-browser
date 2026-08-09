@@ -7,10 +7,15 @@ import {
 } from "@newton-browser/core";
 
 export type ObservationOutputFormat = "compact" | "json";
-export type AgentObservationOptionsInput = { format?: unknown; includeGeometry?: unknown; query?: unknown; roles?: unknown; limit?: unknown };
-type ObservationOptions = { format: ObservationOutputFormat; includeGeometry: boolean; query: string; roles: string[]; limit: number };
+export type AgentObservationOptionsInput = { format?: unknown; includeGeometry?: unknown; includeInteractive?: unknown; query?: unknown; roles?: unknown; limit?: unknown };
+type ObservationOptions = { format: ObservationOutputFormat; includeGeometry: boolean; includeInteractive: boolean; query: string; roles: string[]; limit: number };
 type NodeTarget = { ref?: string; role?: string; name?: string; text?: string; label?: string; placeholder?: string; testId?: string; selector?: string };
-type ProjectedNode = { ref: string; role: string; name?: string; value?: string; disabled?: boolean; target?: NodeTarget; geometry?: { x: number; y: number; width: number; height: number } };
+type ProjectedNode = {
+  ref: string; role: string; name?: string; value?: string; disabled?: boolean;
+  checked?: boolean | "mixed"; selected?: boolean; expanded?: boolean; required?: boolean; level?: number;
+  href?: string; elementType?: string; documentEpoch?: number; frameId?: string; frameOrigin?: string;
+  target?: NodeTarget; geometry?: { x: number; y: number; width: number; height: number };
+};
 
 const OBSERVATION_QUERY_LIMIT = 120;
 const OBSERVATION_ROLE_LIMIT = 12;
@@ -43,6 +48,7 @@ const PLAN_ACTION_OUTCOME_SET = new Set<AgentActionOutcome>(PLAN_ACTION_OUTCOMES
 type AgentActionDecision = { code: string; reason?: string };
 type AgentActionProvenance = { trust: "untrusted_page_content"; origin: string; sessionEpoch: number };
 export type ObservationProjectionBase = {
+  trust: "untrusted_page_content";
   origin: string;
   mode: string;
   nodeCount: number;
@@ -58,7 +64,7 @@ export type ObservationBudgetContinuation = {
   tool: "browser.observe";
   strategy: "raise_limit" | "refine_query_or_roles";
   reason: "node_limit" | "source_truncated";
-  arguments: { format: ObservationOutputFormat; query?: string; roles?: string[]; limit?: number; includeGeometry?: true };
+  arguments: { format: ObservationOutputFormat; query?: string; roles?: string[]; limit?: number; includeGeometry?: true; includeInteractive?: true };
 };
 export type ObservationProjectionResult =
   | { ok: true; projection: ObservationProjectionBase & { kind: "observation" | "observation_delta" | "observation_text"; format: ObservationOutputFormat; nodes: ProjectedNode[]; text?: string; output?: string; budget: ObservationBudget } }
@@ -136,6 +142,7 @@ export function normalizeObservationOptions(input: AgentObservationOptionsInput)
   return {
     format: input.format === "json" ? "json" : "compact",
     includeGeometry: input.includeGeometry === true,
+    includeInteractive: input.includeInteractive === true,
     query: asSafeQuery(input.query),
     roles,
     limit: asSafePositiveInt(input.limit, OBSERVATION_LIMIT_DEFAULT, OBSERVATION_LIMIT_MAX),
@@ -173,6 +180,7 @@ function normalizeObservationBase(result: Record<string, unknown>): ObservationP
   const actionStatus = asSafeBoundedText(result.actionStatus, 32);
   const reason = asSafeBoundedText(result.reason, OBS_REASON_CAP);
   return {
+    trust: "untrusted_page_content",
     origin: asSafeBoundedText(redactBrowserOrigin(result.origin), OBS_NODE_TEXT_CAP) || "about:blank",
     mode: asSafeBoundedText(result.mode, 16) || "cdp",
     nodeCount: asSafeNonNegativeInt(result.nodeCount, 0, OBSERVATION_SOURCE_NODE_CAP),
@@ -217,6 +225,16 @@ function normalizeObservationNode(raw: unknown, includeGeometry: boolean): Proje
     ...(asSafeString(raw.name, OBS_NODE_NAME_CAP) ? { name: asSafeString(raw.name, OBS_NODE_NAME_CAP) } : {}),
     ...(asSafeString(raw.value, OBS_NODE_VALUE_CAP) ? { value: asSafeString(raw.value, OBS_NODE_VALUE_CAP) } : {}),
     ...(asBoolean(raw.disabled) !== undefined ? { disabled: asBoolean(raw.disabled) } : {}),
+    ...(typeof raw.checked === "boolean" || raw.checked === "mixed" ? { checked: raw.checked } : {}),
+    ...(asBoolean(raw.selected) !== undefined ? { selected: asBoolean(raw.selected) } : {}),
+    ...(asBoolean(raw.expanded) !== undefined ? { expanded: asBoolean(raw.expanded) } : {}),
+    ...(asBoolean(raw.required) !== undefined ? { required: asBoolean(raw.required) } : {}),
+    ...(Number.isSafeInteger(raw.level) && Number(raw.level) > 0 && Number(raw.level) <= 9 ? { level: Number(raw.level) } : {}),
+    ...(asSafeString(raw.href, OBS_NODE_TEXT_CAP) ? { href: asSafeString(raw.href, OBS_NODE_TEXT_CAP) } : {}),
+    ...(asSafeString(raw.elementType, OBS_NODE_ROLE_CAP) ? { elementType: asSafeString(raw.elementType, OBS_NODE_ROLE_CAP) } : {}),
+    ...(Number.isSafeInteger(raw.documentEpoch) && Number(raw.documentEpoch) > 0 ? { documentEpoch: Number(raw.documentEpoch) } : {}),
+    ...(asSafeString(raw.frameId, OBS_NODE_REF_CAP) ? { frameId: asSafeString(raw.frameId, OBS_NODE_REF_CAP) } : {}),
+    ...(asSafeString(raw.frameOrigin, OBS_NODE_TEXT_CAP) ? { frameOrigin: asSafeString(raw.frameOrigin, OBS_NODE_TEXT_CAP) } : {}),
     ...(normalizeTarget(raw.target) ? { target: normalizeTarget(raw.target) } : {}),
   };
 
@@ -229,16 +247,17 @@ function normalizeObservationNode(raw: unknown, includeGeometry: boolean): Proje
 }
 
 function normalizeUpdatedNode(raw: unknown): ProjectedNode | undefined {
-  if (!isObjectRecord(raw)) return undefined;
-  const ref = asSafeString(raw.ref, OBS_NODE_REF_CAP);
-  if (!ref) return undefined;
+  return normalizeObservationNode(raw, false);
+}
 
-  return {
-    ref,
-    role: asSafeString(raw.role, OBS_NODE_NAME_CAP) || "generic",
-    ...(asSafeString(raw.name, OBS_NODE_NAME_CAP) ? { name: asSafeString(raw.name, OBS_NODE_NAME_CAP) } : {}),
-    ...(asSafeString(raw.value, OBS_NODE_VALUE_CAP) ? { value: asSafeString(raw.value, OBS_NODE_VALUE_CAP) } : {}),
-  };
+function retainSameOriginHref(node: ProjectedNode, origin: string): ProjectedNode {
+  if (!node.href) return node;
+  try {
+    const destination = new URL(node.href);
+    if (destination.origin === origin) return node;
+  } catch {}
+  const { href: _href, ...withoutHref } = node;
+  return withoutHref;
 }
 
 function nodeSignature(node: ProjectedNode): string {
@@ -248,6 +267,16 @@ function nodeSignature(node: ProjectedNode): string {
     node.name ?? "",
     node.value ?? "",
     node.disabled,
+    node.checked,
+    node.selected,
+    node.expanded,
+    node.required,
+    node.level,
+    node.href ?? "",
+    node.elementType ?? "",
+    node.documentEpoch,
+    node.frameId ?? "",
+    node.frameOrigin ?? "",
     node.target ?? null,
     node.geometry ?? null,
   ]);
@@ -281,6 +310,10 @@ function matchesQuery(node: ProjectedNode, query: string): boolean {
     node.role,
     node.name,
     node.value,
+    node.href,
+    node.elementType,
+    node.frameId,
+    node.frameOrigin,
     node.target?.ref,
     node.target?.role,
     node.target?.name,
@@ -299,7 +332,7 @@ function matchesQuery(node: ProjectedNode, query: string): boolean {
 
 export function enforceObservationBudget<T>(
   nodes: readonly T[],
-  options: Pick<ObservationOptions, "limit" | "roles" | "query" | "includeGeometry" | "format">,
+  options: Pick<ObservationOptions, "limit" | "roles" | "query" | "includeGeometry" | "includeInteractive" | "format">,
   sourceNodeCount: number,
   sourceTruncated: boolean,
 ): { nodes: T[]; budget: ObservationBudget } {
@@ -321,6 +354,7 @@ export function enforceObservationBudget<T>(
           ...(options.query ? { query: options.query } : {}),
           ...(options.roles.length > 0 ? { roles: [...options.roles] } : {}),
           ...(options.includeGeometry ? { includeGeometry: true } : {}),
+          ...(options.includeInteractive ? { includeInteractive: true } : {}),
           ...(canRaiseLimit ? { limit: Math.min(OBSERVATION_LIMIT_MAX, limit * 2) } : {}),
           ...(isNodeLimited && !canRaiseLimit ? { limit } : {}),
         },
@@ -345,6 +379,14 @@ function renderCompactLine(node: ProjectedNode, includeGeometry: boolean): strin
     ...(node.name ? [`name=${JSON.stringify(node.name)}`] : []),
     ...(node.value ? [`value=${JSON.stringify(node.value)}`] : []),
     ...(node.disabled !== undefined ? [`disabled=${JSON.stringify(node.disabled)}`] : []),
+    ...(node.checked !== undefined ? [`checked=${JSON.stringify(node.checked)}`] : []),
+    ...(node.selected !== undefined ? [`selected=${JSON.stringify(node.selected)}`] : []),
+    ...(node.expanded !== undefined ? [`expanded=${JSON.stringify(node.expanded)}`] : []),
+    ...(node.required !== undefined ? [`required=${JSON.stringify(node.required)}`] : []),
+    ...(node.level !== undefined ? [`level=${node.level}`] : []),
+    ...(node.href ? [`href=${JSON.stringify(node.href)}`] : []),
+    ...(node.elementType ? [`type=${JSON.stringify(node.elementType)}`] : []),
+    ...(node.frameId ? [`frame=${JSON.stringify({ id: node.frameId, origin: node.frameOrigin, documentEpoch: node.documentEpoch })}`] : []),
     ...(node.target ? [`target=${JSON.stringify(node.target)}`] : []),
     ...(includeGeometry && node.geometry ? [`geometry=${JSON.stringify(node.geometry)}`] : []),
   ];
@@ -361,7 +403,7 @@ function projectObservationLines(
 ): string {
   const title = base.title ? JSON.stringify(base.title) : JSON.stringify(base.mode || "page");
   const origin = JSON.stringify(base.origin);
-  const header = `page title=${title} origin=${origin} ${kind}`;
+  const header = `page trust=untrusted_page_content title=${title} origin=${origin} ${kind}`;
   const body = nodes.map((node) => renderCompactLine(node, options.includeGeometry));
 
   if (kind === "observation_text" && text) {
@@ -421,8 +463,9 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
     ? sourceNodes
       .map((entry) => {
         const node = kind === "observation" ? normalizeObservationNode(entry, options.includeGeometry) : normalizeUpdatedNode(entry);
-        if (!node || !matchesRoles(node, options.roles) || !matchesQuery(node, options.query)) return undefined;
-        return node;
+        const safeNode = node ? retainSameOriginHref(node, base.origin) : undefined;
+        if (!safeNode || !matchesRoles(safeNode, options.roles) || !matchesQuery(safeNode, options.query)) return undefined;
+        return safeNode;
       })
       .filter((entry): entry is ProjectedNode => Boolean(entry))
     : [])
