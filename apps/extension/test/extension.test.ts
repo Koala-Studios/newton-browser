@@ -66,6 +66,12 @@ test("standalone extension build materializes package runtime into dist", () => 
     "src/vendor/newton-browser-driver/controller.js",
     "src/vendor/newton-browser-driver/chrome-tabs-port.js",
     "src/vendor/newton-browser-driver/driver.js",
+    "src/vendor/newton-browser-driver/session-command-pump.js",
+    "src/vendor/newton-browser-driver/session-transaction.js",
+    "src/vendor/newton-browser-driver/target-registry.js",
+    "src/vendor/newton-browser-driver/origin-containment.js",
+    "src/vendor/newton-browser-driver/input-dispatcher.js",
+    "src/vendor/newton-browser-driver/renderer-liveness.js",
     "src/overlay.js",
     "src/overlay.css",
     "src/onboarding.js",
@@ -79,6 +85,7 @@ test("standalone extension build materializes package runtime into dist", () => 
   const driver = fs.readFileSync(path.join(distRoot, "src/vendor/newton-browser-driver/driver.js"), "utf8");
   assert.match(driver, /"dist\/src\/overlay\.css"/);
   assert.match(driver, /"dist\/src\/overlay\.js"/);
+  assertRelativeImportClosure(distRoot, "src/service-worker.js");
   const panel = fs.readFileSync(path.join(distRoot, "panel.html"), "utf8");
   assert.match(panel, /id="status-text"/);
   assert.doesNotMatch(panel, /approval|id="host"|id="start"|id="observe"|id="screenshot"/i);
@@ -98,6 +105,23 @@ test("standalone extension build materializes package runtime into dist", () => 
   const localTransport = fs.readFileSync(path.join(distRoot, "src/local-transport.js"), "utf8");
   assert.doesNotMatch(localTransport, /enqueueCommand|postEscalation|no_live_session|command_timeout|sessions = new Map/);
 });
+
+function assertRelativeImportClosure(root: string, entry: string) {
+  const pending = [entry];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const relative = pending.pop()!;
+    if (visited.has(relative)) continue;
+    visited.add(relative);
+    const absolute = path.join(root, relative);
+    assert.ok(fs.existsSync(absolute), `missing runtime import: ${relative}`);
+    const source = fs.readFileSync(absolute, "utf8");
+    for (const match of source.matchAll(/(?:import|export)\s+(?:[^"']+?\s+from\s+)?["'](\.[^"']+)["']/g)) {
+      const resolved = path.normalize(path.join(path.dirname(relative), match[1])).replaceAll("\\", "/");
+      pending.push(resolved);
+    }
+  }
+}
 
 test("first-run onboarding opens once for installation and never for updates", async () => {
   const moduleUrl = pathToFileURL(path.resolve(appRoot, "src/onboarding-lifecycle.js")).href;

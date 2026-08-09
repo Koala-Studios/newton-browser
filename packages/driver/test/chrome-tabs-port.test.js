@@ -7,6 +7,7 @@ test("chrome tabs port creates owned tabs without taking the user's active tab",
   const creates = [];
   const groups = [];
   const updates = [];
+  const tabUpdates = [];
   const chromeApi = {
     tabs: {
       async create(input) {
@@ -20,6 +21,10 @@ test("chrome tabs port creates owned tabs without taking the user's active tab",
       async remove() {},
       async get() {
         return { id: 101 };
+      },
+      async update(tabId, input) {
+        tabUpdates.push({ tabId, input });
+        return { id: tabId };
       },
       onRemoved: {
         addListener() {},
@@ -48,6 +53,7 @@ test("chrome tabs port creates owned tabs without taking the user's active tab",
   assert.deepEqual(await port.createOwnedTab("https://example.com", "blue", "QA"), { tabId: 101, groupId: 201 });
   assert.deepEqual(creates, [{ url: "https://example.com", active: false }]);
   assert.deepEqual(groups, [{ tabIds: [101] }]);
+  assert.deepEqual(tabUpdates, [{ tabId: 101, input: { autoDiscardable: false } }]);
   assert.deepEqual(updates, [{ groupId: 201, input: { title: "QA", color: "blue" } }]);
 });
 

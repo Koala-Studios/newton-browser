@@ -316,6 +316,40 @@ test("driver observes same-origin iframe AX trees and excludes cross-origin fram
   assert.deepEqual(observation.excludedFrames, [{ frameId: "cross", frameOrigin: "https://other.example", reason: "origin_not_granted" }]);
 });
 
+test("driver reports invalid selector syntax before action dispatch", async () => {
+  const driver = createNewtonBrowserDriver();
+  let inputDispatched = false;
+  driver.cdp = async (method) => {
+    if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+    if (method === "DOM.querySelectorAll") throw new Error("Failed to execute 'querySelectorAll': ']' is not a valid selector");
+    if (method.startsWith("Input.")) inputDispatched = true;
+    return {};
+  };
+  await assert.rejects(
+    driver.executeAction({ kind: "click", target: { selector: "]" } }),
+    (error) => error.code === "invalid_selector",
+  );
+  assert.equal(inputDispatched, false);
+});
+
+test("driver preflights wait selectors before entering the wait loop", async () => {
+  const driver = createNewtonBrowserDriver();
+  driver.containment = { contains: () => true };
+  driver.containmentReady = true;
+  let calls = 0;
+  driver.cdp = async (method) => {
+    calls += 1;
+    if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+    if (method === "DOM.querySelectorAll") throw new Error("SyntaxError: invalid selector");
+    return {};
+  };
+  await assert.rejects(
+    driver.preflightAction({ kind: "wait_for", waitFor: { selector: "]" } }),
+    (error) => error.code === "invalid_selector",
+  );
+  assert.equal(calls, 2);
+});
+
 test("driver observes and resolves a granted OOPIF through its exact flattened session", async () => {
   const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com", "https://child.test"] });
   driver.mainTargetId = "main-target";
@@ -475,7 +509,7 @@ test("driver verifies scroll state when Chrome drops the wheel acknowledgement",
 
   assert.equal(result.status, "verified");
   assert.deepEqual(result.changed, { scrollY: 900, wheelAcknowledged: false });
-  assert.equal(calls[0].timeoutMs, 2000);
+  assert.deepEqual(calls[0].timeoutMs, { timeoutMs: 2000 });
 });
 
 test("driver resolves top-level action target shorthands from observations", async () => {
@@ -545,9 +579,9 @@ test("driver click dispatches complete CDP mouse button state", async () => {
 
   assert.deepEqual(commandOrder.slice(0, 4), ["DOM.focus", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent"]);
   assert.deepEqual(mouseEvents, [
-    { type: "mouseMoved", x: 20, y: 30, button: "none", buttons: 0, pointerType: "mouse" },
-    { type: "mousePressed", x: 20, y: 30, button: "left", buttons: 1, clickCount: 1, pointerType: "mouse" },
-    { type: "mouseReleased", x: 20, y: 30, button: "left", buttons: 0, clickCount: 1, pointerType: "mouse" },
+    { type: "mouseMoved", x: 20, y: 30, button: "none", buttons: 0, modifiers: 0, pointerType: "mouse" },
+    { type: "mousePressed", x: 20, y: 30, button: "left", buttons: 1, clickCount: 1, modifiers: 0, pointerType: "mouse" },
+    { type: "mouseReleased", x: 20, y: 30, button: "left", buttons: 0, clickCount: 1, modifiers: 0, pointerType: "mouse" },
   ]);
 });
 
@@ -569,6 +603,45 @@ test("driver rejects a target that moves after pointer entry before pressing", a
   assert.equal(result.status, "stale_target");
   assert.equal(result.reason, "target_moved");
   assert.equal(pressed, false, "driver must not press at a point the target vacated");
+});
+
+test("driver returns bounded evidence for an element intercepting a click", async () => {
+  const driver = createNewtonBrowserDriver();
+  let pressed = false;
+  const blocker = {
+    role: "dialog",
+    name: "Cookie preferences",
+    tag: "section",
+    point: { x: 20, y: 30 },
+    frame: { targetId: "main", documentEpoch: 2 },
+  };
+  driver.resolveTarget = async () => ({ backendNodeId: 7, point: { x: 20, y: 30 }, targetId: "main", documentEpoch: 2 });
+  driver.paintCursorClick = () => {};
+  driver.pageSignature = async () => ({ url: "https://example.com/page", title: "Example" });
+  driver.elementState = async () => ({});
+  driver.hitTestTarget = async () => false;
+  driver.blockingElementEvidence = async () => blocker;
+  driver.inputDispatcher = {
+    async run(_route, operation) {
+      return operation({ pointerMove: async () => {}, mouseDown: async () => { pressed = true; }, mouseUp: async () => {} });
+    },
+  };
+  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z" });
+
+  const result = await driver.click({ kind: "click", target: { ref: "d2:e7" } });
+  assert.equal(result.reason, "click_intercepted");
+  assert.deepEqual(result.changed.blocker, blocker);
+  assert.equal(pressed, false);
+});
+
+test("driver settling observes mutation revision and network quiet instead of element counts", async () => {
+  const driver = createNewtonBrowserDriver();
+  const expressions = [];
+  driver.evalString = async (expression) => { expressions.push(expression); return "complete:4:https://example.com/page"; };
+  await driver.waitForSettle(500);
+  assert.ok(expressions[0].includes("MutationObserver"));
+  assert.ok(expressions[0].includes('document.addEventListener("input"'));
+  assert.equal(expressions[0].includes("querySelectorAll('*').length"), false);
 });
 
 test("driver reconciles post-action network writes after an allowed click", async () => {
@@ -750,6 +823,18 @@ test("driver tracks a pending dialog and surfaces it in observation metadata", a
   assert.deepEqual(driver.pendingDialog, { dialogType: "confirm", message: "Delete this item?" });
   const meta = driver.withObservationMeta("verified", {}, await driver.observe({}));
   assert.deepEqual(meta.observation.pendingDialog, { dialogType: "confirm", message: "Delete this item?" });
+});
+
+test("driver does not clear another target's pending dialog", () => {
+  const driver = createNewtonBrowserDriver();
+  driver.recordDebuggerEvent({ sessionId: "child-a" }, "Page.javascriptDialogOpening", { type: "alert", message: "A" });
+  driver.recordDebuggerEvent({ sessionId: "child-b" }, "Page.javascriptDialogOpening", { type: "confirm", message: "B" });
+  driver.recordDebuggerEvent({ sessionId: "child-a" }, "Page.javascriptDialogClosed", {});
+  assert.deepEqual(driver.pendingDialog, { dialogType: "confirm", message: "B" });
+  assert.equal(driver.pendingDialogRoute.sessionId, "child-b");
+  driver.recordDebuggerEvent({ sessionId: "child-a" }, "Page.javascriptDialogOpening", { type: "alert", message: "A2" });
+  driver.recordDebuggerEvent({ sessionId: "child-a" }, "Page.javascriptDialogClosed", {});
+  assert.deepEqual(driver.pendingDialog, { dialogType: "confirm", message: "B" });
 });
 
 test("driver dialog_accept resolves the dialog via CDP and clears pending state", async () => {

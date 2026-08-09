@@ -8,6 +8,8 @@ const INVALID_COMMAND_SEQUENCE_ERROR = "invalid_command_sequence";
 const OUTCOME_COMPLETED = "completed";
 const OUTCOME_PREVENTED = "prevented";
 const OUTCOME_NOT_STARTED = "not_started";
+const OUTCOME_UNKNOWN = "outcome_unknown";
+const MAX_REATTACH_ATTEMPTS = 4;
 const commandByteEncoder = new TextEncoder();
 
 const DEFAULT_GROUP_THEMES = [
@@ -39,6 +41,9 @@ class SessionController {
     this.nextSequence = 1;
     this.unsubscribe = null;
     this.reattaching = false;
+    this.reattachPending = false;
+    this.reattachAttempts = 0;
+    this.lastDetachReason = null;
     this.lifecycleState = lifecycleState ?? "creating_tab";
     this.routingErrorCode = null;
     this._commandShutdown = null;
@@ -274,42 +279,46 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     async handleDebuggerDetach(source, reason) {
       const controller = controllerForTab(source?.tabId);
       if (!controller) return;
-      controller.driver.markDetached();
-      if (reason === "canceled_by_user") {
+      const detachReason = String(reason ?? "debugger_detached");
+      controller.driver.markDetached(detachReason);
+      controller.lastDetachReason = detachReason;
+      if (detachReason === "canceled_by_user") {
         await runtime.stop(controller.sessionId).catch(() => {});
         return;
       }
-      if (controller.reattaching) return;
-      controller.reattaching = true;
-      try {
-        const tabId = controller.tabId;
-        for (let attempt = 0; attempt < 3 && sessions.has(controller.sessionId) && controller.tabId === tabId; attempt += 1) {
-          const tab = await tabs.getTab(tabId).catch(() => null);
-          if (!tab) {
-            await runtime.stop(controller.sessionId).catch(() => {});
-            return;
-          }
-          await delay(250 * (attempt + 1));
-          try {
-            await controller.driver.attach(tabId);
-            if (!controller.streaming) startSubscription(controller);
-            await notifyState();
-            return;
-          } catch {
-            // The target may still be swapping under us.
-          }
-        }
-        if (sessions.has(controller.sessionId) && controller.tabId === tabId && !controller.driver.attached) {
-          await runtime.stop(controller.sessionId).catch(() => {});
-        }
-      } finally {
-        controller.reattaching = false;
+      if (/replaced|devtools|another debugger/i.test(detachReason)) {
+        controller.routingErrorCode = "debugger_conflict";
+        controller.lifecycleState = "degraded";
+        await notifyState();
+        return;
       }
+      controller.routingErrorCode = "debugger_detached";
+      controller.lifecycleState = "reconciling";
+      controller.reattachPending = true;
+      controller.reattachAttempts = 0;
+      await attemptReattach(controller);
+    },
+
+    async handleTabUpdated(tabId, changeInfo, tab) {
+      const controller = controllerForTab(tabId);
+      if (!controller) return;
+      if (changeInfo?.discarded === true || tab?.discarded === true) {
+        controller.driver.markDiscarded?.();
+        controller.routingErrorCode = "discarded";
+        controller.lifecycleState = "degraded";
+        controller.reattachPending = false;
+        await notifyState();
+        return;
+      }
+      if (controller.reattachPending) await attemptReattach(controller);
     },
 
     async handleTabRemoved(tabId) {
       const controller = controllerForTab(tabId);
-      if (controller) await runtime.stop(controller.sessionId).catch(() => {});
+      if (controller) {
+        controller.driver.markTargetGone?.();
+        await runtime.stop(controller.sessionId).catch(() => {});
+      }
     },
   };
 
@@ -321,6 +330,9 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   });
   tabs.onTabRemoved?.((tabId) => {
     void runtime.handleTabRemoved(tabId).catch(() => {});
+  });
+  tabs.onTabUpdated?.((tabId, changeInfo, tab) => {
+    void runtime.handleTabUpdated(tabId, changeInfo, tab).catch(() => {});
   });
 
   function nextTheme() {
@@ -339,6 +351,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       const theme = nextTheme();
       let tabId = Number.isInteger(session.ownedTabId) ? session.ownedTabId : null;
       let tabGroupId = Number.isInteger(session.tabGroupId) ? session.tabGroupId : null;
+      let retainedOwnedTab = false;
       const origin = session.origin ?? null;
       defer("host_session", () => transport.stopSession(session.sessionId), {
         dedupeKey: `host:${session.sessionId}`,
@@ -369,7 +382,9 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         });
       } else if (mode === "owned_group") {
         defer("owned_tab", () => tabs.removeTab(tabId), { dedupeKey: `tab:${tabId}` });
+        retainedOwnedTab = true;
       }
+      if (retainedOwnedTab) await tabs.setAutoDiscardable?.(tabId, false);
       const controller = newController({
         sessionId: session.sessionId,
         tabId,
@@ -404,6 +419,70 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       controller.lifecycleState = "active";
       await notifyState({ required: true });
     });
+  }
+
+  async function attemptReattach(controller) {
+    if (!controller.reattachPending || controller.reattaching || controller.closing) return false;
+    if (!sessions.has(controller.sessionId) || typeof controller.tabId !== "number") return false;
+    controller.reattaching = true;
+    controller.reattachAttempts += 1;
+    try {
+      const tab = await tabs.getTab(controller.tabId).catch(() => null);
+      if (!tab) {
+        controller.driver.markTargetGone?.();
+        controller.routingErrorCode = "target_gone";
+        controller.lifecycleState = "degraded";
+        controller.reattachPending = false;
+        await notifyState();
+        return false;
+      }
+      if (tab.discarded) {
+        controller.driver.markDiscarded?.();
+        controller.routingErrorCode = "discarded";
+        controller.lifecycleState = "degraded";
+        controller.reattachPending = false;
+        await notifyState();
+        return false;
+      }
+      const origin = safeOrigin(tab.pendingUrl) || safeOrigin(tab.url);
+      if (!controller.allowedOrigins.includes(origin)) {
+        controller.routingErrorCode = "origin_not_granted";
+        controller.lifecycleState = "degraded";
+        controller.reattachPending = false;
+        await notifyState();
+        return false;
+      }
+      controller.lifecycleState = "attaching_debugger";
+      await controller.driver.attach(controller.tabId);
+      controller.reattachPending = false;
+      controller.reattachAttempts = 0;
+      controller.routingErrorCode = null;
+      controller.lifecycleState = "active";
+      if (!controller.streaming) startSubscription(controller);
+      await notifyState();
+      return true;
+    } catch (error) {
+      if (/replaced|devtools|another debugger|already attached/i.test(String(error?.message ?? error ?? ""))) {
+        controller.reattachPending = false;
+        controller.routingErrorCode = "debugger_conflict";
+        controller.lifecycleState = "degraded";
+        await notifyState();
+        return false;
+      }
+      if (controller.reattachAttempts >= MAX_REATTACH_ATTEMPTS) {
+        controller.reattachPending = false;
+        controller.lifecycleState = "degraded";
+        controller.routingErrorCode = "debugger_detached";
+        await notifyState();
+        return false;
+      }
+      controller.lifecycleState = "reconciling";
+      controller.routingErrorCode = "debugger_detached";
+      await notifyState();
+      return false;
+    } finally {
+      controller.reattaching = false;
+    }
   }
 
   function startSubscription(controller) {
@@ -471,7 +550,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }
       if (action.kind === "__trusted_fill") {
         executionStarted = true;
-        await controller.driver.executeAction({ kind: "fill", target: action.target, value: action.value });
+        await controller.driver.executeAction({ kind: "fill", target: action.target, value: action.value }, { commandId });
         const postFillOrigin = await liveTabOrigin(controller.tabId);
         if (!controller.allowedOrigins.includes(postFillOrigin)) {
           prepareShutdown(controller, { notifyState: true, awaitCurrent: false });
@@ -494,7 +573,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
         return;
       }
       executionStarted = true;
-      const delta = await controller.driver.executeAction(action);
+      const delta = await controller.driver.executeAction(action, { commandId });
       const postActionOrigin = await liveTabOrigin(controller.tabId);
       if (!controller.allowedOrigins.includes(postActionOrigin)) {
         prepareShutdown(controller, { notifyState: true, awaitCurrent: false });
@@ -513,8 +592,10 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
       }, OUTCOME_COMPLETED);
       await emit({ type: "activity", commandId, actionKind: command.actionKind, status: delta.status, changed: delta.changed ?? {} });
     } catch (error) {
-      const stageOutcome = executionStarted ? OUTCOME_COMPLETED : OUTCOME_PREVENTED;
       const detail = errorCode(error);
+      const stageOutcome = executionStarted
+        ? (isUncertainDriverFailure(detail) ? OUTCOME_UNKNOWN : OUTCOME_COMPLETED)
+        : OUTCOME_PREVENTED;
       await emitTerminalResult({ ok: false, errorCode: detail }, stageOutcome);
     }
   }
@@ -536,6 +617,7 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     if (decision.blocked) return { stop: "blocked", decision };
     return { stop: null, decision };
     } catch (error) {
+      if (error?.code === "invalid_selector" || errorCode(error) === "invalid_selector") throw error;
       throw new Error("floor_evaluation_failed");
     }
   }
@@ -848,10 +930,6 @@ function deltaToResult(delta) {
   return { kind: "ack", message: delta.status ?? "ok" };
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function errorCode(error) {
   if (error && typeof error.code === "string") return error.code.slice(0, 80);
   const message = String(error?.message ?? error ?? "driver_error");
@@ -860,6 +938,14 @@ function errorCode(error) {
 
 function stageRetrySafe(outcome) {
   return outcome === OUTCOME_NOT_STARTED || outcome === OUTCOME_PREVENTED;
+}
+
+function isUncertainDriverFailure(code) {
+  return code === "input_cleanup_failed"
+    || code === "renderer_unresponsive"
+    || code === "debugger_conflict"
+    || code === "target_gone"
+    || code.startsWith("cdp_timeout_");
 }
 
 function positiveSafeInteger(value) {

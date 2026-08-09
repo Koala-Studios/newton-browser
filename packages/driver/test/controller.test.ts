@@ -2199,3 +2199,116 @@ test("BridgeRuntime handles queue rejection without unhandled rejections", async
 
   assert.equal(unhandled, false);
 });
+
+test("BridgeRuntime retries debugger reconciliation only on browser lifecycle events", async () => {
+  let attachCalls = 0;
+  let rendererReady = false;
+  const harness = createControllerHarness({
+    sessionId: "s-event-reconcile",
+    driverOverrides: {
+      async attach() {
+        attachCalls += 1;
+        if (attachCalls > 1 && !rendererReady) throw new Error("target_swapping");
+        this.attached = true;
+      },
+      markDetached(reason: string) {
+        this.attached = false;
+        this.detachReason = reason;
+      },
+    },
+  });
+
+  await harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
+  await harness.runtime.handleDebuggerDetach({ tabId: 101 }, "target_closed");
+  assert.equal(attachCalls, 2, "one immediate state reconciliation attempt is allowed");
+  assert.equal(harness.runtime.snapshot().sessions[0].lifecycleState, "reconciling");
+  assert.equal(harness.runtime.snapshot().sessions[0].routingErrorCode, "debugger_detached");
+
+  rendererReady = true;
+  await harness.runtime.handleTabUpdated(101, { status: "complete" }, { id: 101, url: "https://example.com/page", discarded: false });
+  assert.equal(attachCalls, 3, "the next attempt is driven by tabs.onUpdated, not a delay");
+  assert.equal(harness.runtime.snapshot().sessions[0].lifecycleState, "active");
+  assert.equal(harness.runtime.snapshot().sessions[0].routingErrorCode, undefined);
+});
+
+test("BridgeRuntime surfaces debugger conflicts without reattaching or mutating the tab", async () => {
+  let attachCalls = 0;
+  let focused = false;
+  const harness = createControllerHarness({
+    sessionId: "s-debugger-conflict",
+    tabsOverrides: {
+      async focusTab() { focused = true; },
+    },
+    driverOverrides: {
+      async attach() { attachCalls += 1; this.attached = true; },
+      markDetached(reason: string) { this.attached = false; this.detachReason = reason; },
+    },
+  });
+
+  await harness.runtime.startSession({ origin: "https://example.com", tabMode: "current", tabId: 101 });
+  await harness.runtime.handleDebuggerDetach({ tabId: 101 }, "replaced_with_devtools");
+  assert.equal(attachCalls, 1);
+  assert.equal(focused, false);
+  assert.equal(harness.runtime.snapshot().sessions[0].lifecycleState, "degraded");
+  assert.equal(harness.runtime.snapshot().sessions[0].routingErrorCode, "debugger_conflict");
+});
+
+test("BridgeRuntime classifies a discarded owned tab without reloading it", async () => {
+  let discarded = false;
+  let focused = false;
+  const harness = createControllerHarness({
+    sessionId: "s-discarded",
+    tabsOverrides: {
+      async focusTab() { focused = true; },
+    },
+    driverOverrides: {
+      markDiscarded() { discarded = true; },
+    },
+  });
+
+  await harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
+  await harness.runtime.handleTabUpdated(101, { discarded: true }, { id: 101, url: "https://example.com/page", discarded: true });
+  assert.equal(discarded, true);
+  assert.equal(focused, false);
+  assert.equal(harness.runtime.snapshot().sessions[0].routingErrorCode, "discarded");
+  assert.equal(harness.runtime.snapshot().sessions[0].lifecycleState, "degraded");
+});
+
+test("BridgeRuntime preserves invalid_selector before execution", async () => {
+  let executed = false;
+  const invalidSelector = Object.assign(new Error("invalid_selector"), { code: "invalid_selector" });
+  const harness = createControllerHarness({
+    sessionId: "s-invalid-selector",
+    driverOverrides: {
+      async resolveEvidence() { throw invalidSelector; },
+      async executeAction() { executed = true; return { status: "verified", changed: {} }; },
+    },
+  });
+  await harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
+  const handler = harness.getCommandHandler("s-invalid-selector");
+  assert.ok(handler);
+  void handler({ sessionId: "s-invalid-selector", commandId: "invalid-selector", sessionEpoch: 1, sequence: 1, actionKind: "click", action: { kind: "click", target: { selector: "]" } } });
+  const result = await harness.awaitCommandResult("invalid-selector") as any;
+  assert.equal(result.errorCode, "invalid_selector");
+  assert.equal(result.outcome, "prevented");
+  assert.equal(result.retrySafe, true);
+  assert.equal(executed, false);
+});
+
+test("BridgeRuntime marks post-release renderer failures outcome_unknown", async () => {
+  const failure = Object.assign(new Error("renderer_unresponsive"), { code: "renderer_unresponsive" });
+  const harness = createControllerHarness({
+    sessionId: "s-renderer-unknown",
+    driverOverrides: {
+      async executeAction() { throw failure; },
+    },
+  });
+  await harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
+  const handler = harness.getCommandHandler("s-renderer-unknown");
+  assert.ok(handler);
+  void handler({ sessionId: "s-renderer-unknown", commandId: "renderer-unknown", sessionEpoch: 1, sequence: 1, actionKind: "click", action: { kind: "click" } });
+  const result = await harness.awaitCommandResult("renderer-unknown") as any;
+  assert.equal(result.errorCode, "renderer_unresponsive");
+  assert.equal(result.outcome, "outcome_unknown");
+  assert.equal(result.retrySafe, false);
+});

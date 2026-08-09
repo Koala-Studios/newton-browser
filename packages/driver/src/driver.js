@@ -12,6 +12,8 @@
 
 import { TargetRegistry } from "./target-registry.js";
 import { compileOriginGrant, decidePausedRequest, decidePausedTarget } from "./origin-containment.js";
+import { DialogTracker, InputDispatcher } from "./input-dispatcher.js";
+import { RendererLiveness } from "./renderer-liveness.js";
 
 const CDP_VERSION = "1.3";
 const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Network", "Log"];
@@ -64,6 +66,8 @@ class NewtonBrowserDriver {
     // A page-initiated JS dialog blocking the renderer (WS9.4), or null. Set on
     // Page.javascriptDialogOpening and cleared when handled/closed.
     this.pendingDialog = null;
+    this.pendingDialogRoute = null;
+    this.pendingDialogs = new Map();
     // Owned-tab viewport override requested via `resize` (WS9.6), or null. Re-applied
     // after a debugger re-attach so a cross-process navigation does not silently
     // revert the caller's chosen size.
@@ -75,6 +79,7 @@ class NewtonBrowserDriver {
     this.consoleDropped = 0;
     this.networkBuffer = new Map(); // requestId -> entry (insertion-ordered)
     this.networkDropped = 0;
+    this.networkInFlight = new Set();
     // Session origin grant, set by the controller. Gates network-body fetches.
     this.allowedOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
     this.targetRegistry = new TargetRegistry();
@@ -84,6 +89,12 @@ class NewtonBrowserDriver {
       : null;
     this.containmentReady = false;
     this.heldTargets = new Map();
+    this.inputDispatcher = new InputDispatcher((method, params, route) => this.cdp(method, params, route));
+    this.dialogTracker = new DialogTracker();
+    this.rendererLiveness = new RendererLiveness();
+    this.livenessEpoch = 1;
+    this.rendererLiveness.register("root", this.livenessEpoch);
+    this.activeCommandId = null;
   }
 
   isAttachedTo(tabId) {
@@ -116,6 +127,7 @@ class NewtonBrowserDriver {
     }
     await this.reassertOverlay();
     this.containmentReady = true;
+    this.reconcileRenderer("root");
   }
 
   // (Re)inject the overlay and re-announce the driving indicator. Called on attach
@@ -141,13 +153,20 @@ class NewtonBrowserDriver {
     this.containment = null;
     this.containmentReady = false;
     this.heldTargets.clear();
+    this.networkInFlight.clear();
+    this.pendingDialogs.clear();
+    this.pendingDialog = null;
+    this.pendingDialogRoute = null;
+    this.dialogTracker = new DialogTracker();
+    this.rendererLiveness.remove("root", "driver_detached");
   }
 
   // Chrome detached the debugger underneath us (e.g. a cross-process navigation
   // closed the old target). Clear the stale in-memory flag so a follow-up
   // attach() actually re-establishes the CDP session instead of no-op'ing. We do
   // NOT call chrome.debugger.detach here — Chrome already did.
-  markDetached() {
+  markDetached(reason = "debugger_detached") {
+    this.failRenderer("root", "debugger_detached", reason);
     this.attached = false;
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
@@ -155,6 +174,68 @@ class NewtonBrowserDriver {
     this.containment = null;
     this.containmentReady = false;
     this.heldTargets.clear();
+    this.networkInFlight.clear();
+    this.pendingDialogs.clear();
+    this.pendingDialog = null;
+    this.pendingDialogRoute = null;
+    this.dialogTracker = new DialogTracker();
+  }
+
+  ensureRenderer(targetKey) {
+    const existing = this.rendererLiveness.snapshot(targetKey);
+    if (existing) return existing;
+    return this.rendererLiveness.register(targetKey, this.livenessEpoch);
+  }
+
+  failRenderer(targetKey, state, detail) {
+    const snapshot = this.ensureRenderer(targetKey);
+    if (snapshot.state === state || snapshot.state === "terminal") return snapshot;
+    try {
+      return this.rendererLiveness.transition(targetKey, state, { epoch: snapshot.epoch, detail });
+    } catch {
+      return snapshot;
+    }
+  }
+
+  reconcileRenderer(targetKey) {
+    let snapshot = this.ensureRenderer(targetKey);
+    if (snapshot.state === "healthy") return snapshot;
+    try {
+      if (snapshot.state !== "reconciling") {
+        snapshot = this.rendererLiveness.transition(targetKey, "reconciling", { epoch: snapshot.epoch });
+      }
+      return this.rendererLiveness.transition(targetKey, "healthy", { epoch: snapshot.epoch });
+    } catch {
+      this.livenessEpoch += 1;
+      return this.rendererLiveness.register(targetKey, this.livenessEpoch);
+    }
+  }
+
+  assertRendererLive(targetKey, actionKind) {
+    const snapshot = this.ensureRenderer(targetKey);
+    if (snapshot.state === "healthy" || snapshot.state === "reconciling") return;
+    if (snapshot.state === "dialog_blocked" && (actionKind === "dialog_accept" || actionKind === "dialog_dismiss")) return;
+    const code = snapshot.state === "discarded" ? "discarded"
+      : snapshot.state === "debugger_detached" ? "debugger_conflict"
+        : snapshot.state === "target_gone" || snapshot.state === "terminal" ? "target_gone"
+          : snapshot.state === "dialog_blocked" ? "dialog_blocked" : "renderer_unresponsive";
+    throw typedDriverError(code);
+  }
+
+  markDiscarded() {
+    return this.failRenderer("root", "discarded", "tab_discarded");
+  }
+
+  markTargetGone(targetKey = "root") {
+    return this.failRenderer(targetKey, "target_gone", "target_removed");
+  }
+
+  async dispatchInput(route, operation) {
+    const targetKey = inputTargetKey(route);
+    this.ensureRenderer(targetKey);
+    const result = await this.dialogTracker.race(targetKey, this.activeCommandId, () => this.inputDispatcher.run(route, operation));
+    if (result.kind === "dialog") throw typedDriverError("dialog_blocked");
+    return result.value;
   }
 
   recordDebuggerEvent(sourceOrMethod, methodOrParams = {}, eventParams = {}) {
@@ -165,10 +246,19 @@ class NewtonBrowserDriver {
     // Dialog open/close is tracked persistently (not just inside an action window)
     // because a JS dialog blocks the renderer until it is handled (WS9.4).
     if (method === "Page.javascriptDialogOpening") {
-      this.pendingDialog = normalizePendingDialog(params);
+      const targetKey = inputTargetKey(source);
+      const dialog = this.dialogTracker.open(targetKey, params);
+      this.pendingDialogs.delete(targetKey);
+      this.pendingDialogs.set(targetKey, { dialog, route: { targetKey, ...(source?.sessionId ? { sessionId: source.sessionId } : {}) } });
+      this.refreshPendingDialog();
+      this.failRenderer(targetKey, "dialog_blocked", dialog.dialogType);
     }
     if (method === "Page.javascriptDialogClosed") {
-      this.pendingDialog = null;
+      const targetKey = inputTargetKey(source);
+      this.dialogTracker.close(targetKey);
+      this.pendingDialogs.delete(targetKey);
+      this.refreshPendingDialog();
+      this.reconcileRenderer(targetKey);
     }
     // Console ring buffer (WS9.2).
     if (method === "Runtime.consoleAPICalled") {
@@ -183,15 +273,21 @@ class NewtonBrowserDriver {
     }
     // Network ring buffer (WS9.3) — metadata only, never headers.
     if (method === "Network.requestWillBeSent" && params?.requestId) {
+      while (this.networkInFlight.size >= NETWORK_BUFFER_MAX) {
+        this.networkInFlight.delete(this.networkInFlight.values().next().value);
+      }
+      this.networkInFlight.add(String(params.requestId));
       this.pushNetwork(params.requestId, { requestId: params.requestId, method: String(params.request?.method ?? "GET"), url: String(params.request?.url ?? ""), resourceType: params.type, at: new Date().toISOString() });
     }
     if (method === "Network.responseReceived" && params?.requestId) {
       this.updateNetwork(params.requestId, { status: params.response?.status, mimeType: params.response?.mimeType, resourceType: params.type });
     }
     if (method === "Network.loadingFinished" && params?.requestId) {
+      this.networkInFlight.delete(String(params.requestId));
       this.updateNetwork(params.requestId, { bytes: params.encodedDataLength });
     }
     if (method === "Network.loadingFailed" && params?.requestId) {
+      this.networkInFlight.delete(String(params.requestId));
       this.updateNetwork(params.requestId, { failed: true });
     }
     const signals = this.activeActionSignals;
@@ -228,7 +324,10 @@ class NewtonBrowserDriver {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error(`cdp_timeout_${method}`));
+        this.failRenderer(inputTargetKey(routeOrTimeout), "unresponsive", `cdp_timeout_${method}`);
+        const error = typedDriverError("renderer_unresponsive");
+        error.detail = `cdp_timeout_${method}`;
+        reject(error);
       }, timeoutMs);
       const debuggee = sessionId ? { tabId: this.tabId, sessionId } : { tabId: this.tabId };
       chrome.debugger.sendCommand(debuggee, method, params, (result) => {
@@ -369,6 +468,20 @@ class NewtonBrowserDriver {
     if (!this.containmentReady || !this.containment) throw Object.assign(new Error("origin_containment_unavailable"), { code: "origin_containment_unavailable" });
     if (action?.kind === "navigate" && !this.containment.contains(action.url)) {
       throw Object.assign(new Error("ungranted_navigation"), { code: "ungranted_navigation" });
+    }
+    const selector = selectorFromAction(action);
+    if (selector) return this.validateSelector(selector);
+  }
+
+  async validateSelector(selector) {
+    const root = await this.cdp("DOM.getDocument", { depth: 0 });
+    const nodeId = root?.root?.nodeId;
+    if (!nodeId) throw typedDriverError("target_resolution_failed");
+    try {
+      await this.cdp("DOM.querySelectorAll", { nodeId, selector });
+    } catch (error) {
+      if (isInvalidSelectorError(error)) throw typedDriverError("invalid_selector");
+      throw error;
     }
   }
 
@@ -655,7 +768,7 @@ class NewtonBrowserDriver {
       : { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false };
     await this.cdp("Emulation.setDeviceMetricsOverride", { width: preset.width, height: preset.height, deviceScaleFactor: preset.deviceScaleFactor, mobile: preset.mobile }).catch(() => {});
     await this.cdp("Emulation.setTouchEmulationEnabled", { enabled: preset.mobile }).catch(() => {});
-    await delay(200); // let the reflow settle before capture
+    await this.waitForSettle(1_000);
     return {
       restore: async () => {
         await this.cdp("Emulation.clearDeviceMetricsOverride", {}).catch(() => {});
@@ -666,26 +779,32 @@ class NewtonBrowserDriver {
   }
 
   // ── Action execution (the write half) ──────────────────────────────────────
-  async executeAction(action) {
+  async executeAction(action, context = {}) {
     const kind = action?.kind;
-    if (kind === "observe") return this.withObservationMeta("verified", {}, await this.observe({ maxNodes: action.maxNodes, query: action.query, mode: action.mode }));
-    if (kind === "screenshot") return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({ sensitiveZones: action.sensitiveZones, fullPage: action.fullPage, waitMs: action.waitMs, device: action.device, clip: action.clip, inline: action.inline, format: action.format, quality: action.quality }) };
-    if (kind === "navigate") return this.navigate(action);
-    if (kind === "back" || kind === "forward" || kind === "reload") return this.historyAction(kind);
-    if (kind === "scroll") return this.scroll(action);
-    if (kind === "wait_for") return this.waitFor(action);
-    if (kind === "click") return this.click(action);
-    if (kind === "press") return this.press(action);
-    if (kind === "hover" || kind === "move") return this.hover(action);
-    if (kind === "fill" || kind === "type") return this.fill(action);
-    if (kind === "select") return this.select(action);
-    if (kind === "clear") return this.clear(action);
-    if (kind === "set_files") return this.setFiles(action);
-    if (kind === "dialog_accept" || kind === "dialog_dismiss") return this.handleDialog(kind, action);
-    if (kind === "resize") return this.resizeViewport(action);
-    if (kind === "console") return { status: "verified", verified: true, changed: {}, observation: this.getConsole(action) };
-    if (kind === "network") return { status: "verified", verified: true, changed: {}, observation: await this.getNetwork(action) };
-    return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+    this.assertRendererLive("root", kind);
+    this.activeCommandId = typeof context?.commandId === "string" ? context.commandId : null;
+    try {
+      if (kind === "observe") return this.withObservationMeta("verified", {}, await this.observe({ maxNodes: action.maxNodes, query: action.query, mode: action.mode }));
+      if (kind === "screenshot") return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({ sensitiveZones: action.sensitiveZones, fullPage: action.fullPage, waitMs: action.waitMs, device: action.device, clip: action.clip, inline: action.inline, format: action.format, quality: action.quality }) };
+      if (kind === "navigate") return this.navigate(action);
+      if (kind === "back" || kind === "forward" || kind === "reload") return this.historyAction(kind);
+      if (kind === "scroll") return this.scroll(action);
+      if (kind === "wait_for") return this.waitFor(action);
+      if (kind === "click") return this.click(action);
+      if (kind === "press") return this.press(action);
+      if (kind === "hover" || kind === "move") return this.hover(action);
+      if (kind === "fill" || kind === "type") return this.fill(action);
+      if (kind === "select") return this.select(action);
+      if (kind === "clear") return this.clear(action);
+      if (kind === "set_files") return this.setFiles(action);
+      if (kind === "dialog_accept" || kind === "dialog_dismiss") return this.handleDialog(kind, action);
+      if (kind === "resize") return this.resizeViewport(action);
+      if (kind === "console") return { status: "verified", verified: true, changed: {}, observation: this.getConsole(action) };
+      if (kind === "network") return { status: "verified", verified: true, changed: {}, observation: await this.getNetwork(action) };
+      return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+    } finally {
+      this.activeCommandId = null;
+    }
   }
 
   // ── Console / network read-only buffers (WS9.2 / WS9.3) ─────────────────────
@@ -776,14 +895,21 @@ class NewtonBrowserDriver {
     }
     const accept = kind === "dialog_accept";
     const dialog = this.pendingDialog;
+    const pendingRoute = this.pendingDialogRoute;
     const params = { accept };
     if (accept && dialog.dialogType === "prompt") {
       params.promptText = String(action?.promptText ?? dialog.defaultPrompt ?? "");
     }
     const signalWindow = this.beginActionSignals();
     try {
-      await this.cdp("Page.handleJavaScriptDialog", params);
-      this.pendingDialog = null;
+      const route = dialogRoute(pendingRoute);
+      const targetKey = pendingRoute?.targetKey ?? inputTargetKey(route);
+      await this.cdp("Page.handleJavaScriptDialog", params, route);
+      this.dialogTracker.close(targetKey);
+      this.pendingDialogs.delete(targetKey);
+      this.refreshPendingDialog();
+      this.reconcileRenderer(targetKey);
+      await this.inputDispatcher.whenIdle();
       await this.waitForSettle();
       const signals = signalWindow.finish();
       const observation = await this.observe({});
@@ -795,7 +921,7 @@ class NewtonBrowserDriver {
   }
 
   async navigate(action) {
-    this.preflightAction(action);
+    await this.preflightAction(action);
     const startUrl = await this.evalString("location.href");
     await this.cdp("Page.navigate", { url: action.url });
     await this.waitForSettle();
@@ -826,12 +952,19 @@ class NewtonBrowserDriver {
     const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId, target) : {};
       const signalWindow = this.beginActionSignals();
       try {
-        await this.moveMouse(point, target);
-        if (target.backendNodeId && !(await this.hitTestTarget(target.backendNodeId, point.x, point.y, target))) {
-          return this.targetMoved();
+        const dispatched = await this.dispatchInput(target, async (input) => {
+          await input.pointerMove(point);
+          if (target.backendNodeId && !(await this.hitTestTarget(target.backendNodeId, point.x, point.y, target))) return false;
+          await input.mouseDown("left");
+          await input.mouseUp("left");
+          return true;
+        });
+        if (!dispatched) {
+          const blocker = await this.blockingElementEvidence(point, target);
+          if (!blocker) return this.targetMoved();
+          const observation = await this.observe({});
+          return this.withObservationMeta("stale_target", { blocker }, observation, "click_intercepted");
         }
-        await this.pressMouse(point, target);
-      await this.releaseMouse(point, target);
       await this.settleShort();
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
@@ -855,18 +988,14 @@ class NewtonBrowserDriver {
     if (!point) return this.targetMoved();
     const beforeState = await this.elementState(target.backendNodeId, target);
     this.paintCursorField(point);
-    await this.pressMouse(point, target);
-    await this.releaseMouse(point, target);
     await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    await this.selectAll(target);
-    if (action.kind === "type") {
-      for (const ch of String(action.value ?? "")) {
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", text: ch }, target);
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", text: ch }, target);
-      }
-    } else {
-      await this.cdp("Input.insertText", { text: String(action.value ?? "") }, target);
-    }
+    await this.dispatchInput(target, async (input) => {
+      await input.pointerMove(point);
+      await input.mouseDown("left");
+      await input.mouseUp("left");
+      await input.chord(["Control", "a"]);
+      await input.insertText(String(action.value ?? ""));
+    });
     const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
     const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const changed = { ...diffElement(beforeState, afterState), ...(waitResult?.matched ? { waitedFor: true } : {}) };
@@ -906,8 +1035,8 @@ class NewtonBrowserDriver {
     }
     if (!applied) {
       // Fallback for custom (non-native) selects: focus + trusted typing.
-      await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }).catch(() => {});
-      await this.cdp("Input.insertText", { text: String(action.value ?? "") }).catch(() => {});
+      await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
+      await this.dispatchInput(target, (input) => input.insertText(String(action.value ?? "")));
     }
     const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const changed = diffElement(beforeState, afterState);
@@ -920,9 +1049,10 @@ class NewtonBrowserDriver {
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const beforeState = await this.elementState(target.backendNodeId, target);
     await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    await this.selectAll(target);
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", windowsVirtualKeyCode: 46 }, target);
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", windowsVirtualKeyCode: 46 }, target);
+    await this.dispatchInput(target, async (input) => {
+      await input.chord(["Control", "a"]);
+      await input.keyPress("Delete");
+    });
     const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", diffElement(beforeState, afterState), observation);
@@ -1037,10 +1167,9 @@ class NewtonBrowserDriver {
   async scroll(action) {
     const dy = Number(action.value) || 600;
     const beforeY = await this.evalNumber("window.scrollY");
-    const acknowledged = await this.cdp(
-      "Input.dispatchMouseEvent",
-      { type: "mouseWheel", x: 10, y: 10, deltaX: 0, deltaY: dy },
-      SCROLL_DISPATCH_TIMEOUT_MS,
+    const acknowledged = await this.dispatchInput(
+      { timeoutMs: SCROLL_DISPATCH_TIMEOUT_MS },
+      (input) => input.wheel({ x: 10, y: 10 }, { x: 0, y: dy }),
     ).then(() => true).catch(() => false);
     await this.sendToPage({ type: "NB_DRIVE_SCROLL", dy });
     const afterY = await this.waitForScrollPositionChange(beforeY);
@@ -1079,10 +1208,7 @@ class NewtonBrowserDriver {
     const keys = Array.isArray(action.keys) && action.keys.length > 0 ? action.keys : [String(action.value ?? "Enter")];
     const signalWindow = this.beginActionSignals();
     try {
-      for (const key of keys.slice(0, 8)) {
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: String(key) }, target ?? {});
-        await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: String(key) }, target ?? {});
-      }
+      await this.dispatchInput(target ?? {}, (input) => input.chord(keys.slice(0, 8)));
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
       const observation = await this.observeDelta();
@@ -1100,53 +1226,18 @@ class NewtonBrowserDriver {
     if (!target) return this.targetMoved("not_found");
     const point = target.point ?? await this.actionablePoint(target.backendNodeId, target);
     if (!point) return this.targetMoved();
-    await this.moveMouse(point, target);
+    await this.dispatchInput(target, (input) => input.pointerMove(point));
     await this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
     await this.settleShort();
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", { hovered: true }, observation);
   }
 
-  async moveMouse(point, route = {}) {
-    await this.cdp("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: point.x,
-      y: point.y,
-      button: "none",
-      buttons: 0,
-      pointerType: "mouse",
-    }, route);
-  }
-
-  async pressMouse(point, route = {}) {
-    await this.cdp("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x: point.x,
-      y: point.y,
-      button: "left",
-      buttons: 1,
-      clickCount: 1,
-      pointerType: "mouse",
-    }, route);
-  }
-
-  async releaseMouse(point, route = {}) {
-    await this.cdp("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: point.x,
-      y: point.y,
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
-      pointerType: "mouse",
-    }, route);
-  }
-
   // Resolve the target element's structural facts so the SW can re-check the
   // floor with real evidence BEFORE dispatching a mutating action (§7, S3). The
   // accessible name lets host/structural commit rules gate a ref-targeted click.
   async resolveEvidence(action) {
-    const target = await this.resolveTarget(action).catch(() => null);
+    const target = await this.resolveTarget(action);
     const origin = target?.origin || await this.evalString("location.origin");
     if (!target?.backendNodeId) {
       return { resolved: { origin }, signals: {} };
@@ -1276,7 +1367,13 @@ class NewtonBrowserDriver {
     const root = await this.cdp("DOM.getDocument", { depth: 0 }).catch(() => null);
     const nodeId = root?.root?.nodeId;
     if (!nodeId) return null;
-    const found = await this.cdp("DOM.querySelectorAll", { nodeId, selector }).catch(() => null);
+    let found;
+    try {
+      found = await this.cdp("DOM.querySelectorAll", { nodeId, selector });
+    } catch (error) {
+      if (isInvalidSelectorError(error)) throw typedDriverError("invalid_selector");
+      throw error;
+    }
     const nodeIds = Array.isArray(found?.nodeIds) ? found.nodeIds : [];
     if (nodeIds.length > 1) throw new Error("ambiguous");
     if (nodeIds.length === 0) return null;
@@ -1467,6 +1564,34 @@ class NewtonBrowserDriver {
     return Boolean(result?.result?.value);
   }
 
+  async blockingElementEvidence(point, route = {}) {
+    const hit = await this.cdp("DOM.getNodeForLocation", {
+      x: Math.round(point.x),
+      y: Math.round(point.y),
+      includeUserAgentShadowDOM: true,
+      ignorePointerEventsNone: false,
+    }, route).catch(() => null);
+    const backendNodeId = hit?.backendNodeId;
+    if (!Number.isInteger(backendNodeId)) return null;
+    const [facts, name, described] = await Promise.all([
+      this.elementFacts(backendNodeId, route).catch(() => ({})),
+      this.axNameFor(backendNodeId, route).catch(() => ""),
+      this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null),
+    ]);
+    const tag = String(described?.node?.localName || described?.node?.nodeName || "").toLowerCase().slice(0, 40);
+    return {
+      role: String(facts?.role || "").slice(0, 40),
+      name: String(name || facts?.accessibleName || "").replace(/\s+/g, " ").trim().slice(0, 160),
+      tag,
+      point: { x: Math.round(point.x), y: Math.round(point.y) },
+      frame: {
+        ...(route?.targetId ? { targetId: String(route.targetId).slice(0, 160) } : {}),
+        ...(route?.frameId ? { frameId: String(route.frameId).slice(0, 160) } : {}),
+        ...(Number.isSafeInteger(route?.documentEpoch) ? { documentEpoch: route.documentEpoch } : {}),
+      },
+    };
+  }
+
   async objectIdFor(backendNodeId, route = {}) {
     const resolved = await this.cdp("DOM.resolveNode", { backendNodeId }, route).catch(() => null);
     return typeof resolved?.object?.objectId === "string" ? resolved.object.objectId : null;
@@ -1481,11 +1606,6 @@ class NewtonBrowserDriver {
     return false;
   }
 
-  async selectAll(route = {}) {
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2 }, route);
-    await this.cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2 }, route);
-  }
-
   async maskZones(zones) {
     if (!Array.isArray(zones) || zones.length === 0) return;
     await this.sendToPage({ type: "NB_DRIVE_MASK", zones });
@@ -1495,18 +1615,28 @@ class NewtonBrowserDriver {
     await this.sendToPage({ type: "NB_DRIVE_UNMASK" });
   }
 
-  async waitForSettle() {
-    const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+  async waitForSettle(timeoutMs = SETTLE_TIMEOUT_MS) {
+    const boundedTimeout = Math.max(100, Math.min(Number(timeoutMs) || SETTLE_TIMEOUT_MS, SETTLE_TIMEOUT_MS));
+    const deadline = Date.now() + boundedTimeout;
     let last = "";
     let stable = 0;
     while (Date.now() < deadline) {
-      // Cheap settle fingerprint (S10): readyState + a structural counter + url.
-      // Avoids serializing the whole DOM (innerHTML.length) every poll, which
-      // janks large pages and is a weak signal anyway.
       const fingerprint = await this.evalString(
-        "document.readyState + ':' + (document.body ? document.body.childElementCount : 0) + ':' + (document.querySelectorAll ? document.querySelectorAll('*').length : 0) + ':' + location.href",
+        `(() => {
+          const key = "__newtonBrowserDocumentSignal";
+          let signal = globalThis[key];
+          if (!signal || signal.document !== document) {
+            signal = { document, revision: 0 };
+            const bump = () => { signal.revision = Math.min(Number.MAX_SAFE_INTEGER, signal.revision + 1); };
+            new MutationObserver(bump).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+            document.addEventListener("input", bump, true);
+            document.addEventListener("change", bump, true);
+            globalThis[key] = signal;
+          }
+          return document.readyState + ":" + signal.revision + ":" + location.href;
+        })()`,
       );
-      if (fingerprint.startsWith("complete") && fingerprint === last) {
+      if (fingerprint.startsWith("complete") && this.networkInFlight.size === 0 && fingerprint === last) {
         stable += 1;
         if (stable >= 2) return;
       } else {
@@ -1518,7 +1648,7 @@ class NewtonBrowserDriver {
   }
 
   async settleShort() {
-    await delay(180);
+    await this.waitForSettle(750);
   }
 
   paintCursorClick(x, y) {
@@ -1604,7 +1734,12 @@ class NewtonBrowserDriver {
         return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
       })()`,
       returnByValue: true,
-    }).catch(() => null);
+    });
+    if (result?.exceptionDetails) {
+      const detail = `${result.exceptionDetails.text ?? ""} ${result.exceptionDetails.exception?.description ?? ""}`;
+      if (isInvalidSelectorError(detail)) throw typedDriverError("invalid_selector");
+      throw typedDriverError("target_resolution_failed");
+    }
     return Boolean(result?.result?.value);
   }
 
@@ -1657,6 +1792,12 @@ class NewtonBrowserDriver {
   async targetMoved(status = "stale_target") {
     const observation = await this.observe({});
     return this.withObservationMeta(status, {}, observation, status === "not_found" ? "target_not_found" : "target_moved");
+  }
+
+  refreshPendingDialog() {
+    const latest = [...this.pendingDialogs.values()].at(-1) ?? null;
+    this.pendingDialog = latest?.dialog ?? null;
+    this.pendingDialogRoute = latest?.route ?? null;
   }
 
   beginActionSignals() {
@@ -1722,6 +1863,13 @@ function normalizedTarget(action) {
   if (action.text) return { text: String(action.text), ...(action.exact ? { exact: true } : {}) };
   if (Number.isFinite(action.x) && Number.isFinite(action.y)) return { coordinates: { x: Math.round(action.x), y: Math.round(action.y) } };
   return null;
+}
+
+function selectorFromAction(action) {
+  const target = normalizedTarget(action);
+  if (typeof target?.selector === "string" && target.selector) return target.selector;
+  const wait = normalizedWaitFor(action?.waitFor ?? (action?.kind === "wait_for" ? action : null));
+  return typeof wait?.selector === "string" && wait.selector ? wait.selector : null;
 }
 
 function normalizedWaitFor(waitFor) {
@@ -1843,17 +1991,23 @@ function consoleArgsText(args) {
   }).join(" ").trim().slice(0, 2000);
 }
 
-// Shape a Page.javascriptDialogOpening payload into the tracked pending-dialog
-// record (WS9.4). The message is truncated defensively; final redaction happens
-// in the host before the message leaves the relay.
-function normalizePendingDialog(params = {}) {
-  const type = String(params?.type ?? "alert");
-  const dialogType = ["alert", "confirm", "prompt", "beforeunload"].includes(type) ? type : "alert";
-  const record = { dialogType, message: String(params?.message ?? "").slice(0, 1000) };
-  if (dialogType === "prompt" && typeof params?.defaultPrompt === "string") {
-    record.defaultPrompt = params.defaultPrompt.slice(0, 1000);
-  }
-  return record;
+function inputTargetKey(route = {}) {
+  return typeof route?.sessionId === "string" && route.sessionId ? `session:${route.sessionId}` : "root";
+}
+
+function dialogRoute(dialog = {}) {
+  return typeof dialog?.sessionId === "string" && dialog.sessionId ? { sessionId: dialog.sessionId } : {};
+}
+
+function typedDriverError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+function isInvalidSelectorError(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /invalid selector|not a valid selector|failed to execute ['\"]queryselector|syntaxerror/i.test(message);
 }
 
 function reconciliationChanges(signals) {

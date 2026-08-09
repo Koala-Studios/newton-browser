@@ -19,7 +19,16 @@ copyFile(path.join(appRoot, "panel.html"), path.join(distRoot, "panel.html"));
 copyTree(sourceRoot, path.join(distRoot, "src"));
 
 const distDriverRoot = path.join(distRoot, "src", "vendor", "newton-browser-driver");
-for (const file of ["controller.js", "chrome-tabs-port.js"]) {
+for (const file of [
+  "controller.js",
+  "chrome-tabs-port.js",
+  "session-command-pump.js",
+  "session-transaction.js",
+  "target-registry.js",
+  "origin-containment.js",
+  "input-dispatcher.js",
+  "renderer-liveness.js",
+]) {
   copyFile(path.join(driverRoot, file), path.join(distDriverRoot, file));
 }
 const driverSource = fs.readFileSync(path.join(driverRoot, "driver.js"), "utf8")

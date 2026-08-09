@@ -25,6 +25,9 @@ export function createChromeTabsPort(chromeApi = globalThis.chrome) {
       // extension to be allowed in incognito; otherwise a typed error surfaces.
       const windowId = options.incognito ? await ensureIncognitoWindow(chromeApi) : null;
       const tab = await chromeApi.tabs.create({ url, active: false, ...(windowId !== null ? { windowId } : {}) });
+      if (Number.isInteger(tab?.id) && chromeApi.tabs.update) {
+        await chromeApi.tabs.update(tab.id, { autoDiscardable: false });
+      }
       let groupId = null;
       try {
         groupId = await chromeApi.tabs.group({ tabIds: [tab.id] });
@@ -33,6 +36,10 @@ export function createChromeTabsPort(chromeApi = globalThis.chrome) {
         groupId = null;
       }
       return { tabId: tab.id, groupId };
+    },
+
+    async setAutoDiscardable(tabId, autoDiscardable) {
+      await chromeApi.tabs.update(tabId, { autoDiscardable: Boolean(autoDiscardable) });
     },
 
     async removeTab(tabId) {
@@ -75,6 +82,11 @@ export function createChromeTabsPort(chromeApi = globalThis.chrome) {
     onTabRemoved(callback) {
       chromeApi.tabs.onRemoved.addListener(callback);
       return () => chromeApi.tabs.onRemoved.removeListener?.(callback);
+    },
+
+    onTabUpdated(callback) {
+      chromeApi.tabs.onUpdated.addListener(callback);
+      return () => chromeApi.tabs.onUpdated.removeListener?.(callback);
     },
   };
 }
