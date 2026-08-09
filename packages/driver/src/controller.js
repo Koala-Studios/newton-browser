@@ -1,5 +1,6 @@
 // @ts-check
 import { SessionCommandPump } from "./session-command-pump.js";
+import { runSessionTransaction } from "./session-transaction.js";
 const DEFAULT_SESSION_MAX_ITEMS = 32;
 const DEFAULT_SESSION_MAX_BYTES = 1024 * 1024;
 const STALE_COMMAND_EPOCH_ERROR = "stale_command_epoch";
@@ -18,7 +19,7 @@ const DEFAULT_GROUP_THEMES = [
 ];
 
 class SessionController {
-  constructor({ sessionId, tabId, origin, allowedOrigins, tabMode, ownsTab, tabGroupId, accent, driver }) {
+  constructor({ sessionId, tabId, origin, allowedOrigins, tabMode, ownsTab, tabGroupId, accent, driver, lifecycleState }) {
     this.sessionId = sessionId;
     this.tabId = tabId ?? null;
     this.origin = origin ?? null;
@@ -38,6 +39,7 @@ class SessionController {
     this.nextSequence = 1;
     this.unsubscribe = null;
     this.reattaching = false;
+    this.lifecycleState = lifecycleState ?? "creating_tab";
     this._commandShutdown = null;
     this._shutdownState = null;
     this._stopSession = null;
@@ -57,6 +59,7 @@ class SessionController {
       ownsTab: this.ownsTab,
       streaming: this.streaming,
       attached: this.driver.attached,
+      lifecycleState: this.lifecycleState,
       commandPump: this.pump.snapshot(),
     };
   }
@@ -91,8 +94,13 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     return { ...primary, sessions: list, count: list.length };
   };
 
-  const notifyState = async () => {
-    await emit({ type: "state", state: bridgeSnapshot() });
+  const notifyState = async ({ required = false } = {}) => {
+    const event = { type: "state", state: bridgeSnapshot() };
+    if (required && typeof notify === "function") {
+      await Promise.resolve(notify(event));
+      return;
+    }
+    await emit(event);
   };
 
   const runtime = {
@@ -120,18 +128,19 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
     async startSession({ tabId, origin, allowedOrigins, goal, tabMode, instanceLabel } = {}) {
       if (!safeOrigin(origin)) throw new Error("origin_required");
       const mode = tabMode === "current" ? "current" : "owned_group";
-      let ownedTabId = mode === "current" ? tabId : null;
-      let tabGroupId = null;
       const theme = nextTheme();
       if (mode === "current" && typeof tabId !== "number") {
         throw new Error("A normal web tab is required to drive the current tab.");
       }
-      if (mode === "owned_group") {
-        const acquired = await tabs.createOwnedTab(origin, theme.color, groupTitle({ goal, instanceLabel, origin }));
-        ownedTabId = acquired.tabId;
-        tabGroupId = acquired.groupId ?? null;
-      }
-      try {
+      return runSessionTransaction(async ({ defer }) => {
+        let ownedTabId = mode === "current" ? tabId : null;
+        let tabGroupId = null;
+        if (mode === "owned_group") {
+          const acquired = await tabs.createOwnedTab(origin, theme.color, groupTitle({ goal, instanceLabel, origin }));
+          ownedTabId = acquired.tabId;
+          tabGroupId = acquired.groupId ?? null;
+          defer("owned_tab", () => tabs.removeTab(ownedTabId), { dedupeKey: `tab:${ownedTabId}` });
+        }
         const created = await transport.createSession({
           origin: origin ?? null,
           allowedOrigins: dedupeOrigins(allowedOrigins, origin),
@@ -142,6 +151,9 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           instanceLabel: instanceLabel ?? "",
         });
         if (!created?.sessionId) throw new Error("session_start_failed");
+        defer("host_session", () => transport.stopSession(created.sessionId), {
+          dedupeKey: `host:${created.sessionId}`,
+        });
         const controller = newController({
           sessionId: created.sessionId,
           tabId: ownedTabId,
@@ -151,19 +163,25 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
           ownsTab: mode === "owned_group",
           tabGroupId,
           accent: mode === "owned_group" ? theme.accent : null,
+          lifecycleState: "attaching_debugger",
         });
-        sessions.set(controller.sessionId, controller);
+        defer("debugger", () => controller.driver.detach(), { dedupeKey: `debugger:${created.sessionId}` });
         await controller.driver.attach(ownedTabId);
+        controller.lifecycleState = "verifying_origin";
         const liveOrigin = await liveTabOrigin(ownedTabId);
         if (!controller.allowedOrigins.includes(liveOrigin)) throw new Error("origin_not_granted");
         await transport.attachTab(controller.sessionId, { ownedTabId, tabGroupId, attached: true, liveOrigin });
+        controller.lifecycleState = "publishing_ready";
+        defer("published_session", () => {
+          sessions.delete(controller.sessionId);
+          stopSubscription(controller);
+        }, { dedupeKey: `published:${created.sessionId}` });
+        sessions.set(controller.sessionId, controller);
         startSubscription(controller);
-        await notifyState();
+        controller.lifecycleState = "active";
+        await notifyState({ required: true });
         return controller.sessionId;
-      } catch (error) {
-        if (mode === "owned_group" && typeof ownedTabId === "number") await tabs.removeTab(ownedTabId).catch(() => {});
-        throw error;
-      }
+      });
     },
 
     async ensureForActiveSessions(activeTabId, restoredBindings = []) {
@@ -301,57 +319,74 @@ export function createBridgeRuntime({ transport, evaluateFloor, tabs, driverFact
   }
 
   async function bindExternalSession(session, activeTabId) {
-    const mode = session.tabMode === "current" ? "current" : "owned_group";
-    const theme = nextTheme();
-    let tabId = Number.isInteger(session.ownedTabId) ? session.ownedTabId : null;
-    let tabGroupId = Number.isInteger(session.tabGroupId) ? session.tabGroupId : null;
-    const origin = session.origin ?? null;
-    if (tabId !== null && !(await tabs.getTab(tabId).catch(() => null))) {
-      tabId = null;
-      tabGroupId = null;
-    }
-    if (tabId === null) {
-      if (mode === "current") {
-        if (typeof activeTabId !== "number") return;
-        tabId = activeTabId;
-      } else {
-        const acquired = await tabs.createOwnedTab(origin, theme.color, groupTitle({ goal: session.goal, instanceLabel: session.instanceLabel, origin }), { incognito: session.incognito === true });
-        tabId = acquired.tabId;
-        tabGroupId = acquired.groupId ?? null;
+    return runSessionTransaction(async ({ defer }) => {
+      const mode = session.tabMode === "current" ? "current" : "owned_group";
+      const theme = nextTheme();
+      let tabId = Number.isInteger(session.ownedTabId) ? session.ownedTabId : null;
+      let tabGroupId = Number.isInteger(session.tabGroupId) ? session.tabGroupId : null;
+      const origin = session.origin ?? null;
+      defer("host_session", () => transport.stopSession(session.sessionId), {
+        dedupeKey: `host:${session.sessionId}`,
+      });
+      if (tabId !== null && !(await tabs.getTab(tabId).catch(() => null))) {
+        tabId = null;
+        tabGroupId = null;
       }
-      await transport.attachTab(session.sessionId, {
+      if (tabId === null) {
+        if (mode === "current") {
+          if (typeof activeTabId !== "number") throw new Error("current_tab_unavailable");
+          tabId = activeTabId;
+        } else {
+          const acquired = await tabs.createOwnedTab(
+            origin,
+            theme.color,
+            groupTitle({ goal: session.goal, instanceLabel: session.instanceLabel, origin }),
+            { incognito: session.incognito === true },
+          );
+          tabId = acquired.tabId;
+          tabGroupId = acquired.groupId ?? null;
+          defer("owned_tab", () => tabs.removeTab(tabId), { dedupeKey: `tab:${tabId}` });
+        }
+        await transport.attachTab(session.sessionId, {
+          ownedTabId: tabId,
+          tabGroupId: tabGroupId ?? undefined,
+          attached: false,
+        });
+      } else if (mode === "owned_group") {
+        defer("owned_tab", () => tabs.removeTab(tabId), { dedupeKey: `tab:${tabId}` });
+      }
+      const controller = newController({
+        sessionId: session.sessionId,
+        tabId,
+        origin,
+        allowedOrigins: Array.isArray(session.allowedOrigins) ? session.allowedOrigins : [],
+        tabMode: mode,
+        ownsTab: mode === "owned_group",
+        tabGroupId,
+        accent: mode === "owned_group" ? theme.accent : null,
+        lifecycleState: "verifying_origin",
+      });
+      const liveOrigin = await liveTabOrigin(tabId);
+      if (!controller.allowedOrigins.includes(liveOrigin)) throw new Error("origin_not_granted");
+      controller.lifecycleState = "attaching_debugger";
+      defer("debugger", () => controller.driver.detach(), { dedupeKey: `debugger:${session.sessionId}` });
+      await controller.driver.attach(tabId);
+      await transport.attachTab(controller.sessionId, {
         ownedTabId: tabId,
         tabGroupId: tabGroupId ?? undefined,
-        attached: false,
-      }).catch(() => {});
-    }
-    const controller = newController({
-      sessionId: session.sessionId,
-      tabId,
-      origin,
-      allowedOrigins: Array.isArray(session.allowedOrigins) ? session.allowedOrigins : [],
-      tabMode: mode,
-      ownsTab: mode === "owned_group",
-      tabGroupId,
-      accent: mode === "owned_group" ? theme.accent : null,
+        attached: true,
+        liveOrigin,
+      });
+      controller.lifecycleState = "publishing_ready";
+      defer("published_session", () => {
+        sessions.delete(controller.sessionId);
+        stopSubscription(controller);
+      }, { dedupeKey: `published:${session.sessionId}` });
+      sessions.set(controller.sessionId, controller);
+      startSubscription(controller);
+      controller.lifecycleState = "active";
+      await notifyState({ required: true });
     });
-    sessions.set(controller.sessionId, controller);
-    const liveOrigin = await liveTabOrigin(tabId);
-    if (!controller.allowedOrigins.includes(liveOrigin)) {
-      if (mode === "owned_group") await tabs.removeTab(tabId).catch(() => {});
-      await transport.stopSession(controller.sessionId).catch(() => {});
-      sessions.delete(controller.sessionId);
-      return;
-    }
-    await controller.driver.attach(tabId);
-    await transport.attachTab(controller.sessionId, {
-      ownedTabId: tabId,
-      tabGroupId: tabGroupId ?? undefined,
-      attached: true,
-      liveOrigin,
-    });
-    startSubscription(controller);
-    await notifyState();
   }
 
   function startSubscription(controller) {

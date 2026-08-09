@@ -59,6 +59,7 @@ test("session start requires an exact origin and waits for authenticated extensi
     assert.match(started.json.sessionId, /^bbs_local_/);
     assert.equal(started.json.session.liveOrigin, "https://example.com");
     assert.equal(started.json.session.attached, true);
+    assert.equal(started.json.session.lifecycleState, "active");
   } finally {
     extension.close();
     await bridge.close();

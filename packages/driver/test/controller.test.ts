@@ -252,6 +252,138 @@ function createControllerHarness({
   };
 }
 
+test("BridgeRuntime rolls back every owned-session start failure stage", async () => {
+  const stages = [
+    "create_tab",
+    "create_host",
+    "attach_debugger",
+    "verify_origin",
+    "publish_attachment",
+    "subscribe",
+    "persist_binding",
+  ] as const;
+  for (const stage of stages) {
+    const order: string[] = [];
+    const harness = createControllerHarness({
+      notify: (event) => {
+        if (event?.type !== "state") return;
+        order.push("persist_binding");
+        if (stage === "persist_binding") throw new Error("injected_persist_binding");
+      },
+      createSession: async () => {
+        order.push("create_host");
+        if (stage === "create_host") throw new Error("injected_create_host");
+        return { sessionId: `failure-${stage}` };
+      },
+      transportOverrides: {
+        async attachTab() {
+          order.push("publish_attachment");
+          if (stage === "publish_attachment") throw new Error("injected_publish_attachment");
+        },
+        subscribe(sessionId: string, callback: (command: unknown) => Promise<void> | void) {
+          order.push("subscribe");
+          if (stage === "subscribe") throw new Error("injected_subscribe");
+          return () => { void sessionId; void callback; };
+        },
+        async stopSession(sessionId: string) {
+          order.push(`stop_host:${sessionId}`);
+        },
+      },
+      tabsOverrides: {
+        async createOwnedTab() {
+          order.push("create_tab");
+          if (stage === "create_tab") throw new Error("injected_create_tab");
+          return { tabId: 101, groupId: 201 };
+        },
+        async getTab() {
+          order.push("verify_origin");
+          return {
+            id: 101,
+            url: stage === "verify_origin" ? "https://outside.test" : "https://example.com/page",
+          };
+        },
+        async removeTab(tabId: number) {
+          order.push(`remove_tab:${tabId}`);
+        },
+      },
+      driverFactory: () => ({
+        attached: false,
+        async attach() {
+          order.push("attach_debugger");
+          this.attached = true;
+          if (stage === "attach_debugger") throw new Error("injected_attach_debugger");
+        },
+        async detach() {
+          order.push("detach_debugger");
+          this.attached = false;
+        },
+        isAttachedTo() { return this.attached; },
+        async reassertOverlay() {},
+        markDetached() { this.attached = false; },
+      }),
+    });
+
+    await assert.rejects(
+      harness.runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" }),
+    );
+    assert.equal(harness.runtime.snapshot().count, 0, `${stage} must never publish a partial controller`);
+    if (stage === "create_tab") {
+      assert.deepEqual(order, ["create_tab"]);
+      continue;
+    }
+    assert.equal(order.at(-1), "remove_tab:101", `${stage} must finish by removing the owned tab`);
+    if (stage === "create_host") {
+      assert.equal(order.some((item) => item.startsWith("stop_host:")), false);
+      assert.equal(order.includes("detach_debugger"), false);
+    } else {
+      assert.equal(order.includes(`stop_host:failure-${stage}`), true);
+      assert.equal(order.includes("detach_debugger"), true);
+      assert.ok(order.indexOf(`stop_host:failure-${stage}`) > order.indexOf("detach_debugger"));
+    }
+  }
+});
+
+test("BridgeRuntime rolls back a failed external-session rebind before publication", async () => {
+  const order: string[] = [];
+  const harness = createControllerHarness({
+    listSessions: async () => [{
+      sessionId: "external-failure",
+      origin: "https://example.com",
+      allowedOrigins: ["https://example.com"],
+      tabMode: "owned_group",
+    }],
+    transportOverrides: {
+      async attachTab(_sessionId: string, tab: { attached?: boolean }) {
+        order.push(tab.attached ? "attached" : "pending");
+        if (tab.attached) throw new Error("injected_attached_publication");
+      },
+      async stopSession(sessionId: string) {
+        order.push(`stop:${sessionId}`);
+      },
+    },
+    tabsOverrides: {
+      async createOwnedTab() { order.push("create_tab"); return { tabId: 101, groupId: 201 }; },
+      async removeTab(tabId: number) { order.push(`remove:${tabId}`); },
+    },
+    driverOverrides: {
+      async attach() { order.push("attach_debugger"); this.attached = true; },
+      async detach() { order.push("detach_debugger"); this.attached = false; },
+    },
+  });
+
+  await harness.runtime.ensureForActiveSessions();
+  assert.equal(harness.runtime.snapshot().count, 0);
+  assert.deepEqual(order, [
+    "create_tab",
+    "pending",
+    "attach_debugger",
+    "attached",
+    "detach_debugger",
+    "remove:101",
+    "stop:external-failure",
+  ]);
+});
+
 test("BridgeRuntime drives a click command through a fake transport", async () => {
   const events: Array<{ commandId: string; eventType: string; detail: unknown }> = [];
   const results: unknown[] = [];
@@ -345,6 +477,7 @@ test("BridgeRuntime drives a click command through a fake transport", async () =
   const sessionId = await runtime.startSession({ origin: "https://example.com", tabMode: "owned_group" });
   assert.equal(sessionId, "s1");
   assert.equal(runtime.snapshot().count, 1);
+  assert.equal(runtime.snapshot().sessions[0].lifecycleState, "active");
   assert.ok(commandHandler);
   const nextCommand = createCommandSequencer();
 

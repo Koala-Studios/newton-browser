@@ -159,6 +159,7 @@ async function loadBindingRecords() {
 
 async function rememberOwnedBindings(state) {
   const records = await getBindingRecords();
+  const previous = new Map(records);
   for (const session of state?.sessions ?? []) {
     if (!session?.ownsTab || !session.sessionId || !Number.isInteger(session.tabId)) continue;
     records.set(session.sessionId, {
@@ -168,14 +169,30 @@ async function rememberOwnedBindings(state) {
       origin: typeof session.origin === "string" ? session.origin : null,
     });
   }
-  await persistBindingRecords(records);
+  try {
+    await persistBindingRecords(records);
+  } catch (error) {
+    restoreBindingRecords(records, previous);
+    throw error;
+  }
   scheduleOrphanCleanup();
 }
 
 async function forgetBinding(sessionId) {
   const records = await getBindingRecords();
+  const previous = new Map(records);
   records.delete(String(sessionId ?? ""));
-  await persistBindingRecords(records);
+  try {
+    await persistBindingRecords(records);
+  } catch (error) {
+    restoreBindingRecords(records, previous);
+    throw error;
+  }
+}
+
+function restoreBindingRecords(records, previous) {
+  records.clear();
+  for (const [sessionId, binding] of previous) records.set(sessionId, binding);
 }
 
 function scheduleOrphanCleanup() {
@@ -199,7 +216,7 @@ async function cleanupOrphanBindings() {
 }
 
 async function persistBindingRecords(records) {
-  await chrome.storage.local.set({ [SESSION_BINDINGS_KEY]: [...records.values()] }).catch(() => {});
+  await chrome.storage.local.set({ [SESSION_BINDINGS_KEY]: [...records.values()] });
 }
 
 function errorCode(error) {

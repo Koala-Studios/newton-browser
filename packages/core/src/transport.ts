@@ -7,6 +7,19 @@ import type {
 } from "./protocol.ts";
 import type { BrowserResolvedTarget } from "./risk.ts";
 
+export const BROWSER_SESSION_LIFECYCLE_STATES = [
+  "creating_host",
+  "creating_tab",
+  "attaching_debugger",
+  "verifying_origin",
+  "publishing_ready",
+  "active",
+  "finalizing",
+  "stopped",
+] as const;
+
+export type BrowserSessionLifecycleState = (typeof BROWSER_SESSION_LIFECYCLE_STATES)[number];
+
 export type BridgeCommand = {
   commandId: string;
   sessionId: string;
@@ -68,6 +81,7 @@ export type BridgeSessionInfo = {
   goal?: string;
   instanceLabel?: string;
   incognito?: boolean;
+  lifecycleState?: BrowserSessionLifecycleState;
 };
 
 export type BridgeFloorInput = {

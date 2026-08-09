@@ -179,6 +179,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
         tabGroupId: init.tabGroupId ?? null,
         attached: false,
         liveOrigin: null,
+        lifecycleState: "creating_tab",
         goal: init.goal ?? "",
         instanceLabel: init.instanceLabel ?? "",
         ...(init.incognito ? { incognito: true } : {}),
@@ -640,6 +641,7 @@ export function createNewtonBrowserHost(options: HostOptions = {}) {
       session.tabGroupId = Number.isInteger(params.tab?.tabGroupId) ? params.tab.tabGroupId : session.tabGroupId ?? null;
       session.attached = params.tab?.attached === true;
       session.liveOrigin = typeof params.tab?.liveOrigin === "string" ? params.tab.liveOrigin : session.liveOrigin ?? null;
+      session.lifecycleState = session.attached ? "active" : "attaching_debugger";
       notifyReadiness(sessionId);
       broadcastSessionsChanged();
       if (!state.inFlightCommandId) dispatchNext(sessionId);
