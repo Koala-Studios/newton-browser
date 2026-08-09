@@ -1,0 +1,10 @@
+{
+  "id": "fill-action",
+  "caseType": "action",
+  "maxTokens": 100,
+  "input": {
+    "outcome": "completed",
+    "reason": "filled",
+    "changed": true
+  }
+}

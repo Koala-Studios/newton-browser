@@ -1,0 +1,10 @@
+{
+  "id": "click-action",
+  "caseType": "action",
+  "maxTokens": 125,
+  "input": {
+    "outcome": "completed",
+    "status": "completed",
+    "reason": "clicked"
+  }
+}

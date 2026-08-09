@@ -1,0 +1,51 @@
+{
+  "id": "workflow-session",
+  "caseType": "workflow",
+  "maxTokens": 2100,
+  "steps": [
+    {
+      "id": "workflow-observation",
+      "type": "observation",
+      "options": { "format": "compact", "query": "", "limit": 12 },
+      "maxTokens": 500,
+      "inputRef": "checkout-observation-shared.fixture"
+    },
+    {
+      "id": "workflow-fill",
+      "type": "action",
+      "maxTokens": 100,
+      "input": {
+        "outcome": "completed",
+        "status": "completed",
+        "reason": "filled"
+      }
+    },
+    {
+      "id": "workflow-click",
+      "type": "action",
+      "maxTokens": 125,
+      "input": {
+        "outcome": "completed",
+        "status": "completed",
+        "reason": "clicked"
+      }
+    },
+    {
+      "id": "workflow-lean",
+      "type": "observation",
+      "options": { "format": "json", "query": "pay", "limit": 12 },
+      "maxTokens": 700,
+      "inputRef": "checkout-observation-shared.fixture"
+    },
+    {
+      "id": "workflow-verify",
+      "type": "action",
+      "maxTokens": 120,
+      "input": {
+        "outcome": "completed",
+        "status": "completed",
+        "reason": "verified"
+      }
+    }
+  ]
+}

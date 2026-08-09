@@ -1,0 +1,6 @@
+{
+  "id": "tool-catalog",
+  "caseType": "deferred",
+  "reason": "requires pinned tokenizer and checked-in catalog manifest",
+  "maxTokens": 3000
+}
