@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
-import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
+import { BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BridgeResultEvent, type BrowserControlTransportMode, type BrowserFloorDecision } from "@newton-browser/core";
 
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
 import type { NewtonBrowserHost } from "./bridge.ts";
@@ -218,8 +218,8 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       : null;
     if (!disposition) return toolError("invalid_finalize_disposition", "Disposition must be close, deliverable, or handoff.");
     const event = await bridge.dispatch(sessionId, { kind: "__finalize", disposition } as any);
-    if (!event.ok) return toolError(event.errorCode, event.errorCode);
-    return toolJson({ ok: true, ...(isObject(event.result) ? event.result : {}), transport });
+    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event), transport }, true);
+    return toolJson({ ok: true, ...(isObject(event.result) ? event.result : {}), ...publicCommandMetadata(event), transport });
   }
   if (name === "browser.stop_all") {
     bridge.stopAll();
@@ -234,8 +234,8 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       ? { kind: "console", level: args.level, pattern: args.pattern, limit: clampNumber(args.limit, 100, 1, 500), clear: args.clear === true }
       : { kind: "network", urlPattern: args.urlPattern, requestId: args.requestId, limit: clampNumber(args.limit, 100, 1, 500) };
     const event = await bridge.dispatch(sessionId, action as never);
-    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, transport }, true);
-    return toolJson({ ok: true, result: redactObservationResult(event.result), transport });
+    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event), transport }, true);
+    return toolJson({ ok: true, result: redactObservationResult(event.result), ...publicCommandMetadata(event), transport });
   }
 
   if (["browser.observe", "browser.screenshot", "browser.act"].includes(name)) {
@@ -253,14 +253,17 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       }, true);
     }
     if (name === "browser.act" && isObject(action) && action.kind === "fill_form") {
-      return await runFillForm(bridge, sessionId, session, action, transport);
+      return await runFillForm(bridge, sessionId, session, action, transport, typeof args.idempotencyKey === "string" ? args.idempotencyKey : undefined);
     }
     const verdict = evaluateHostFloor({ session, action });
     if (!verdict.relay) return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision), transport }, true);
-    const event = await bridge.dispatch(sessionId, verdict.action);
-    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), transport }, true);
+    const dispatchOptions = name === "browser.act" && args.idempotencyKey !== undefined
+      ? { idempotencyKey: args.idempotencyKey as string }
+      : undefined;
+    const event = await bridge.dispatch(sessionId, verdict.action, dispatchOptions);
+    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), ...publicCommandMetadata(event), transport }, true);
     const decision = strongestDecision(verdict.decision, event.decision);
-    if (name === "browser.screenshot") return screenshotToolResult(event.result, decision, args);
+    if (name === "browser.screenshot") return screenshotToolResult(event, decision, args);
     if (name === "browser.act") {
       const result = isObject(event.result) ? redactObservationResult(event.result) : { value: event.result };
       return toolJson({
@@ -268,10 +271,11 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
         actionStatus: typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified",
         decision: publicDecision(decision),
         result,
+        ...publicCommandMetadata(event),
         transport,
       });
     }
-    return toolJson({ ok: true, result: redactObservationResult(event.result), transport });
+    return toolJson({ ok: true, result: redactObservationResult(event.result), ...publicCommandMetadata(event), transport });
   }
   return toolError("unknown_tool", `Unknown tool: ${name}`);
 }
@@ -287,6 +291,7 @@ async function runFillForm(
   session: unknown,
   action: Record<string, unknown>,
   transport: BrowserControlTransportMode,
+  idempotencyKey?: string,
 ): Promise<ToolCallResult> {
   const parsed = parseBrowserAction(action);
   const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
@@ -294,6 +299,7 @@ async function runFillForm(
   const results: Array<{ index: number; status: string; reason?: string }> = [];
   let strongest: BrowserFloorDecision | undefined;
   let lastObservation: unknown;
+  let lastCommandMetadata: ReturnType<typeof publicCommandMetadata> | undefined;
   for (let index = 0; index < fields.length; index += 1) {
     const fillAction = { kind: "fill", ...fields[index] };
     const verdict = evaluateHostFloor({ session: session as never, action: fillAction });
@@ -302,10 +308,14 @@ async function runFillForm(
       results.push({ index, status: "blocked", reason: verdict.decision.reasons.at(-1) ?? "blocked_by_floor" });
       return toolJson({ ok: false, errorCode: "blocked_by_floor", stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
     }
-    const event = await bridge.dispatch(sessionId, verdict.action);
+    const fieldIdempotencyKey = idempotencyKey
+      ? createHash("sha256").update(`${idempotencyKey}:${index}`).digest("base64url")
+      : undefined;
+    const event = await bridge.dispatch(sessionId, verdict.action, fieldIdempotencyKey ? { idempotencyKey: fieldIdempotencyKey } : undefined);
+    lastCommandMetadata = publicCommandMetadata(event);
     if (!event.ok) {
       results.push({ index, status: "failed", reason: event.errorCode });
-      return toolJson({ ok: false, errorCode: event.errorCode, stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
+      return toolJson({ ok: false, errorCode: event.errorCode, stoppedAt: index, fields: results, decision: publicDecision(strongest), ...lastCommandMetadata, transport }, true);
     }
     strongest = event.decision ? strongestDecision(strongest, event.decision) : strongest;
     const result = isObject(event.result) ? event.result : {};
@@ -316,7 +326,7 @@ async function runFillForm(
       return toolJson({ ok: false, errorCode: "fill_form_field_incomplete", stoppedAt: index, fields: results, decision: publicDecision(strongest), transport }, true);
     }
   }
-  return toolJson({ ok: true, actionStatus: "verified", filled: results.length, fields: results, decision: publicDecision(strongest), observation: lastObservation, transport });
+  return toolJson({ ok: true, actionStatus: "verified", filled: results.length, fields: results, decision: publicDecision(strongest), observation: lastObservation, ...lastCommandMetadata, transport });
 }
 
 function actionForTool(name: string, args: Record<string, unknown>): unknown {
@@ -384,29 +394,31 @@ function hasAllowedFileSignature(file: string, extension: string): boolean {
   }
 }
 
-function screenshotToolResult(raw: unknown, decision: BrowserFloorDecision, args: Record<string, unknown>): ToolCallResult {
-  if (!isObject(raw) || typeof raw.dataUrl !== "string") return toolError("screenshot_unavailable", "The extension returned no screenshot bytes.");
+function screenshotToolResult(event: Extract<BridgeResultEvent, { ok: true }>, decision: BrowserFloorDecision, args: Record<string, unknown>): ToolCallResult {
+  const raw = event.result;
+  const commandMetadata = publicCommandMetadata(event);
+  if (!isObject(raw) || typeof raw.dataUrl !== "string") return toolError("screenshot_unavailable", "The extension returned no screenshot bytes.", commandMetadata);
   const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(raw.dataUrl);
-  if (!match?.[2]) return toolError("invalid_screenshot", "The extension returned malformed screenshot bytes.");
+  if (!match?.[2]) return toolError("invalid_screenshot", "The extension returned malformed screenshot bytes.", commandMetadata);
   const imageMime = `image/${match[1]}`;
   const buffer = Buffer.from(match[2], "base64");
-  if (buffer.length > SCREENSHOT_BYTES_CAP) return toolError("result_too_large", "Screenshot exceeds the 16 MiB result bound.", { recommendedDelivery: "file" });
+  if (buffer.length > SCREENSHOT_BYTES_CAP) return toolError("result_too_large", "Screenshot exceeds the 16 MiB result bound.", { recommendedDelivery: "file", ...commandMetadata });
   const metadata = { ...raw } as Record<string, unknown>;
   delete metadata.dataUrl;
   delete metadata.inline;
   const delivery = args.delivery === "file" || args.delivery === "inline" ? args.delivery : "image";
-  const common = { ok: true, delivery, decision: publicDecision(decision), ...metadata };
+  const common = { ok: true, delivery, decision: publicDecision(decision), ...metadata, ...commandMetadata };
   if (delivery === "image") {
     return { content: [{ type: "text", text: JSON.stringify(common) }, { type: "image", data: match[2], mimeType: imageMime }] };
   }
   if (delivery === "inline") {
-    if (raw.dataUrl.length > INLINE_SCREENSHOT_CAP) return toolError("result_too_large", "Inline screenshot exceeds the 1,000,000 character bound.", { recommendedDelivery: "image" });
+    if (raw.dataUrl.length > INLINE_SCREENSHOT_CAP) return toolError("result_too_large", "Inline screenshot exceeds the 1,000,000 character bound.", { recommendedDelivery: "image", ...commandMetadata });
     return toolJson({ ...common, dataUrl: raw.dataUrl });
   }
   try {
     return toolJson(writeScreenshotFile(buffer, common, args, match[1] === "jpeg" ? "jpg" : "png"));
   } catch (error) {
-    return toolError(errorCode(error), error instanceof Error ? error.message : String(error));
+    return toolError(errorCode(error), error instanceof Error ? error.message : String(error), commandMetadata);
   }
 }
 
@@ -446,7 +458,12 @@ function toolList(): Array<Record<string, unknown>> {
       incognito: { type: "boolean" },
     }, ["origin"]),
     tool("browser.observe", "Observe the current session tab. mode:\"text\" returns bounded, redacted readable page text instead of the accessibility tree.", { transport, sessionId: { type: "string" }, mode: { type: "string", enum: ["full", "diff", "text"] }, maxNodes: { type: "number" }, maxChars: { type: "number" } }, ["sessionId"]),
-    tool("browser.act", "Run one typed browser action and return its floor decision.", { transport, sessionId: { type: "string" }, action: { type: "object" } }, ["sessionId", "action"]),
+    tool("browser.act", "Run one typed browser action and return its floor decision.", {
+      transport,
+      sessionId: { type: "string" },
+      action: { type: "object" },
+      idempotencyKey: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" },
+    }, ["sessionId", "action"]),
     tool("browser.screenshot", "Capture and deliver a screenshot.", {
       transport,
       sessionId: { type: "string" },
@@ -479,6 +496,16 @@ function toolList(): Array<Record<string, unknown>> {
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []): Record<string, unknown> {
   return { name, description, inputSchema: { type: "object", properties, required, additionalProperties: false } };
+}
+
+function publicCommandMetadata(event: BridgeResultEvent) {
+  return {
+    sessionEpoch: event.sessionEpoch,
+    sequence: event.sequence,
+    outcome: event.outcome,
+    retrySafe: event.retrySafe,
+    ...(event.lateResultDiscarded ? { lateResultDiscarded: true } : {}),
+  };
 }
 
 function toolJson(value: unknown, isError = false, errorCodeValue?: string): ToolCallResult {

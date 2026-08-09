@@ -1,6 +1,10 @@
-import { redactBrowserOrigin, redactBrowserResult } from "../../../packages/core/src/redaction.ts";
-import { redactJson, redactText } from "../../../packages/core/src/text-redaction.ts";
-import type { NewtonBrowserResult } from "../../../packages/core/src/protocol.ts";
+import {
+  redactBrowserOrigin,
+  redactBrowserResult,
+  redactJson,
+  redactText,
+  type NewtonBrowserResult,
+} from "@newton-browser/core";
 
 export type ObservationOutputFormat = "compact" | "json";
 export type AgentObservationOptionsInput = { format?: unknown; includeGeometry?: unknown; query?: unknown; roles?: unknown; limit?: unknown };

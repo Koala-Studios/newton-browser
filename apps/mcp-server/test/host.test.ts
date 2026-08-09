@@ -139,6 +139,59 @@ test("MCP blocks a sensitive fill before any extension dispatch", async () => {
   assert.ok(Date.now() - started < 250, "a pre-dispatch block must not wait for an extension or command timeout");
 });
 
+test("browser.act forwards idempotency keys and exposes host-owned outcome metadata", async () => {
+  const bridge = testBridge();
+  const address = await bridge.listen(0);
+  const socket = await connectExtension(address.port, bridge.hostInstanceId);
+  let commandCount = 0;
+  const countCommands = (data: any) => {
+    if (JSON.parse(data.toString()).type === "bridge_command") commandCount += 1;
+  };
+  socket.on("message", countCommands);
+  try {
+    const { sessionId } = bridge.createSession({ origin: "https://example.com", allowedOrigins: ["https://example.com"], tabMode: "owned_group" });
+    await extensionRequest(socket, "subscribeSession", { sessionId });
+    const args = {
+      sessionId,
+      idempotencyKey: "public-idempotency-key",
+      action: { kind: "click", target: { role: "button", name: "Continue" } },
+    };
+    const wirePromise = waitForMessage(socket, (message) => message.type === "bridge_command" && message.command?.sessionId === sessionId);
+    const firstCall = toolCall(bridge, "browser.act", args);
+    const wire = await wirePromise;
+    await postResult(socket, wire, {
+      ok: true,
+      result: { kind: "observation", mode: "cdp", origin: "https://example.com", title: "Done", nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z", actionStatus: "verified", verified: true },
+    });
+    const first = await firstCall;
+    assert.equal(first.isError, false);
+    assert.equal(first.json.outcome, "completed");
+    assert.equal(first.json.retrySafe, false);
+    assert.equal(first.json.sessionEpoch, wire.command.sessionEpoch);
+    assert.equal(first.json.sequence, wire.command.sequence);
+
+    const replay = await toolCall(bridge, "browser.act", args);
+    assert.equal(replay.isError, false);
+    assert.equal(replay.json.outcome, "completed");
+    assert.equal(replay.json.sequence, wire.command.sequence);
+    assert.equal(commandCount, 1);
+
+    const conflict = await toolCall(bridge, "browser.act", {
+      ...args,
+      action: { kind: "click", target: { role: "button", name: "Different" } },
+    });
+    assert.equal(conflict.isError, true);
+    assert.equal(conflict.json.errorCode, "idempotency_conflict");
+    assert.equal(conflict.json.outcome, "prevented");
+    assert.equal(conflict.json.retrySafe, true);
+    assert.equal(commandCount, 1);
+  } finally {
+    socket.off("message", countCommands);
+    socket.close();
+    await bridge.close();
+  }
+});
+
 test("authenticated ws transport queues, subscribes, and carries frames above 64 KiB", async () => {
   const bridge = testBridge();
   const address = await bridge.listen(0);

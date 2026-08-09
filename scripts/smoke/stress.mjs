@@ -9,6 +9,7 @@ const warmupMs = Number(process.env.NEWTON_BROWSER_STRESS_WARMUP_MS ?? 30_000);
 const rssLimitBytes = Number(process.env.NEWTON_BROWSER_STRESS_RSS_LIMIT_MB ?? 96) * 1024 * 1024;
 const bridge = createNewtonBrowserHost({ authMode: "local_trust", browserTarget: "auto" });
 let socket;
+let sameSessionOverlapViolations = 0;
 
 try {
   const listening = await bridge.listen(0, "127.0.0.1");
@@ -34,6 +35,7 @@ try {
   const rssGrowth = Math.max(rssMax - rssStart, rssEnd - rssStart);
 
   assert(crossResults === 0, `cross-session results detected: ${crossResults}`);
+  assert(sameSessionOverlapViolations === 0, `same-session overlap detected: ${sameSessionOverlapViolations}`);
   assert(operations > 0, "stress workers completed no operations");
   assert(rssGrowth <= rssLimitBytes, `RSS growth ${rssGrowth} exceeded ${rssLimitBytes}`);
   process.stdout.write(`${JSON.stringify({
@@ -44,6 +46,7 @@ try {
     workers: sessions.map((item) => item.worker),
     operations,
     crossResults,
+    sameSessionOverlapViolations,
     deadlocks: 0,
     rss: { baseline: "post_warmup", start: rssStart, max: rssMax, end: rssEnd, growth: rssGrowth, limit: rssLimitBytes },
   })}\n`);
@@ -100,6 +103,8 @@ try {
 async function connectFakeExtension(port) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Origin: "chrome-extension://stress-fixture" } });
   const claimed = new Set();
+  const activeSessions = new Set();
+  const pendingRequests = new Map();
   await new Promise((resolve, reject) => {
     ws.once("open", resolve);
     ws.once("error", reject);
@@ -107,40 +112,69 @@ async function connectFakeExtension(port) {
   ws.on("message", (data) => {
     const message = JSON.parse(data.toString());
     if (message.type === "client_ready" || message.type === "sessions_changed") {
-      request(ws, "listSessions", {});
+      void request(ws, pendingRequests, "listSessions", {}).catch(() => {});
       return;
     }
     if (message.type === "bridge_response" && Array.isArray(message.result)) {
+      settleRequest(pendingRequests, message);
       for (const session of message.result) {
         if (claimed.has(session.sessionId)) continue;
         claimed.add(session.sessionId);
         if (session.instanceLabel === "saturation-probe") continue;
-        request(ws, "attachTab", { sessionId: session.sessionId, tab: { ownedTabId: 700 + claimed.size, tabGroupId: 800, attached: true, liveOrigin: session.origin } });
-        request(ws, "subscribeSession", { sessionId: session.sessionId });
+        void request(ws, pendingRequests, "attachTab", { sessionId: session.sessionId, tab: { ownedTabId: 700 + claimed.size, tabGroupId: 800, attached: true, liveOrigin: session.origin } }).catch(() => {});
+        void request(ws, pendingRequests, "subscribeSession", { sessionId: session.sessionId }).catch(() => {});
       }
+      return;
+    }
+    if (message.type === "bridge_response") {
+      settleRequest(pendingRequests, message);
       return;
     }
     if (message.type !== "bridge_command") return;
     const { command } = message;
-    request(ws, "postResult", {
-      event: {
-        commandId: command.commandId,
-        ok: true,
-        result: {
-          sessionId: command.sessionId,
-          worker: command.action.query,
-          sequence: command.action.sequence,
+    if (activeSessions.has(command.sessionId)) sameSessionOverlapViolations += 1;
+    activeSessions.add(command.sessionId);
+    setImmediate(() => {
+      activeSessions.delete(command.sessionId);
+      void request(ws, pendingRequests, "postResult", {
+        event: {
+          commandId: command.commandId,
+          sessionEpoch: command.sessionEpoch,
+          sequence: command.sequence,
+          ok: true,
+          outcome: "completed",
+          retrySafe: false,
+          result: {
+            sessionId: command.sessionId,
+            worker: command.action.query,
+            sequence: command.action.sequence,
+          },
         },
-      },
+      }).catch(() => {});
     });
+  });
+  ws.on("close", () => {
+    for (const waiter of pendingRequests.values()) waiter.reject(new Error("stress extension disconnected"));
+    pendingRequests.clear();
   });
   ws.send(JSON.stringify({ type: "client_hello", clientId: `stress_extension_${randomUUID().replaceAll("-", "")}`, browserFamily: "chrome" }));
   await waitFor(() => bridge.getStatus().eligibleClientCount === 1, "stress extension readiness");
   return ws;
 }
 
-function request(ws, method, params) {
-  ws.send(JSON.stringify({ type: "bridge_request", requestId: `stress_${randomUUID()}`, method, params }));
+function request(ws, pendingRequests, method, params) {
+  const requestId = `stress_${randomUUID()}`;
+  const response = new Promise((resolve, reject) => pendingRequests.set(requestId, { resolve, reject }));
+  ws.send(JSON.stringify({ type: "bridge_request", requestId, method, params }));
+  return response;
+}
+
+function settleRequest(pendingRequests, message) {
+  const waiter = pendingRequests.get(message.requestId);
+  if (!waiter) return;
+  pendingRequests.delete(message.requestId);
+  if (message.ok === false) waiter.reject(new Error(message.error ?? "bridge request failed"));
+  else waiter.resolve(message);
 }
 
 async function waitFor(predicate, label, timeoutMs = 5000) {

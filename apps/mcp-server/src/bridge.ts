@@ -3,8 +3,15 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 
-import type { BridgeCommand, BrowserCommandOutcome, BrowserFloorDecision, BridgeResultEvent, BridgeSessionInfo, BridgeSessionInit } from "@newton-browser/core";
-import { validateIdempotencyKey } from "../../../packages/core/src/action-schema.ts";
+import {
+  validateIdempotencyKey,
+  type BridgeCommand,
+  type BrowserCommandOutcome,
+  type BrowserFloorDecision,
+  type BridgeResultEvent,
+  type BridgeSessionInfo,
+  type BridgeSessionInit,
+} from "@newton-browser/core";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { loadBrowserTarget, loadOrCreatePairingConfig, loadTransportAuthMode, type BrowserTarget, type TransportAuthMode, validDoctorToken } from "./config.ts";
