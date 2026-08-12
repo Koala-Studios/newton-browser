@@ -10,7 +10,6 @@ const families = process.platform === "win32" ? ["chrome", "edge"] : ["chrome"];
 for (const family of families) {
   const env = { ...process.env, NEWTON_BROWSER_QA_BROWSER: family };
   run("eval:direct-live", env);
-  run("eval:real-sites", env);
   const packed = run("smoke:packed-direct", env, true);
   const receipt = lastJsonReceipt(packed.stdout);
   if (receipt?.ok !== true || receipt?.browserFamily !== family || typeof receipt?.packedArtifactSha256 !== "string") {
@@ -21,7 +20,7 @@ for (const family of families) {
 if (artifactHashes.size !== 1) throw new Error("packed artifact hash diverged across browser families");
 const finalSourceDigest = candidateDigest();
 if (finalSourceDigest !== sourceDigest) throw new Error("release candidate changed during verification");
-process.stdout.write(`${JSON.stringify({ ok: true, deterministic: true, platform: process.platform, sourceDigest, sourceUnchanged: true, directLive: families, realSites: families, packedDirect: families, artifactSha256: [...artifactHashes][0], crossPlatformReceiptRequiredSeparately: true })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, deterministic: true, platform: process.platform, sourceDigest, sourceUnchanged: true, directLive: families, packedDirect: families, artifactSha256: [...artifactHashes][0], realSiteEvidenceRequiredSeparately: true, crossPlatformReceiptRequiredSeparately: true })}\n`);
 
 function run(command, env, capture = false) {
   const executable = process.env.npm_execpath ? process.execPath : "pnpm";

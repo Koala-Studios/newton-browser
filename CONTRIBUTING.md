@@ -67,9 +67,11 @@ pnpm smoke:quick
 ```
 
 Use `pnpm release:deterministic` for the browser-free source/packed checkpoint. Before a
-release, the complete `pnpm release:check` (deterministic plus installed-browser direct
-and real-site gates) must pass three consecutive times with no skipped critical tests.
-Record manual and live-browser evidence under `test/evidence/`.
+release, run the public real-site matrix once on every required browser/platform, then the
+complete `pnpm release:check` (deterministic plus source and installed-artifact direct
+browser gates) three consecutive times with no skipped critical tests. Third-party site
+availability is evidence, not an input to artifact reproducibility. Record manual and
+live-browser evidence under `test/evidence/`.
 
 ## Pull requests
 

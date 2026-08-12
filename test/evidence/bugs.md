@@ -1754,3 +1754,21 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   the direct-Node test explicitly suppresses the parent pnpm environment, and the final
   three-pass verifier is restarted from zero on the refrozen tree.
 - Status: implemented; final immutable execution pending.
+
+## BB-151 - Artifact reproducibility depended on repeated third-party site availability
+
+- Found: 2026-08-12 during immutable pass two after an identical pass-one matrix.
+- Minimal repro: run the complete release gate twice. Pass one reaches YouTube's public
+  text endpoint; pass two times out there while Reddit, Mercato, W3C, Meta, both direct
+  suites, cleanup, and the identical artifact remain healthy.
+- Root cause: the three-pass artifact verifier reran every volatile public site, coupling
+  Newton reproducibility to consent, challenge, routing, and availability policies owned
+  by unrelated third parties.
+- Fix: the seven-site matrix remains mandatory once on Windows Chrome, Windows Edge, and
+  pinned Linux Chrome, with bounded failure and cleanup receipts. The three unchanged-tree
+  repetitions cover deterministic checks, source direct-browser behavior, and the exact
+  packed artifact only.
+- Regression/evidence: release-wiring tests require real-site evidence to be declared
+  separate and absent from the repeated script; the bounded preflight receipt records all
+  three successful seven-site lanes.
+- Status: implemented; final immutable execution pending.

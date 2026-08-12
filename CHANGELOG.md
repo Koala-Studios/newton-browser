@@ -60,6 +60,9 @@
   five interactive reference and commerce sites.
 - Made the clean-tree three-pass verifier launch pnpm through Node on Windows instead of
   directly spawning a command shim, which Node 25 rejects with `EINVAL`.
+- Kept mandatory public real-site QA as one evidence matrix per browser/platform while
+  removing volatile third-party availability from the three artifact-reproducibility
+  repetitions.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser

@@ -153,9 +153,10 @@ pnpm eval:real-sites
 pnpm release:check
 ```
 
-Release requires `pnpm release:check` to pass from the exact packed candidate three
-consecutive times on Windows and Linux with no skipped critical tests, plus the pinned
-Linux Chrome for Testing matrix and matching cross-platform tarball hashes.
+Run `pnpm eval:real-sites` once per required browser/platform. Release then requires
+`pnpm release:check` to pass from the exact packed candidate three consecutive times on
+Windows and Linux with no skipped critical tests, plus the pinned Linux Chrome for Testing
+matrix and matching cross-platform tarball hashes.
 
 ## Repository layout
 

@@ -123,8 +123,11 @@ dispatch. This preserves password/payment/PII blocking and structural commit met
 without a controller compatibility layer or a race-prone pre-queue lookup.
 
 The source live suite and exact-packed live suite are separate release stages. The packed
-browser workflow is not redundantly rerun inside the source suite; the complete release
-gate executes each once per browser family and verifies one artifact hash.
+browser workflow is not redundantly rerun inside the source suite; each reproducibility
+pass executes each once per browser family and verifies one artifact hash. Public
+third-party real-site evidence runs once per required browser/platform outside the three
+reproducibility repetitions, so an upstream consent/challenge/availability change cannot
+rewrite the artifact verdict.
 
 The recursive source test discovery already includes the eval fixtures and quick-smoke
 tests. Release and CI therefore do not execute those exact files a second time. The root

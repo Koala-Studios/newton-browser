@@ -18,7 +18,8 @@ test("release and live suites use only the direct owned-browser runtime", () => 
   assert.match(suite, /direct_origin_containment/u);
   assert.match(suite, /direct_input/u);
   assert.match(complete, /eval:direct-live/u);
-  assert.match(complete, /eval:real-sites/u);
+  assert.doesNotMatch(complete, /eval:real-sites/u);
+  assert.match(complete, /realSiteEvidenceRequiredSeparately/u);
   assert.match(complete, /smoke:packed-direct/u);
   assert.doesNotMatch(read("scripts/smoke/live-config.mjs"), /NEWTON_BROWSER_BROWSER/u);
 });

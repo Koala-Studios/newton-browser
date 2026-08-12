@@ -14,10 +14,13 @@ browser-store release.
    claims that opaque import preserved authentication.
 5. Require the deterministic five-file USTAR/gzip package receipt and compare its exact
    SHA-256 across all three passes; functional `npm install` success alone is insufficient.
-6. Run `pnpm release:check` three consecutive times on the unchanged candidate on both
-   Windows (Chrome and Edge) and Linux (Chrome), and run the pinned Linux Chrome for
-   Testing container. Any source, test, config, lockfile, doc, or skill change resets the
-   count. The command inventories tracked and non-ignored untracked candidate files,
+6. After the one-per-platform public real-site matrix passes, run `pnpm release:check`
+   three consecutive times on the unchanged candidate on both Windows (Chrome and Edge)
+   and Linux (Chrome), and run the pinned Linux Chrome for Testing container. The repeated
+   gate covers deterministic checks, source direct-browser behavior, and the exact packed
+   artifact; it deliberately does not make reproducibility depend on repeated availability
+   of third-party sites. Any source, test, config, lockfile, doc, or skill change resets
+   the count. The command inventories tracked and non-ignored untracked candidate files,
    records their SHA-256 content digest, and fails if that digest changes during the gate.
 7. Require matching Windows/Linux tarball hashes and bounded platform receipts before the
    separately approved publish job can create the release or invoke npm publication. The
