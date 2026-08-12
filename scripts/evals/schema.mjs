@@ -484,16 +484,17 @@ function parseSensitiveZones(raw, label, cap, itemCap) {
     if (!Object.keys(value).length) {
       throw new EvalSchemaError(`${itemLabel} is empty`, itemLabel);
     }
-    if (!Object.keys(value).every((key) => key === "selector" || key === "name" || key === "label")) {
+    if (!Object.keys(value).every((key) => key === "ref" || key === "selector" || key === "name" || key === "label")) {
       throw new EvalSchemaError(`${itemLabel} contains unknown key`, itemLabel);
     }
     const parsed = parseTargetLike(value, itemLabel, {
+      ref: (input) => parseTrimmedString(input, `${itemLabel}.ref`, itemCap),
       selector: (input) => parseTrimmedString(input, `${itemLabel}.selector`, itemCap),
       name: (input) => parseTrimmedString(input, `${itemLabel}.name`, itemCap),
       label: (input) => parseTrimmedString(input, `${itemLabel}.label`, itemCap),
     });
     if (!Object.keys(parsed).length) {
-      throw new EvalSchemaError(`${itemLabel} must include selector, name, or label`, itemLabel);
+      throw new EvalSchemaError(`${itemLabel} must include ref, selector, name, or label`, itemLabel);
     }
     return freezeShallow(parsed);
   }));

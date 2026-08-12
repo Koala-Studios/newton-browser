@@ -1,6 +1,10 @@
 # Plan 03: Target, Frame, and CDP Session Registry
 
-- Status: approved; deterministic implementation and live harness complete, live browser evidence pending
+> Historical implementation plan. The target/frame registry remains part of the direct
+> driver, but extension files and extension-era acceptance commands below are obsolete.
+> Current release closure is tracked by Plans 13-15 and `docs/PROGRESS_LEDGER.md`.
+
+- Status: superseded execution plan; retained as design history
 - Classification: core browser-target foundation
 - Dependencies: Plans 01 and 02
 

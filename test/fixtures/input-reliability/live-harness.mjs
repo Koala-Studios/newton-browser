@@ -1,31 +1,32 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import os from "node:os";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-import { createNewtonBrowserHost } from "../../../apps/mcp-server/src/bridge.ts";
+import { createDefaultDirectBrowserHost } from "../../../apps/mcp-server/src/browser-runtime/default-direct-host.ts";
+import { discoverBrowserExecutable } from "../../../apps/mcp-server/src/browser-runtime/browser-discovery.ts";
 import { handleMcpMessage } from "../../../apps/mcp-server/src/mcp-server.ts";
-import { resolveLiveBrowserTarget, resolveLiveHostPort } from "../../../scripts/smoke/live-config.mjs";
+import { resolveLiveBrowserTarget } from "../../../scripts/smoke/live-config.mjs";
 
 const fixtureRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export async function runInputReliabilityLive(name, execute, options = {}) {
   const mainPort = Number(options.mainPort);
   const crossPort = Number(options.crossPort);
-  const hostPort = options.hostPort === undefined ? resolveLiveHostPort() : Number(options.hostPort);
   const browserTarget = options.browserTarget ?? resolveLiveBrowserTarget();
-  if (![mainPort, crossPort].every((value) => Number.isSafeInteger(value) && value > 0)
-    || (hostPort !== undefined && (!Number.isSafeInteger(hostPort) || hostPort < 17_321 || hostPort > 17_340))) {
-    throw new Error("live smoke fixture ports must be positive integers and the optional host port must be within 17321-17340");
-  }
+  if (![mainPort, crossPort].every((value) => Number.isSafeInteger(value) && value > 0)) throw new Error("live smoke fixture ports must be positive integers");
   const main = await startStaticServer(mainPort);
   const cross = await startStaticServer(crossPort);
-  const bridge = createNewtonBrowserHost({ browserTarget });
+  const directRoot = createDirectRoot();
+  let bridge = null;
   let sessionId = "";
   let requestId = 1;
   const origin = `http://127.0.0.1:${mainPort}`;
   const crossOrigin = `http://127.0.0.1:${crossPort}`;
   const mcp = async (tool, args = {}) => {
+    if (!bridge) throw new Error("live browser host is unavailable");
     const response = await handleMcpMessage(bridge, {
       jsonrpc: "2.0",
       id: requestId++,
@@ -37,12 +38,19 @@ export async function runInputReliabilityLive(name, execute, options = {}) {
     return JSON.parse(text);
   };
   try {
-    const listener = await bridge.listen(hostPort, "127.0.0.1");
-    await waitForState(() => bridge.getStatus().extensionConnected === true, "extension connection", 45_000);
+    const directExecutable = discoverBrowserExecutable({ family: browserTarget, env: process.env });
+    if (!directExecutable) throw new Error("direct_browser_unavailable");
+    bridge = createDefaultDirectBrowserHost({
+      ...process.env,
+      NEWTON_BROWSER_BROWSER: browserTarget,
+      NEWTON_BROWSER_BROWSER_EXECUTABLE: directExecutable.path,
+      NEWTON_BROWSER_CONFIG_DIR: directRoot.root,
+      NEWTON_BROWSER_PROFILE_STORE_DIR: path.join(directRoot.root, "identities"),
+    });
+    const listener = await bridge.listen();
     const started = await mcp("browser.session.start", {
       origin,
       allowedOrigins: [origin, crossOrigin],
-      tabMode: "owned_group",
       goal: name,
       instanceLabel: name,
     });
@@ -66,14 +74,42 @@ export async function runInputReliabilityLive(name, execute, options = {}) {
       assert,
       log(step, detail = {}) { process.stdout.write(`${JSON.stringify({ smoke: name, step, ...detail })}\n`); },
     };
-    api.log("connected", { browserTarget, hostPort: listener.port });
+    api.log("connected", { browserTarget });
     await execute(api);
-    api.log("pass", { browserTarget, hostPort: listener.port });
+    api.log("pass", { browserTarget });
   } finally {
     try { if (sessionId) await mcp("browser.session.stop", { sessionId }); } catch {}
-    try { bridge.stopAll(); await bridge.close(); } catch {}
+    let directCleanupConfirmed = bridge === null;
+    try {
+      if (bridge) { await bridge.stopAll(); await bridge.close(); }
+      directCleanupConfirmed = true;
+    } catch {}
     await Promise.all([closeServer(main), closeServer(cross)]);
+    if (directRoot && directCleanupConfirmed) removeDirectRoot(directRoot);
   }
+}
+
+function createDirectRoot() {
+  const parent = fs.realpathSync.native(os.tmpdir());
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(parent, "newton-direct-input-live-")));
+  const stat = fs.lstatSync(root);
+  const nonce = randomBytes(32).toString("hex");
+  fs.writeFileSync(path.join(root, ".owner"), nonce, { flag: "wx", mode: 0o600 });
+  return Object.freeze({ root, parent, nonce, dev: stat.dev, ino: stat.ino });
+}
+
+function removeDirectRoot(owned) {
+  const resolved = fs.realpathSync.native(owned.root);
+  const stat = fs.lstatSync(resolved);
+  const marker = path.join(resolved, ".owner");
+  const markerStat = fs.lstatSync(marker);
+  if (resolved !== owned.root || path.dirname(resolved) !== owned.parent
+    || !/^newton-direct-input-live-[^/\\]+$/u.test(path.basename(resolved))
+    || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== owned.dev || stat.ino !== owned.ino
+    || !markerStat.isFile() || markerStat.isSymbolicLink() || fs.readFileSync(marker, "utf8") !== owned.nonce) {
+    throw new Error("direct input live cleanup refused");
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
 }
 
 async function startStaticServer(port) {

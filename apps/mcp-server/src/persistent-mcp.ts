@@ -2,10 +2,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { createNewtonBrowserHost } from "./bridge.ts";
-import { serveNewtonBrowserMcpConnection } from "./mcp-server.ts";
+import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
+import { serveNewtonBrowserMcpConnection, type BrowserHost } from "./mcp-server.ts";
 
-import type { NewtonBrowserHost } from "./bridge.ts";
 
 export type PersistentMcpDaemon = {
   socketPath: string;
@@ -23,25 +22,20 @@ export async function runPersistentMcpDaemon(socketPath: string): Promise<void> 
 
 export async function startPersistentMcpDaemon(
   socketPath: string,
-  input: { bridge?: NewtonBrowserHost; idleMs?: number } = {},
+  input: { bridge?: BrowserHost; idleMs?: number; orphanSessionTtlMs?: number } = {},
 ): Promise<PersistentMcpDaemon> {
   const target = prepareSocketPath(socketPath);
   const parent = path.dirname(target);
-  const readinessTimeoutMs = Number(process.env.NEWTON_BROWSER_READINESS_TIMEOUT_MS);
-  const orphanSessionTtlMs = boundedOrphanSessionTtlMs(process.env.NEWTON_BROWSER_ORPHAN_SESSION_TTL_MS);
-  const bridge = input.bridge ?? createNewtonBrowserHost({
-    limits: {
-      ...(Number.isFinite(readinessTimeoutMs) ? { readinessTimeoutMs: Math.max(50, readinessTimeoutMs) } : {}),
-      orphanSessionTtlMs,
-    },
-    observerRegistryDirectory: process.env.NEWTON_BROWSER_OBSERVER_REGISTRY_DIR,
-    observerToken: process.env.NEWTON_BROWSER_OBSERVER_TOKEN,
-  });
-  await bridge.listen(undefined, "127.0.0.1");
+  const orphanSessionTtlMs = input.orphanSessionTtlMs === undefined
+    ? boundedOrphanSessionTtlMs(process.env.NEWTON_BROWSER_ORPHAN_SESSION_TTL_MS)
+    : boundedInjectedOrphanTtl(input.orphanSessionTtlMs);
+  const bridge = input.bridge ?? createDefaultDirectBrowserHost();
+  await bridge.listen();
   let connected = false;
+  let closing = false;
   let lastDisconnectedAt = Date.now();
   const server = net.createServer((socket) => {
-    if (connected) { socket.destroy(); return; }
+    if (closing || connected) { socket.destroy(); return; }
     connected = true;
     void serveNewtonBrowserMcpConnection({ bridge, readable: socket, writable: socket })
       .finally(() => { connected = false; lastDisconnectedAt = Date.now(); });
@@ -52,28 +46,61 @@ export async function startPersistentMcpDaemon(
   });
   fs.chmodSync(target, 0o600);
   const idleMs = input.idleMs ?? boundedIdleMs(process.env.NEWTON_BROWSER_DAEMON_IDLE_MS);
+  let orphanCleanup: Promise<void> | null = null;
+  let nextOrphanAttemptAt = 0;
   const idle = setInterval(() => {
-    if (!connected && bridge.listSessions().length === 0 && Date.now() - lastDisconnectedAt >= idleMs) server.close();
-  }, Math.min(5_000, idleMs));
+    if (connected) return;
+    const now = Date.now();
+    const sessions = bridge.listSessions();
+    if (sessions.length === 0) {
+      if (now - lastDisconnectedAt >= idleMs) void finalize().catch(() => undefined);
+      return;
+    }
+    if (now - lastDisconnectedAt < orphanSessionTtlMs || now < nextOrphanAttemptAt || orphanCleanup) return;
+    const operation = Promise.resolve().then(() => bridge.stopAll());
+    orphanCleanup = operation;
+    void operation.then(() => {
+      if (bridge.listSessions().length === 0 && !connected) void finalize().catch(() => undefined);
+    }, () => {
+      nextOrphanAttemptAt = Date.now() + Math.min(5_000, orphanSessionTtlMs);
+    }).finally(() => {
+      if (orphanCleanup === operation) orphanCleanup = null;
+    });
+  }, Math.min(5_000, idleMs, orphanSessionTtlMs));
   idle.unref();
-  let closed = false;
+  let terminalClosed = false;
+  let cleanupOperation: Promise<void> | null = null;
+  let closedSettled = false;
   let resolveClosed!: () => void;
-  const closedPromise = new Promise<void>((resolve) => { resolveClosed = resolve; });
-  const finalize = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
+  let rejectClosed!: (error: unknown) => void;
+  const closedPromise = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject; });
+  void closedPromise.catch(() => undefined);
+  const finalize = (): Promise<void> => {
+    if (terminalClosed) return Promise.resolve();
+    if (cleanupOperation) return cleanupOperation;
+    closing = true;
     clearInterval(idle);
-    bridge.stopAll();
-    await bridge.close().catch(() => undefined);
-    unlinkOwnedSocket(target);
-    resolveClosed();
+    const operation = (async () => {
+      try { await bridge.stopAll(); } catch { /* bridge.close remains the authoritative cleanup retry */ }
+      await bridge.close();
+      if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      unlinkOwnedSocket(target);
+      terminalClosed = true;
+      if (!closedSettled) { closedSettled = true; resolveClosed(); }
+    })();
+    cleanupOperation = operation;
+    void operation.catch((error: unknown) => {
+      if (!closedSettled) { closedSettled = true; rejectClosed(error); }
+    }).finally(() => {
+      if (cleanupOperation === operation) cleanupOperation = null;
+    });
+    return operation;
   };
   const close = async (): Promise<void> => {
-    if (closed) return closedPromise;
-    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (terminalClosed) return;
     await finalize();
   };
-  server.once("close", () => { void finalize(); });
+  server.once("close", () => { void finalize().catch(() => undefined); });
   return { socketPath: target, close, closed: closedPromise };
 }
 
@@ -134,4 +161,11 @@ function boundedOrphanSessionTtlMs(value: string | undefined): number {
   return Number.isFinite(parsed)
     ? Math.max(30 * 60_000, Math.min(30 * 24 * 60 * 60_000, Math.trunc(parsed)))
     : 7 * 24 * 60 * 60_000;
+}
+
+function boundedInjectedOrphanTtl(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 10 || value > 30 * 24 * 60 * 60_000) {
+    throw new Error("persistent_mcp_orphan_ttl_invalid");
+  }
+  return value;
 }

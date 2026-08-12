@@ -242,11 +242,25 @@ class InputScope {
   async mouseUp(button: unknown = "left", clickCount: unknown = 1): Promise<void> {
     const normalized = normalizeButton(button);
     const index = this.pressedButtons.lastIndexOf(normalized);
+    const releasedButtons = this.pressedButtons.reduce(
+      (mask, pressed, pressedIndex) => pressedIndex === index ? mask : mask | MOUSE_BUTTON_BITS[pressed],
+      0,
+    );
+    try {
+      await this.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased", ...this.point, button: normalized, buttons: releasedButtons,
+        clickCount: boundedClickCount(clickCount), modifiers: this.modifierMask(), pointerType: "mouse",
+      }, this.route);
+    } catch (error) {
+      if (isReleaseAcknowledgementTimeout(error)) {
+        if (index >= 0) this.pressedButtons.splice(index, 1);
+        if (typeof error === "object" && error !== null) {
+          Object.defineProperty(error, "inputReleaseUnacknowledged", { value: true, enumerable: false });
+        }
+      }
+      throw error;
+    }
     if (index >= 0) this.pressedButtons.splice(index, 1);
-    await this.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased", ...this.point, button: normalized, buttons: this.buttonMask(),
-      clickCount: boundedClickCount(clickCount), modifiers: this.modifierMask(), pointerType: "mouse",
-    }, this.route);
   }
 
   async insertText(text: unknown): Promise<void> {
@@ -311,6 +325,12 @@ class InputScope {
     this.pressedModifiers.length = 0;
     return errors;
   }
+}
+
+function isReleaseAcknowledgementTimeout(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const value = error as { code?: unknown; detail?: unknown };
+  return value.code === "renderer_unresponsive" && value.detail === "cdp_timeout_Input.dispatchMouseEvent";
 }
 
 export function keyDescriptor(input: unknown, modifiers = 0): KeyDescriptor {

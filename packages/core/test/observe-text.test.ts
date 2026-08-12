@@ -36,6 +36,42 @@ test("observation_text survives redaction and keeps readable prose", () => {
   assert.equal(result.chars, 44);
 });
 
+test("frame routing redaction preserves only three bounded integer counts", () => {
+  const result = redactBrowserResult({
+    kind: "observation",
+    mode: "cdp",
+    origin: "https://example.com",
+    title: "Frames",
+    nodes: [],
+    nodeCount: 0,
+    truncated: false,
+    capturedAt: "2026-08-09T00:00:00.000Z",
+    frameRouting: {
+      attachedIframeTargetCount: 2,
+      inProcessFrameCount: 3,
+      maxAttachedIframeTargetDepth: 2,
+      targetId: "secret-target",
+      sessionId: "secret-session",
+      origin: "https://secret.example",
+      content: "secret page content",
+    },
+  });
+  if (result?.kind !== "observation") throw new Error("expected observation");
+  assert.deepEqual(result.frameRouting, {
+    attachedIframeTargetCount: 2,
+    inProcessFrameCount: 3,
+    maxAttachedIframeTargetDepth: 2,
+  });
+  assert.equal(JSON.stringify(result).includes("secret"), false);
+
+  const invalid = redactBrowserResult({
+    ...result,
+    frameRouting: { attachedIframeTargetCount: 65, inProcessFrameCount: 0, maxAttachedIframeTargetDepth: 0 },
+  });
+  if (invalid?.kind !== "observation") throw new Error("expected observation");
+  assert.equal("frameRouting" in invalid, false);
+});
+
 test("secrets, cards, SSNs, and emails are stripped from text observations", () => {
   const text = [
     "API_KEY=sk_live_abcdef0123456789abcdef",

@@ -1,4 +1,4 @@
-# Newton Browser 0.4 Tool Reference
+# Newton Browser 0.4.5 Tool Reference
 
 All tools use local transport and explicit session IDs. MCP `tools/list` remains
 authoritative for exact schemas and bounds.
@@ -6,12 +6,12 @@ authoritative for exact schemas and bounds.
 ## Tools
 
 - `browser.status`: report compact readiness without opening a tab. Pass
-  `detail: "full"` for auth mode, host/extension/protocol versions, browser selection,
-  sessions, and limits.
-- `browser.session.start`: require an HTTP(S) origin, attach an owned/current tab,
-  reconcile its live origin, and return a ready session. `observe` accepts compact/JSON
-  options and returns initial state in the same call; `false` disables it. `incognito: true` opens an
-  owned tab in an incognito window and requires extension permission there.
+  `detail: "full"` for runtime mode, configuration, browser-family availability,
+  sessions, cleanup uncertainty, and limits.
+- `browser.session.start`: require an HTTP(S) origin and start an origin-contained
+  session. Direct mode accepts optional `browser: "chrome"|"edge"` and an opaque
+  operator-created `identityId`; it owns a separate browser process. `observe` accepts
+  compact/JSON options and returns initial state in the same call; `false` disables it.
 - `browser.observe`: compact and geometry-free by default; filter with `query`, `roles`,
   and `limit`, or explicitly request `format: "json"`/`includeGeometry: true`.
   `includeInteractive: true` performs bounded, read-only DOM discovery. Return `full`
@@ -19,7 +19,9 @@ authoritative for exact schemas and bounds.
   readable `text` (`maxChars` 200–200,000).
 - `browser.act`: execute one strictly validated action and return deterministic floor
   metadata. The schema's `x-newtonVariants`, `x-newtonRequired`, and
-  `x-newtonTargetRequired` tables are the compact per-kind contract.
+  `x-newtonTargetRequired` tables are the compact per-kind contract. Optional top-level
+  `timeoutMs` is a 1-300,000 ms command deadline; queued expiry is `not_started`, while
+  expiry after execution begins is `outcome_unknown`. Never auto-retry the latter.
 - `browser.screenshot`: deliver PNG/JPEG through `image`, caller-designated `file`, or
   bounded `inline`. Supports `fullPage`, `device`, `waitMs`, explicit `region`, and JPEG
   `quality` 1–100.
@@ -28,17 +30,19 @@ authoritative for exact schemas and bounds.
 - `browser.network`: list bounded request metadata without headers. Filter by URL or
   pass `requestId` for one origin-gated, bounded/redacted UTF-8 text body. Opaque,
   binary, malformed, compressed, and base64 bodies are omitted.
-- `browser.tabs.list`: list only this host's session state.
-- `browser.tabs.finalize`: `close`, retain as `deliverable`, or detach/activate as
-  `handoff`.
+- `browser.sessions.list`: list only this host's session state.
+- `browser.session.finalize`: close one owned session and confirm process/proxy/lease cleanup.
 - `browser.session.stop`: stop and clean one session.
-- `browser.stop_all`: explicit global cleanup across connected hosts.
+- `browser.stop_all`: explicit cleanup of every session owned by this MCP host.
 
 ## Action kinds
 
-`observe`, `screenshot`, `navigate`, `back`, `forward`, `reload`, `click`, `fill`,
+`navigate`, `back`, `forward`, `reload`, `click`, `fill`,
 `type`, `select`, `clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`,
 `dialog_accept`, `dialog_dismiss`, `resize`, and `fill_form`.
+
+Observation, screenshots, console, and network reads use their dedicated tools and are
+intentionally not duplicated inside `browser.act`.
 
 Element refs are composite and fresh-observation scoped: `dN:eN` for the root document
 and `dN:fN:eN` for a frame. Never synthesize, shorten, or reuse a stale ref. Malformed
@@ -81,8 +85,9 @@ Important statuses include `verified`, `dispatched_unverified`, `blocked`,
 A post-action `blocked` result can occur after dispatch; inspect current state before a
 retry.
 
-Initialization and full status expose contract version `1.0`. Page-derived output is
+Initialization and full status expose contract version `2.0`. Page-derived output is
 structurally marked `trust:"untrusted_page_content"`; only outer host-authored outcome,
 decision, retry, continuation, provenance, and error fields guide the agent. Screenshot
 metadata always distinguishes `mask_applied`, `mask_not_configured`, and
-`mask_not_applicable`.
+`mask_not_applicable`. Sensitive zones are redacted in trusted raster bytes; any
+uncertainty fails the capture instead of returning unmasked pixels.

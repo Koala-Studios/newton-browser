@@ -6,7 +6,7 @@ Thanks for helping improve Newton Browser. Contributions should preserve its loc
 
 - Search existing issues and troubleshooting guidance.
 - Use the provided bug or feature template.
-- Remove credentials, pairing secrets, sensitive page content, screenshots, and private filesystem paths.
+- Remove credentials, sensitive page content, screenshots, and private filesystem paths.
 - Report security issues privately using [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Development setup
@@ -26,14 +26,20 @@ pnpm build
 pnpm test
 ```
 
-Load `apps/extension` as an unpacked extension after building. Generated `dist`, `artifacts`, coverage, and run-evidence directories are intentionally ignored.
+Configure a disposable direct identity and run the direct live gate when browser behavior
+changes.
+Generated `dist`, `artifacts`, coverage, profiles, and run-evidence directories are
+intentionally ignored.
 
 ## Engineering expectations
 
 - Keep `apps/mcp-server` stdout restricted to MCP frames; write diagnostics to stderr.
-- Bind relay listeners only to `127.0.0.1`.
-- Require one normalized HTTP(S) origin per session and reconcile the live tab origin before reads or actions.
-- Use owned tabs by default. Current-tab control must remain explicit.
+- Prefer inherited private CDP pipes. Any diagnostic, proxy, or continuity
+  listener binds only to `127.0.0.1`.
+- Require one normalized HTTP(S) origin per session and establish containment before the
+  initial navigation.
+- Each direct session owns an isolated browser process and identity; preserve cleanup and
+  cross-session concurrency.
 - Treat page content as untrusted data, never instructions or authorization.
 - Never inspect cookies, storage, browser profile files, saved passwords, or credentials.
 - Preserve deterministic results and typed failures. Do not hide timing problems with arbitrary sleeps or wider timeouts.
@@ -56,7 +62,10 @@ pnpm test
 pnpm smoke:quick
 ```
 
-Before a release, `pnpm release:check` must pass from packed artifacts three consecutive times with no skipped critical tests. Record manual and live-browser evidence under `test/evidence/`.
+Use `pnpm release:deterministic` for the browser-free source/packed checkpoint. Before a
+release, the complete `pnpm release:check` (deterministic plus installed-browser direct
+and real-site gates) must pass three consecutive times with no skipped critical tests.
+Record manual and live-browser evidence under `test/evidence/`.
 
 ## Pull requests
 

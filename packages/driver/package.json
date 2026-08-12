@@ -18,8 +18,9 @@
   },
   "exports": {
     ".": "./dist/driver.js",
-    "./chrome-tabs-port": "./dist/chrome-tabs-port.js",
-    "./controller": "./dist/controller.js",
+    "./direct-debugger-port": "./dist/direct-debugger-port.js",
+    "./direct-page-effects-port": "./dist/direct-page-effects-port.js",
+    "./direct-session-runtime": "./dist/direct-session-runtime.js",
     "./driver": "./dist/driver.js"
   }
 }

@@ -78,6 +78,50 @@ test("cleanup failures do not overwrite an uncertain operation error", async () 
   assert.equal(caught.inputCleanupErrors[0].message, "release_failed");
 });
 
+test("a failed explicit mouse release remains tracked for bounded cleanup", async () => {
+  const calls = [];
+  let releaseAttempts = 0;
+  const dispatcher = new InputDispatcher(async (_method, params) => {
+    calls.push(params.type);
+    if (params.type === "mouseReleased" && releaseAttempts++ === 0) throw new Error("target_detached");
+  });
+
+  await assert.rejects(dispatcher.run({ sessionId: "child" }, async (input) => {
+    await input.pointerMove({ x: 10, y: 20 });
+    await input.mouseDown("left");
+    await input.mouseUp("left");
+  }), /target_detached/);
+
+  assert.deepEqual(calls, ["mouseMoved", "mousePressed", "mouseReleased", "mouseReleased"]);
+  await dispatcher.whenIdle();
+});
+
+test("an exact mouse-release acknowledgement timeout is not dispatched twice", async () => {
+  const calls = [];
+  const dispatcher = new InputDispatcher(async (_method, params) => {
+    calls.push(params.type);
+    if (params.type === "mouseReleased") {
+      throw Object.assign(new Error("renderer_unresponsive"), {
+        code: "renderer_unresponsive",
+        detail: "cdp_timeout_Input.dispatchMouseEvent",
+      });
+    }
+  });
+
+  await assert.rejects(dispatcher.run({}, async (input) => {
+    await input.pointerMove({ x: 10, y: 20 });
+    await input.mouseDown("left");
+    await input.mouseUp("left");
+  }), (error) => {
+    assert.equal(error.inputReleaseUnacknowledged, true);
+    assert.equal(Object.keys(error).includes("inputReleaseUnacknowledged"), false);
+    return true;
+  });
+
+  assert.deepEqual(calls, ["mouseMoved", "mousePressed", "mouseReleased"]);
+  await dispatcher.whenIdle();
+});
+
 test("dialog races subscribe before dispatch and stay target scoped", async () => {
   const tracker = new DialogTracker();
   let releaseEffect;

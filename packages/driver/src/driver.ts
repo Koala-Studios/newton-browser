@@ -1,8 +1,8 @@
-// Newton Browser strict TypeScript driver.
-// Newton Browser in-extension CDP driver.
+// Newton Browser strict TypeScript CDP driver. The owned-browser runtime injects
+// its private transport; this module has no ambient browser-extension dependency.
 //
-// Runs in the MV3 service worker. Attaches chrome.debugger (CDP) to the ACTIVE
-// tab on demand for the duration of a session, then detaches. Observing and
+// Observing and acting are bound to a Newton-owned Chromium target. The private
+// CDP transport is injected by the direct session runtime. Observing and
 // acting are the same subsystem — an observation is the read half of an action.
 //
 // Trusted input only: CDP Input dispatches real events that land on SPAs that
@@ -10,10 +10,11 @@
 // every action is funneled through the typed contract. The cursor overlay is
 // fire-and-forget and NEVER gates execution (§5.1).
 
-import { TargetRegistry } from "./target-registry.js";
+import { TargetRegistry, TARGET_REGISTRY_ERROR_CODES } from "./target-registry.js";
 import { compileOriginGrant, decidePausedRequest, decidePausedTarget } from "./origin-containment.js";
 import { DialogTracker, InputDispatcher } from "./input-dispatcher.js";
 import { RendererLiveness } from "./renderer-liveness.js";
+import { maskCapturedPng } from "./raster-mask.js";
 import type {
   ActiveActionSignals,
   ActionSignalWindow,
@@ -26,6 +27,7 @@ import type {
   ConsoleEntry,
   ChangeRecord,
   DeltaObservation,
+  DebuggerPort,
   DriverAction,
   DriverContext,
   DriverError,
@@ -44,6 +46,7 @@ import type {
   InputDispatchScope,
   InteractiveFilters,
   PageSignature,
+  PageEffectsPort,
   ScreenshotOptions,
   TargetRoute,
   TargetResolution,
@@ -75,9 +78,99 @@ const MAX_SCREENSHOT_WAIT_MS = 10000; // bound the pre-capture wait (D5)
 const MAX_SHOT_PX = 20000;            // bound an explicit-clip capture (D5)
 const CDP_TIMEOUT_MS = 20000;         // bound each CDP call so a hang can't wedge the pump
 const SCROLL_DISPATCH_TIMEOUT_MS = 2000; // scroll verifies page state even if Chrome drops the wheel acknowledgement
+const OWNED_ROOT_INPUT_TIMEOUT_MS = 2000; // Chromium can omit release ACK when a click synchronously creates a target.
 const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays practical
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
-const INLINE_IMAGE_MAX_CHARS = 23_000_000; // supports up to the 16 MiB decoded relay bound
+const INLINE_IMAGE_MAX_CHARS = 23_000_000; // supports up to the 16 MiB decoded MCP bound
+const MASK_REGION_PADDING_CSS = 3;
+const INITIAL_NAVIGATION_COMMIT_CAP = 32;
+const RELATED_LAUNCH_TICKET_CAP = 64;
+const RELATED_PAGE_FILTER = [{ type: "page", exclude: false }, { exclude: true }];
+const CHILD_TARGET_FILTER = [
+  { type: "iframe", exclude: false },
+  { type: "worker", exclude: false },
+  { type: "shared_worker", exclude: false },
+  { type: "service_worker", exclude: false },
+  { exclude: true },
+];
+const OWNED_BROWSER_TARGET_FILTER = [
+  { type: "page", exclude: false },
+  { exclude: true },
+];
+const PRESERVED_ATTACH_FAILURE_CODES = new Set<string>([
+  ...Object.values(TARGET_REGISTRY_ERROR_CODES),
+  "origin_containment_unavailable",
+  "containment_fence_failed",
+  "debugger_conflict",
+  "shutdown_detach_failed",
+  "renderer_unresponsive",
+]);
+
+function unavailableDebuggerPort(): DebuggerPort {
+  const unavailable = async (): Promise<never> => { throw new Error("direct_debugger_port_required"); };
+  return {
+    attach: unavailable,
+    detach: unavailable,
+    sendCommand: unavailable,
+  };
+}
+
+function noOpPageEffectsPort(): PageEffectsPort {
+  const noop = async (): Promise<void> => {};
+  return {
+    begin: noop, end: noop, scroll: noop, move: noop, click: noop, field: noop,
+  };
+}
+
+type IframeOwnerRoute = Readonly<{ targetId: string; sessionId: string | null; frameId: string }>;
+type IframeOwnerGeometry = Readonly<{
+  x: number;
+  y: number;
+  viewportWidth: number;
+  viewportHeight: number;
+}>;
+type PreparedEmbeddingFrames = Readonly<{
+  routes: ReadonlyArray<IframeOwnerRoute>;
+  geometries: ReadonlyArray<IframeOwnerGeometry>;
+}>;
+type FramedPointProof = Readonly<{
+  targetId: string;
+  frameId: string;
+  sessionId: string | null;
+  point: Point;
+  frames: PreparedEmbeddingFrames;
+}>;
+type DriverObserveOptions = ObserveOptions & Pick<BrowserAction, "includeFrameRouting">;
+type InitialNavigationCommit = Readonly<{ frameId: string; loaderId: string; url: string; origin: string }>;
+type InitialNavigationState = {
+  generation: number;
+  expectedFrameId: string | null;
+  expectedLoaderId: string | null;
+  commits: InitialNavigationCommit[];
+  commitOverflow: boolean;
+  commitResolved: boolean;
+  prevention: { frameId: string | null; reason: string } | null;
+  resolve(value: InitialNavigationCommit): void;
+  reject(error: unknown): void;
+  promise: Promise<InitialNavigationCommit>;
+  timer: ReturnType<typeof setTimeout>;
+};
+type RelatedLaunchPhase = "paused_setup" | "paused_unknown" | "waiting_document" | "closing" | "settled";
+type RelatedLaunchTicket = {
+  targetId: string;
+  sessionId: string;
+  browserSessionId: string;
+  generation: number;
+  commandToken: number | null;
+  phase: RelatedLaunchPhase;
+  documentContinued: boolean;
+  prevention: string | null;
+  closed: boolean;
+  resolve(): void;
+  reject(error: unknown): void;
+  promise: Promise<void>;
+  timer: ReturnType<typeof setTimeout> | null;
+};
 
 export function createNewtonBrowserDriver(options: BrowserDriverOptions = {}) {
   return new NewtonBrowserDriver(options);
@@ -92,6 +185,7 @@ class NewtonBrowserDriver {
   accent: string | null;
   ownerLabel: string;
   ownsTab: boolean;
+  ownsBrowser: boolean;
   lastNodes: Map<string, ObservationNodeSnapshot>;
   lastObserveUrl: string | null;
   lastScrollY: number;
@@ -109,6 +203,10 @@ class NewtonBrowserDriver {
   allowedOrigins: string[];
   targetRegistry: TargetRegistry;
   mainTargetId: string | null;
+  mainFrameId: string | null;
+  mainLoaderId: string | null;
+  actionabilityFailure: string | null;
+  framedPointProof: FramedPointProof | null;
   containment: ReturnType<typeof compileOriginGrant> | null;
   containmentReady: boolean;
   heldTargets: Map<string, HeldTarget>;
@@ -117,6 +215,30 @@ class NewtonBrowserDriver {
   rendererLiveness: RendererLiveness;
   livenessEpoch: number;
   activeCommandId: string | null;
+  browserControlSessionId: string | null;
+  browserRootSessionId: string | null;
+  protocolEventTail: Promise<void>;
+  protocolGeneration: number;
+  protocolEventFailure: unknown | null;
+  commandContainmentPrevention: string | null;
+  commandContainmentActive: boolean;
+  activeCommandKind: DriverAction["kind"] | null;
+  initialNavigation: InitialNavigationState | null;
+  relatedLaunchTickets: Map<string, RelatedLaunchTicket>;
+  proxyGuardedRelatedPages: Map<string, { sessionId: string; browserSessionId: string }>;
+  pendingOwnedChildTargets: Map<string, { source: CdpRecord; params: CdpRecord; generation: number }>;
+  processingOwnedChildTargets: boolean;
+  relatedCommandFailures: Map<number, DriverError>;
+  commandTokenCounter: number;
+  activeCommandToken: number | null;
+  closing: boolean;
+  unresolvedRelatedClose: { targetId: string; browserSessionId: string } | null;
+  unresolvedRelatedCloseOverflow: boolean;
+  relationshipCleanupComplete: boolean;
+  debuggerPort: DebuggerPort;
+  pageEffectsPort: PageEffectsPort;
+  debuggerEventUnsubscribe: (() => void) | null;
+  attachingTabId: number | null;
 
   constructor(options: BrowserDriverOptions = {}) {
     this.tabId = null;
@@ -127,6 +249,7 @@ class NewtonBrowserDriver {
     this.accent = typeof options.accent === "string" ? options.accent : null;
     this.ownerLabel = typeof options.ownerLabel === "string" && options.ownerLabel.trim() ? options.ownerLabel.trim().slice(0, 40) : "Newton";
     this.ownsTab = Boolean(options.ownsTab);
+    this.ownsBrowser = Boolean(options.ownsBrowser);
     // Diff-delta state (Proposal 29 / D6): baseline of the last full observation
     // and caches that cut per-action CDP round-trips.
     this.lastNodes = new Map(); // ref -> { role, name, value, bbox }
@@ -155,6 +278,10 @@ class NewtonBrowserDriver {
     this.allowedOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.mainFrameId = null;
+    this.mainLoaderId = null;
+    this.actionabilityFailure = null;
+    this.framedPointProof = null;
     this.containment = this.allowedOrigins.length
       ? compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1))
       : null;
@@ -166,6 +293,30 @@ class NewtonBrowserDriver {
     this.livenessEpoch = 1;
     this.rendererLiveness.register("root", this.livenessEpoch);
     this.activeCommandId = null;
+    this.browserControlSessionId = null;
+    this.browserRootSessionId = null;
+    this.protocolEventTail = Promise.resolve();
+    this.protocolGeneration = 0;
+    this.protocolEventFailure = null;
+    this.commandContainmentPrevention = null;
+    this.commandContainmentActive = false;
+    this.activeCommandKind = null;
+    this.initialNavigation = null;
+    this.relatedLaunchTickets = new Map();
+    this.proxyGuardedRelatedPages = new Map();
+    this.pendingOwnedChildTargets = new Map();
+    this.processingOwnedChildTargets = false;
+    this.relatedCommandFailures = new Map();
+    this.commandTokenCounter = 0;
+    this.activeCommandToken = null;
+    this.closing = false;
+    this.unresolvedRelatedClose = null;
+    this.unresolvedRelatedCloseOverflow = false;
+    this.relationshipCleanupComplete = false;
+    this.debuggerPort = options.debuggerPort ?? unavailableDebuggerPort();
+    this.pageEffectsPort = options.pageEffectsPort ?? noOpPageEffectsPort();
+    this.debuggerEventUnsubscribe = null;
+    this.attachingTabId = null;
   }
 
   isAttachedTo(tabId: number): boolean {
@@ -176,29 +327,77 @@ class NewtonBrowserDriver {
     if (this.attached && this.tabId === tabId) return;
     if (this.attached) await this.detach();
     this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
-    await chrome.debugger.attach({ tabId }, CDP_VERSION);
-    this.tabId = tabId;
-    this.attached = true;
-    await this.initializeTargetRegistry();
-    for (const domain of CDP_DOMAINS) {
-      await this.cdp(`${domain}.enable`, {});
+    this.protocolGeneration += 1;
+    this.attachingTabId = tabId;
+    try {
+      await attachStage("root_debugger_attach_failed", async () => {
+        this.subscribeDebuggerEvents();
+        await this.debuggerPort.attach({ tabId }, CDP_VERSION);
+      });
+    } catch (error) {
+      this.attachingTabId = null;
+      this.protocolGeneration += 1;
+      this.unsubscribeDebuggerEvents();
+      this.protocolEventTail = Promise.resolve();
+      this.protocolEventFailure = null;
+      throw error;
     }
-    await this.installContainment({});
+    this.tabId = tabId;
+    this.attachingTabId = null;
+    this.attached = true;
+    this.relationshipCleanupComplete = false;
+    this.protocolEventFailure = null;
+    try {
+      await attachStage("root_protocol_setup_failed", async () => {
+        await this.initializeTargetRegistry();
+        for (const domain of CDP_DOMAINS) {
+          await this.cdp(`${domain}.enable`, {});
+        }
+        await this.installContainment({});
     // Owned tabs stay inactive so they never steal the user's focus. Chrome
     // otherwise accepts pointer/key CDP commands for a background tab while
     // dropping their press/release events. Focus emulation makes only this
     // debugger target behave as active without activating the visible tab.
-    await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
+        await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
+      });
     // Child frames / popups attach to the same session (§7.5).
-    await this.cdp("Target.setAutoAttach", { autoAttach: true, flatten: true, waitForDebuggerOnStart: true });
-    await this.calibrate();
+      const browserTarget = await attachStage("browser_control_attach_failed", () => this.cdp("Target.attachToBrowserTarget", {}));
+      const browserSessionId = typeof browserTarget.sessionId === "string" && browserTarget.sessionId
+        ? browserTarget.sessionId
+        : null;
+      if (!browserSessionId || !this.mainTargetId) throw typedDriverError("origin_containment_unavailable");
+      this.browserControlSessionId = browserSessionId;
+      await attachStage("related_autoattach_failed", () => this.ownsBrowser
+        ? this.cdp("Target.setAutoAttach", {
+          autoAttach: true,
+          flatten: true,
+          waitForDebuggerOnStart: false,
+          filter: OWNED_BROWSER_TARGET_FILTER,
+        }, { sessionId: browserSessionId })
+        : this.cdp("Target.autoAttachRelated", {
+          targetId: this.mainTargetId,
+          waitForDebuggerOnStart: true,
+          filter: RELATED_PAGE_FILTER,
+        }, { sessionId: browserSessionId }));
+      await this.fenceBrowserProtocolEvents("browser_control_fence_failed");
+      await attachStage("root_autoattach_failed", () => this.cdp("Target.setAutoAttach", {
+        autoAttach: true,
+        flatten: true,
+        waitForDebuggerOnStart: !this.ownsBrowser,
+        filter: CHILD_TARGET_FILTER,
+      }));
+      await attachStage("calibration_failed", () => this.calibrate());
     // Re-apply a caller-chosen viewport (WS9.6) that a re-attach would otherwise drop.
-    if (this.sessionViewport) {
-      await this.cdp("Emulation.setDeviceMetricsOverride", { width: this.sessionViewport.width, height: this.sessionViewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+      if (this.sessionViewport) {
+        await this.cdp("Emulation.setDeviceMetricsOverride", { width: this.sessionViewport.width, height: this.sessionViewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
+      }
+      await attachStage("overlay_readiness_failed", () => this.reassertOverlay());
+      this.containmentReady = true;
+      this.reconcileRenderer("root");
+    } catch (error) {
+      await this.detach();
+      throw error;
     }
-    await this.reassertOverlay();
-    this.containmentReady = true;
-    this.reconcileRenderer("root");
   }
 
   // (Re)inject the overlay and re-announce the driving indicator. Called on attach
@@ -207,20 +406,62 @@ class NewtonBrowserDriver {
   // disappears on the first nav and never returns. Fire-and-forget; never gates.
   async reassertOverlay(): Promise<void> {
     if (!this.attached || this.tabId == null) return;
-    await this.injectOverlay();
-    await this.sendToPage({ type: "NB_DRIVE_BEGIN", accent: this.accent ?? undefined, ownerLabel: this.ownerLabel });
+    await this.pageEffectsPort.begin(this.tabId, {
+      ...(this.accent === null ? {} : { accent: this.accent }),
+      ownerLabel: this.ownerLabel,
+    }).catch(() => {});
   }
 
   async detach(): Promise<void> {
     if (!this.attached || this.tabId == null) return;
-    await this.sendToPage({ type: "NB_DRIVE_END" }).catch(() => {});
+    this.closing = true;
+    this.containmentReady = false;
+    this.rejectInitialNavigation(typedDriverError("debugger_conflict"));
+    if (!this.relationshipCleanupComplete) {
+      const browserControlSessionId = this.browserControlSessionId;
+      try {
+        await this.drainProtocolEventQueue();
+        await this.closeOutstandingRelatedLaunches();
+        if (browserControlSessionId && this.mainTargetId) {
+          await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId }, { sessionId: browserControlSessionId });
+          await this.drainProtocolEventQueue();
+          await this.closeOutstandingRelatedLaunches();
+          await this.cdp("Target.setAutoAttach", {
+            autoAttach: false,
+            flatten: true,
+            waitForDebuggerOnStart: false,
+          }, { sessionId: browserControlSessionId });
+          await this.drainProtocolEventQueue();
+          await this.closeOutstandingRelatedLaunches();
+          await this.cdp("Target.detachFromTarget", { sessionId: browserControlSessionId });
+        }
+      } catch {
+        throw this.containmentFenceFailure("related_cleanup_failed");
+      }
+      this.relationshipCleanupComplete = true;
+      this.protocolGeneration += 1;
+      this.browserControlSessionId = null;
+      this.browserRootSessionId = null;
+    }
+    await this.pageEffectsPort.end(this.tabId).catch(() => {});
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
-    await chrome.debugger.detach({ tabId: this.tabId }).catch(() => {});
+    try {
+      await this.debuggerPort.detach({ tabId: this.tabId });
+    } catch {
+      throw typedDriverError("shutdown_detach_failed");
+    }
+    this.unsubscribeDebuggerEvents();
+    this.commandContainmentPrevention = null;
+    this.commandContainmentActive = false;
+    this.activeCommandKind = null;
+    this.activeCommandToken = null;
     this.attached = false;
     this.tabId = null;
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.mainFrameId = null;
+    this.mainLoaderId = null;
     this.containment = null;
     this.containmentReady = false;
     this.heldTargets.clear();
@@ -229,19 +470,55 @@ class NewtonBrowserDriver {
     this.pendingDialog = null;
     this.pendingDialogRoute = null;
     this.dialogTracker = new DialogTracker();
+    this.protocolEventTail = Promise.resolve();
+    this.protocolEventFailure = null;
+    for (const ticket of this.relatedLaunchTickets.values()) if (ticket.timer !== null) clearTimeout(ticket.timer);
+    this.relatedLaunchTickets.clear();
+    this.proxyGuardedRelatedPages.clear();
+    this.pendingOwnedChildTargets.clear();
+    this.processingOwnedChildTargets = false;
+    this.relatedCommandFailures.clear();
+    this.closing = false;
+    this.unresolvedRelatedClose = null;
+    this.unresolvedRelatedCloseOverflow = false;
+    this.relationshipCleanupComplete = false;
     this.rendererLiveness.remove("root", "driver_detached");
   }
 
   // Chrome detached the debugger underneath us (e.g. a cross-process navigation
   // closed the old target). Clear the stale in-memory flag so a follow-up
   // attach() actually re-establishes the CDP session instead of no-op'ing. We do
-  // NOT call chrome.debugger.detach here — Chrome already did.
+  // Do not call the injected detach transport here: Chromium already detached it.
   markDetached(reason = "debugger_detached"): void {
+    this.unsubscribeDebuggerEvents();
+    this.attachingTabId = null;
     this.failRenderer("root", "debugger_detached", reason);
     this.attached = false;
+    this.protocolGeneration += 1;
+    this.browserControlSessionId = null;
+    this.browserRootSessionId = null;
+    this.commandContainmentPrevention = null;
+    this.commandContainmentActive = false;
+    this.activeCommandKind = null;
+    this.rejectInitialNavigation(typedDriverError("debugger_conflict"));
+    this.protocolEventTail = Promise.resolve();
+    this.protocolEventFailure = null;
+    for (const ticket of this.relatedLaunchTickets.values()) if (ticket.timer !== null) clearTimeout(ticket.timer);
+    this.relatedLaunchTickets.clear();
+    this.proxyGuardedRelatedPages.clear();
+    this.pendingOwnedChildTargets.clear();
+    this.processingOwnedChildTargets = false;
+    this.relatedCommandFailures.clear();
+    this.activeCommandToken = null;
+    this.closing = false;
+    this.unresolvedRelatedClose = null;
+    this.unresolvedRelatedCloseOverflow = false;
+    this.relationshipCleanupComplete = false;
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.mainFrameId = null;
+    this.mainLoaderId = null;
     this.containment = null;
     this.containmentReady = false;
     this.heldTargets.clear();
@@ -301,19 +578,58 @@ class NewtonBrowserDriver {
     return this.failRenderer(targetKey, "target_gone", "target_removed");
   }
 
-  async dispatchInput<T>(route: CdpRoute, operation: (input: InputDispatchScope) => Promise<T>): Promise<T> {
+  async dispatchInput<T>(
+    route: TargetRoute,
+    operation: (input: InputDispatchScope) => Promise<T>,
+    mode: "root" | "target" = "root",
+  ): Promise<T> {
+    if (mode === "target" && !route.sessionId) throw typedDriverError("stale_target");
     const targetKey = inputTargetKey(route);
     this.ensureRenderer(targetKey);
-    const result = await this.dialogTracker.race(targetKey, this.activeCommandId, () => this.inputDispatcher.run(route, operation));
+    const inputRoute: CdpRoute = mode === "target"
+      ? {
+          ...(route.sessionId ? { sessionId: route.sessionId } : {}),
+          ...(typeof route.timeoutMs === "number" ? { timeoutMs: route.timeoutMs } : {}),
+        }
+      : route.sessionId || route.frameId
+        ? { ...(typeof route.timeoutMs === "number" ? { timeoutMs: route.timeoutMs } : {}) }
+        : route;
+    const result = await this.dialogTracker.race(targetKey, this.activeCommandId, () => this.inputDispatcher.run(inputRoute, operation));
     if (result.kind === "dialog") throw typedDriverError("dialog_blocked");
     return result.value;
   }
 
-  recordDebuggerEvent(sourceOrMethod: CdpRecord | string, methodOrParams: CdpRecord | string = {}, eventParams: CdpRecord = {}): Promise<void> | undefined {
+  recordDebuggerEvent(sourceOrMethod: CdpRecord | string, methodOrParams: CdpRecord | string = {}, eventParams: CdpRecord = {}): Promise<void> {
     const source = typeof sourceOrMethod === "string" ? {} : sourceOrMethod ?? {};
     const method = typeof sourceOrMethod === "string" ? sourceOrMethod : String(methodOrParams);
     const params: CdpRecord = typeof sourceOrMethod === "string" && typeof methodOrParams !== "string" ? methodOrParams : eventParams;
-    const targetEvent = this.recordTargetEvent(source, method, params);
+    const authenticatedAtReceipt = this.isAuthenticatedEventSource(source);
+    if (authenticatedAtReceipt) this.recordDebuggerSideEffects(source, method, params);
+    const generation = this.protocolGeneration;
+    const work = this.protocolEventTail.then(async () => {
+      if (generation !== this.protocolGeneration) return;
+      await this.recordTargetEventNow(source, method, params, generation);
+      if (!authenticatedAtReceipt && this.isAuthenticatedEventSource(source)) {
+        this.recordDebuggerSideEffects(source, method, params);
+      }
+    });
+    this.protocolEventTail = work.catch((error: unknown) => {
+      if (generation === this.protocolGeneration) this.protocolEventFailure = error;
+    });
+    return work;
+  }
+
+  isAuthenticatedEventSource(source: CdpRecord): boolean {
+    if (typeof source?.tabId === "number" && source.tabId !== this.tabId && source.tabId !== this.attachingTabId) return false;
+    const sessionId = typeof source?.sessionId === "string" && source.sessionId ? source.sessionId : null;
+    if (!sessionId) return true;
+    return sessionId === this.browserControlSessionId
+      || sessionId === this.browserRootSessionId
+      || Boolean(this.targetRegistry.targetForSession(sessionId));
+  }
+
+  recordDebuggerSideEffects(source: CdpRecord, method: string, params: CdpRecord): void {
+    this.noteInitialNavigationEvent(source, method, params);
     // Dialog open/close is tracked persistently (not just inside an action window)
     // because a JS dialog blocks the renderer until it is handled (WS9.4).
     if (method === "Page.javascriptDialogOpening") {
@@ -363,7 +679,7 @@ class NewtonBrowserDriver {
       this.updateNetwork(params.requestId, { failed: true });
     }
     const signals = this.activeActionSignals;
-    if (!signals) return targetEvent;
+    if (!signals) return;
     if (method === "Network.requestWillBeSent" && isNetworkWrite(params?.request)) {
       signals.networkWrite = true;
     }
@@ -379,7 +695,24 @@ class NewtonBrowserDriver {
     if (method === "Target.targetCreated" && params?.targetInfo?.type === "page") {
       signals.newTarget = true;
     }
-    return targetEvent;
+  }
+
+  subscribeDebuggerEvents(): void {
+    if (this.debuggerEventUnsubscribe || !this.debuggerPort.onDebuggerEvent) return;
+    this.debuggerEventUnsubscribe = this.debuggerPort.onDebuggerEvent((source, method, params) =>
+      this.recordDebuggerEvent(source, method, params));
+  }
+
+  unsubscribeDebuggerEvents(): void {
+    const unsubscribe = this.debuggerEventUnsubscribe;
+    if (!unsubscribe) return;
+    this.debuggerEventUnsubscribe = null;
+    try {
+      unsubscribe();
+    } catch {
+      // Debugger ownership is already terminal; a faulty observer cleanup cannot
+      // turn a confirmed browser detach into an uncertain detach.
+    }
   }
 
   cdp(method: string, params: CdpRecord = {}, routeOrTimeout: CdpRoute | number = {}): Promise<CdpRecord> {
@@ -388,7 +721,7 @@ class NewtonBrowserDriver {
       : routeOrTimeout?.timeoutMs ?? CDP_TIMEOUT_MS;
     const sessionId = typeof routeOrTimeout === "object" ? routeOrTimeout?.sessionId : null;
     return new Promise((resolve, reject) => {
-      // Bound every CDP call: chrome.debugger.sendCommand can hang indefinitely
+      // Bound every CDP call: the debugger transport can hang indefinitely
       // (e.g. Page.captureScreenshot under device emulation on some pages). The
       // per-session command pump awaits each call, so one hung call would wedge
       // the whole session. A timeout turns a hang into a recoverable error.
@@ -402,13 +735,16 @@ class NewtonBrowserDriver {
         reject(error);
       }, timeoutMs);
       const debuggee = sessionId ? { tabId: this.tabId, sessionId } : { tabId: this.tabId };
-      chrome.debugger.sendCommand(debuggee, method, params, (result) => {
+      this.debuggerPort.sendCommand(debuggee, method, params).then((result) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        const error = chrome.runtime.lastError;
-        if (error) reject(new Error(error.message));
-        else resolve(result ?? {});
+        resolve(result ?? {});
+      }, (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
       });
     });
   }
@@ -427,104 +763,408 @@ class NewtonBrowserDriver {
     this.targetRegistry.commitTopLevelDocument(targetId);
   }
 
-  async recordTargetEvent(source: CdpRecord, method: string, params: CdpRecord): Promise<void> {
+  recordTargetEvent(source: CdpRecord, method: string, params: CdpRecord): Promise<void> {
+    const generation = this.protocolGeneration;
+    const work = this.protocolEventTail.then(async () => {
+      if (generation !== this.protocolGeneration) return;
+      await this.recordTargetEventNow(source, method, params, generation);
+    });
+    this.protocolEventTail = work.catch((error: unknown) => {
+      if (generation === this.protocolGeneration) this.protocolEventFailure = error;
+    });
+    return work;
+  }
+
+  async recordTargetEventNow(source: CdpRecord, method: string, params: CdpRecord, generation: number): Promise<void> {
     const sourceSessionId = typeof source?.sessionId === "string" ? source.sessionId : null;
+    if (typeof source?.tabId === "number" && source.tabId !== this.tabId) return;
+    if (method !== "Target.attachedToTarget" && sourceSessionId && !this.isAuthenticatedEventSource(source)) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo && typeof params.sessionId === "string") {
       const info = params.targetInfo;
-      if (!["page", "iframe", "worker"].includes(info.type)) return;
-      const type = info.type;
+      if (!["page", "iframe", "worker", "shared_worker", "service_worker"].includes(info.type)) return;
+      const type = info.type === "shared_worker" || info.type === "service_worker" ? "worker" : info.type;
       const targetId = String(info.targetId ?? "");
       if (!targetId) return;
+      const fromBrowserControl = sourceSessionId !== null && sourceSessionId === this.browserControlSessionId;
+      if (fromBrowserControl && targetId === this.mainTargetId) {
+        this.browserRootSessionId = params.sessionId;
+        if (params.waitingForDebugger === true) {
+          await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: params.sessionId });
+        }
+        return;
+      }
+      if (type === "page" && !fromBrowserControl) return;
+      if (fromBrowserControl && type !== "page") return;
+      if (this.ownsBrowser && type === "worker" && params.waitingForDebugger !== true) {
+        // The owned runtime's launch-time proxy is already the pre-network
+        // boundary. Workers are not exposed as actionable/observable targets,
+        // and retrofitting domains after an unpaused worker starts races its
+        // short lifecycle without adding agent capability.
+        return;
+      }
+      if (fromBrowserControl && params.waitingForDebugger !== true) {
+        if (this.ownsBrowser) {
+          await this.trackProxyGuardedRelatedPage(info, params.sessionId, sourceSessionId!, generation);
+          return;
+        }
+        await this.closeUntrackedRelatedTarget(targetId, sourceSessionId!, "related_page_not_paused_close_failed");
+        throw this.containmentFenceFailure("related_page_not_paused");
+      }
+      if (this.ownsBrowser
+        && !fromBrowserControl
+        && params.waitingForDebugger !== true
+        && this.activeCommandToken !== null
+        && !this.processingOwnedChildTargets) {
+        if (!this.pendingOwnedChildTargets.has(params.sessionId)
+          && this.pendingOwnedChildTargets.size >= RELATED_LAUNCH_TICKET_CAP) {
+          throw this.containmentFenceFailure("owned_child_target_capacity_exceeded");
+        }
+        this.pendingOwnedChildTargets.set(params.sessionId, { source, params, generation });
+        return;
+      }
+      if (sourceSessionId && !fromBrowserControl && !this.targetRegistry.targetForSession(sourceSessionId)) return;
       const sourceTarget = sourceSessionId ? this.targetRegistry.targetForSession(sourceSessionId) : null;
       const parentTargetId = type === "page"
         ? (typeof info.openerId === "string" ? info.openerId : null)
-        : type === "iframe" ? (sourceTarget?.targetId ?? this.mainTargetId) : null;
+        : type === "iframe" || type === "worker" ? (sourceTarget?.targetId ?? this.mainTargetId) : null;
       const hostFrameId = type === "iframe"
         ? (typeof info.openerFrameId === "string" ? info.openerFrameId : targetId)
         : null;
-      this.targetRegistry.registerTarget({
-        targetId,
-        type,
-        ...(parentTargetId ? { parentTargetId } : {}),
-        ...(hostFrameId ? { hostFrameId } : {}),
-        sessionId: params.sessionId,
-        origin: safeOrigin(info.url),
-      });
-      await this.cdp(
-        "Target.setAutoAttach",
-        { autoAttach: true, flatten: true, waitForDebuggerOnStart: true },
-        { sessionId: params.sessionId },
-      );
-      for (const domain of CDP_DOMAINS) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
-      const route = { sessionId: params.sessionId };
-      await this.installContainment(route);
-      const parent = parentTargetId ? this.targetRegistry.listObservationRoutes().find((candidate) => candidate.targetId === parentTargetId) : null;
-      const targetDecision = decidePausedTarget({ url: info.url, initiatorUrl: parent?.origin }, this.containment!);
-      if (targetDecision.action === "resume") {
-        await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
-      } else {
-        this.heldTargets.set(targetId, { targetId, sessionId: params.sessionId, type, reason: targetDecision.reason });
-        if (targetDecision.action === "block" && this.ownsTab && type !== "iframe") {
-          await this.cdp("Target.closeTarget", { targetId });
+      const commandScopedWorker = this.ownsBrowser
+        && type === "worker"
+        && this.activeCommandToken !== null
+        && this.browserControlSessionId !== null;
+      const relatedTicket = fromBrowserControl || commandScopedWorker
+        ? await this.createRelatedLaunchTicket(
+            targetId,
+            params.sessionId,
+            fromBrowserControl ? sourceSessionId! : this.browserControlSessionId!,
+            generation,
+            fromBrowserControl
+              ? (typeof info.openerId === "string" ? info.openerId : null)
+              : parentTargetId,
+          )
+        : null;
+      let relatedSetupStage: "admission" | "registry" | "autoattach" | "domains" | "fetch" | "resume" = "admission";
+      try {
+        if (relatedTicket && this.closing) {
+          await this.closeRelatedLaunchTicket(relatedTicket);
+          this.settleRelatedLaunchTicket(relatedTicket, null);
+          return;
         }
+        const parent = parentTargetId
+          ? this.targetRegistry.listObservationRoutes().find((candidate) => candidate.targetId === parentTargetId)
+          : null;
+        const targetDecision = !safeOrigin(info.url)
+          ? { action: "hold" as const, reason: "target_origin_pending", granted: false }
+          : decidePausedTarget({ url: info.url, initiatorUrl: parent?.origin }, this.containment!);
+        if (targetDecision.action === "block" && relatedTicket) {
+          await this.closeRelatedLaunchTicket(relatedTicket);
+          this.settleRelatedLaunchTicket(relatedTicket, "ungranted_target");
+          return;
+        }
+        if (targetDecision.action === "block" && type === "worker" && this.browserControlSessionId) {
+          await this.closeUntrackedRelatedTarget(targetId, this.browserControlSessionId, "worker_close_not_acknowledged");
+          return;
+        }
+        relatedSetupStage = "registry";
+        this.targetRegistry.registerTarget({
+          targetId,
+          type,
+          ...(parentTargetId ? { parentTargetId } : {}),
+          ...(hostFrameId ? { hostFrameId } : {}),
+          sessionId: params.sessionId,
+          origin: safeOrigin(info.url),
+        });
+        relatedSetupStage = "autoattach";
+        await this.cdp(
+          "Target.setAutoAttach",
+          { autoAttach: true, flatten: true, waitForDebuggerOnStart: true, filter: CHILD_TARGET_FILTER },
+          { sessionId: params.sessionId },
+        );
+        const domains = type === "worker"
+          ? ["Runtime", "Network", "Log"]
+          : relatedTicket && type === "page" ? ["Runtime"] : CDP_DOMAINS;
+        relatedSetupStage = "domains";
+        for (const domain of domains) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
+        const route = { sessionId: params.sessionId };
+        relatedSetupStage = "fetch";
+        await this.installContainment(route);
+        if (relatedTicket && isInheritedBlankTarget(info.url)) {
+          // Chromium commonly reports a newly opened page as about:blank while
+          // the triggering Input.dispatchMouseEvent is still in flight. Closing
+          // that paused target can deadlock the input acknowledgement. Resume it
+          // only after recursive target controls and request-stage Fetch are
+          // installed, then keep the originating command open until its first
+          // Document is either granted+committed or denied+closed with ACK.
+          relatedSetupStage = "resume";
+          await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
+          relatedTicket.phase = "waiting_document";
+          this.armRelatedLaunchDeadline(relatedTicket);
+          return;
+        }
+        if (targetDecision.action === "resume") {
+          this.heldTargets.delete(targetId);
+          if (params.waitingForDebugger === true) {
+            relatedSetupStage = "resume";
+            await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
+          }
+          if (relatedTicket) {
+            if (type === "worker") this.settleRelatedLaunchTicket(relatedTicket, null);
+            else {
+              relatedTicket.phase = "waiting_document";
+              this.armRelatedLaunchDeadline(relatedTicket);
+            }
+          }
+        } else {
+          this.heldTargets.set(targetId, { targetId, sessionId: params.sessionId, type, reason: targetDecision.reason });
+          if (relatedTicket) {
+            relatedTicket.phase = "paused_unknown";
+            this.armRelatedLaunchDeadline(relatedTicket);
+          }
+        }
+      } catch (error) {
+        if (this.ownsBrowser && params.waitingForDebugger !== true && !relatedTicket && this.browserControlSessionId) {
+          // An unpaused OOPIF/worker can disappear while its recursive domains
+          // are being installed (common on production pages with short-lived ad
+          // and analytics frames). The launch-time proxy remains the preventive
+          // network boundary for the owned process. Retire this unactionable
+          // route and detach its exact transient session instead of poisoning the
+          // main page's containment fence. A later attachment is admitted as a
+          // fresh route and must complete the normal setup before observation.
+          try {
+            await this.cdp(
+              "Target.detachFromTarget",
+              { sessionId: params.sessionId },
+              { sessionId: this.browserControlSessionId },
+            );
+          } catch { /* the transient session may already be gone */ }
+          try { this.targetRegistry.detachTarget(targetId, params.sessionId); } catch { /* already retired */ }
+          return;
+        }
+        if (!relatedTicket || relatedTicket.phase === "settled") throw error;
+        if (relatedTicket.phase !== "closing") {
+          try {
+            await this.closeRelatedLaunchTicket(relatedTicket);
+            relatedTicket.phase = "settled";
+          } catch {
+            throw this.failRelatedLaunchTicket(relatedTicket, "related_setup_close_failed");
+          }
+        }
+        throw this.failRelatedLaunchTicket(relatedTicket, `related_target_setup_failed_${relatedSetupStage}`);
       }
       return;
     }
     if (method === "Target.targetInfoChanged" && params?.targetInfo?.targetId) {
+      const proxyGuarded = sourceSessionId === this.browserControlSessionId
+        ? this.proxyGuardedRelatedPages.get(params.targetInfo.targetId)
+        : undefined;
+      if (proxyGuarded) {
+        const guardedOrigin = safeOrigin(params.targetInfo.url);
+        if (guardedOrigin) {
+          const guardedDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment!);
+          if (guardedDecision.action === "block") {
+            await this.closeUntrackedRelatedTarget(
+              params.targetInfo.targetId,
+              proxyGuarded.browserSessionId,
+              "proxy_guarded_page_close_failed",
+            );
+            this.proxyGuardedRelatedPages.delete(params.targetInfo.targetId);
+            this.recordAuthoritativePrevention("ungranted_target", generation);
+          }
+        }
+        return;
+      }
+      const relatedPageTicket = sourceSessionId === this.browserControlSessionId
+        ? this.relatedLaunchTickets.get(params.targetInfo.targetId)
+        : undefined;
+      if (relatedPageTicket?.phase === "waiting_document" && relatedPageTicket.documentContinued) {
+        const committedOrigin = safeOrigin(params.targetInfo.url);
+        if (committedOrigin && this.containment?.contains(params.targetInfo.url)) {
+          this.settleRelatedLaunchTicket(relatedPageTicket, null);
+          return;
+        }
+      }
       const held = this.heldTargets.get(params.targetInfo.targetId);
       if (!held) return;
+      if (held.type === "page" && sourceSessionId !== this.browserControlSessionId) return;
+      const ticket = this.relatedLaunchTickets.get(held.targetId);
       const targetDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment!);
       if (targetDecision.action === "resume") {
         this.heldTargets.delete(held.targetId);
-        await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: held.sessionId });
-      } else if (targetDecision.action === "block" && this.ownsTab && held.type !== "iframe") {
+        if (!this.ownsBrowser) {
+          await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: held.sessionId });
+        }
+        if (ticket) {
+          ticket.phase = "waiting_document";
+          this.armRelatedLaunchDeadline(ticket);
+        }
+      } else if (targetDecision.action === "block" && held.type === "page" && this.browserControlSessionId) {
+        if (!ticket) throw this.containmentFenceFailure("related_ticket_missing");
+        await this.closeRelatedLaunchTicket(ticket);
         this.heldTargets.delete(held.targetId);
-        await this.cdp("Target.closeTarget", { targetId: held.targetId });
+        this.settleRelatedLaunchTicket(ticket, "ungranted_target");
       }
       return;
     }
     if (method === "Fetch.requestPaused" && typeof params?.requestId === "string") {
+      if (sourceSessionId && !this.targetRegistry.targetForSession(sourceSessionId)) return;
       const decision = decidePausedRequest(params, this.containment!);
       const route = sourceSessionId ? { sessionId: sourceSessionId } : {};
+      const relatedTicket = sourceSessionId ? this.relatedLaunchTicketForSession(sourceSessionId) : undefined;
       if (decision.action === "fail") {
-        if (this.activeActionSignals) this.activeActionSignals.containmentPrevention = decision.reason;
-        await this.cdp("Fetch.failRequest", { requestId: params.requestId, errorReason: "BlockedByClient" }, route);
+        if (params.resourceType === "Document" && typeof params.frameId === "string" && params.frameId !== this.mainFrameId) {
+          const sourceTargetId = sourceSessionId
+            ? this.targetRegistry.targetForSession(sourceSessionId)?.targetId
+            : this.mainTargetId;
+          const blockedOrigin = safeOrigin(params.request?.url);
+          if (sourceTargetId && blockedOrigin) {
+            try {
+              this.targetRegistry.recordBlockedFrameOrigin({
+                frameId: params.frameId,
+                sourceTargetId,
+                sourceSessionId,
+                origin: blockedOrigin,
+              });
+            } catch {
+              // Provenance is optional metadata. Containment remains fail-closed
+              // and the request is still failed when registry identity rejects it.
+            }
+          }
+        }
+        try {
+          await this.cdp("Fetch.failRequest", { requestId: params.requestId, errorReason: "BlockedByClient" }, route);
+        } catch (error) {
+          // A production page can cancel a paused request before CDP acknowledges
+          // fail/continue. The owned runtime's launch-time proxy remains the
+          // authoritative origin boundary, so a vanished request cannot escape
+          // the grant. Do not author a driver prevention without an ACK. Legacy
+          // A missing independent proxy is never treated as preventive evidence.
+          if (this.ownsBrowser) return;
+          throw error;
+        }
+        this.noteInitialNavigationPrevention(sourceSessionId, params, decision.reason);
+        if (relatedTicket && params.resourceType === "Document") {
+          const launchPending = relatedTicket.phase !== "settled";
+          await this.closeRelatedLaunchTicket(relatedTicket);
+          if (launchPending) this.settleRelatedLaunchTicket(relatedTicket, decision.reason);
+          else this.relatedLaunchTickets.delete(relatedTicket.targetId);
+        } else if (!relatedTicket && this.activeCommandKind === "navigate"
+          && params.resourceType === "Document"
+          && typeof params.frameId === "string"
+          && typeof this.mainFrameId === "string"
+          && params.frameId === this.mainFrameId) {
+          // Fetch interception proves prevention, but it does not prove that an
+          // arbitrary page-owned request was caused by the temporally overlapping
+          // input command. Attribute only the exact main-frame Document navigation
+          // (or a related-target ticket above). Background requests remain denied
+          // and visible in containment diagnostics without poisoning an unrelated
+          // click, scroll, wait, or observation.
+          this.recordAuthoritativePrevention(decision.reason, generation);
+        }
       } else {
-        await this.cdp("Fetch.continueRequest", { requestId: params.requestId }, route);
+        try {
+          await this.cdp("Fetch.continueRequest", { requestId: params.requestId }, route);
+        } catch (error) {
+          if (this.ownsBrowser) return;
+          throw error;
+        }
+        if (relatedTicket && params.resourceType === "Document") relatedTicket.documentContinued = true;
       }
       return;
     }
     if (method === "Target.detachedFromTarget") {
+      if (typeof params?.sessionId === "string" && params.sessionId === this.browserControlSessionId) {
+        this.browserControlSessionId = null;
+        this.browserRootSessionId = null;
+        this.containmentReady = false;
+        this.protocolEventFailure = typedDriverError("containment_fence_failed");
+        return;
+      }
+      if (sourceSessionId === this.browserControlSessionId && params?.sessionId === this.browserRootSessionId) {
+        this.browserRootSessionId = null;
+        return;
+      }
       const target = typeof params?.sessionId === "string"
         ? this.targetRegistry.targetForSession(params.sessionId)
         : undefined;
-      const targetId = typeof params?.targetId === "string" ? params.targetId : target?.targetId;
+      const guardedTargetId = typeof params?.sessionId === "string"
+        ? [...this.proxyGuardedRelatedPages.entries()].find(([, guarded]) => guarded.sessionId === params.sessionId)?.[0]
+        : undefined;
+      const targetId = typeof params?.targetId === "string" ? params.targetId : target?.targetId ?? guardedTargetId;
       if (targetId) {
-        this.heldTargets.delete(targetId);
-        this.targetRegistry.detachTarget(targetId);
+        this.proxyGuardedRelatedPages.delete(targetId);
+        const relatedTicket = this.relatedLaunchTickets.get(targetId);
+        if (relatedTicket && (typeof params?.sessionId !== "string" || relatedTicket.sessionId === params.sessionId)) {
+          relatedTicket.closed = true;
+          if (relatedTicket.phase !== "settled") {
+            this.failRelatedLaunchTicket(relatedTicket, "related_target_detached_before_commit");
+          } else {
+            this.relatedLaunchTickets.delete(targetId);
+          }
+        }
+        const held = this.heldTargets.get(targetId);
+        if (held && (typeof params?.sessionId !== "string" || held.sessionId === params.sessionId)) {
+          this.heldTargets.delete(targetId);
+        }
+        this.targetRegistry.detachTarget(
+          targetId,
+          typeof params?.sessionId === "string" ? params.sessionId : undefined,
+        );
       }
       return;
     }
     if (method === "Page.frameDetached" && typeof params?.frameId === "string") {
-      this.targetRegistry.detachFrame(params.frameId);
+      const sourceTarget = sourceSessionId
+        ? this.targetRegistry.targetForSession(sourceSessionId)
+        : this.mainTargetId ? { targetId: this.mainTargetId } : undefined;
+      if (params.reason === "swap" && sourceTarget?.targetId) {
+        this.targetRegistry.beginFrameSwap(params.frameId, sourceTarget.targetId);
+      } else {
+        this.targetRegistry.detachFrame(params.frameId);
+      }
       return;
     }
     if (method !== "Page.frameNavigated" || !params?.frame || typeof params.frame.id !== "string") return;
     const frame = params.frame;
+    if (sourceSessionId && !frame.parentId) {
+      const ticket = [...this.relatedLaunchTickets.values()].find((candidate) => candidate.sessionId === sourceSessionId && candidate.phase === "waiting_document");
+      const committedOrigin = safeOrigin(frame.url);
+      if (ticket && ticket.documentContinued && committedOrigin && this.containment?.contains(frame.url)) {
+        this.settleRelatedLaunchTicket(ticket, null);
+      }
+    }
     if (!frame.parentId && !sourceSessionId) {
       if (!this.mainTargetId) return;
-      this.targetRegistry.commitTopLevelDocument(this.mainTargetId, safeOrigin(frame.url));
-      this.refIndex.clear();
+      this.reconcileTopLevelDocument(frame, safeOrigin(frame.url), true);
       return;
     }
     const target = sourceSessionId
       ? this.targetRegistry.targetForSession(sourceSessionId)
       : this.mainTargetId ? { targetId: this.mainTargetId } : undefined;
     if (!target?.targetId) return;
-    this.targetRegistry.registerFrame({
+    if ("type" in target && target.type === "page" && target.targetId !== this.mainTargetId) return;
+    const parentFrameId = typeof frame.parentId === "string" ? frame.parentId : null;
+    const hostFrameId = "hostFrameId" in target ? target.hostFrameId : null;
+    const parentRoute = parentFrameId
+      ? this.targetRegistry.listObservationRoutes().find((route) => route.frameId === parentFrameId)
+      : undefined;
+    // The root frame reported inside a flattened OOPIF session retains the
+    // embedding frame as its CDP parent. That parent belongs to the ancestor
+    // target, so expressing it as an intra-target frame edge creates a false
+    // cross-target cycle/conflict. The target's hostFrameId already preserves
+    // the boundary; nested frames inside the OOPIF keep their local parent.
+    const crossesTargetBoundary = sourceSessionId && (
+      parentFrameId === hostFrameId
+      || (parentRoute && parentRoute.targetId !== target.targetId)
+    );
+    const localParentFrameId = crossesTargetBoundary || parentFrameId === this.mainFrameId
+      ? null
+      : parentFrameId;
+    this.targetRegistry.reconcileOopifFrame({
       frameId: frame.id,
       targetId: target.targetId,
-      ...(typeof frame.parentId === "string" ? { parentFrameId: frame.parentId } : {}),
+      ...(localParentFrameId ? { parentFrameId: localParentFrameId } : {}),
       origin: safeOrigin(frame.url),
     });
   }
@@ -534,6 +1174,391 @@ class NewtonBrowserDriver {
       patterns: [{ urlPattern: "*", requestStage: "Request" }],
       handleAuthRequests: false,
     }, route);
+  }
+
+  async trackProxyGuardedRelatedPage(
+    info: CdpRecord,
+    sessionId: string,
+    browserSessionId: string,
+    generation: number,
+  ): Promise<void> {
+    const targetId = typeof info.targetId === "string" ? info.targetId : "";
+    if (!targetId || !this.ownsBrowser) return;
+    if (!this.proxyGuardedRelatedPages.has(targetId) && this.proxyGuardedRelatedPages.size >= RELATED_LAUNCH_TICKET_CAP) {
+      await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "proxy_guarded_page_capacity_close_failed");
+      throw this.containmentFenceFailure("proxy_guarded_page_capacity_exceeded");
+    }
+    const origin = safeOrigin(info.url);
+    if (origin) {
+      const decision = decidePausedTarget({ url: info.url }, this.containment!);
+      if (decision.action === "block") {
+        await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "proxy_guarded_page_close_failed");
+        this.proxyGuardedRelatedPages.delete(targetId);
+        this.recordAuthoritativePrevention("ungranted_target", generation);
+        return;
+      }
+    }
+    this.proxyGuardedRelatedPages.set(targetId, { sessionId, browserSessionId });
+  }
+
+  async flushPendingOwnedChildTargets(): Promise<void> {
+    if (this.processingOwnedChildTargets || this.pendingOwnedChildTargets.size === 0) return;
+    this.processingOwnedChildTargets = true;
+    try {
+      while (this.pendingOwnedChildTargets.size > 0) {
+        const pending = [...this.pendingOwnedChildTargets.values()];
+        this.pendingOwnedChildTargets.clear();
+        for (const entry of pending) {
+          if (entry.generation !== this.protocolGeneration) continue;
+          await this.recordTargetEventNow(entry.source, "Target.attachedToTarget", entry.params, entry.generation);
+        }
+      }
+    } finally {
+      this.processingOwnedChildTargets = false;
+    }
+  }
+
+  async createRelatedLaunchTicket(targetId: string, sessionId: string, browserSessionId: string, generation: number, openerId: string | null): Promise<RelatedLaunchTicket> {
+    if (this.relatedLaunchTickets.size >= RELATED_LAUNCH_TICKET_CAP) {
+      await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "related_ticket_capacity_close_failed");
+      throw this.containmentFenceFailure("related_ticket_capacity_exceeded");
+    }
+    const parentTicket = openerId ? this.relatedLaunchTickets.get(openerId) : undefined;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    promise.catch(() => {});
+    const ticket: RelatedLaunchTicket = {
+      targetId,
+      sessionId,
+      browserSessionId,
+      generation,
+      commandToken: parentTicket?.commandToken ?? this.activeCommandToken ?? null,
+      phase: "paused_setup",
+      documentContinued: false,
+      prevention: null,
+      closed: false,
+      resolve,
+      reject,
+      promise,
+      timer: null,
+    };
+    this.relatedLaunchTickets.set(targetId, ticket);
+    return ticket;
+  }
+
+  relatedLaunchTicketForSession(sessionId: string): RelatedLaunchTicket | undefined {
+    const direct = [...this.relatedLaunchTickets.values()].find((ticket) => ticket.sessionId === sessionId);
+    if (direct) return direct;
+    const ancestor = this.targetRegistry.relatedPageAncestorForSession(sessionId);
+    return ancestor ? this.relatedLaunchTickets.get(ancestor.targetId) : undefined;
+  }
+
+  async closeUntrackedRelatedTarget(targetId: string, browserSessionId: string, detail: string): Promise<void> {
+    try {
+      const closed = await this.cdp("Target.closeTarget", { targetId }, { sessionId: browserSessionId });
+      if (closed.success === true) return;
+    } catch {
+      // Retain exact cleanup identity below.
+    }
+    if (this.unresolvedRelatedClose && (
+      this.unresolvedRelatedClose.targetId !== targetId
+      || this.unresolvedRelatedClose.browserSessionId !== browserSessionId
+    )) {
+      this.unresolvedRelatedCloseOverflow = true;
+    } else {
+      this.unresolvedRelatedClose = { targetId, browserSessionId };
+    }
+    throw this.containmentFenceFailure(detail);
+  }
+
+  async expireRelatedLaunchTicket(ticket: RelatedLaunchTicket): Promise<void> {
+    if (ticket.phase === "settled" || this.relatedLaunchTickets.get(ticket.targetId) !== ticket) return;
+    try {
+      await this.closeRelatedLaunchTicket(ticket);
+    } catch {
+      // The unresolved ticket remains durable and blocks teardown.
+    }
+    this.failRelatedLaunchTicket(ticket, "related_ticket_deadline");
+  }
+
+  armRelatedLaunchDeadline(ticket: RelatedLaunchTicket): void {
+    if (ticket.timer !== null || ticket.phase === "settled") return;
+    ticket.timer = setTimeout(() => {
+      void this.expireRelatedLaunchTicket(ticket);
+    }, CDP_TIMEOUT_MS);
+  }
+
+  async closeRelatedLaunchTicket(ticket: RelatedLaunchTicket): Promise<void> {
+    ticket.phase = "closing";
+    const closed = await this.cdp("Target.closeTarget", { targetId: ticket.targetId }, { sessionId: ticket.browserSessionId });
+    if (closed.success !== true) throw this.containmentFenceFailure("popup_close_not_acknowledged");
+    ticket.closed = true;
+    try {
+      this.targetRegistry.detachTarget(ticket.targetId, ticket.sessionId);
+    } catch {
+      // The target may have detached concurrently after the affirmative close.
+    }
+  }
+
+  settleRelatedLaunchTicket(ticket: RelatedLaunchTicket, prevention: string | null): void {
+    if (ticket.phase === "settled") return;
+    if (ticket.timer !== null) clearTimeout(ticket.timer);
+    ticket.timer = null;
+    ticket.phase = "settled";
+    ticket.prevention = prevention;
+    ticket.resolve();
+    if (ticket.commandToken === null && ticket.closed) this.relatedLaunchTickets.delete(ticket.targetId);
+  }
+
+  failRelatedLaunchTicket(ticket: RelatedLaunchTicket, detail: string): DriverError {
+    if (ticket.timer !== null) clearTimeout(ticket.timer);
+    ticket.timer = null;
+    const error = this.containmentFenceFailure(detail);
+    if (ticket.commandToken !== null && !this.relatedCommandFailures.has(ticket.commandToken)) {
+      this.relatedCommandFailures.set(ticket.commandToken, error);
+    }
+    ticket.reject(error);
+    if (ticket.closed) this.relatedLaunchTickets.delete(ticket.targetId);
+    return error;
+  }
+
+  async awaitRelatedLaunches(commandToken: number): Promise<string | null> {
+    while (true) {
+      this.consumeRelatedCommandFailure(commandToken);
+      await this.fenceBrowserProtocolEvents();
+      this.consumeRelatedCommandFailure(commandToken);
+      const tickets = [...this.relatedLaunchTickets.values()].filter((ticket) => ticket.commandToken === commandToken);
+      await Promise.all(tickets.map((ticket) => ticket.promise));
+      this.consumeRelatedCommandFailure(commandToken);
+      await this.fenceBrowserProtocolEvents();
+      this.consumeRelatedCommandFailure(commandToken);
+      const stable = [...this.relatedLaunchTickets.values()].filter((ticket) => ticket.commandToken === commandToken);
+      if (stable.length !== tickets.length || stable.some((ticket, index) => ticket !== tickets[index])) continue;
+      const prevention = stable.map((ticket) => ticket.prevention).find((reason): reason is string => typeof reason === "string") ?? null;
+      for (const ticket of stable) if (ticket.closed) this.relatedLaunchTickets.delete(ticket.targetId);
+      return prevention;
+    }
+  }
+
+  async settleRelatedEffectsBeforePostAction(): Promise<string | null> {
+    const commandToken = this.activeCommandToken;
+    if (!this.containmentReady || commandToken === null) return null;
+    await this.fenceBrowserProtocolEvents();
+    const ticketPrevention = await this.awaitRelatedLaunches(commandToken);
+    return ticketPrevention ?? this.commandContainmentPrevention;
+  }
+
+  consumeRelatedCommandFailure(commandToken: number): void {
+    const error = this.relatedCommandFailures.get(commandToken);
+    if (error) {
+      this.relatedCommandFailures.delete(commandToken);
+      throw error;
+    }
+  }
+
+  async drainProtocolEventQueue(): Promise<void> {
+    while (true) {
+      const tail = this.protocolEventTail;
+      await tail;
+      if (tail === this.protocolEventTail) return;
+    }
+  }
+
+  async closeOutstandingRelatedLaunches(): Promise<void> {
+    if (this.unresolvedRelatedClose) {
+      const pending = this.unresolvedRelatedClose;
+      await this.closeUntrackedRelatedTarget(pending.targetId, pending.browserSessionId, "related_cleanup_close_failed");
+      this.unresolvedRelatedClose = null;
+    }
+    if (this.unresolvedRelatedCloseOverflow) throw this.containmentFenceFailure("related_cleanup_identity_overflow");
+    for (const ticket of [...this.relatedLaunchTickets.values()]) {
+      if (!ticket.closed) {
+        await this.closeRelatedLaunchTicket(ticket);
+      }
+      if (ticket.phase !== "settled") this.settleRelatedLaunchTicket(ticket, ticket.prevention);
+      this.relatedLaunchTickets.delete(ticket.targetId);
+    }
+  }
+
+  recordAuthoritativePrevention(reason: string, generation: number): void {
+    if (generation !== this.protocolGeneration) return;
+    if (this.activeActionSignals) this.activeActionSignals.containmentPrevention = reason;
+    if (this.commandContainmentActive) this.commandContainmentPrevention = reason;
+  }
+
+  async fenceBrowserProtocolEvents(attachFailureCode: string | null = null): Promise<void> {
+    const sessionId = this.browserControlSessionId;
+    if (this.protocolEventFailure) {
+      if (isPreservedAttachFailure(this.protocolEventFailure)) throw this.protocolEventFailure;
+      throw this.containmentFenceFailure("popup_protocol_event_failed");
+    }
+    if (!sessionId || !this.mainTargetId) {
+      if (this.commandContainmentActive || this.containmentReady) {
+        throw this.containmentFenceFailure("browser_control_session_missing");
+      }
+      return;
+    }
+    try {
+      await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId });
+      await this.drainProtocolEventQueue();
+      await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId }, { sessionId });
+      while (true) {
+        const tail = this.protocolEventTail;
+        await tail;
+        if (this.protocolEventFailure) throw this.protocolEventFailure;
+        if (tail === this.protocolEventTail) return;
+      }
+    } catch (error) {
+      if (isPreservedAttachFailure(error)) throw error;
+      if (attachFailureCode && !isPreservedAttachFailure(error)) {
+        this.containmentReady = false;
+        throw typedDriverError(attachFailureCode);
+      }
+      throw this.containmentFenceFailure("popup_protocol_fence_failed");
+    }
+  }
+
+  containmentFenceFailure(detail: string): DriverError {
+    this.containmentReady = false;
+    const error = typedDriverError("containment_fence_failed");
+    error.detail = detail;
+    return error;
+  }
+
+  async navigateInitialGranted(url: string): Promise<InitialNavigationCommit> {
+    if (!this.ownsTab || !this.attached || !this.containmentReady || !this.containment) {
+      throw typedDriverError("origin_containment_unavailable");
+    }
+    if (!this.containment.contains(url)) throw typedDriverError("ungranted_navigation");
+    if (this.initialNavigation) throw typedDriverError("initial_navigation_conflict");
+    const browserSessionId = this.browserControlSessionId;
+
+    let resolve!: (value: InitialNavigationCommit) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<InitialNavigationCommit>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    void promise.catch(() => {});
+    const state: InitialNavigationState = {
+      generation: this.protocolGeneration,
+      expectedFrameId: null,
+      expectedLoaderId: null,
+      commits: [],
+      commitOverflow: false,
+      commitResolved: false,
+      prevention: null,
+      resolve,
+      reject,
+      promise,
+      timer: setTimeout(() => {
+        if (this.initialNavigation === state) {
+          this.initialNavigation = null;
+          reject(typedDriverError("initial_navigation_uncommitted"));
+        }
+      }, CDP_TIMEOUT_MS),
+    };
+    this.initialNavigation = state;
+    try {
+      const response = await this.cdp("Page.navigate", { url });
+      if (typeof response.errorText === "string" && response.errorText) throw typedDriverError("initial_navigation_failed");
+      if (response.isDownload === true) throw typedDriverError("initial_navigation_download");
+      if (typeof response.frameId !== "string" || !response.frameId) throw typedDriverError("initial_navigation_uncommitted");
+      if (typeof response.loaderId !== "string" || !response.loaderId) throw typedDriverError("initial_navigation_uncommitted");
+      state.expectedFrameId = response.frameId;
+      state.expectedLoaderId = response.loaderId;
+      this.reconcileInitialNavigation(state);
+      const commit = await promise;
+      if (state.generation !== this.protocolGeneration || !this.attached) throw typedDriverError("debugger_conflict");
+      await this.fenceBrowserProtocolEvents();
+      if (
+        state.generation !== this.protocolGeneration
+        || !this.attached
+        || !this.containmentReady
+        || !browserSessionId
+        || this.browserControlSessionId !== browserSessionId
+      ) throw typedDriverError("debugger_conflict");
+      if (state.commitOverflow) throw typedDriverError("initial_navigation_event_overflow");
+      if (state.prevention && (!state.prevention.frameId || state.prevention.frameId === state.expectedFrameId)) {
+        throw typedDriverError(state.prevention.reason);
+      }
+      return commit;
+    } catch (error) {
+      if (this.initialNavigation === state) {
+        this.initialNavigation = null;
+        clearTimeout(state.timer);
+      }
+      throw error;
+    } finally {
+      if (this.initialNavigation === state) this.initialNavigation = null;
+      clearTimeout(state.timer);
+    }
+  }
+
+  noteInitialNavigationEvent(source: CdpRecord, method: string, params: CdpRecord): void {
+    const state = this.initialNavigation;
+    if (!state || state.generation !== this.protocolGeneration) return;
+    if (source?.sessionId || method !== "Page.frameNavigated" || params?.frame?.parentId) return;
+    const frame = params?.frame;
+    if (typeof frame?.id !== "string" || typeof frame?.loaderId !== "string" || typeof frame?.url !== "string") return;
+    if (state.commits.length >= INITIAL_NAVIGATION_COMMIT_CAP) {
+      state.commitOverflow = true;
+    } else {
+      state.commits.push({ frameId: frame.id, loaderId: frame.loaderId, url: frame.url, origin: safeOrigin(frame.url) });
+    }
+    this.reconcileInitialNavigation(state);
+  }
+
+  noteInitialNavigationPrevention(sourceSessionId: string | null, params: CdpRecord, reason: string): void {
+    const state = this.initialNavigation;
+    if (!state || state.generation !== this.protocolGeneration || sourceSessionId) return;
+    if (params?.resourceType !== "Document" || reason !== "ungranted_navigation") return;
+    state.prevention = { frameId: typeof params.frameId === "string" ? params.frameId : null, reason };
+    this.reconcileInitialNavigation(state);
+  }
+
+  reconcileInitialNavigation(state: InitialNavigationState): void {
+    if (this.initialNavigation !== state || !state.expectedFrameId || !state.expectedLoaderId) return;
+    if (state.commitOverflow) {
+      if (state.commitResolved) return;
+      this.initialNavigation = null;
+      clearTimeout(state.timer);
+      state.reject(typedDriverError("initial_navigation_event_overflow"));
+      return;
+    }
+    if (state.prevention && (!state.prevention.frameId || state.prevention.frameId === state.expectedFrameId)) {
+      if (state.commitResolved) return;
+      this.initialNavigation = null;
+      clearTimeout(state.timer);
+      state.reject(typedDriverError(state.prevention.reason));
+      return;
+    }
+    const commit = state.commits.find((candidate) =>
+      candidate.frameId === state.expectedFrameId && candidate.loaderId === state.expectedLoaderId);
+    if (!commit) return;
+    if (!this.containment?.contains(commit.url)) {
+      this.initialNavigation = null;
+      clearTimeout(state.timer);
+      state.reject(typedDriverError("ungranted_navigation"));
+      return;
+    }
+    clearTimeout(state.timer);
+    if (!state.commitResolved) {
+      state.commitResolved = true;
+      state.resolve(commit);
+    }
+  }
+
+  rejectInitialNavigation(error: unknown): void {
+    const state = this.initialNavigation;
+    if (!state) return;
+    this.initialNavigation = null;
+    clearTimeout(state.timer);
+    state.reject(error);
   }
 
   preflightAction(action: DriverAction): Promise<void> | void {
@@ -546,15 +1571,15 @@ class NewtonBrowserDriver {
   }
 
   async validateSelector(selector: string): Promise<void> {
-    const root = await this.cdp("DOM.getDocument", { depth: 0 });
-    const nodeId = root?.root?.nodeId;
-    if (!nodeId) throw typedDriverError("target_resolution_failed");
-    try {
-      await this.cdp("DOM.querySelectorAll", { nodeId, selector });
-    } catch (error) {
-      if (isInvalidSelectorError(error)) throw typedDriverError("invalid_selector");
-      throw error;
-    }
+    const result = await this.cdp("Runtime.evaluate", {
+      expression: `document.querySelector(${JSON.stringify(selector)}), true`,
+      returnByValue: true,
+      awaitPromise: false,
+    });
+    if (!result?.exceptionDetails) return;
+    const detail = `${result.exceptionDetails.text ?? ""} ${result.exceptionDetails.exception?.description ?? ""}`;
+    if (isInvalidSelectorError(detail)) throw typedDriverError("invalid_selector");
+    throw typedDriverError("target_resolution_failed");
   }
 
   // CSS-pixel calibration (§5.2 note): CDP Input coordinates are layout-viewport
@@ -568,23 +1593,14 @@ class NewtonBrowserDriver {
     this.devicePixelRatio = dpr && dpr > 0 ? dpr : 1;
   }
 
-  async injectOverlay(): Promise<void> {
-    await chrome.scripting.insertCSS({ target: { tabId: this.tabId }, files: ["src/overlay.css"] }).catch(() => {});
-    await chrome.scripting.executeScript({ target: { tabId: this.tabId }, files: ["src/overlay.js"] }).catch(() => {});
-  }
-
-  sendToPage(message: DriverRecord): Promise<CdpRecord | void> {
-    return chrome.tabs.sendMessage(this.tabId, message).catch(() => {});
-  }
-
   // ── Observation (the read half) ───────────────────────────────────────────
   // Compact AX observation with backendNodeId-keyed refs (§7.5). Excludes
-  // the bridge overlay UI so the agent never targets the bubble.
-  async observe(options?: ObserveOptions & { mode?: "full" }): Promise<FullObservation>;
-  async observe(options: ObserveOptions & { mode: "text" }): Promise<TextObservation>;
-  async observe(options: ObserveOptions & { mode: "diff" }): Promise<FullObservation | DeltaObservation>;
-  async observe(options?: ObserveOptions): Promise<DriverObservation>;
-  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars }: ObserveOptions = {}): Promise<DriverObservation> {
+  // any Newton-owned UI marker so the agent never targets product chrome.
+  async observe(options?: DriverObserveOptions & { mode?: "full" }): Promise<FullObservation>;
+  async observe(options: DriverObserveOptions & { mode: "text" }): Promise<TextObservation>;
+  async observe(options: DriverObserveOptions & { mode: "diff" }): Promise<FullObservation | DeltaObservation>;
+  async observe(options?: DriverObserveOptions): Promise<DriverObservation>;
+  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, includeFrameRouting = false, mode = "full", maxChars }: DriverObserveOptions = {}): Promise<DriverObservation> {
     if (mode === "text") return this.observeText(maxChars === undefined ? {} : { maxChars });
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
     const url = await this.evalString("location.href");
@@ -665,7 +1681,8 @@ class NewtonBrowserDriver {
     const title = await this.evalString("document.title");
     const origin = safeOrigin(url);
     const capturedAt = new Date().toISOString();
-    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
+    const frameRouting = includeFrameRouting ? this.targetRegistry.frameRoutingSummary() : undefined;
+    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, ...(excludedFrames.length ? { excludedFrames } : {}), ...(frameRouting ? { frameRouting } : {}), capturedAt };
     // D6: emit a compact diff when asked (and a baseline exists, and the read is
     // not query-filtered). If the page churned heavily, fall back to a full snapshot.
     const canDiff = mode === "diff" && !filterText && this.lastNodes.size > 0;
@@ -675,14 +1692,14 @@ class NewtonBrowserDriver {
       const delta = computeObservationDelta(baseline, nodes);
       const churn = delta.added.length + delta.removed.length + delta.updated.length;
       if (churn <= Math.max(8, Math.round(nodes.length * 0.6))) {
-        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
+        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, ...(excludedFrames.length ? { excludedFrames } : {}), ...(frameRouting ? { frameRouting } : {}), capturedAt };
       }
     }
     return full;
   }
 
   // WS9.1: readable-text observation. Prefer main/article content, fall back to body
-  // innerText. Raw text crosses the loopback relay and is secret-redacted host-side by
+  // innerText. Raw text crosses the private driver boundary and is secret-redacted host-side by
   // redactBrowserResult before it reaches the client, exactly like accessible names.
   async observeText({ maxChars = TEXT_OBSERVE_CHAR_CAP }: Pick<ObserveOptions, "maxChars"> = {}): Promise<TextObservation> {
     const cap = Math.max(200, Math.min(Number(maxChars) || TEXT_OBSERVE_CHAR_CAP, TEXT_OBSERVE_CHAR_CAP));
@@ -722,14 +1739,36 @@ class NewtonBrowserDriver {
   }
 
   reconcileFrameTree(frameTree: CdpRecord | undefined, origin: string): void {
+    let initialized = false;
     if (!this.mainTargetId) {
       this.mainTargetId = `tab-${this.tabId ?? "unattached"}`;
       this.targetRegistry.registerTarget({ targetId: this.mainTargetId, type: "page", origin });
       this.targetRegistry.commitTopLevelDocument(this.mainTargetId);
+      initialized = true;
+    }
+    const topFrame = frameTree?.frame;
+    if (initialized) {
+      if (typeof topFrame?.id === "string") this.mainFrameId = topFrame.id;
+      this.mainLoaderId = safeLoaderId(topFrame?.loaderId);
+    } else if (topFrame) {
+      this.reconcileTopLevelDocument(topFrame, origin, false);
     }
     const known = new Set(this.targetRegistry.listObservationRoutes().map((route) => route.frameId).filter(Boolean));
+    const blocked = new Set<string>();
     for (const frame of childFrameRecords(frameTree)) {
-      if (known.has(frame.frameId)) continue;
+      if (frame.parentFrameId && blocked.has(frame.parentFrameId)) {
+        blocked.add(frame.frameId);
+        continue;
+      }
+      const identity = this.targetRegistry.frameIdentity(frame.frameId);
+      if (identity) {
+        if ((identity.state === "active" || identity.state === "pending") && identity.targetId === this.mainTargetId) {
+          known.add(frame.frameId);
+        } else {
+          blocked.add(frame.frameId);
+        }
+        continue;
+      }
       this.targetRegistry.registerFrame({
         frameId: frame.frameId,
         targetId: this.mainTargetId,
@@ -738,6 +1777,23 @@ class NewtonBrowserDriver {
       });
       known.add(frame.frameId);
     }
+  }
+
+  reconcileTopLevelDocument(frame: CdpRecord, origin: string, commitWithoutLoader: boolean): void {
+    if (!this.mainTargetId) return;
+    if (typeof frame.id === "string") this.mainFrameId = frame.id;
+    const loaderId = safeLoaderId(frame.loaderId);
+    if (loaderId !== null) {
+      if (loaderId === this.mainLoaderId) return;
+      this.targetRegistry.commitTopLevelDocument(this.mainTargetId, origin);
+      this.mainLoaderId = loaderId;
+      this.refIndex.clear();
+      return;
+    }
+    if (!commitWithoutLoader) return;
+    this.targetRegistry.commitTopLevelDocument(this.mainTargetId, origin);
+    this.mainLoaderId = null;
+    this.refIndex.clear();
   }
 
   // Post-action observation as a compact diff (D6). Used after in-place actions
@@ -780,65 +1836,71 @@ class NewtonBrowserDriver {
   async screenshot({ sensitiveZones = [], fullPage = false, waitMs, device, clip, inline = false, format = "png", quality }: ScreenshotOptions = {}): Promise<DriverRecord> {
     const emulation = await this.applyDeviceEmulation(device);
     const restoreDevice = emulation.restore;
-    const imageFormat = format === "jpeg" ? "jpeg" : "png";
     const masksConfigured = Array.isArray(sensitiveZones) && sensitiveZones.length > 0;
-    const maskDisposition = masksConfigured ? "mask_applied" : "mask_not_configured";
+    // Trusted post-capture masking operates on Chromium's bounded lossless PNG.
+    // A masked JPEG request is safely upgraded to PNG rather than returning pixels
+    // that would need a lossy decoder/encoder in the security boundary.
+    const requestedFormat = format === "jpeg" ? "jpeg" : "png";
+    const imageFormat = masksConfigured ? "png" : requestedFormat;
+    let maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable" = masksConfigured
+      ? "mask_applied"
+      : "mask_not_configured";
+    let resumeRasterMask: (() => Promise<void>) | null = null;
     try {
       const wait = Math.max(0, Math.min(Number(waitMs) || 0, MAX_SCREENSHOT_WAIT_MS));
       if (wait > 0) { await this.waitForSettle().catch(() => {}); await delay(wait); }
-      if (masksConfigured && !await this.maskZones(sensitiveZones)) throw new Error("mask_application_failed");
-      const params: CdpRecord = { format: imageFormat };
-      if (imageFormat === "jpeg") params.quality = Math.max(1, Math.min(typeof quality === "number" && Number.isFinite(quality) ? Math.trunc(quality) : 70, 100));
-      let truncated = false;
-      if (clip && Number.isFinite(clip.width) && Number.isFinite(clip.height) && clip.width > 0 && clip.height > 0) {
-        params.clip = { x: Math.max(0, clip.x || 0), y: Math.max(0, clip.y || 0), width: Math.min(clip.width, MAX_SHOT_PX), height: Math.min(clip.height, MAX_SHOT_PX), scale: 1 };
-        params.captureBeyondViewport = true;
-      } else if (!fullPage && emulation.clip) {
-        // Device emulation: capture an explicit region. Without a clip, mobile
-        // emulation (mobile:true) can hang captureScreenshot waiting on the visual
-        // viewport; an explicit clip + captureBeyondViewport makes it deterministic.
-        params.clip = { ...emulation.clip, scale: 1 };
-        params.captureBeyondViewport = true;
-      } else if (fullPage) {
-        const metrics = await this.cdp("Page.getLayoutMetrics", {}).catch(() => null);
-        const size = metrics?.cssContentSize || metrics?.contentSize;
-        const width = Math.round(size?.width || 0);
-        let height = Math.round(size?.height || 0);
-        // Bound a long page so the capture/encode stays practical, and downscale
-        // wide pages so the output image (and any inline transfer) is bounded.
-        if (height > FULLPAGE_MAX_PX) { height = FULLPAGE_MAX_PX; truncated = true; }
-        if (width > 0 && height > 0) {
-          const scale = width > FULLPAGE_MAX_WIDTH ? FULLPAGE_MAX_WIDTH / width : 1;
-          params.clip = { x: 0, y: 0, width, height, scale };
-          params.captureBeyondViewport = true;
-        } else {
-          params.captureBeyondViewport = true;
-        }
-      } else {
-        // Plain viewport capture via an explicit clip of the current visual
-        // viewport. captureBeyondViewport:false with no clip can hang after a
-        // prior device-emulation capture (emulation residue); an explicit clip is
-        // reliable and keeps every capture mode on the same code path.
-        const vw = (await this.evalNumber("window.innerWidth")) || 1280;
-        const vh = (await this.evalNumber("window.innerHeight")) || 800;
-        const sx = (await this.evalNumber("window.scrollX")) || 0;
-        const sy = (await this.evalNumber("window.scrollY")) || 0;
-        params.clip = { x: sx, y: sy, width: Math.min(vw, MAX_SHOT_PX), height: Math.min(vh, MAX_SHOT_PX), scale: 1 };
-        params.captureBeyondViewport = true;
+      let targets: TargetResolution[] = [];
+      if (masksConfigured) {
+        targets = await this.resolveMaskTargets(sensitiveZones);
+        // Freeze every actionable target before deriving scroll, clip, or geometry.
+        // Otherwise an untrusted page could move a sensitive element between the
+        // measurement and the trusted raster operation.
+        resumeRasterMask = await this.pauseForRasterMask();
+      }
+      const { params, truncated } = await this.screenshotCapturePlan({
+        imageFormat,
+        quality,
+        fullPage,
+        clip,
+        emulationClip: emulation.clip,
+      });
+      const captureClip = params.clip as (Box & { scale: number }) | undefined;
+      if (!captureClip) throw new Error("screenshot_clip_unavailable");
+      let maskRegions: Box[] = [];
+      if (masksConfigured) {
+        const rootScroll = {
+          x: (await this.evalNumber("window.scrollX")) || 0,
+          y: (await this.evalNumber("window.scrollY")) || 0,
+        };
+        maskRegions = await this.maskRegionsForTargets(targets, rootScroll);
       }
       const shot = await this.cdp("Page.captureScreenshot", params).catch(() => null);
-      await this.unmaskZones();
+      let screenshotData = typeof shot?.data === "string" ? shot.data : null;
+      let rasterWidth: number | undefined;
+      let rasterHeight: number | undefined;
+      if (masksConfigured) {
+        if (!screenshotData) throw new Error("mask_capture_failed");
+        const masked = maskCapturedPng(screenshotData, captureClip, maskRegions);
+        screenshotData = masked.base64;
+        rasterWidth = masked.width;
+        rasterHeight = masked.height;
+        maskDisposition = masked.appliedRegions > 0 ? "mask_applied" : "mask_not_applicable";
+      }
+      if (resumeRasterMask) {
+        const resume = resumeRasterMask;
+        resumeRasterMask = null;
+        await resume();
+      }
       const url = await this.evalString("location.href");
       const title = await this.evalString("document.title");
-      const captureClip = params.clip as (Box & { scale: number }) | undefined;
       const scale = captureClip?.scale || 1;
-      const width = captureClip ? Math.round(captureClip.width * scale) : undefined;
-      const height = captureClip ? Math.round(captureClip.height * scale) : undefined;
+      const width = rasterWidth ?? (captureClip ? Math.round(captureClip.width * scale) : undefined);
+      const height = rasterHeight ?? (captureClip ? Math.round(captureClip.height * scale) : undefined);
       // Carry the image ONLY when the caller asked for it inline — otherwise a
       // multi-MB base64 would be POSTed across the network just to be stripped by
       // redaction. Drop an over-cap inline image here too (before the POST) so it
       // never wastes a slow round-trip; the caller sees truncated.
-      const dataUrl = shot?.data ? `data:image/${imageFormat};base64,${shot.data}` : null;
+      const dataUrl = screenshotData ? `data:image/${imageFormat};base64,${screenshotData}` : null;
       const inlineTooBig = Boolean(inline && dataUrl && dataUrl.length > INLINE_IMAGE_MAX_CHARS);
       const includeInline = Boolean(inline && dataUrl && !inlineTooBig);
       return {
@@ -850,20 +1912,73 @@ class NewtonBrowserDriver {
         fullPage: Boolean(fullPage),
         truncated: truncated || inlineTooBig,
         maskDisposition,
+        format: imageFormat,
+        ...(requestedFormat !== imageFormat ? { requestedFormat } : {}),
         ...(width ? { width } : {}),
         ...(height ? { height } : {}),
         ...(includeInline ? { dataUrl, inline: true } : {}),
         capturedAt: new Date().toISOString(),
       };
     } finally {
-      await restoreDevice().catch(() => {});
-      await this.unmaskZones().catch(() => {});
+      try {
+        if (resumeRasterMask) await resumeRasterMask();
+      } finally {
+        await restoreDevice().catch(() => {});
+      }
     }
   }
 
-  // Apply a mobile/desktop device render (D5). Owned-tab only by default — it
-  // visibly reflows the page, so we never silently distort the user's own
-  // current tab. Returns { restore, clip } — the clip is the device viewport so
+  async screenshotCapturePlan(input: {
+    imageFormat: "png" | "jpeg";
+    quality: number | undefined;
+    fullPage: boolean;
+    clip: Box | undefined;
+    emulationClip: Box | null;
+  }): Promise<{ params: CdpRecord; truncated: boolean }> {
+    const params: CdpRecord = { format: input.imageFormat };
+    if (input.imageFormat === "jpeg") {
+      params.quality = Math.max(1, Math.min(typeof input.quality === "number" && Number.isFinite(input.quality) ? Math.trunc(input.quality) : 70, 100));
+    }
+    let truncated = false;
+    if (input.clip && Number.isFinite(input.clip.width) && Number.isFinite(input.clip.height)
+      && input.clip.width > 0 && input.clip.height > 0) {
+      params.clip = {
+        x: Math.max(0, input.clip.x || 0),
+        y: Math.max(0, input.clip.y || 0),
+        width: Math.min(input.clip.width, MAX_SHOT_PX),
+        height: Math.min(input.clip.height, MAX_SHOT_PX),
+        scale: 1,
+      };
+      params.captureBeyondViewport = true;
+    } else if (!input.fullPage && input.emulationClip) {
+      params.clip = { ...input.emulationClip, scale: 1 };
+      params.captureBeyondViewport = true;
+    } else if (input.fullPage) {
+      const metrics = await this.cdp("Page.getLayoutMetrics", {}).catch(() => null);
+      const size = metrics?.cssContentSize || metrics?.contentSize;
+      const width = Math.round(size?.width || 0);
+      let height = Math.round(size?.height || 0);
+      if (height > FULLPAGE_MAX_PX) { height = FULLPAGE_MAX_PX; truncated = true; }
+      if (width > 0 && height > 0) {
+        const scale = width > FULLPAGE_MAX_WIDTH ? FULLPAGE_MAX_WIDTH / width : 1;
+        params.clip = { x: 0, y: 0, width, height, scale };
+        params.captureBeyondViewport = true;
+      } else {
+        params.captureBeyondViewport = true;
+      }
+    } else {
+      const width = (await this.evalNumber("window.innerWidth")) || 1280;
+      const height = (await this.evalNumber("window.innerHeight")) || 800;
+      const x = (await this.evalNumber("window.scrollX")) || 0;
+      const y = (await this.evalNumber("window.scrollY")) || 0;
+      params.clip = { x, y, width: Math.min(width, MAX_SHOT_PX), height: Math.min(height, MAX_SHOT_PX), scale: 1 };
+      params.captureBeyondViewport = true;
+    }
+    return { params, truncated };
+  }
+
+  // Apply a mobile/desktop device render (D5). It visibly reflows only the
+  // session's isolated browser. Returns { restore, clip } — the clip is the device viewport so
   // the capture can target an explicit region (see screenshot()).
   async applyDeviceEmulation(device?: "mobile" | "desktop"): Promise<{ restore: () => Promise<void>; clip: Box | null }> {
     if (device !== "mobile" && device !== "desktop") return { restore: async () => {}, clip: null };
@@ -893,7 +2008,37 @@ class NewtonBrowserDriver {
     const kind = action.kind;
     this.assertRendererLive("root", kind);
     this.activeCommandId = typeof context?.commandId === "string" ? context.commandId : null;
+    this.commandContainmentPrevention = null;
+    this.commandContainmentActive = isContainmentAttributableAction(action);
+    this.activeCommandKind = kind;
+    const requiresProtocolFence = this.containmentReady;
+    this.commandTokenCounter = this.commandTokenCounter >= Number.MAX_SAFE_INTEGER ? 1 : this.commandTokenCounter + 1;
+    const commandToken = this.commandTokenCounter;
+    this.activeCommandToken = commandToken;
     try {
+      const result = await this.executeActionNow(action);
+      await this.flushPendingOwnedChildTargets();
+      let ticketPrevention: string | null = null;
+      if (this.commandContainmentActive && requiresProtocolFence) {
+        await this.fenceBrowserProtocolEvents();
+        ticketPrevention = await this.awaitRelatedLaunches(commandToken);
+      }
+      const prevention = ticketPrevention ?? this.commandContainmentPrevention;
+      if (!prevention) return result;
+      const changed = isRecord(result.changed) ? result.changed : {};
+      return { ...result, status: "blocked", verified: false, reason: prevention, changed: { ...changed, containmentPrevention: prevention } };
+    } finally {
+      this.relatedCommandFailures.delete(commandToken);
+      this.commandContainmentPrevention = null;
+      this.commandContainmentActive = false;
+      this.activeCommandKind = null;
+      this.activeCommandToken = null;
+      this.activeCommandId = null;
+    }
+  }
+
+  async executeActionNow(action: DriverAction): Promise<DriverRecord> {
+    const kind = action.kind;
       switch (kind) {
         case "observe":
           return this.withObservationMeta("verified", {}, await this.observe({
@@ -901,6 +2046,7 @@ class NewtonBrowserDriver {
             ...(action.query !== undefined ? { query: action.query } : {}),
             ...(action.roles !== undefined ? { roles: action.roles } : {}),
             ...(action.includeInteractive !== undefined ? { includeInteractive: action.includeInteractive } : {}),
+            ...(action.includeFrameRouting !== undefined ? { includeFrameRouting: action.includeFrameRouting } : {}),
             ...(action.mode !== undefined ? { mode: action.mode } : {}),
           }));
         case "screenshot":
@@ -941,9 +2087,6 @@ class NewtonBrowserDriver {
           return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
         }
       }
-    } finally {
-      this.activeCommandId = null;
-    }
   }
 
   // ── Console / network read-only buffers (WS9.2 / WS9.3) ─────────────────────
@@ -1029,8 +2172,8 @@ class NewtonBrowserDriver {
     };
   }
 
-  // Set the owned tab's viewport (WS9.6). Owned-tab only — resizing distorts the
-  // page layout, so we never silently reflow the user's own current tab. The
+  // Set the isolated session viewport (WS9.6). Resizing affects only the
+  // session's owned browser. The
   // override persists on the driver and is re-applied on re-attach.
   async resizeViewport(action: DriverAction): Promise<DriverRecord> {
     if (!this.ownsTab) return this.withObservationMeta("failed", {}, await this.observe({}), "resize_needs_owned_tab");
@@ -1105,38 +2248,94 @@ class NewtonBrowserDriver {
   async click(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
+    const framedTarget = typeof target.frameId === "string" && target.frameId.length > 0;
+    if (framedTarget && !target.backendNodeId) return this.targetMoved("stale_target", "target_geometry_unavailable");
     if (target.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    const point = target.point ?? (target.backendNodeId ? await this.actionablePoint(target.backendNodeId, target) : null);
-    if (!point) return this.targetMoved();
+    const point = framedTarget && target.backendNodeId
+      ? await this.actionablePoint(target.backendNodeId, target)
+      : target.point ?? (target.backendNodeId ? await this.actionablePoint(target.backendNodeId, target) : null);
+    if (!point) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
+    const pointerRoute = this.pointerInputRoute(target, point);
+    if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
     this.paintCursorClick(point.x, point.y); // fire-and-forget (§5.1)
     const before = await this.pageSignature();
     const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId, target) : {};
       const signalWindow = this.beginActionSignals();
       try {
-        const dispatched = await this.dispatchInput(target, async (input) => {
-          await input.pointerMove(point);
-          if (target.backendNodeId && !(await this.hitTestTarget(target.backendNodeId, point.x, point.y, target))) return false;
-          await input.mouseDown("left");
-          await input.mouseUp("left");
-          return true;
-        });
+        let dispatched: boolean;
+        let committingInputStarted = false;
+        let releaseAcknowledgementUncertain = false;
+        try {
+          const inputTarget = this.ownsBrowser && pointerRoute.mode === "root"
+            ? { ...target, timeoutMs: OWNED_ROOT_INPUT_TIMEOUT_MS }
+            : target;
+          dispatched = await this.dispatchInput(inputTarget, async (input) => {
+            await input.pointerMove(pointerRoute.point);
+            if (target.backendNodeId) {
+              const actionable = framedTarget
+                ? await this.verifyFramedPoint(target.backendNodeId, target, point)
+                : await this.hitTestTarget(target.backendNodeId, point.x, point.y, target);
+              if (!actionable) return false;
+            }
+            committingInputStarted = true;
+            await input.mouseDown("left");
+            await input.mouseUp("left");
+            return true;
+          }, pointerRoute.mode);
+        } catch (error) {
+          if (committingInputStarted && isInputReleaseAcknowledgementTimeout(error)) {
+            releaseAcknowledgementUncertain = true;
+            dispatched = true;
+          } else {
+          // A child session can disappear at any input boundary. Convert only
+          // raw transport failures from this internal mode to the established
+          // stale-target contract; typed renderer/dialog failures retain their
+          // existing semantics.
+          if (pointerRoute.mode === "target" && !isTypedDriverError(error)) {
+            if (committingInputStarted) return this.inputDispatchUncertain();
+            return this.targetMoved("stale_target", "frame_input_route_unavailable");
+          }
+          throw error;
+          }
+        }
+        await this.flushPendingOwnedChildTargets();
         if (!dispatched) {
+          if (framedTarget) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
           const blocker = await this.blockingElementEvidence(point, target);
           if (!blocker) return this.targetMoved();
           const observation = await this.observe({});
           return this.withObservationMeta("stale_target", { blocker }, observation, "click_intercepted");
         }
+      const relatedPrevention = await this.settleRelatedEffectsBeforePostAction();
+      if (relatedPrevention) {
+        const signals = signalWindow.finish();
+        return {
+          status: "blocked",
+          verified: false,
+          reason: relatedPrevention,
+          changed: {
+            ...reconciliationChanges(signals),
+            containmentPrevention: relatedPrevention,
+          },
+        };
+      }
       await this.settleShort();
+      if (releaseAcknowledgementUncertain) this.reconcileRenderer(inputTargetKey(target));
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
       const after = await this.pageSignature();
       const afterState = target.backendNodeId ? await this.elementState(target.backendNodeId, target).catch(() => ({})) : {};
-      const changed = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...reconciliationChanges(signals), ...(waitResult?.matched ? { waitedFor: true } : {}) };
+      const changed = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...reconciliationChanges(signals), ...(waitResult?.matched ? { waitedFor: true } : {}), ...(releaseAcknowledgementUncertain ? { inputReleaseAcknowledgement: "unacknowledged" } : {}) };
       const observation = await this.observeDelta();
       const reconciliation = reconcilePostActionSignals(signals);
       if (reconciliation) return this.withObservationMeta("blocked", changed, observation, reconciliation);
       const verified = waitResult ? waitResult.matched : Object.keys(changed).length > 0;
-      return this.withObservationMeta(verified ? "verified" : "dispatched_unverified", changed, observation, waitResult && !waitResult.matched ? waitResult.reason : undefined);
+      return this.withObservationMeta(
+        releaseAcknowledgementUncertain ? "dispatched_unverified" : verified ? "verified" : "dispatched_unverified",
+        changed,
+        observation,
+        releaseAcknowledgementUncertain ? "input_release_unacknowledged" : waitResult && !waitResult.matched ? waitResult.reason : undefined,
+      );
     } finally {
       signalWindow.finish();
     }
@@ -1145,20 +2344,38 @@ class NewtonBrowserDriver {
   async fill(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
-    const point = await this.actionablePoint(target.backendNodeId, target);
-    if (!point) return this.targetMoved();
-    const beforeState = await this.elementState(target.backendNodeId, target);
+    const backendNodeId = target.backendNodeId;
+    const framedTarget = typeof target.frameId === "string" && target.frameId.length > 0;
+    await this.cdp("DOM.focus", { backendNodeId }, target).catch(() => {});
+    const point = await this.actionablePoint(backendNodeId, target);
+    if (!point) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
+    const pointerRoute = this.pointerInputRoute(target, point);
+    if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
+    const beforeState = await this.elementState(backendNodeId, target);
     this.paintCursorField(point);
-    await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    await this.dispatchInput(target, async (input) => {
-      await input.pointerMove(point);
-      await input.mouseDown("left");
-      await input.mouseUp("left");
-      await input.chord(["Control", "a"]);
-      await input.insertText(String(action.value ?? ""));
-    });
+    let dispatched: boolean;
+    let committingInputStarted = false;
+    try {
+      dispatched = await this.dispatchInput(target, async (input) => {
+        await input.pointerMove(pointerRoute.point);
+        if (framedTarget && !(await this.verifyFramedPoint(backendNodeId, target, point))) return false;
+        committingInputStarted = true;
+        await input.mouseDown("left");
+        await input.mouseUp("left");
+        await input.chord(["Control", "a"]);
+        await input.insertText(String(action.value ?? ""));
+        return true;
+      }, pointerRoute.mode);
+    } catch (error) {
+      if (pointerRoute.mode === "target" && !isTypedDriverError(error)) {
+        if (committingInputStarted) return this.inputDispatchUncertain();
+        return this.targetMoved("stale_target", "frame_input_route_unavailable");
+      }
+      throw error;
+    }
+    if (!dispatched) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
     const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
-    const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
+    const afterState = await this.elementState(backendNodeId, target).catch(() => ({}));
     const changed = { ...diffElement(beforeState, afterState), ...(waitResult?.matched ? { waitedFor: true } : {}) };
     const observation = await this.observeDelta();
     return this.withObservationMeta(waitResult ? (waitResult.matched ? "verified" : "timed_out") : "verified", changed, observation, waitResult && !waitResult.matched ? waitResult.reason : undefined);
@@ -1197,7 +2414,13 @@ class NewtonBrowserDriver {
     if (!applied) {
       // Fallback for custom (non-native) selects: focus + trusted typing.
       await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-      await this.dispatchInput(target, (input) => input.insertText(String(action.value ?? "")));
+      const inputMode = this.targetInputMode(target);
+      try {
+        await this.dispatchInput(target, (input) => input.insertText(String(action.value ?? "")), inputMode);
+      } catch (error) {
+        if (inputMode === "target" && !isTypedDriverError(error)) return this.inputDispatchUncertain();
+        throw error;
+      }
     }
     const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const changed = diffElement(beforeState, afterState);
@@ -1210,10 +2433,16 @@ class NewtonBrowserDriver {
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const beforeState = await this.elementState(target.backendNodeId, target);
     await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    await this.dispatchInput(target, async (input) => {
-      await input.chord(["Control", "a"]);
-      await input.keyPress("Delete");
-    });
+    const inputMode = this.targetInputMode(target);
+    try {
+      await this.dispatchInput(target, async (input) => {
+        await input.chord(["Control", "a"]);
+        await input.keyPress("Delete");
+      }, inputMode);
+    } catch (error) {
+      if (inputMode === "target" && !isTypedDriverError(error)) return this.inputDispatchUncertain();
+      throw error;
+    }
     const afterState = await this.elementState(target.backendNodeId, target).catch(() => ({}));
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", diffElement(beforeState, afterState), observation);
@@ -1381,7 +2610,7 @@ class NewtonBrowserDriver {
       { timeoutMs: SCROLL_DISPATCH_TIMEOUT_MS },
       (input) => input.wheel({ x: 10, y: 10 }, { x: 0, y: dy }),
     ).then(() => true).catch(() => false);
-    await this.sendToPage({ type: "NB_DRIVE_SCROLL", dy });
+    await this.pageEffectsPort.scroll(this.tabId, dy).catch(() => {});
     const afterY = await this.waitForScrollPositionChange(beforeY);
     const observation = await this.observeDelta();
     const changed = Math.abs(afterY - beforeY) > 1;
@@ -1416,9 +2645,15 @@ class NewtonBrowserDriver {
     const target = await this.resolveTarget(action);
     if (target?.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
     const keys = Array.isArray(action.keys) && action.keys.length > 0 ? action.keys : [String(action.value ?? "Enter")];
+    const inputMode = this.targetInputMode(target ?? {});
     const signalWindow = this.beginActionSignals();
     try {
-      await this.dispatchInput(target ?? {}, (input) => input.chord(keys.slice(0, 8)));
+      try {
+        await this.dispatchInput(target ?? {}, (input) => input.chord(keys.slice(0, 8)), inputMode);
+      } catch (error) {
+        if (inputMode === "target" && !isTypedDriverError(error)) return this.inputDispatchUncertain();
+        throw error;
+      }
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
       const observation = await this.observeDelta();
@@ -1434,10 +2669,28 @@ class NewtonBrowserDriver {
   async hover(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (!target) return this.targetMoved("not_found");
-    const point = target.point ?? (target.backendNodeId ? await this.actionablePoint(target.backendNodeId, target) : null);
-    if (!point) return this.targetMoved();
-    await this.dispatchInput(target, (input) => input.pointerMove(point));
-    await this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
+    const framedTarget = typeof target.frameId === "string" && target.frameId.length > 0;
+    if (framedTarget && !target.backendNodeId) return this.targetMoved("stale_target", "target_geometry_unavailable");
+    const point = framedTarget && target.backendNodeId
+      ? await this.actionablePoint(target.backendNodeId, target)
+      : target.point ?? (target.backendNodeId ? await this.actionablePoint(target.backendNodeId, target) : null);
+    if (!point) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
+    const pointerRoute = this.pointerInputRoute(target, point);
+    if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
+    let dispatched: boolean;
+    try {
+      dispatched = await this.dispatchInput(target, async (input) => {
+        await input.pointerMove(pointerRoute.point);
+        return !framedTarget || (target.backendNodeId !== undefined && await this.verifyFramedPoint(target.backendNodeId, target, point));
+      }, pointerRoute.mode);
+    } catch (error) {
+      if (pointerRoute.mode === "target" && !isTypedDriverError(error)) {
+        return this.targetMoved("stale_target", "frame_input_route_unavailable");
+      }
+      throw error;
+    }
+    if (!dispatched) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
+    await this.pageEffectsPort.move(this.tabId, point).catch(() => {});
     await this.settleShort();
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", { hovered: true }, observation);
@@ -1618,25 +2871,54 @@ class NewtonBrowserDriver {
   }
 
   async actionablePoint(backendNodeId: number, route: TargetRoute = {}): Promise<Point | null> {
+    this.actionabilityFailure = null;
+    this.framedPointProof = null;
+    const framedTarget = typeof route.frameId === "string" && route.frameId.length > 0;
+    let embeddingFrames: PreparedEmbeddingFrames | null = null;
     // Bring off-screen / below-the-fold targets into view first — the single
     // biggest real-world reliability win. Without this, an element outside the
     // viewport never hit-tests and times out as stale_target (seen live on the
     // large dynamic catalog).
     await this.scrollIntoView(backendNodeId, route);
+    if (framedTarget) {
+      embeddingFrames = await this.prepareEmbeddingFrames(route);
+      if (!embeddingFrames) {
+        this.actionabilityFailure ??= "frame_chain_unavailable";
+        return null;
+      }
+    }
     const deadline = Date.now() + AUTO_WAIT_TIMEOUT_MS;
-    const vh = (await this.evalNumber("window.innerHeight", route)) || 100000;
-    const vw = (await this.evalNumber("window.innerWidth", route)) || 100000;
+    const viewportRoute = framedTarget ? {} : route;
+    const measuredHeight = await this.evalNumber("window.innerHeight", viewportRoute);
+    const measuredWidth = await this.evalNumber("window.innerWidth", viewportRoute);
+    if (framedTarget && (measuredHeight <= 0 || measuredWidth <= 0)) return null;
+    const vh = measuredHeight || 100000;
+    const vw = measuredWidth || 100000;
     let previous = null;
     let rescrolls = 0;
     while (Date.now() < deadline) {
-      const box = await this.boxFor(backendNodeId, route);
+      const localBox = framedTarget
+        ? await this.localBoxFor(backendNodeId, route)
+        : await this.boxFor(backendNodeId, route);
+      const box = framedTarget && localBox && embeddingFrames
+        ? this.composeThroughEmbeddingFrames(localBox, embeddingFrames)
+        : localBox;
       if (box && box.width > 0 && box.height > 0) {
         const cx = box.x + box.width / 2;
         const cy = box.y + box.height / 2;
         // If the bbox centre is outside the viewport, re-scroll (bounded) and re-measure.
         if ((cy < 0 || cy > vh || cx < 0 || cx > vw) && rescrolls < 3) {
           rescrolls += 1;
-          await this.scrollIntoView(backendNodeId, route);
+          if (framedTarget) {
+            await this.scrollIntoView(backendNodeId, route);
+            embeddingFrames = await this.prepareEmbeddingFrames(route);
+            if (!embeddingFrames) {
+              this.actionabilityFailure ??= "frame_chain_unavailable";
+              return null;
+            }
+          } else {
+            await this.scrollIntoView(backendNodeId, route);
+          }
           previous = null;
           await delay(AUTO_WAIT_POLL_MS);
           continue;
@@ -1648,18 +2930,420 @@ class NewtonBrowserDriver {
           // on footer links → stale_target). Try each rendered fragment's centre
           // (getClientRects) and the bbox centre; the first point that actually
           // hit-tests to this node (or a descendant) wins.
-          for (const pt of await this.candidatePoints(backendNodeId, route)) {
-            const x = Math.round(pt.x);
-            const y = Math.round(pt.y);
-            if (x < 0 || x > vw || y < 0 || y > vh) continue;
+          if (framedTarget && !(await this.locallyActionable(backendNodeId, route))) {
+            this.actionabilityFailure = "target_local_hit_failed";
+            return null;
+          }
+          const candidates = framedTarget
+            ? await this.localCandidatePoints(backendNodeId, route)
+            : await this.candidatePoints(backendNodeId, route);
+          let framedCandidateOutsideRoot = false;
+          for (const pt of candidates) {
+            const composed = framedTarget && embeddingFrames
+              ? this.composeThroughEmbeddingFrames(pt, embeddingFrames)
+              : pt;
+            const x = Math.round(composed.x);
+            const y = Math.round(composed.y);
+            if (x < 0 || x > vw || y < 0 || y > vh) {
+              if (framedTarget) framedCandidateOutsideRoot = true;
+              continue;
+            }
+            if (framedTarget) {
+              if (!embeddingFrames || !this.embeddingTopologyMatches(route, embeddingFrames.routes)) {
+                this.actionabilityFailure = "frame_topology_changed";
+                return null;
+              }
+              if (!route.targetId || !route.frameId) return null;
+              this.framedPointProof = Object.freeze({
+                targetId: route.targetId,
+                frameId: route.frameId,
+                sessionId: route.sessionId ?? null,
+                point: Object.freeze({ x, y }),
+                frames: embeddingFrames,
+              });
+              return { x, y };
+            }
             if (await this.hitTestTarget(backendNodeId, x, y, route)) return { x, y };
+          }
+          if (framedTarget && framedCandidateOutsideRoot && rescrolls < 3) {
+            rescrolls += 1;
+            await this.scrollIntoView(backendNodeId, route);
+            embeddingFrames = await this.prepareEmbeddingFrames(route);
+            if (!embeddingFrames) {
+              this.actionabilityFailure ??= "frame_chain_unavailable";
+              return null;
+            }
+            previous = null;
+            await delay(AUTO_WAIT_POLL_MS);
+            continue;
           }
         }
         previous = box;
       }
       await delay(AUTO_WAIT_POLL_MS);
     }
+    this.actionabilityFailure ??= framedTarget ? "target_geometry_unavailable" : "target_moved";
     return null;
+  }
+
+  async prepareEmbeddingFrames(route: TargetRoute): Promise<PreparedEmbeddingFrames | null> {
+    if (!route.targetId || !route.frameId) return null;
+    let owners: ReadonlyArray<IframeOwnerRoute>;
+    try {
+      owners = this.embeddingOwnerRoutes(route);
+    } catch {
+      this.actionabilityFailure = "frame_topology_unavailable";
+      return null;
+    }
+    if (owners.length === 0) {
+      this.actionabilityFailure = "frame_topology_unavailable";
+      return null;
+    }
+    // Phase one mutates scroll state only. A later nested owner scroll can move
+    // an earlier owner in its parent viewport, so no geometry from this phase
+    // is eligible for the final point proof.
+    for (const owner of owners) {
+      if (!owner) {
+        this.actionabilityFailure = "frame_topology_unavailable";
+        return null;
+      }
+      const ownerRoute: TargetRoute = { targetId: owner.targetId, sessionId: owner.sessionId, frameId: owner.frameId };
+      const backendNodeId = await this.frameOwnerBackendNodeId(owner);
+      if (backendNodeId === null) {
+        this.actionabilityFailure = "frame_owner_unavailable";
+        return null;
+      }
+      await this.scrollIntoView(backendNodeId, ownerRoute);
+    }
+
+    // Phase two re-resolves and proves every owner after all scroll mutations
+    // have completed, keeping the captured geometry internally consistent.
+    const geometries: IframeOwnerGeometry[] = [];
+    for (let index = 0; index < owners.length; index += 1) {
+      const owner = owners[index];
+      if (!owner) {
+        this.actionabilityFailure = "frame_topology_unavailable";
+        return null;
+      }
+      const ownerRoute: TargetRoute = { targetId: owner.targetId, sessionId: owner.sessionId, frameId: owner.frameId };
+      const backendNodeId = await this.frameOwnerBackendNodeId(owner);
+      if (backendNodeId === null) {
+        this.actionabilityFailure = "frame_owner_unavailable";
+        return null;
+      }
+      if (!(await this.locallyActionable(backendNodeId, ownerRoute))) {
+        this.actionabilityFailure = "frame_owner_hit_failed";
+        return null;
+      }
+      const geometry = await this.iframeOwnerGeometry(backendNodeId, ownerRoute);
+      if (!geometry) {
+        this.actionabilityFailure = "frame_owner_geometry_unavailable";
+        return null;
+      }
+      const childOwner = owners[index + 1];
+      const childRoute: TargetRoute = childOwner
+        ? { targetId: childOwner.targetId, sessionId: childOwner.sessionId }
+        : route;
+      if (childRoute.sessionId && childRoute.targetId !== owner.targetId) {
+        const childWidth = await this.evalNumber("window.innerWidth", childRoute);
+        const childHeight = await this.evalNumber("window.innerHeight", childRoute);
+        if (!sameCssPixelSize(geometry.viewportWidth, childWidth)
+          || !sameCssPixelSize(geometry.viewportHeight, childHeight)) {
+          this.actionabilityFailure = "frame_viewport_mismatch";
+          return null;
+        }
+      }
+      geometries.push(geometry);
+    }
+    if (!this.embeddingTopologyMatches(route, owners)) {
+      this.actionabilityFailure = "frame_topology_changed";
+      return null;
+    }
+    return Object.freeze({ routes: Object.freeze([...owners]), geometries: Object.freeze(geometries) });
+  }
+
+  embeddingTopologyMatches(route: TargetRoute, expected: ReadonlyArray<IframeOwnerRoute>): boolean {
+    if (!route.targetId || !route.frameId) return false;
+    try {
+      const current = this.embeddingOwnerRoutes(route);
+      return current.length === expected.length && current.every((owner, index) => {
+        const prior = expected[index];
+        return Boolean(prior
+          && owner.targetId === prior.targetId
+          && owner.sessionId === prior.sessionId
+          && owner.frameId === prior.frameId);
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  embeddingOwnerRoutes(route: TargetRoute): ReadonlyArray<IframeOwnerRoute> {
+    if (!route.targetId || !route.frameId) return [];
+    return this.targetRegistry.embeddingOwnerRoutes(route.targetId, route.frameId);
+  }
+
+  async frameOwnerBackendNodeId(owner: IframeOwnerRoute): Promise<number | null> {
+    const ownerRoute: TargetRoute = { targetId: owner.targetId, sessionId: owner.sessionId, frameId: owner.frameId };
+    const result = await this.cdp("DOM.getFrameOwner", { frameId: owner.frameId }, ownerRoute).catch(() => null);
+    const directBackendNodeId = result?.backendNodeId;
+    if (typeof directBackendNodeId === "number" && Number.isSafeInteger(directBackendNodeId)) return directBackendNodeId;
+    const ownerNodeId = result?.nodeId;
+    if (typeof ownerNodeId !== "number" || !Number.isSafeInteger(ownerNodeId)) return null;
+    const described = await this.cdp("DOM.describeNode", { nodeId: ownerNodeId }, ownerRoute).catch(() => null);
+    const describedBackendNodeId = described?.node?.backendNodeId;
+    return typeof describedBackendNodeId === "number" && Number.isSafeInteger(describedBackendNodeId)
+      ? describedBackendNodeId
+      : null;
+  }
+
+  async verifyFramedPoint(backendNodeId: number, route: TargetRoute, point: Point): Promise<boolean> {
+    const proof = this.framedPointProof;
+    if (!proof || !route.targetId || !route.frameId
+      || proof.targetId !== route.targetId
+      || proof.frameId !== route.frameId
+      || proof.sessionId !== (route.sessionId ?? null)
+      || proof.point.x !== point.x
+      || proof.point.y !== point.y
+      || !this.embeddingTopologyMatches(route, proof.frames.routes)) {
+      this.actionabilityFailure = "frame_topology_changed";
+      return false;
+    }
+    let localX = point.x;
+    let localY = point.y;
+    for (let index = 0; index < proof.frames.routes.length; index += 1) {
+      const owner = proof.frames.routes[index];
+      const priorGeometry = proof.frames.geometries[index];
+      if (!owner || !priorGeometry) {
+        this.actionabilityFailure = "frame_topology_changed";
+        return false;
+      }
+      const ownerRoute: TargetRoute = { targetId: owner.targetId, sessionId: owner.sessionId, frameId: owner.frameId };
+      const ownerBackendNodeId = await this.frameOwnerBackendNodeId(owner);
+      if (ownerBackendNodeId === null) {
+        this.actionabilityFailure = "frame_owner_unavailable";
+        return false;
+      }
+      const geometry = await this.iframeOwnerGeometry(ownerBackendNodeId, ownerRoute);
+      if (!geometry || !sameFrameGeometry(geometry, priorGeometry)) {
+        this.actionabilityFailure = "frame_owner_geometry_changed";
+        return false;
+      }
+      if (!(await this.runtimeHitTestTarget(ownerBackendNodeId, localX, localY, ownerRoute))) {
+        this.actionabilityFailure = "frame_owner_hit_failed";
+        return false;
+      }
+      localX -= geometry.x;
+      localY -= geometry.y;
+    }
+    if (!(await this.runtimeHitTestTarget(backendNodeId, localX, localY, route))) {
+      this.actionabilityFailure = "target_local_hit_failed";
+      return false;
+    }
+    if (!this.embeddingTopologyMatches(route, proof.frames.routes)) {
+      this.actionabilityFailure = "frame_topology_changed";
+      return false;
+    }
+    return true;
+  }
+
+  targetMainViewportPoint(route: TargetRoute, rootPoint: Point): Point | null {
+    const proof = this.framedPointProof;
+    if (!proof || !route.targetId || !route.frameId || !route.sessionId
+      || proof.targetId !== route.targetId
+      || proof.frameId !== route.frameId
+      || proof.sessionId !== route.sessionId
+      || proof.point.x !== rootPoint.x
+      || proof.point.y !== rootPoint.y
+      || !Number.isFinite(proof.point.x)
+      || !Number.isFinite(proof.point.y)
+      || Math.round(proof.point.x) !== proof.point.x
+      || Math.round(proof.point.y) !== proof.point.y
+      || this.targetRegistry.targetForSession(route.sessionId)?.targetId !== route.targetId
+      || !this.embeddingTopologyMatches(route, proof.frames.routes)) {
+      this.actionabilityFailure = "frame_input_route_unavailable";
+      return null;
+    }
+    // Input coordinates in a child session are relative to that target's main
+    // viewport. Subtract only the ancestor-owned prefix from the exact rounded
+    // root point retained by the actionability proof. Any same-process frames
+    // inside the target form a contiguous suffix and remain part of the target-
+    // local coordinate.
+    let x = proof.point.x;
+    let y = proof.point.y;
+    let enteredTarget = false;
+    let targetViewport: IframeOwnerGeometry | null = null;
+    for (let index = 0; index < proof.frames.routes.length; index += 1) {
+      const owner = proof.frames.routes[index];
+      const geometry = proof.frames.geometries[index];
+      if (!owner || !geometry) {
+        this.actionabilityFailure = "frame_input_route_unavailable";
+        return null;
+      }
+      if (owner.targetId === route.targetId) {
+        enteredTarget = true;
+        continue;
+      }
+      if (enteredTarget) {
+        this.actionabilityFailure = "frame_input_route_unavailable";
+        return null;
+      }
+      x -= geometry.x;
+      y -= geometry.y;
+      targetViewport = geometry;
+    }
+    if (!targetViewport || !Number.isFinite(x) || !Number.isFinite(y)
+      || !Number.isFinite(targetViewport.viewportWidth) || targetViewport.viewportWidth <= 0
+      || !Number.isFinite(targetViewport.viewportHeight) || targetViewport.viewportHeight <= 0
+      || x < 0 || x > targetViewport.viewportWidth
+      || y < 0 || y > targetViewport.viewportHeight) {
+      this.actionabilityFailure = "frame_input_point_invalid";
+      return null;
+    }
+    return { x, y };
+  }
+
+  pointerInputRoute(route: TargetRoute, rootPoint: Point): Readonly<{ mode: "root" | "target"; point: Point }> | null {
+    if (this.targetInputMode(route) === "root") return Object.freeze({ mode: "root", point: rootPoint });
+    const point = this.targetMainViewportPoint(route, rootPoint);
+    return point ? Object.freeze({ mode: "target", point: Object.freeze(point) }) : null;
+  }
+
+  targetInputMode(route: TargetRoute): "root" | "target" {
+    return typeof route.frameId === "string" && route.frameId.length > 0 && typeof route.sessionId === "string" && route.sessionId.length > 0
+      ? "target"
+      : "root";
+  }
+
+  composeThroughEmbeddingFrames<T extends Point | Box>(value: T, frames: PreparedEmbeddingFrames): T {
+    let x = value.x;
+    let y = value.y;
+    for (let index = frames.geometries.length - 1; index >= 0; index -= 1) {
+      const geometry = frames.geometries[index];
+      if (!geometry) continue;
+      x += geometry.x;
+      y += geometry.y;
+    }
+    return { ...value, x, y };
+  }
+
+  async iframeOwnerGeometry(backendNodeId: number, route: TargetRoute): Promise<IframeOwnerGeometry | null> {
+    const objectId = await this.objectIdFor(backendNodeId, route);
+    if (!objectId) return null;
+    const result = await this.cdp("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function () {
+        try {
+          let cursor = this;
+          let depth = 0;
+          while (cursor) {
+            if (depth >= 64) return null;
+            const cursorStyle = window.getComputedStyle(cursor);
+            if (cursorStyle.transform !== "none" || cursorStyle.perspective !== "none"
+              || (cursorStyle.zoom !== "1" && cursorStyle.zoom !== "normal")) return null;
+            const root = cursor.getRootNode();
+            cursor = cursor.parentElement || (root && root.host) || null;
+            depth += 1;
+          }
+          if (window.visualViewport && window.visualViewport.scale !== 1) return null;
+          const rect = Element.prototype.getBoundingClientRect.call(this);
+          const style = window.getComputedStyle(this);
+          return {
+            x: rect.left + this.clientLeft,
+            y: rect.top + this.clientTop,
+            viewportWidth: this.clientWidth,
+            viewportHeight: this.clientHeight,
+            renderedWidth: rect.width,
+            renderedHeight: rect.height,
+            layoutWidth: this.offsetWidth,
+            layoutHeight: this.offsetHeight,
+            transform: style.transform,
+            zoom: style.zoom,
+            axisAligned: true,
+          };
+        } catch (e) { return null; }
+      }`,
+      returnByValue: true,
+    }, route).catch(() => null);
+    const value = result?.result?.value;
+    if (!value || typeof value !== "object") return null;
+    const x = finiteNumber(value.x);
+    const y = finiteNumber(value.y);
+    const viewportWidth = finiteNumber(value.viewportWidth);
+    const viewportHeight = finiteNumber(value.viewportHeight);
+    const renderedWidth = finiteNumber(value.renderedWidth);
+    const renderedHeight = finiteNumber(value.renderedHeight);
+    const layoutWidth = finiteNumber(value.layoutWidth);
+    const layoutHeight = finiteNumber(value.layoutHeight);
+    if (x === null || y === null || viewportWidth === null || viewportHeight === null
+      || renderedWidth === null || renderedHeight === null || layoutWidth === null || layoutHeight === null
+      || viewportWidth <= 0 || viewportHeight <= 0 || renderedWidth <= 0 || renderedHeight <= 0
+      || layoutWidth <= 0 || layoutHeight <= 0
+      || value.axisAligned !== true
+      || value.transform !== "none"
+      || (value.zoom !== "1" && value.zoom !== "normal")
+      || !sameCssPixelSize(renderedWidth, layoutWidth)
+      || !sameCssPixelSize(renderedHeight, layoutHeight)) return null;
+    return Object.freeze({ x, y, viewportWidth, viewportHeight });
+  }
+
+  async locallyActionable(backendNodeId: number, route: TargetRoute): Promise<boolean> {
+    const vh = (await this.evalNumber("window.innerHeight", route)) || 0;
+    const vw = (await this.evalNumber("window.innerWidth", route)) || 0;
+    if (vh <= 0 || vw <= 0) return false;
+    for (const point of await this.localCandidatePoints(backendNodeId, route)) {
+      const x = Math.round(point.x);
+      const y = Math.round(point.y);
+      if (x < 0 || x > vw || y < 0 || y > vh) continue;
+      if (await this.runtimeHitTestTarget(backendNodeId, x, y, route)) return true;
+    }
+    return false;
+  }
+
+  async localCandidatePoints(backendNodeId: number, route: TargetRoute): Promise<Point[]> {
+    const objectId = await this.objectIdFor(backendNodeId, route);
+    if (!objectId) return [];
+    const result = await this.cdp("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function () {
+        const out = [];
+        const push = (r) => {
+          if (r && r.width > 0 && r.height > 0) out.push({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+        };
+        try { for (const r of this.getClientRects()) push(r); } catch (e) {}
+        try { push(this.getBoundingClientRect()); } catch (e) {}
+        return out;
+      }`,
+      returnByValue: true,
+    }, route).catch(() => null);
+    const points = result?.result?.value;
+    return Array.isArray(points)
+      ? points.filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      : [];
+  }
+
+  async localBoxFor(backendNodeId: number, route: TargetRoute): Promise<Box | null> {
+    const objectId = await this.objectIdFor(backendNodeId, route);
+    if (!objectId) return null;
+    const result = await this.cdp("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function () {
+        try {
+          const rect = Element.prototype.getBoundingClientRect.call(this);
+          return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+        } catch (e) { return null; }
+      }`,
+      returnByValue: true,
+    }, route).catch(() => null);
+    const value = result?.result?.value;
+    if (!value || typeof value !== "object") return null;
+    const x = finiteNumber(value.x);
+    const y = finiteNumber(value.y);
+    const width = finiteNumber(value.width);
+    const height = finiteNumber(value.height);
+    return x === null || y === null || width === null || height === null || width <= 0 || height <= 0
+      ? null
+      : { x, y, width, height };
   }
 
   // Viewport-relative click candidates for a node, ordered most-specific first:
@@ -1819,14 +3503,136 @@ class NewtonBrowserDriver {
     return false;
   }
 
-  async maskZones(zones: NonNullable<BrowserAction["sensitiveZones"]>): Promise<boolean | undefined> {
-    if (!Array.isArray(zones) || zones.length === 0) return;
-    const response = await this.sendToPage({ type: "NB_DRIVE_MASK", zones });
-    return response?.ok === true;
+  async resolveMaskTargets(zones: NonNullable<BrowserAction["sensitiveZones"]>): Promise<TargetResolution[]> {
+    if (!Array.isArray(zones) || zones.length === 0 || zones.length > 32) throw new Error("mask_application_failed");
+    const targets: TargetResolution[] = [];
+    const identities = new Set<string>();
+    for (const zone of zones) {
+      // Sensitive zones support an observed ref as well as semantic/configured
+      // matching. Keep the discriminator on the action itself so a union spread
+      // cannot widen the target into an invalid partial union.
+      const target = await this.resolveTarget({ kind: "wait_for", ...zone, exact: true });
+      if (!target || typeof target.backendNodeId !== "number" || !Number.isSafeInteger(target.backendNodeId)) {
+        throw new Error("mask_target_unavailable");
+      }
+      const identity = `${target.targetId ?? "root"}:${target.frameId ?? "root"}:${target.backendNodeId}`;
+      if (identities.has(identity)) continue;
+      identities.add(identity);
+      targets.push(target);
+    }
+    if (targets.length === 0) throw new Error("mask_target_unavailable");
+    return targets;
   }
 
-  async unmaskZones() {
-    await this.sendToPage({ type: "NB_DRIVE_UNMASK" });
+  async maskRegionsForTargets(targets: readonly TargetResolution[], rootScroll: Point): Promise<Box[]> {
+    const regions: Box[] = [];
+    for (const target of targets) {
+      const backendNodeId = target.backendNodeId;
+      if (typeof backendNodeId !== "number") throw new Error("mask_target_unavailable");
+      const local = await this.viewportBoxForMask(backendNodeId, target);
+      if (!local) throw new Error("mask_target_geometry_unavailable");
+      let x = local.x;
+      let y = local.y;
+      if (target.frameId) {
+        let owners: ReadonlyArray<IframeOwnerRoute>;
+        try {
+          owners = this.embeddingOwnerRoutes(target);
+        } catch {
+          throw new Error("mask_frame_topology_unavailable");
+        }
+        if (owners.length === 0) throw new Error("mask_frame_topology_unavailable");
+        for (const owner of owners) {
+          const ownerRoute: TargetRoute = { targetId: owner.targetId, sessionId: owner.sessionId, frameId: owner.frameId };
+          const ownerBackendNodeId = await this.frameOwnerBackendNodeId(owner);
+          if (ownerBackendNodeId === null) throw new Error("mask_frame_owner_unavailable");
+          const geometry = await this.iframeOwnerGeometry(ownerBackendNodeId, ownerRoute);
+          if (!geometry) throw new Error("mask_frame_geometry_unavailable");
+          x += geometry.x;
+          y += geometry.y;
+        }
+        if (!this.embeddingTopologyMatches(target, owners)) throw new Error("mask_frame_topology_changed");
+      }
+      const region = {
+        x: x + rootScroll.x - MASK_REGION_PADDING_CSS,
+        y: y + rootScroll.y - MASK_REGION_PADDING_CSS,
+        width: local.width + MASK_REGION_PADDING_CSS * 2,
+        height: local.height + MASK_REGION_PADDING_CSS * 2,
+      };
+      if (![region.x, region.y, region.width, region.height].every(Number.isFinite)
+        || region.width <= 0 || region.height <= 0) {
+        throw new Error("mask_target_geometry_unavailable");
+      }
+      regions.push(region);
+    }
+    return regions;
+  }
+
+  async viewportBoxForMask(backendNodeId: number, route: TargetRoute): Promise<Box | null> {
+    const objectId = await this.objectIdFor(backendNodeId, route);
+    if (!objectId) return null;
+    const measured = await this.cdp("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function () {
+        const rect = this.getBoundingClientRect();
+        const style = getComputedStyle(this);
+        return {
+          x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+          visible: style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0,
+          connected: this.isConnected === true,
+        };
+      }`,
+      returnByValue: true,
+    }, route).catch(() => null);
+    const value = measured?.result?.value;
+    if (!value || value.visible !== true || value.connected !== true
+      || ![value.x, value.y, value.width, value.height].every(Number.isFinite)
+      || value.width <= 0 || value.height <= 0) return null;
+    return { x: value.x, y: value.y, width: value.width, height: value.height };
+  }
+
+  async pauseForRasterMask(): Promise<() => Promise<void>> {
+    const routes: CdpRoute[] = [{}];
+    const sessionIds = new Set<string>();
+    for (const route of this.targetRegistry.listObservationRoutes()) {
+      if (!route.sessionId || sessionIds.has(route.sessionId)) continue;
+      sessionIds.add(route.sessionId);
+      routes.push({ sessionId: route.sessionId });
+    }
+    const prepared: CdpRoute[] = [];
+    try {
+      for (const route of routes) {
+        prepared.push(route);
+        await this.cdp("Animation.enable", {}, route);
+        await this.cdp("Animation.setPlaybackRate", { playbackRate: 0 }, route);
+        // Disabling script execution freezes page-authored DOM movement without putting
+        // the renderer into Debugger.paused, a state in which Chromium can refuse or
+        // hang Page.captureScreenshot. Animation playback is frozen separately above.
+        await this.cdp("Emulation.setScriptExecutionDisabled", { value: true }, route);
+      }
+    } catch {
+      await this.resumeRasterMaskRoutes(prepared).catch(() => {});
+      throw new Error("mask_page_freeze_failed");
+    }
+    let resumed = false;
+    return async () => {
+      if (resumed) return;
+      resumed = true;
+      await this.resumeRasterMaskRoutes(prepared);
+    };
+  }
+
+  async resumeRasterMaskRoutes(routes: readonly CdpRoute[]): Promise<void> {
+    let failed = false;
+    for (const route of [...routes].reverse()) {
+      for (const [method, params] of [
+        ["Emulation.setScriptExecutionDisabled", { value: false }],
+        ["Animation.setPlaybackRate", { playbackRate: 1 }],
+        ["Animation.disable", {}],
+      ] as const) {
+        try { await this.cdp(method, params, route); } catch { failed = true; }
+      }
+    }
+    if (failed) throw new Error("mask_page_resume_failed");
   }
 
   async waitForSettle(timeoutMs = SETTLE_TIMEOUT_MS) {
@@ -1867,13 +3673,13 @@ class NewtonBrowserDriver {
 
   paintCursorClick(x: number, y: number): void {
     // fire-and-forget, never awaited, errors swallowed (§5.1).
-    this.sendToPage({ type: "NB_DRIVE_MOVE", x, y });
-    this.sendToPage({ type: "NB_DRIVE_CLICK", x, y });
+    this.pageEffectsPort.move(this.tabId, { x, y }).catch(() => {});
+    this.pageEffectsPort.click(this.tabId, { x, y }).catch(() => {});
   }
 
   paintCursorField(point: Point): void {
-    this.sendToPage({ type: "NB_DRIVE_MOVE", x: point.x, y: point.y });
-    this.sendToPage({ type: "NB_DRIVE_FIELD", rect: { x: point.x - 12, y: point.y - 12, width: 24, height: 24 } });
+    this.pageEffectsPort.move(this.tabId, point).catch(() => {});
+    this.pageEffectsPort.field(this.tabId, { x: point.x - 12, y: point.y - 12, width: 24, height: 24 }).catch(() => {});
   }
 
   async evalString(expression: string, route: TargetRoute = {}): Promise<string> {
@@ -2010,9 +3816,23 @@ class NewtonBrowserDriver {
     };
   }
 
-  async targetMoved(status = "stale_target"): Promise<DriverRecord> {
+  async targetMoved(status = "stale_target", reason?: string): Promise<DriverRecord> {
     const observation = await this.observe({});
-    return this.withObservationMeta(status, {}, observation, status === "not_found" ? "target_not_found" : "target_moved");
+    return this.withObservationMeta(status, {}, observation, reason ?? (status === "not_found" ? "target_not_found" : "target_moved"));
+  }
+
+  async inputDispatchUncertain(): Promise<DriverRecord> {
+    const observation = await this.observe({}).catch(() => ({
+      kind: "observation",
+      mode: "cdp",
+      origin: safeOrigin(this.lastObserveUrl ?? ""),
+      title: "",
+      nodes: [],
+      nodeCount: 0,
+      truncated: false,
+      capturedAt: new Date().toISOString(),
+    }));
+    return this.withObservationMeta("dispatched_unverified", {}, observation, "input_dispatch_uncertain");
   }
 
   refreshPendingDialog(): void {
@@ -2100,10 +3920,52 @@ function computeObservationDelta(baseline: Map<string, ObservationNodeSnapshot>,
 
 function safeOrigin(url: unknown): string {
   try {
-    return new URL(String(url)).origin;
+    const parsed = new URL(String(url));
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.origin;
   } catch {
     return "";
   }
+}
+
+function isInheritedBlankTarget(url: unknown): boolean {
+  return url === "" || url === "about:blank";
+}
+
+function isRecord(value: unknown): value is CdpRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMutatingAction(kind: DriverAction["kind"]): boolean {
+  return !["observe", "screenshot", "wait_for", "console", "network", "fill_form"].includes(kind);
+}
+
+function isContainmentAttributableAction(action: DriverAction): boolean {
+  if (!isMutatingAction(action.kind)) return false;
+  if (["scroll", "hover", "move", "resize"].includes(action.kind)) return false;
+  if (action.kind === "press") {
+    const targeted = typeof action.ref === "string"
+      || action.target !== undefined
+      || typeof action.role === "string"
+      || typeof action.name === "string"
+      || typeof action.label === "string"
+      || typeof action.placeholder === "string"
+      || typeof action.testId === "string"
+      || typeof action.selector === "string";
+    if (!targeted && Array.isArray(action.keys)
+      && action.keys.every((key) => ["PAGEDOWN", "PAGEUP", "HOME", "END", "ARROWDOWN", "ARROWUP", "ARROWLEFT", "ARROWRIGHT"].includes(key.toUpperCase()))) return false;
+  }
+  return true;
+}
+
+function safeLoaderId(value: unknown): string | null {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.length > 128
+    || /[\u0000-\u0020\u007f]/.test(value)
+  ) return null;
+  return value;
 }
 
 function isSupportedTextMime(mimeType: string): boolean {
@@ -2303,12 +4165,52 @@ function inputTargetKey(route: CdpRoute | number | null | undefined = {}): strin
   return typeof route === "object" && typeof route?.sessionId === "string" && route.sessionId ? `session:${route.sessionId}` : "root";
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sameCssPixelSize(left: number, right: number): boolean {
+  return Number.isFinite(left) && Number.isFinite(right) && left > 0 && right > 0 && Math.abs(left - right) < 0.01;
+}
+
+function sameFrameGeometry(left: IframeOwnerGeometry, right: IframeOwnerGeometry): boolean {
+  return Math.abs(left.x - right.x) < 0.01
+    && Math.abs(left.y - right.y) < 0.01
+    && sameCssPixelSize(left.viewportWidth, right.viewportWidth)
+    && sameCssPixelSize(left.viewportHeight, right.viewportHeight);
+}
+
 function dialogRoute(dialog: PendingDialogRoute | null = null): CdpRoute {
   return typeof dialog?.sessionId === "string" && dialog.sessionId ? { sessionId: dialog.sessionId } : {};
 }
 
 function typedDriverError(code: string): DriverError {
   return Object.assign(new Error(code), { code });
+}
+
+async function attachStage<T>(code: string, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (isPreservedAttachFailure(error)) throw error;
+    throw typedDriverError(code);
+  }
+}
+
+function isPreservedAttachFailure(error: unknown): error is DriverError {
+  if (!isTypedDriverError(error)) return false;
+  return PRESERVED_ATTACH_FAILURE_CODES.has(error.code) || error.code.startsWith("cdp_timeout_");
+}
+
+function isTypedDriverError(error: unknown): error is DriverError {
+  return error instanceof Error && typeof (error as Partial<DriverError>).code === "string";
+}
+
+function isInputReleaseAcknowledgementTimeout(error: unknown): error is DriverError {
+  return isTypedDriverError(error)
+    && error.code === "renderer_unresponsive"
+    && error.detail === "cdp_timeout_Input.dispatchMouseEvent"
+    && (error as DriverError & { inputReleaseUnacknowledged?: unknown }).inputReleaseUnacknowledged === true;
 }
 
 function isInvalidSelectorError(error: unknown): boolean {

@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting a problem. Do not include credentials, pairing secrets, sensitive page content, or private screenshots. Security issues belong in the private reporting flow described in docs/SECURITY.md.
+        Thanks for reporting a problem. Do not include credentials, profile contents, sensitive page content, or private screenshots. Security issues belong in the private reporting flow described in docs/SECURITY.md.
   - type: input
     id: version
     attributes:
@@ -31,7 +31,7 @@ body:
       description: List the smallest exact sequence that reproduces the issue.
       placeholder: |
         1. Build with ...
-        2. Load the extension ...
+        2. Run `newton-browser --doctor` and confirm the owned-browser runtime is configured.
         3. Call browser.status ...
     validations:
       required: true
@@ -60,7 +60,7 @@ body:
       options:
         - label: I searched existing issues and troubleshooting guidance.
           required: true
-        - label: I removed credentials, pairing secrets, sensitive page content, and private local paths.
+        - label: I removed credentials, profile contents, sensitive page content, and private local paths.
           required: true
         - label: This is not a privately reportable security vulnerability.
           required: true

@@ -1,317 +1,234 @@
 # Newton Browser
 
-Local browser control for MCP clients using your existing Chrome or Edge profile.
+Newton Browser is a local MCP browser-control product for agents. Its primary runtime
+launches an isolated Chrome or Edge process for each session, controls it through a
+private inherited CDP pipe, and places a deny-by-default exact-origin policy proxy in
+front of the browser before the first navigation.
 
-[![CI](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Koala-Studios/newton-browser/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/newton-browser.svg)](https://www.npmjs.com/package/newton-browser)
-[![MCP Registry](https://img.shields.io/badge/MCP_Registry-0.4.1-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Koala-Studios%2Fnewton-browser)
-[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/hjhanngbpeafifandahdemfcalfniijn?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn)
-[![GitHub Release](https://img.shields.io/github/v/release/Koala-Studios/newton-browser)](https://github.com/Koala-Studios/newton-browser/releases)
+No browser extension, developer-mode refresh, debug TCP port, hosted relay, installed
+daemon, database, telemetry service, or model-provider integration is required.
 
-Newton Browser connects an MCP client such as Codex or Claude to a local Chromium extension. It can open isolated tabs, observe pages, take screenshots, interact with accessible controls, and hand completed tabs back to you—all without a hosted service, required system daemon, database, telemetry pipeline, or cloud relay.
+## Current status
 
-## Purpose
+Version 0.4.5 is a completed direct-only candidate. The former MV3 extension,
+loopback relay, pairing plane, and current-tab compatibility runtime have been removed.
+Current-tree deterministic, packed, Windows Chrome/Edge, Linux Chrome, unauthenticated
+public real-site, trusted screenshot masking, and three-pass release evidence are recorded.
+Persistent identities and opaque profile import remain optional operator workflows; they
+are not release gates and Newton does not claim that copying a standard Windows Chrome
+profile preserves Google sessions protected by Chrome App-Bound Encryption.
 
-Newton Browser was created to give agents a browser-control tool that is **agent-agnostic and harness-agnostic**. It uses the open MCP interface instead of depending on proprietary browser-control code or product-specific implementations such as Claude's or Codex's Chrome control tools. The same local extension and MCP host can therefore work across compatible clients, agent frameworks, and model providers without locking browser automation to one vendor's stack.
+Newton Browser remains private software. Public publishing, browser-store
+updates, and a public license require separate approval.
 
-> [!IMPORTANT]
-> Newton Browser is an early public preview. Version 0.4.1 is the current npm and MCP Registry release; newer deployment builds are distributed as verified GitHub Release artifacts until npm publication is reconciled. The [Chrome Web Store listing](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn) is live. The former Chrome-review gate on Edge Add-ons is cleared; the Edge listing has not yet been submitted.
+## Why it exists
 
-## Why Newton Browser?
+Agent browser tools need more than raw automation. Newton is designed around:
 
-- **Use your real browser profile.** Work with the sessions you are already signed into instead of a separate automation profile.
-- **Use incognito when privacy matters.** Owned sessions can open in an incognito
-  window so public-site QA and screenshots do not inherit profile logins or storage.
-- **Keep control traffic local.** The MCP host communicates over stdio, and the extension relay binds only to `127.0.0.1`.
-- **Scope every session.** Each session requires one exact HTTP(S) origin plus any explicitly allowed origins.
-- **Keep tabs isolated.** Owned tabs are the default; current-tab control must be requested explicitly.
-- **Make browser ownership deterministic.** Chrome and Edge can remain enabled together while only one browser owns a session.
-- **Apply a safety floor.** Credentials, payment data, one-time codes, government identifiers, and cross-origin targets are blocked before dispatch.
-- **Contain controlled targets before they run.** Related Chromium targets are paused
-  while exact-origin rules are installed, without serializing unrelated sessions.
-- **See what happened.** Observations, screenshots, typed action results, and explicit tab finalization make browser work inspectable.
-
-## How it works
-
-```text
-MCP client
-    ↕ stdio
-newton-browser
-    ↕ WebSocket on 127.0.0.1:17321-17340
-Newton Browser MV3 extension
-    ↕ Chrome DevTools Protocol
-Owned tab or explicitly selected current tab
-```
-
-The MCP client starts its own host process. The extension discovers local hosts in the bounded loopback range, and each browser session is bound to the host, tab, and exact origin that created it.
+- compact accessibility observations and stable fresh refs;
+- same-session FIFO execution with concurrency across independent sessions;
+- exact scheme/host/port grants and preventive network containment;
+- typed outcomes that distinguish completed, prevented, not-started, and uncertain work;
+- isolated, persistent Newton identities without inspecting cookies or profile contents;
+- deterministic safety floors for credentials, payments, files, and external effects;
+- local stdio MCP operation that is independent of a particular model vendor.
 
 ## Requirements
 
-- Node.js 20 or newer to run the host; Node.js 24 or newer to develop the repository
-- Google Chrome or Microsoft Edge with Developer mode available
-- An MCP client that supports local stdio servers
+- Node.js 20 or newer for the packed host; Node.js 24 or newer for development.
+- A locally installed current Chrome or Edge.
+- An MCP client such as Codex, Claude Code, or Claude Desktop.
 
-Source development additionally requires Node.js 24 or newer, pnpm 10.8.0, and Git. The project is designed to work on Windows, macOS, and Linux. The current release evidence is strongest on Windows with Chrome and Edge.
+## Direct-runtime setup
 
-## Quick start
+Version 0.4.5 is not published to npm. Build and use the verified local candidate:
 
-### 1. Get the extension
-
-Chrome users can install Newton Browser directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/newton-browser/hjhanngbpeafifandahdemfcalfniijn).
-
-For a manual install, Edge, or the exact 0.4.1 package, download `newton-browser-extension-0.4.1.zip` from the [v0.4.1 GitHub Release](https://github.com/Koala-Studios/newton-browser/releases/tag/v0.4.1) and extract it to a permanent local directory.
-
-Contributors can instead build the same extension from source:
-
-```bash
-git clone https://github.com/Koala-Studios/newton-browser.git
-cd newton-browser
-npm install --global pnpm@10.8.0
+```powershell
 pnpm install --frozen-lockfile
 pnpm build
+node apps/mcp-server/dist/index.js setup --browser chrome
 ```
 
-`pnpm build` compiles the shared packages and MCP host, then writes the extension runtime under `apps/extension/dist`.
+Setup creates an opaque Newton identity and writes direct-runtime configuration. To use
+Edge, pass `--browser edge`. To select an existing Newton identity:
 
-### 2. Install or load the extension
-
-If you installed from the Chrome Web Store, continue to step 3. For a manual installation:
-
-In Chrome:
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Select **Load unpacked**.
-4. Choose the extracted release directory, or the repository's `apps/extension` directory for a source build.
-
-In Edge, use `edge://extensions` and follow the same steps. The selected directory must contain `manifest.json`; do not select the generated `dist` directory itself.
-
-The default `local_trust` mode requires no pairing key or popup action.
-
-### 3. Configure your MCP client
-
-Use the published host through npx:
-
-```text
-npx -y newton-browser@0.4.1
+```powershell
+node apps/mcp-server/dist/index.js setup --browser chrome --identity nbi_<opaque-id>
 ```
 
-#### Codex
+When a site requires authentication, the operator signs in personally inside a contained
+visible browser:
 
-Add this to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.newton-browser]
-command = "npx"
-args = ["-y", "newton-browser@0.4.1"]
-startup_timeout_sec = 45
-tool_timeout_sec = 150
+```powershell
+node apps/mcp-server/dist/index.js identity login nbi_<opaque-id> --origin https://example.com
 ```
 
-Restart Codex after changing the configuration.
+Add only exact redirect origins that are actually required:
 
-#### Claude Desktop or Claude Code
+```powershell
+node apps/mcp-server/dist/index.js identity login nbi_<opaque-id> `
+  --origin https://example.com `
+  --allow-origin https://accounts.example.com
+```
 
-Merge this server into the client's MCP configuration:
+Newton never asks an agent to type or retrieve credentials. Close the login browser after
+sign-in; success is reported only after browser, proxy, and identity-lease cleanup.
+
+Optional live configuration check:
+
+```powershell
+node apps/mcp-server/dist/index.js doctor --live
+```
+
+Ordinary `--doctor` is configuration-only. The live doctor launches and cleans a
+disposable browser.
+
+## MCP configuration
+
+Example generic stdio configuration:
 
 ```json
 {
   "mcpServers": {
     "newton-browser": {
-      "command": "npx",
-      "args": ["-y", "newton-browser@0.4.1"]
+      "command": "node",
+      "args": ["C:\\absolute\\path\\newton-browser\\apps\\mcp-server\\dist\\index.js"]
     }
   }
 }
 ```
 
-Start a new client session after changing the configuration. Other MCP clients can use the same `command` and `args` as a local stdio server.
+Installer helpers are also available:
 
-### 4. Verify the connection
-
-Ask your MCP client to call:
-
-```text
-browser.status
+```powershell
+node apps/mcp-server/dist/index.js --install codex --dry-run
+node apps/mcp-server/dist/index.js --install claude-code --dry-run
+node apps/mcp-server/dist/index.js --install claude-desktop --dry-run
 ```
 
-A working setup reports `ready: true`. `browser.status` is compact by default; pass
-`detail: "full"` when host, extension, protocol, and limit diagnostics are needed. The
-optional doctor command provides typed setup diagnostics:
+Review a dry run before allowing it to modify client configuration. Restart the MCP client
+after installation. Only after a separately approved 0.4.5 npm publication should these
+local paths be replaced with `npx -y newton-browser@0.4.5`.
 
-Newton Browser initializes with contract version `1.0`. Its small MCP catalog carries
-truthful behavior annotations and an exact compact action-variant table. Invalid action
-kinds, misspelled or variant-inappropriate fields, malformed composite refs, and bad
-enums fail before browser dispatch. Page-derived observations and evidence are
-structurally labeled untrusted; page text is never authorization or a tool instruction.
-Only granted-origin supported UTF-8 network bodies can be returned, after redaction;
-base64, binary, malformed, compressed, and ungranted bodies are omitted.
+## Agent workflow
 
-```bash
-npx -y newton-browser@0.4.1 --doctor
+Newton exposes eleven tools:
+
+- `browser.status`
+- `browser.session.start`
+- `browser.observe`
+- `browser.act`
+- `browser.screenshot`
+- `browser.console`
+- `browser.network`
+- `browser.sessions.list`
+- `browser.session.finalize`
+- `browser.session.stop`
+- `browser.stop_all`
+
+A normal direct session:
+
+1. Calls `browser.status`. Configured direct mode may be idle with `ready:false` before
+   the first session; that is not an extension-disconnected error.
+2. Starts an owned session with one required exact HTTP(S) `origin`, the narrowest
+   `allowedOrigins`, and optionally `browser` or an opaque `identityId`.
+3. Uses compact observations and fresh refs. Page content is untrusted data.
+4. Performs one typed action at a time and reads the host-authored outcome before retrying.
+5. Stops or close-finalizes the session, which confirms process, proxy, CDP, and lease
+   cleanup.
+
+Direct mode does not support current-tab attachment, incognito, deliverable, or handoff.
+Each session owns a separate browser process. Distinct sessions can progress concurrently;
+one persistent identity cannot be leased by two sessions simultaneously.
+
+## Identities and profile import
+
+Useful operator commands:
+
+```powershell
+newton-browser identity create --browser chrome
+newton-browser identity list
+newton-browser identity lease-inspect --id nbi_<opaque-id>
+newton-browser identity lease-recover --id nbi_<opaque-id>
+newton-browser identity delete --id nbi_<opaque-id>
 ```
 
-If the client is not running yet, `ready: false` with `nextAction: "start_or_restart_mcp_client_then_check_browser_status"` is expected.
+With explicit operator authorization, Newton can byte-copy a narrow authentication-bearing
+allowlist from a closed, stable Chrome or Edge profile into a new Newton-owned identity:
 
-## First session
-
-Every session requires an exact origin. A typical tool sequence is:
-
-1. Call `browser.status`.
-2. Start a session with `browser.session.start`:
-
-   ```json
-   {
-     "origin": "https://example.com",
-     "allowedOrigins": ["https://example.com"],
-     "tabMode": "owned_group",
-     "instanceLabel": "example-task",
-     "observe": { "format": "compact", "roles": ["button", "textbox"], "limit": 40 }
-   }
-   ```
-
-3. Use the initial compact observation returned by session start. Call
-   `browser.observe` again only when you need fresh state; compact, geometry-free output
-   is the default. Use `query`, `roles`, and `limit` to narrow it, or `format: "json"`
-   for diagnostic compatibility.
-4. Use `browser.act` with fresh accessible references from the observation.
-5. Re-observe after navigation or a page rerender.
-6. Finish with `browser.tabs.finalize` using `close`, `deliverable`, or `handoff`.
-
-`owned_group` is the safe default. Current-tab control is explicit and only succeeds when the current tab's live origin matches the session grant.
-
-For an isolated owned tab, add `"incognito": true`. Chrome or Edge must have
-**Allow in incognito** enabled for the Newton Browser extension; otherwise session start
-returns `incognito_not_allowed`.
-
-See the [tool reference](skills/newton-browser/references/tool-reference.md) for the complete tool list and action kinds.
-
-## Current limitations
-
-- Chrome and Edge are supported; Firefox and Safari are not.
-- The Edge Add-ons listing is not yet published; Edge users must load the released ZIP unpacked or use a source build.
-- Multi-tab sessions are not yet supported; a popup/new-target signal halts the action
-  instead of silently transferring control.
-- Newton Browser does not bypass CAPTCHAs, authentication challenges, origin grants, or its sensitive-data floor.
-- A session cannot silently follow focus to another tab or origin.
-
-## Configuration
-
-Newton Browser reads optional per-user configuration from:
-
-- Windows: `%LOCALAPPDATA%\NewtonBrowser\config.json`
-- macOS: `~/Library/Application Support/NewtonBrowser/config.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/newton-browser/config.json`
-
-Example:
-
-```json
-{
-  "transportAuth": "paired",
-  "browserTarget": "chrome"
-}
+```powershell
+newton-browser identity import --browser chrome `
+  --user-data-root "C:\path\to\User Data" `
+  --profile-directory Default
 ```
 
-| Setting | Values | Default | Purpose |
-| --- | --- | --- | --- |
-| `transportAuth` | `local_trust`, `paired` | `local_trust` | Enables zero-touch local trust or the optional HMAC pairing handshake. |
-| `browserTarget` | `auto`, `chrome`, `edge` | `auto` | Selects which connected browser may own new sessions. |
-| `hostPolicies` | Array of policy manifests | Built-in generic floor | Adds exact-origin commit rules and screenshot-sensitive zones. |
+Import treats files as opaque bytes. It never parses, logs, exports, edits, or merges
+profile contents. Password, autofill, history, download, extension, restored-session,
+service-worker, and cache data is excluded. Locks, source instability, links, path escape,
+partial copies, and ambiguous browser-process closure fail closed.
 
-Environment overrides are also available:
+## Security model
 
-- `NEWTON_BROWSER_AUTH_MODE=local_trust|paired`
-- `NEWTON_BROWSER_BROWSER=auto|chrome|edge`
-- `NEWTON_BROWSER_CONFIG_DIR=/absolute/config/directory`
+- Every session has one required normalized origin plus explicit exact-origin grants.
+- The policy proxy is listening before Chromium starts and rejects denied HTTP, HTTPS
+  CONNECT, WebSocket, popup, worker, frame, navigation, form, fetch, beacon, redirect,
+  and EventSource destinations before an upstream application request.
+- Browser/CDP interception is defense in depth; proxy loss or cleanup uncertainty fences
+  the session.
+- HTTPS tunnels expose only their destination authority, not a resource type. Every
+  required third-party HTTPS origin must therefore be granted explicitly; Newton never
+  widens CONNECT access based on a passive-resource guess.
+- Page content cannot grant origins, authorize effects, choose local files, or author
+  retry decisions.
+- Credentials, OTPs, payment identifiers, government identifiers, and equivalent secrets
+  are blocked from ordinary agent input.
+- Save, send, publish, purchase, delete, launch, account, budget, and similar external
+  effects still require caller authorization.
+- Network response bodies are returned only for granted-origin bounded UTF-8 text and are
+  redacted. There is no raw-body escape hatch.
 
-Private local integrations may additionally set all three of
-`NEWTON_BROWSER_INSTANCE_LABEL`, `NEWTON_BROWSER_OBSERVER_REGISTRY_DIR`, and
-`NEWTON_BROWSER_OBSERVER_TOKEN`. The first labels sessions created by that MCP
-host. The latter two enable a loopback-only, bearer-authenticated observer that
-publishes bounded session metadata and can focus one exact owned session. The
-observer never exposes page content, origins beyond the session grant, or
-transport secrets, and remains disabled unless explicitly configured.
+Sensitive-zone screenshots use trusted post-capture PNG masking while page scripts and
+animations are frozen through CDP. If target resolution, freeze, geometry, decode,
+masking, or resume cannot be proven, capture fails closed.
 
-When `paired` mode is enabled, run `--doctor` and enter the displayed one-time secret in the extension popup. Do not put the secret in MCP arguments, screenshots, issues, or logs.
-
-## Security and privacy
-
-Newton Browser is local-only infrastructure, but browser automation still carries risk.
-
-- Relay listeners bind only to `127.0.0.1`.
-- Every session is restricted to exact HTTP(S) origins.
-- Page content is treated as untrusted data, never as instructions or authorization.
-- Newton Browser does not inspect cookies, browser storage, profile files, saved passwords, or authentication tokens.
-- Screenshot masking happens in the extension before bytes cross the relay.
-- The safety floor classifies external-effect actions, but it is not a human approval system. The calling agent remains responsible for authorization.
-- Page observations and screenshots stay on the local relay; they leave the machine only if the configured MCP client sends them to its model provider.
-
-Read the full [security model and vulnerability-reporting guidance](docs/SECURITY.md) before using Newton Browser with sensitive accounts.
+See [`docs/SECURITY.md`](docs/SECURITY.md) for the full boundary.
 
 ## Development
 
-Common repository commands:
-
-```bash
-pnpm build                 # Build packages, host, and extension
-pnpm typecheck             # Type-check the workspace
-pnpm test                  # Run the test suite
-pnpm lint                  # Verify the standalone product boundary
-pnpm smoke:quick           # Run the fast smoke subset
-pnpm extension:artifact    # Build the distributable extension ZIP + checksum
-pnpm pack:check            # Build and verify the MCP package tarball
-pnpm eval                  # Run provider-free regression tasks and fixture contracts
-pnpm eval:agent-cost       # Enforce catalog and successful-workflow token budgets
-pnpm eval:live             # Run connected-extension browser acceptance harnesses
-pnpm release:check         # Run the complete release gate
+```powershell
+pnpm install
+pnpm build
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm eval
+pnpm eval:agent-cost
+pnpm pack:check
+pnpm eval:direct-live
+pnpm eval:real-sites
+pnpm release:deterministic
+pnpm release:check
 ```
 
-The browser driver, controller, transport adapter, session lifecycle, target registry,
-containment, input, and renderer-liveness modules are strict TypeScript. `pnpm
-build:driver` compiles them into the stable JavaScript filenames consumed by the MV3
-extension; tests exercise those compiled files, and a parity gate compares two clean
-builds byte-for-byte. The overlay remains JavaScript/CSS because it is an isolated page
-asset, not part of the typed control path.
+`pnpm eval:direct-live` and `pnpm eval:real-sites` use
+`NEWTON_BROWSER_QA_OWNER=chrome|edge`. `pnpm release:deterministic` is the browser-free
+eight-stage source/packed checkpoint. `pnpm release:check` is the authoritative local gate:
+it runs that checkpoint plus installed-browser direct and real-site QA for Chrome and,
+on Windows, Edge. Cross-platform receipts and three consecutive unchanged-candidate
+passes are still required for release.
 
-Provider-free regression tasks, two-origin request counters, frame/input live harnesses,
-and bounded local command metrics are part of the release program. `pnpm eval:live`
-requires a connected unpacked extension and is never silently substituted by fixture-only
-results.
-
-The full release gate is intentionally exhaustive and includes packed-install, clean-user, protocol, fixture, chaos, concurrency, and artifact checks. See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
-
-## Repository layout
+Repository layout:
 
 ```text
-apps/extension/       Manifest V3 extension
-apps/mcp-server/      stdio MCP server and localhost relay
-packages/core/        Contracts, schemas, redaction, and safety floor
-packages/driver/      Strict TypeScript browser-side CDP driver and compiled runtime
-skills/newton-browser Canonical agent workflow and tool reference
-examples/mcp/         Version-pinned artifact configuration examples
-docs/                 Installation, security, decisions, and release docs
-test/                 Fixtures and recorded verification evidence
+apps/mcp-server/      stdio MCP host and owned-browser runtime
+packages/core/        schemas, redaction, provenance, shared contracts
+packages/driver/      strict TypeScript browser driver
+scripts/              builds, release checks, and live harnesses
+skills/newton-browser agent operating guidance
+test/                 fixtures, regression corpus, and bounded evidence
 ```
-
-## Documentation
-
-- [Detailed installation guide](docs/INSTALL.md)
-- [MCP client configuration](docs/MCP_CLIENTS.md)
-- [Tool reference](skills/newton-browser/references/tool-reference.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Security model](docs/SECURITY.md)
-- [Privacy policy](docs/PRIVACY.md)
-- [Architecture and contract decisions](docs/DECISIONS.md)
-- [Release process](docs/RELEASE.md)
-- [Discovery submission plan](docs/DISCOVERY_PLAN.md)
-- [Roadmap](ROADMAP.md)
-
-## Contributing and support
-
-Bug reports and focused feature requests are welcome through the repository's issue templates. Please include deterministic reproduction steps and remove credentials, page content, screenshots, and local paths that should not be public.
-
-For code contributions, read [CONTRIBUTING.md](CONTRIBUTING.md). Security issues should follow the private-reporting guidance in [docs/SECURITY.md](docs/SECURITY.md), not a public issue.
 
 ## License
 
-Newton Browser is licensed under the [MIT License](LICENSE).
+No public license is granted yet. Public licensing and distribution require explicit
+owner approval.

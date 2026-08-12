@@ -1,6 +1,11 @@
 # Plan 09 — Regression Evals, Observability, and Release Gates
 
-- **Status:** Approved; deterministic corpus, metrics, and three-pass packed release evidence complete; connected live-browser matrix pending
+> Historical execution plan. The corpus, metrics, token gates, packed checks, direct
+> Windows Chrome/Edge matrix, and pinned Linux Chrome matrix are complete. References
+> below to the former extension artifact or current-tab mode describe the superseded
+> implementation. Final program closure is tracked in `docs/PROGRESS_LEDGER.md`.
+
+- **Status:** Complete in the direct-only implementation and final release evidence
 - **Depends on:** Added incrementally with every plan; final release gate follows Plan 08
 - **Primary outcome:** Newton measures successful agent workflows, detects regressions copied from real browser-automation failure classes, diagnoses its own state, and releases only from reproducible packed artifacts.
 
@@ -119,7 +124,7 @@ Compact/default doctor remains human-readable. Full output contains no cookies, 
 
 ### Pull requests
 
-- Unit, integration, packed MCP/extension, deterministic eval, catalog/workflow budgets, and `git diff --check`.
+- Unit, integration, exact packed MCP, deterministic eval, catalog/workflow budgets, and `git diff --check`.
 - Real-browser critical matrix: Windows Chrome and Edge; Linux Chrome where infrastructure supports it.
 - No skipped test marked `critical`.
 

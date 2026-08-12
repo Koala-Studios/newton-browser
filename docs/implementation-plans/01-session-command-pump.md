@@ -1,9 +1,12 @@
 # Plan 01: Per-Session Command Pump, Fencing, and Idempotency
 
-- Status: approved; deterministic and packed implementation complete, live acceptance pending
+> Historical implementation plan. Its FIFO/idempotency requirements remain implemented,
+> but relay/extension file references and live gates were superseded by Plans 13-15.
+
+- Status: superseded execution plan; retained as design history
 - Classification: core execution foundation
 - Dependencies: none
-- Primary owners: core protocol, MCP bridge, extension controller
+- Current owners: core protocol and the direct MCP host/session runtime
 
 ## 1. Objective
 

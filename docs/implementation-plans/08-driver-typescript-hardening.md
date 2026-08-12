@@ -1,6 +1,11 @@
 # Plan 08 — Driver TypeScript Hardening
 
-- **Status:** Approved; implementation in progress
+> Historical execution plan. The strict TypeScript conversion, deterministic driver
+> build, direct debugger/page-effects adapters, packed allowlist, and build-parity gates
+> are complete. Extension/controller paths mentioned below were subsequently deleted by
+> Plans 13-15 and are retained only to explain the conversion sequence.
+
+- **Status:** Complete; superseded as an execution plan by the direct-only architecture
 - **Depends on:** Plans 01–07 stabilized
 - **Primary outcome:** The critical driver/controller/transport path is checked by TypeScript and built deterministically, without rewriting the product or changing runtime behavior.
 

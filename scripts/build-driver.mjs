@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const driverRoot = path.join(root, "packages", "driver");
-const source = path.join(driverRoot, "src");
 const defaultDestination = path.join(driverRoot, "dist");
 const config = path.join(driverRoot, "tsconfig.json");
 const coreConfig = path.join(root, "packages", "core", "tsconfig.build.json");
@@ -32,9 +31,6 @@ export function buildDriver({ destination = defaultDestination, quiet = false } 
   // module for it, but no runtime imports reference that file after type erasure.
   fs.rmSync(path.join(resolvedDestination, "types.js"), { force: true });
 
-  for (const asset of ["overlay.js", "overlay.css"]) {
-    fs.copyFileSync(path.join(source, asset), path.join(resolvedDestination, asset));
-  }
   if (!quiet) console.log("newton browser driver build ok");
   return resolvedDestination;
 }

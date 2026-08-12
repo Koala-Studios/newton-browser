@@ -6,7 +6,10 @@ export type BrowserDriverOptions = {
   accent?: string;
   ownerLabel?: string;
   ownsTab?: boolean;
+  ownsBrowser?: boolean;
   allowedOrigins?: string[];
+  debuggerPort?: DebuggerPort;
+  pageEffectsPort?: PageEffectsPort;
 };
 
 export type CdpRoute = { sessionId?: string | null; timeoutMs?: number };
@@ -16,6 +19,25 @@ export type CdpRoute = { sessionId?: string | null; timeoutMs?: number };
 // results are narrowed by each consuming method before they become public.
 // eslint is not used in this repository; keep the escape confined to this alias.
 export type CdpRecord = Record<string, any>;
+
+export type DebuggerTarget = { tabId: number | null; sessionId?: string };
+export type DebuggerPort = {
+  attach(target: { tabId: number }, version: string): Promise<void>;
+  detach(target: { tabId: number }): Promise<void>;
+  sendCommand(target: DebuggerTarget, method: string, params: CdpRecord): Promise<CdpRecord>;
+  onDebuggerEvent?(
+    listener: (source: CdpRecord, method: string, params: CdpRecord) => void | Promise<void>,
+  ): () => void;
+};
+
+export type PageEffectsPort = {
+  begin(tabId: number | null, options: { accent?: string; ownerLabel: string }): Promise<void>;
+  end(tabId: number | null): Promise<void>;
+  scroll(tabId: number | null, dy: number): Promise<void>;
+  move(tabId: number | null, point: Point): Promise<void>;
+  click(tabId: number | null, point: Point): Promise<void>;
+  field(tabId: number | null, rect: Box): Promise<void>;
+};
 
 export type DriverAction = BrowserAction;
 export type DriverContext = { commandId?: string };
@@ -124,24 +146,3 @@ export type TargetRoute = CdpRoute & {
   backendNodeId?: number;
   ref?: string;
 };
-
-declare global {
-  const chrome: {
-    debugger: {
-      attach(target: { tabId: number }, version: string): Promise<void>;
-      detach(target: { tabId: number }): Promise<void>;
-      sendCommand(
-        target: { tabId: number | null; sessionId?: string },
-        method: string,
-        params: CdpRecord,
-        callback: (result?: CdpRecord) => void,
-      ): void;
-    };
-    runtime: { lastError?: { message?: string } };
-    scripting: {
-      insertCSS(details: DriverRecord): Promise<void>;
-      executeScript(details: DriverRecord): Promise<void>;
-    };
-    tabs: { sendMessage(tabId: number | null, message: DriverRecord): Promise<CdpRecord> };
-  };
-}

@@ -24,20 +24,14 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  apps/extension: {}
-
   apps/mcp-server:
-    dependencies:
-      ws:
-        specifier: ^8.21.0
-        version: 8.21.0
     devDependencies:
       '@newton-browser/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
+      '@newton-browser/driver':
+        specifier: workspace:*
+        version: link:../../packages/driver
 
   packages/core: {}
 
@@ -357,9 +351,6 @@ packages:
   '@types/node@24.13.3':
     resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
-
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
@@ -399,18 +390,6 @@ packages:
 
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
-
-  ws@8.21.0:
-    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
 
 snapshots:
 
@@ -607,10 +586,6 @@ snapshots:
     dependencies:
       undici-types: 7.18.2
 
-  '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 24.13.3
-
   base64-js@1.5.1: {}
 
   detect-libc@2.1.2: {}
@@ -689,5 +664,3 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@7.18.2: {}
-
-  ws@8.21.0: {}

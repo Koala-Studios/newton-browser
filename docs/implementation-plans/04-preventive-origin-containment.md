@@ -1,6 +1,7 @@
 # Plan 04 — Preventive Origin Containment
 
-- **Status:** Approved; deterministic implementation and request-counter harness complete, live browser evidence pending
+- **Status:** Complete through the owner-approved isolated-browser Plan 04B architecture;
+  the MV3 limitation below remains historical rationale
 - **Depends on:** Plan 03 target/frame/session registry
 - **Primary outcome:** Newton prevents controlled targets and mutating requests from crossing the session grant, rather than discovering the violation only after an effect may have occurred.
 
@@ -8,18 +9,46 @@
 
 Post-action origin checks cannot undo a navigation, form submission, popup, worker bootstrap, WebSocket connection, or beacon. An agent needs a truthful distinction between an operation that was prevented and one whose outcome is uncertain. This is a safety and reliability requirement, not merely a better error message.
 
-Newton will not claim to be a complete browser-network sandbox. It will enforce the boundary over the targets and requests it controls while allowing normal read-only third-party subresources needed by modern sites.
+Newton will not claim to be a complete browser-network sandbox. In the approved
+owned-browser architecture, its launch-time proxy and CDP controls require every upstream
+destination, including subresources, to match an explicit session origin grant.
+
+## Historical MV3 platform blocker
+
+Chrome for Testing 151 rejected `Target.attachToBrowserTarget` through
+`chrome.debugger`, so an ordinary extension cannot use browser-target-only
+`Target.autoAttachRelated`. A disposable tab-root `Target.setAutoAttach` probe
+was then accepted by Chrome but did not pause a `window.open(..., "noopener")`
+popup: the action completed and the exact denied destination document reached
+the fixture server once. The bounded receipt is
+[`aip04-root-autoattach-probe.json`](../../test/evidence/aip04-root-autoattach-probe.json).
+
+The probe met its mandatory rollback criterion and was not promoted. The owner selected
+the dedicated Newton-owned browser/profile path. The direct runtime's launch-time policy
+proxy now supplies the zero-first-destination boundary and browser/CDP controls remain
+defense in depth. The extension-only boundary still cannot truthfully guarantee general
+popup prevention and remains migration-only.
+
+The two authored alternatives preserve the decision history:
+
+- [Plan 04A](04a-extension-popup-boundary.md) retains the extension-only and
+  existing-profile architecture, narrows the popup guarantee, preflights directly
+  identifiable declarative `_blank` actions, and reports script-popup outcomes honestly.
+- [Plan 04B](04b-isolated-browser-strict-containment.md) preserves the strict first-request
+  guarantee by adding a Newton-owned isolated Chromium backend with browser-level CDP.
 
 ## Enforceable boundary
 
 For a session grant containing the normalized primary origin and explicit allowed origins:
 
 - Prevent top-level and controlled-frame navigation to an ungranted origin, including HTTP redirects.
-- Pause newly created popup, subframe, and worker targets until their initial URL is reconciled with the grant.
+- Pause newly created subframe and worker targets inside the attached target tree until
+  their initial URL is reconciled with the grant. General top-level popups are included
+  only if the owner approves Plan 04B; Plan 04A deliberately narrows that guarantee.
 - Prevent mutating requests (`POST`, `PUT`, `PATCH`, `DELETE`) and beacon-like requests to ungranted origins.
 - Prevent ungranted WebSocket and EventSource connection attempts when observable through the installed CDP interception path.
-- Allow ordinary `GET`/`HEAD` third-party subresources so CDNs, fonts, images, and analytics do not make normal pages unusable.
-- Never return response bodies from an ungranted origin, even when the browser loaded that body as a permitted read-only subresource.
+- Require ordinary `GET`/`HEAD` third-party subresources such as CDNs, fonts, images, and analytics to be explicitly granted.
+- Never return response bodies from an ungranted origin.
 - Treat WebRTC and traffic outside the attached target tree as outside this guarantee. Documentation must not describe Newton as total browser network isolation.
 
 ## Files
@@ -107,9 +136,6 @@ function decidePausedRequest({ request, resourceType, isNavigationRequest }, gra
   if (isNavigationRequest) return { action: "fail", reason: "ungranted_navigation" };
   if (mutating) return { action: "fail", reason: "ungranted_mutation" };
   if (connection) return { action: "fail", reason: "ungranted_connection" };
-  if (method === "GET" || method === "HEAD") {
-    return { action: "continue_without_body_access", reason: "read_only_subresource" };
-  }
   return { action: "fail", reason: "unsupported_ungranted_request" };
 }
 ```
@@ -146,7 +172,7 @@ Each slice must include its tests and may not broaden timeouts to pass.
 - Cross-origin form, fetch mutation, and beacon produce zero application requests.
 - Ungranted popup and worker code do not execute.
 - Ungranted controlled iframe is not resumed.
-- Read-only CDN image/stylesheet requests continue but their bodies cannot be observed.
+- Ungranted CDN image/stylesheet requests make zero destination connections; explicitly granted resources continue normally.
 - Current-tab containment failure leaves the tab URL and contents untouched.
 - Allowed-origin redirects and frames continue normally.
 - A detach after release returns `outcome_unknown`, never `prevented`.

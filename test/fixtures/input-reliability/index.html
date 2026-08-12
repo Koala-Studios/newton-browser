@@ -37,7 +37,12 @@
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
       });
-      keyLog.value = JSON.stringify(keyEvents);
+      // Keep the browser-visible evidence compact enough for the bounded
+      // observation surface while retaining every distinct key and phase.
+      keyLog.value = JSON.stringify({
+        keys: [...new Set(keyEvents.map((entry) => entry.key).filter(Boolean))],
+        types: [...new Set(keyEvents.map((entry) => entry.type))],
+      });
     };
     for (const type of ["keydown", "keypress", "keyup", "input"]) {
       document.querySelector("#keyboard-target").addEventListener(type, recordKey);

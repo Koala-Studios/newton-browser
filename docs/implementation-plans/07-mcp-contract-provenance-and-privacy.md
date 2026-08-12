@@ -1,5 +1,8 @@
 # Plan 07 — MCP Contract, Provenance, and Opaque-Body Privacy
 
+> Completed implementation record. The bridge entry in the original file map was
+> superseded by the direct in-process browser host in Plans 13-15.
+
 - **Status:** Complete
 - **Depends on:** Plans 04 and 06
 - **Primary outcome:** Agents receive a strict, discoverable, versioned MCP contract that identifies untrusted page data, describes action risk, and cannot leak opaque encoded bodies around text redaction.
@@ -25,7 +28,7 @@ An efficient output format is only useful when agents can reliably construct val
 - `packages/core/src/redaction.ts` — explicit handling for encoded or undecodable bodies.
 - `packages/driver/src/driver.ts` — label body encoding and source origin before returning network evidence.
 - `apps/mcp-server/src/mcp-server.ts` — publish concise schemas, server instructions, and annotations.
-- `apps/mcp-server/src/bridge.ts` — preserve provenance and contract version.
+- `apps/mcp-server/src/browser-runtime/direct-browser-host.ts` — preserve provenance and contract version in the final direct architecture.
 - Existing MCP/core contract tests and packed-server smokes.
 - `README.md`, `docs/MCP_CLIENTS.md`, `docs/SECURITY.md`, `docs/PRIVACY.md`, and `docs/DECISIONS.md`.
 - `test/evidence/qa-ledger.md` and `test/evidence/completion-audit.md`.

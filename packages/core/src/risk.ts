@@ -24,7 +24,7 @@ const AGENTIC_ACTIONS = new Set(["scroll", "wait_for", "hover", "move", "back", 
 const MUTATING_ACTIONS = new Set(["click", "fill", "type", "select", "navigate", "press", "clear", "back", "forward", "reload"]);
 const FILL_ACTIONS = new Set(["fill", "type", "select", "clear", "set_files"]);
 const SECRET_HINT = /password|passcode|secret|token|api[_ -]?key|credential|private[_ -]?key|otp|2fa|one[_ -]?time|verification code|security code/i;
-// Payment / financial / government-id fields. The bridge never auto-types these: a
+// Payment / financial / government-id fields. The host never auto-types these: a
 // fill on one is blocked at the floor, the same as a credential (S22).
 const PAYMENT_PII_HINT = /credit[_ -]?card|card[_ -]?number|cardnumber|\bcvv\b|\bcvc\b|\bccv\b|card[_ -]?security|\bssn\b|social[_ -]?security|\biban\b|routing[_ -]?number|account[_ -]?number|sort[_ -]?code|\bcvn\b|tax[_ -]?id|national[_ -]?insurance/i;
 // Structural fallback only: used to detect a likely commit on an UNKNOWN host.
@@ -184,7 +184,7 @@ function resolveCommitBoundary(
 }
 
 // Returns the block reason if this fill targets a credential, OTP/2FA, payment,
-// or government-id field: the bridge never auto-types these. null = safe
+// or government-id field: the host never auto-types these. null = safe
 // draft field.
 function sensitiveFieldReason(input: BrowserFloorInput): string | null {
   if (input.signals?.secretField) return "secret_or_password_field";

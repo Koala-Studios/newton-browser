@@ -24,7 +24,7 @@ export type BrowserHostCommitRule = {
 
 export type BrowserHostSensitiveZone = {
   // A selector or AX-name region masked in screenshots before they leave the
-  // extension (spend, payment, customer data).
+  // host policy (spend, payment, customer data).
   selector?: string;
   name?: string;
   label?: string;

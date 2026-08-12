@@ -17,17 +17,29 @@ import { buildDriver } from "../../../scripts/build-driver.mjs";
 
 const TEMP_PREFIX = "newton-driver-build-parity-";
 const EXPECTED_FILES = [
-  "chrome-tabs-port.js",
-  "controller.js",
+  "direct-debugger-port.d.ts",
+  "direct-debugger-port.js",
+  "direct-page-effects-port.d.ts",
+  "direct-page-effects-port.js",
+  "direct-session-runtime.d.ts",
+  "direct-session-runtime.js",
+  "driver.d.ts",
   "driver.js",
+  "input-dispatcher.d.ts",
   "input-dispatcher.js",
+  "origin-containment.d.ts",
   "origin-containment.js",
-  "overlay.css",
-  "overlay.js",
+  "raster-mask.d.ts",
+  "raster-mask.js",
+  "renderer-liveness.d.ts",
   "renderer-liveness.js",
+  "session-command-pump.d.ts",
   "session-command-pump.js",
+  "session-transaction.d.ts",
   "session-transaction.js",
+  "target-registry.d.ts",
   "target-registry.js",
+  "types.d.ts",
 ];
 
 const workspaceRoot = path.resolve(
@@ -101,7 +113,7 @@ test("driver builds are deterministic and contain only production outputs", () =
     ].map((value) => value.toLowerCase());
 
     for (const [relative, file] of first) {
-      assert.equal(relative.endsWith(".ts"), false, `${relative} is TypeScript source`);
+      assert.equal(relative.endsWith(".ts") && !relative.endsWith(".d.ts"), false, `${relative} is TypeScript source`);
       assert.equal(relative.endsWith(".map"), false, `${relative} is a source map`);
       assert.equal(forbiddenPathSegment.test(relative), false, `${relative} is a dev-only fixture`);
 

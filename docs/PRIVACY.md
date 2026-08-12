@@ -1,63 +1,63 @@
-# Newton Browser Privacy Policy
+# Newton Browser Privacy
 
-_Last updated: 2026-07-10_
+_Last updated: 2026-08-11_
 
-Newton Browser is a local, developer tool. It connects an MCP client on your computer to
-a browser extension on the same computer so an AI agent you run can drive a browser tab.
-It has no backend.
+Newton Browser is a local developer tool. Its direct runtime launches isolated Chrome or
+Edge processes and controls them from a local stdio MCP host through inherited private CDP
+pipes. It has no Newton cloud backend, account service, telemetry, analytics, crash-report
+service, remote relay, or database.
 
-## What Newton Browser does not do
+## Data Newton does not inspect
 
-- **No telemetry.** Newton Browser sends no analytics, usage metrics, crash reports, or
-  any other data to Koala Studios or any third party.
-- **No servers.** There is no Newton Browser cloud service, account, database, or relay.
-  The MCP host and the extension talk over a WebSocket bound to `127.0.0.1` (loopback)
-  only — traffic never leaves your machine.
-- **No profile harvesting.** Newton Browser does not read your browsing history, saved
-  passwords, autofill data, cookies, or bookmarks. It does not enumerate your tabs beyond
-  the sessions it owns.
+Newton does not parse, enumerate, log, return, export, or merge browser cookies, storage,
+saved passwords, autofill, history, downloads, bookmarks, profile contents, or restored
+tabs. It controls only its owned session processes.
 
-## What data is handled, and where it goes
+With explicit operator authorization, the identity importer may copy a narrow documented
+set of authentication-bearing files from a closed stable profile. The files remain opaque
+bytes. Password, autofill, history, download, extension, session, service-worker, and cache
+data is excluded. Closure is proven from the browser-family process table and source
+stability rather than the presence of persistent database files named `LOCK`. The source
+is never modified.
 
-- **Page content the agent observes.** When you ask an agent to observe, screenshot, or
-  read a page, that page's accessible structure, text, or image is captured and returned
-  to the MCP client you configured. Newton Browser redacts likely secrets (passwords,
-  card and government-id numbers) in the host before results reach the client. Whether
-  that data then leaves your machine depends entirely on **your** MCP client and its model
-  provider — Newton Browser itself never transmits it anywhere.
-- **Local settings.** The extension stores a small amount of state in
-  `chrome.storage.local`: your connection settings and, only if you enable the optional
-  hardened pairing mode, a pairing secret. This never leaves the browser profile.
-- **Incognito sessions.** When explicitly requested, an owned tab opens in an incognito
-  window and does not inherit the normal profile's cookies or storage. The extension
-  must be allowed in incognito by the user; Newton Browser never enables that setting.
-- **Screenshots you save.** If you ask for a screenshot delivered to a file, it is written
-  only to the absolute directory you specify.
-- **Network evidence.** Request metadata never includes headers. A response body is
-  eligible only when its URL is within the session grant and it is supported UTF-8 text;
-  it still passes secret/card/identifier redaction. Base64, binary, malformed,
-  compressed, and ungranted bodies are omitted. Newton may return only bounded MIME,
-  encoding, byte-count, and SHA-256 metadata for an omitted body.
-- **Provenance.** Page-derived observations, console text, network records, and action
-  deltas are structurally labeled `untrusted_page_content` by the local MCP host. Page
-  content cannot replace that label or author an authorization decision.
+Opaque import does not guarantee a usable authenticated session. Browser and operating-
+system protection can bind encrypted data to its original profile location; notably,
+current Windows Chrome App-Bound Encryption may reject standard-profile data when the copy
+is launched from Newton's isolated user-data directory. Newton neither bypasses that
+protection nor treats authentication preservation as release evidence.
 
-## Permissions
+## Data handled during a session
 
-The extension requests broad host access and the `debugger` permission because browser
-control is implemented through the Chrome DevTools Protocol, and a session may target any
-HTTP(S) origin you choose at runtime. Every session is scoped to the exact origins you
-grant, and control traffic is confined to loopback. See the permission justifications in
-`docs/store/listing.md`.
+- **Observations and page text:** bounded accessible structure or text is returned to the
+  configured MCP client with untrusted-page provenance and host-side redaction.
+- **Screenshots:** captured only on request. File delivery writes to the caller-provided
+  absolute directory. Sensitive zones are masked in trusted post-capture PNG pixels;
+  uncertainty fails closed rather than returning an unmasked image.
+- **Console and network evidence:** bounded and redacted. Request headers are never
+  returned. Bodies are eligible only for granted-origin supported UTF-8 text; binary,
+  base64, compressed, malformed, and ungranted bodies are omitted.
+- **Identity metadata:** opaque identity ID, browser family, creation time, lease state,
+  and bounded lifecycle receipts. Source paths and profile contents are not public output.
+- **Local configuration:** selected browser family and opaque identity ID
+  are stored in the per-user Newton Browser configuration directory.
 
-Screenshot results explicitly report whether configured sensitive-zone masking was
-applied. If configured masking fails, capture fails rather than returning an unmasked
-image. Newton Browser never inspects cookies, storage, saved credentials, or profile
-files to discover mask regions.
+Whether page observations or screenshots leave the computer depends on the MCP client and
+model provider chosen by the user. Newton Browser itself does not send them elsewhere.
+
+## Network and process isolation
+
+Each session has an exact-origin policy proxy ready before Chromium starts. Control traffic
+uses inherited pipes; no browser debug TCP port is opened. The proxy makes permitted browser
+requests to the websites the operator asked Newton to visit. Denied destinations are not
+dialed in the documented containment scope.
+
+A separate local guardian receives only browser launch arguments plus bounded filesystem
+ownership facts. It never receives page content or parsed profile data. Its only purpose
+is to terminate the owned browser tree and release the exact lease/ephemeral identity if
+the MCP host disappears.
 
 ## Contact
 
-Questions or concerns: open an issue at
-https://github.com/Koala-Studios/newton-browser/issues (do not include secrets or private
-page content). For security reports, follow the private-disclosure process in
-[docs/SECURITY.md](SECURITY.md).
+Open a minimal issue at <https://github.com/Koala-Studios/newton-browser/issues> without
+secrets or private page content. For security reports, follow
+[`SECURITY.md`](SECURITY.md).

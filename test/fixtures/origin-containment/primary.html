@@ -25,6 +25,18 @@
     <div id="controlled-frame-slot"></div>
   </section>
 
+  <section aria-label="Popup containment matrix">
+    <button id="popup-window" type="button">Popup via window open</button>
+    <a id="popup-anchor" target="_blank" rel="noopener">Popup via anchor target blank</a>
+    <form id="popup-form" method="get" target="_blank">
+      <button type="submit">Popup via form target blank</button>
+    </form>
+    <button id="popup-programmatic-anchor" type="button">Popup via programmatic anchor</button>
+    <button id="popup-redirect" type="button">Popup via denied redirect</button>
+    <a id="popup-same" target="_blank">Allowed same-origin popup</a>
+    <a id="popup-granted" target="_blank">Allowed granted-origin popup</a>
+  </section>
+
   <section aria-label="Read-only destination resources">
     <p id="containment-read-only">Read-only destination resources</p>
     <img id="cross-image" alt="Cross-origin read-only pixel">
@@ -59,7 +71,7 @@
     });
     document.querySelector("#cross-worker").addEventListener("click", () => {
       try {
-        const worker = new Worker(`${application}/worker.js`);
+        const worker = new Worker("/origin-containment/worker-launcher.js");
         worker.addEventListener("message", (event) => mark(String(event.data)));
       } catch {}
       mark("worker-dispatched");
@@ -72,6 +84,25 @@
       try { new EventSource(`${application}/connection`); } catch {}
       mark("eventsource-dispatched");
     });
+
+    document.querySelector("#popup-window").addEventListener("click", () => {
+      window.open(`${application}/popup-window.html`, "popup-window-target", "noopener");
+    });
+    document.querySelector("#popup-anchor").href = `${application}/popup-anchor.html`;
+    document.querySelector("#popup-form").action = `${application}/popup-form.html`;
+    document.querySelector("#popup-form").addEventListener("submit", () => mark("popup-form-dispatched"));
+    document.querySelector("#popup-programmatic-anchor").addEventListener("click", () => {
+      const anchor = document.createElement("a");
+      anchor.href = `${application}/popup-programmatic-anchor.html`;
+      anchor.target = "_blank";
+      anchor.rel = "noopener";
+      anchor.click();
+    });
+    document.querySelector("#popup-redirect").addEventListener("click", () => {
+      window.open(`${location.origin}/origin-containment/redirect-to-destination`, "popup-redirect-target", "noopener");
+    });
+    document.querySelector("#popup-same").href = `${location.origin}/origin-containment/application/popup-same.html`;
+    document.querySelector("#popup-granted").href = `${application}/popup-granted.html`;
 
     document.querySelector("#cross-image").src = `${destination}/origin-containment/resource/pixel.svg`;
     const style = document.createElement("link");

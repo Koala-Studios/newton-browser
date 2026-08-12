@@ -1,51 +1,53 @@
 # Newton Browser Roadmap
 
 Newton Browser is local, agent-agnostic browser control for MCP clients. This roadmap is
-directional, not a commitment. See `docs/IMPLEMENTATION_PLAN.md` for the detailed 0.4
-plan and `docs/PROGRESS_LEDGER.md` for current status.
+directional, not a public commitment. Current execution state lives in
+[`docs/PROGRESS_LEDGER.md`](docs/PROGRESS_LEDGER.md) and detailed plans in
+[`docs/implementation-plans/`](docs/implementation-plans/README.md).
 
-## Shipped in 0.4.0
+## Implemented direct-runtime foundation
 
-Version 0.4.0 is public on npm and GitHub. The Chrome Web Store listing is under review;
-Edge Add-ons submission is deferred until Chrome is live. Discovery registry work is
-tracked in `docs/DISCOVERY_PLAN.md`.
+- Per-session owned Chrome/Edge process, private CDP pipe, exact blank root, and a separate
+  guardian that owns crash cleanup; Windows Job Object and Unix process-group loss evidence passed.
+- Per-session deny-by-default launch-time policy proxy with exact-origin grants and honest
+  prevented/unknown outcome semantics.
+- Opaque Newton identities, exclusive leases, operator login, and fail-closed narrow opaque
+  import from a closed stable profile.
+- Strict TypeScript driver, composite refs, same-process and OOPIF routing, dialogs,
+  renderer lifecycle classification, and trusted input dispatch.
+- Same-session FIFO plus independent cross-session concurrency.
+- Compact observations, exact schemas, provenance/redaction, token budgets, provider-free
+  regression corpus, packed installation, and cross-platform live harnesses. Windows
+  Chrome/Edge and pinned Linux Chrome receipts passed.
+- Direct stdio as the ordinary path and optional private Unix-socket continuity for
+  orchestrators that intentionally need sequential-client persistence.
 
-- Renamed to Newton Browser; MIT licensed.
-- Icons and connection-state toolbar icon; first-run onboarding page; minimal
-  session-visibility popup with a stop-all control.
-- CI and release automation; npm packaging (`npx newton-browser`), Node 20 runtime
-  floor, and a `--install <client>` config helper.
-- Host/extension version-skew reporting.
-- Capability additions: `browser.observe` text mode; JavaScript dialog accept/dismiss;
-  owned-tab viewport `resize`; batch `fill_form`; read-only `browser.console` and
-  `browser.network`; screenshot region capture and JPEG/quality encoding.
-- Privacy-preserving owned sessions with `browser.session.start({ incognito: true })`.
-- Security: host-side redaction of observation results wired into the live path
-  (BB-035).
+## Completed release gates
 
-## Next (candidate, post-0.4)
+1. Final-tree unauthenticated read-only production-site evidence is recorded on RFC Editor, Wikipedia,
+   the Mercato di Bellina commerce storefront, and the public W3C Web Accessibility
+   Initiative site. No third-party account is a release dependency.
+2. The exact tree passed `pnpm release:check` three consecutive times with one
+   byte-identical package; the evidence-bearing confirmation follows receipt materialization.
 
-- **Multi-tab sessions (WS9.5).** Track pages opened from an owned tab (window.open /
-  target=_blank), origin-gate popups, and address child tabs from observe/act/screenshot.
-  Requires live multi-target iteration; the single-tab core stays intact until it lands.
-- **Observation token budget and cold-start p95 targets (WS10.1 / WS10.4).** Measured
-  against real heavy pages; formalize caps and idle-wake handling.
-- **session.start `viewport` convenience option** (a counterpart to the `resize` act kind).
-- **Element-target screenshots.** Resolve a fresh element ref into a bounded screenshot
-  crop; 0.4 callers use the existing `region` option.
-- **Dialog state on `browser.status`.** Observations remain authoritative in 0.4;
-  consider a bounded per-session status summary when the session model expands.
-- **Drag-and-drop**, **session recording / GIF**, and **PDF export** act kinds.
-- **A sandboxed, read-only expression evaluator** — only if it can be designed without
-  weakening the typed action floor (see "not planned").
-- **Broader Chromium coverage** (Brave, Arc, other Chromium): test and document.
+## After the usable core is proven
 
-## Not planned
+- Measure startup and observation p50/p95 on real heavy sites and optimize only demonstrated
+  bottlenecks.
+- Improve accessible targeting and SPA recovery from real-site failure evidence without
+  silent stale-ref healing.
+- Consider element-target screenshots and session-start viewport convenience.
+- Consider broader Chromium-family support only after exact browser/process/security QA.
+- Consider multi-page workflows only with an explicit session/tab model and unchanged
+  containment guarantees.
 
-- **Firefox support.** No `chrome.debugger` equivalent, and out of scope by decision.
-- **Arbitrary JavaScript execution** (`eval`-style tool). It would bypass the typed
-  action floor that defines the product's safety model (DECISIONS §16).
-- **Any telemetry, analytics, crash reporting, or remote service.** Newton Browser is
-  local-only by design.
+## Not planned without a new approved proposal
 
-Feedback and focused feature requests: the repository issue tracker.
+- Rust rewrite.
+- Arbitrary JavaScript execution.
+- Hosted browser providers, telemetry, analytics, or remote service.
+- Cookie/storage/profile inspection or export.
+- Automatic mutation retry, global cross-session mutex, or hostname-only grants.
+- Recording, HAR, PDF, GIF, broad provider stacks, or dozens of narrow MCP tools without
+  measured agent-task benefit.
+- Firefox support under the current CDP architecture.

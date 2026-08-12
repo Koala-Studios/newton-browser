@@ -1,6 +1,10 @@
 # Plan 05 — Input and Renderer Reliability
 
-- **Status:** Approved; deterministic implementation and live harness complete, live Chrome/Edge evidence pending
+> Historical implementation plan. The input/renderer requirements remain in the direct
+> driver; extension-specific edits and gates below are obsolete. Current acceptance is
+> tracked by Plans 13-15 and `docs/PROGRESS_LEDGER.md`.
+
+- **Status:** Superseded execution plan; retained as design history
 - **Depends on:** Plans 01 and 03
 - **Primary outcome:** Actions behave like deliberate user input, recover from browser lifecycle events, and report dialogs, discards, detachments, and renderer failures precisely.
 

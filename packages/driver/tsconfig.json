@@ -5,7 +5,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "sourceMap": false,
-    "declaration": false,
+    "declaration": true,
     "strict": true,
     "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,

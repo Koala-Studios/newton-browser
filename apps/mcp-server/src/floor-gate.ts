@@ -10,8 +10,8 @@ import {
 import { loadHostPolicies } from "./config.ts";
 
 export type HostFloorVerdict =
-  | { relay: true; action: BrowserAction; decision: BrowserFloorDecision }
-  | { relay: false; action: BrowserAction; decision: BrowserFloorDecision; errorCode: string };
+  | { dispatchAllowed: true; action: BrowserAction; decision: BrowserFloorDecision }
+  | { dispatchAllowed: false; action: BrowserAction; decision: BrowserFloorDecision; errorCode: string };
 
 export function evaluateHostFloor(input: {
   session: BridgeSessionInfo;
@@ -26,9 +26,9 @@ export function evaluateHostFloor(input: {
     policy: { allowedOrigins: input.session.allowedOrigins ?? (origin ? [origin] : []) },
     manifest,
   });
-  if (decision.blocked) return { relay: false, action, decision, errorCode: "blocked_by_floor" };
+  if (decision.blocked) return { dispatchAllowed: false, action, decision, errorCode: "blocked_by_floor" };
   return {
-    relay: true,
+    dispatchAllowed: true,
     action: action.kind === "screenshot" && manifest?.sensitiveZones?.length
       ? { ...action, sensitiveZones: manifest.sensitiveZones }
       : action,

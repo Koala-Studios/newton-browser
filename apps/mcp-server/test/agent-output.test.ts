@@ -281,6 +281,24 @@ test("dedupe removes duplicate semantic rows while preserving first ref order", 
   assert.deepEqual((projection.projection.nodes as Array<{ ref: string }>).map((node) => node.ref), ["a", "b", "c"]);
 });
 
+test("public observation projection omits internal frame routing diagnostics", () => {
+  const projected = projectLeanObservation({
+    ...sample,
+    frameRouting: {
+      attachedIframeTargetCount: 2,
+      inProcessFrameCount: 3,
+      maxAttachedIframeTargetDepth: 2,
+      targetId: "secret-target",
+      sessionId: "secret-session",
+      content: "secret page content",
+    },
+  });
+  assert.equal(projected.ok, true);
+  if (!projected.ok) assert.fail("observation must project");
+  assert.equal("frameRouting" in projected.projection, false);
+  assert.equal(JSON.stringify(projected.projection).includes("secret"), false);
+});
+
 test("query and role filtering are deterministic and stable", () => {
   const projection = projectLeanObservation(
     {

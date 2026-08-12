@@ -6,7 +6,7 @@ const TEXT_CAP = 240;
 const URL_CAP = 500;
 const NODE_CAP = 80;
 // Hard ceiling for a `mode: "text"` observation after redaction. The driver applies
-// the caller's `maxChars`; this bounds the result regardless of what crossed the relay.
+// the caller's `maxChars`; this bounds the result regardless of what crossed the private transport.
 const TEXT_OBSERVE_CAP = 200_000;
 // Inline screenshot bytes (Proposal 29 / D5) ride result_json transiently (masked
 // pre-capture, pruned with the short-TTL command). Cap so a vision worker gets the
@@ -186,6 +186,8 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ...(typeof input.artifactId === "string" ? { artifactId: input.artifactId.slice(0, TEXT_CAP) } : {}),
       ...(typeof input.width === "number" ? { width: Math.max(0, Math.trunc(input.width)) } : {}),
       ...(typeof input.height === "number" ? { height: Math.max(0, Math.trunc(input.height)) } : {}),
+      ...(input.format === "png" || input.format === "jpeg" ? { format: input.format } : {}),
+      ...(input.requestedFormat === "png" || input.requestedFormat === "jpeg" ? { requestedFormat: input.requestedFormat } : {}),
       ...(device ? { device } : {}),
       ...(typeof input.fullPage === "boolean" ? { fullPage: input.fullPage } : {}),
       maskDisposition: input.maskDisposition === "mask_applied" || input.maskDisposition === "mask_not_applicable"
@@ -203,6 +205,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       : [];
     const updated = Array.isArray(input.updated) ? input.updated.flatMap((node) => normalizeUpdated(node)).slice(0, NODE_CAP) : [];
     const excludedFrames = normalizeExcludedFrames(input.excludedFrames);
+    const frameRouting = normalizeFrameRouting(input.frameRouting);
     return {
       kind: "observation_delta",
       mode: "cdp",
@@ -212,6 +215,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       removed,
       updated,
       ...(excludedFrames.length ? { excludedFrames } : {}),
+      ...(frameRouting ? { frameRouting } : {}),
       nodeCount: typeof input.nodeCount === "number" ? Math.max(0, Math.trunc(input.nodeCount)) : added.length,
       capturedAt: isoOrNow(input.capturedAt),
       ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
@@ -242,6 +246,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ? input.nodes.flatMap((node, index) => normalizeNode(node, index)).slice(0, NODE_CAP)
       : [];
     const excludedFrames = normalizeExcludedFrames(input.excludedFrames);
+    const frameRouting = normalizeFrameRouting(input.frameRouting);
     return {
       kind: "observation",
       mode: input.mode === "cdp" ? "cdp" : "passive",
@@ -251,6 +256,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       nodeCount: typeof input.nodeCount === "number" ? Math.max(0, Math.trunc(input.nodeCount)) : nodes.length,
       truncated: Boolean(input.truncated),
       ...(excludedFrames.length ? { excludedFrames } : {}),
+      ...(frameRouting ? { frameRouting } : {}),
       capturedAt: isoOrNow(input.capturedAt),
       ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
       ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
@@ -428,6 +434,18 @@ function normalizeExcludedFrames(value: unknown) {
     const frameOrigin = redactBrowserOrigin(input.frameOrigin);
     return [{ frameId: redactText(input.frameId).slice(0, 128), frameOrigin: frameOrigin || null, reason: "origin_not_granted" as const }];
   }).slice(0, 64);
+}
+
+function normalizeFrameRouting(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const keys = ["attachedIframeTargetCount", "inProcessFrameCount", "maxAttachedIframeTargetDepth"] as const;
+  if (!keys.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0 && Number(input[key]) <= 64)) return null;
+  return {
+    attachedIframeTargetCount: Number(input.attachedIframeTargetCount),
+    inProcessFrameCount: Number(input.inProcessFrameCount),
+    maxAttachedIframeTargetDepth: Number(input.maxAttachedIframeTargetDepth),
+  };
 }
 
 function normalizeUpdated(value: unknown) {

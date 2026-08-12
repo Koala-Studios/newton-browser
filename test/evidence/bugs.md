@@ -1,4 +1,7 @@
-# Browser Bridge Defect Ledger
+# Historical extension-era defect ledger
+
+> Archived defect history. Deleted extension/relay paths are not current product surfaces;
+> their pass receipts do not close any direct-runtime completion gate.
 
 ## BB-048 — Observer focus redundantly mutated an already-active tab
 
@@ -666,3 +669,433 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Fix: one strict live configuration resolver defaults to Chrome, accepts an explicit Chrome/Edge owner, rejects ambiguous `auto`, and leaves the port undefined so the host scans its bounded loopback range. Every audit live harness now records the selected family and actual port.
 - Regression: `test/live-smoke-config.test.mjs` covers target precedence, ambiguity rejection, automatic port selection, exact bounds, and malformed overrides.
 - Status: closed at source level; connected Chrome/Edge execution remains pending.
+
+## BB-074 - Concurrency acceptance dispatched before page readiness
+
+- Found: 2026-08-09 during the connected Chrome acceptance run.
+- Minimal repro: create two owned sessions, wait only for controller binding, and immediately fill `Search records`; a navigation/renderer transition can interrupt target evidence resolution and surface as `floor_evaluation_failed` before input dispatch.
+- Root cause: `waitForSessionReady` proves the extension/controller binding, not that the destination document has reached the fixture's observable ready state. The live harness conflated those two transitions.
+- Fix: wait concurrently in both sessions for the exact `fixture-ready` marker, then use the returned command sequences as the baselines for FIFO and cross-session assertions.
+- Regression: `test/live-smoke-config.test.mjs` proves the helper dispatches a bounded marker wait for every session, returns exact sequence baselines, and rejects non-verified readiness without sleeps.
+- Status: closed at harness level; connected Chrome rerun pending.
+
+## BB-075 - OOPIF frame identity was not reconciled across process swaps
+
+- Found: 2026-08-09 after the readiness-corrected connected Chrome concurrency run surfaced `frame_conflict` on the first command.
+- Minimal repro: observe an OOPIF first as a frame in the parent session, then attach Chromium's flattened iframe target where `TargetInfo.targetId`, the embedding `Page.Frame.id`, and the child root `Page.Frame.id` share one identity. A process swap may additionally emit `Page.frameDetached(reason: "swap")`, detach the old target session, and reattach the same identity.
+- Root cause: the registry treated every frame owner change and frame-detach event as terminal. It also copied document-root and cross-target CDP parents into the registry's intra-target frame graph. Chromium's OOPIF boundary is a constrained ownership transition, while a swap is a nonterminal transition whose old refs still must remain permanently fenced.
+- Fix: track the main document frame separately; omit only document-root/cross-target parent edges; reconcile ownership only when exact iframe topology proves the same-identity OOPIF boundary; keep child ownership when a late parent observation arrives; and model a bounded one-use swap state that retires refs, suspends the old target session, counts against capacity, and permits only the exact reattachment. Normal removal, unrelated owners, ambiguous topology, and stale refs remain fail-closed.
+- Regression: the registry and driver suites cover parent-first and child-first same-identity event orders, cross-target parents, swap/detach/reattach, permanent old-ref fencing, unknown and terminal detach behavior, unrelated-target rejection, and target/frame cap accounting.
+- Status: closed at source level; rebuilt extension and connected Chrome rerun pending.
+
+## BB-076 - Evidence-resolution failures were mislabeled as floor failures
+
+- Found: 2026-08-09 while adding bounded diagnostics for the connected Chrome frame conflict.
+- Minimal repro: make `driver.resolveEvidence` throw a typed target-registry error before the host floor evaluator runs; the controller returned `floor_evaluation_failed`, hiding both the failing stage and the retry-relevant category.
+- Root cause: one `try/catch` enclosed target resolution and floor evaluation even though they are different trust and failure boundaries.
+- Fix: resolve driver evidence outside the evaluator catch; preserve only recognized typed driver/target failures, map unexpected resolution exceptions to `evidence_resolution_failed`, and reserve `floor_evaluation_failed` for exceptions from the local structural evaluator itself. Internal registry diagnostics never alter the stable public `frame_conflict` code.
+- Regression: `BridgeRuntime keeps internal frame-conflict diagnostics out of the public error contract` proves trusted and hostile detail stay private; the untyped-error, evaluator-stage, and existing invalid-selector regressions prove the failure boundaries remain distinct without exposing page/CDP text.
+- Status: closed at source level; rebuilt extension and connected Chrome diagnostic rerun pending.
+
+## BB-077 - Worker-restart acceptance could reload before command dispatch
+
+- Found: 2026-08-09 during final acceptance-harness scrutiny.
+- Minimal repro: start `live-worker-restart.mjs` and react immediately when its state file reports `reload_now`; the script published that phase before calling `bridge.dispatch`, so the service worker could reload before any command was in flight.
+- Root cause: the human synchronization signal and the system state transition were ordered by source intent rather than by observable host state.
+- Fix: start the long command, wait without sleeps until the host's bounded command metrics prove the next command entered the sent phase, and only then publish `reload_now`.
+- Regression: `worker restart handshake waits until the host reports the command sent` proves both the state-driven success path and bounded failure path.
+- Status: closed at harness level; connected MV3 restart run pending.
+
+## BB-078 - Live readiness failures could echo unbounded page-derived results
+
+- Found: 2026-08-09 during final live-harness trust-boundary review.
+- Minimal repro: return a non-verified readiness result containing a large or sensitive `observation_text`; the helper serialized the entire result into its thrown error and optional state receipt.
+- Root cause: a diagnostic path treated a full browser result as trusted bounded metadata.
+- Fix: retain only `ok`, bounded `errorCode`, bounded `actionStatus`, and numeric `sequence` in readiness failure diagnostics.
+- Regression: `live session readiness rejects a non-verified page state` includes page-derived secret text and proves it is absent from the error.
+- Status: closed at source level; connected live runs pending.
+
+## BB-079 - OOPIF swap tombstones could resurrect or detach the wrong generation
+
+- Found: 2026-08-09 during independent post-integration state-machine review.
+- Minimal repro: begin a same-identity frame swap, then deliver a normal frame removal, a delayed old-session target detach, a cross-origin exact reattach, or an attach while the hosted target is still pending. The initial swap model could retain a consumable swap alongside a terminal tombstone, detach the new generation, reject a valid origin transition, or terminalize pending topology.
+- Root cause: nonterminal swap state did not retain enough exact generation/session topology and normal detach paths did not atomically consume it. Capacity accounting and lifecycle identity were therefore checked independently instead of as one state transition.
+- Fix: terminal removal converts swap state to exactly one tombstone; suspended targets retain a private prior session and require a fresh reattach session; target detach is session-qualified; exact immutable topology permits a new canonical origin; pending hosted subtrees suspend nonterminally; all swapping state counts against existing caps and is absent from public metadata.
+- Regression: registry and driver cases cover swap→remove→reattach rejection, repeated removal, exact cap totals, stale detach before/after frame consumption, same-session rejection, cross-origin granted/ungranted replacements, and pending hosted subtrees.
+- Status: closed at source level; connected Chrome OOPIF churn rerun pending.
+
+## BB-080 - Delayed target detach could desynchronize containment hold ownership
+
+- Found: 2026-08-09 during orchestrator review of BB-079's session-qualified registry fix.
+- Minimal repro: replace an ungranted same-ID OOPIF with a new ungranted session, then deliver the old session's delayed `Target.detachedFromTarget`; the registry kept the new target, but the driver unconditionally deleted its new hold. Conversely, an ungranted-to-granted replacement could retain the old hold.
+- Root cause: target-registry ownership was generation/session-qualified while `heldTargets` remained keyed and mutated only by target ID.
+- Fix: remove a hold on detach only when the event session matches that hold (or no session identity exists), and clear the exact stale hold when a replacement is granted and resumed.
+- Regression: driver tests cover delayed detach before and after replacement frame consumption, preserve the new held record/session, and prove an allowed replacement clears an old hold.
+- Status: closed at source level; connected containment/frame churn rerun pending.
+
+## BB-081 - Ordinary MV3 target hooks cannot guarantee a popup's zero first request
+
+- Found: 2026-08-09 during the connected Linux Chrome containment matrix.
+- Minimal repro: in a disposable isolated Chrome for Testing profile, start a restricted
+  session and activate `window.open(deniedUrl, "_blank", "noopener")`. Ordinary
+  `chrome.debugger` rejects `Target.attachToBrowserTarget`; a private tab-root
+  `Target.setAutoAttach` probe is accepted but the action completes and the exact denied
+  destination document endpoint records one application request.
+- Root cause: browser-target `Target.autoAttachRelated` is unavailable to an ordinary MV3
+  debugger client, while tab-root autoattach covers the attached target tree and does not
+  provide relationship-scoped pre-navigation control of a top-level noopener popup.
+- Resolution: the private probe met its predeclared rollback criterion and was removed.
+  Production keeps the closed `browser_control_attach_failed` setup outcome instead of
+  silently weakening containment. Plan 04 is split into owner-selectable Plan 04A
+  (extension-only narrowed popup boundary) and Plan 04B (isolated Newton-owned browser with
+  browser-level CDP).
+- Regression/evidence: bounded receipt
+  `test/evidence/aip04-root-autoattach-probe.json`; post-rollback driver, controller,
+  extension, build, typecheck, pack, and token gates pass; repository search finds no
+  private-probe activation symbol.
+- Status: platform limitation confirmed; product-boundary decision pending.
+
+## BB-082 - Packed doctor could read or create the user's real Newton config
+
+- Found: 2026-08-09 during the current-tree release-checkpoint pre-audit.
+- Minimal repro: run `pnpm pack:check` without `NEWTON_BROWSER_CONFIG_DIR`. Its packed
+  `--doctor` invocation inherited the user environment, so configuration discovery
+  could read or create the real per-user `pairing.json`.
+- Root cause: the spaced-path install was temporary, but packed utility subprocesses did
+  not receive an isolated home/config environment. The clean-user and matrix smokes had
+  isolation independently, which hid this gap in the pack stage.
+- Fix: create one validated pack-check-owned temporary root; overlay `HOME`, `USERPROFILE`,
+  `LOCALAPPDATA`, `APPDATA`, `XDG_CONFIG_HOME`, and `NEWTON_BROWSER_CONFIG_DIR` for every
+  packed subprocess; verify doctor reports the exact isolated directory; and refuse unsafe
+  recursive cleanup targets.
+- Regression: `test/pack-check-config-isolation.test.mjs` proves a hostile real-config
+  sentinel remains unchanged, writes land only under the isolated root, exact cleanup
+  succeeds, and unrelated/same-prefix replacement targets are rejected.
+- Status: closed; focused 2/2 and packed install/doctor/stdio checks pass with
+  `isolatedConfig:true`.
+
+## BB-083 - Input key evidence could exceed the observation budget
+
+- Found: 2026-08-10 during the final direct live matrix.
+- Minimal repro: type a multi-event key sequence in the input fixture, then request the
+  key-log node through a bounded accessibility observation.
+- Root cause: the fixture serialized its complete growing key-event history.
+- Fix: retain only unique bounded key and event-type categories.
+- Regression: the input fixture contract rejects full-history serialization; Windows
+  Chrome/Edge and Linux Chrome input live stages pass.
+- Status: closed.
+
+## BB-084 - Direct invalid-selector actions bypassed typed preflight
+
+- Found: 2026-08-10 during the direct dialog live stage.
+- Minimal repro: issue a direct action with selector `]`; the raw CDP failure surfaced as
+  `direct_debugger_command_failed` instead of `invalid_selector`.
+- Root cause: the extension controller performed action preflight, but the collapsed
+  direct session command pump called the driver action directly.
+- Fix: direct sessions invoke the driver's preflight before execution; selector syntax is
+  checked through `Runtime.evaluate` exception details and normalized to the existing
+  closed code.
+- Regression: direct-session tests prove rejected preflight performs no execution; driver
+  tests prove typed selector classification; all three dialog live stages pass.
+- Status: closed.
+
+## BB-085 - Packed extension reconnect could miss its initial session snapshot
+
+- Found: 2026-08-10 during Linux packed QA.
+- Minimal repro: reconnect the packed fake extension and immediately stop its attached
+  session; request 29 could wait forever.
+- Root cause: the durable `sessions_changed` handler was installed after `client_ready`,
+  while the host emits readiness and the session snapshot back-to-back.
+- Fix: install the durable handler before sending `client_hello`.
+- Regression: the ordering is asserted statically and repeated packed checks pass.
+- Status: closed.
+
+## BB-086 - Docker Desktop seccomp blocked Chrome's Linux sandbox
+
+- Found: 2026-08-10 during the Linux direct live matrix.
+- Minimal repro: launch Chrome for Testing from the non-root runner under Docker Desktop's
+  default seccomp profile; Chrome exits with `No usable sandbox` before CDP readiness.
+- Root cause: the container profile blocks the user-namespace operation used by Chrome's
+  sandbox. The archive's sandbox helper also needed canonical root ownership/mode.
+- Fix: build the image with a root-owned mode-4755 `chrome_sandbox` and run the disposable
+  QA container with `seccomp=unconfined`; Newton does not add `--no-sandbox`.
+- Regression: runner tests assert both requirements; the final Linux direct run reaches
+  every independent live stage.
+- Status: closed for the documented Docker Desktop runner.
+
+## BB-087 - Packed direct live browser discovery was Windows-only
+
+- Found: 2026-08-10 in the Linux packed direct stage.
+- Minimal repro: run the exact tarball inside the Linux CFT image; the harness returned
+  `direct_browser_unavailable` despite `/usr/bin/google-chrome` being valid.
+- Root cause: the smoke harness duplicated Windows executable paths instead of using the
+  product's deterministic discovery implementation.
+- Fix: use the shared cross-platform browser discovery function.
+- Regression: static contract coverage plus packed Chrome, Edge, and Linux runs pass.
+- Status: closed.
+
+## BB-088 - Worker prevention was incorrectly treated as temporally attributable
+
+- Found: 2026-08-10 in the final direct containment matrix.
+- Minimal repro: click the fixture control that launches a worker request to an ungranted
+  origin. The policy proxy records zero destination application requests, but the action
+  result reports `completed` instead of `prevented`.
+- Root cause: proxy prevention is process/session scoped while worker launch and request
+  settlement are asynchronous; there is no exact command-scoped worker ticket. Timing or
+  ledger-sequence inference can misattribute a late denial to the next command and was
+  rejected.
+- Superseding fix: remove the proxy command fence. The proxy enforces and counts the
+  denial but cannot author an action outcome. Only an exact main-document decision or a
+  command-scoped related-target ticket may return `prevented`; otherwise the UI action's
+  own verified/uncertain outcome is preserved.
+- Regression/evidence: deterministic proxy/host regressions prove no temporal API or
+  cross-command poisoning; Windows Chrome and Edge complete containment matrices prove
+  exact zero-request enforcement with honest asynchronous action outcomes.
+- Status: closed on Windows; current-tree Linux rerun remains a release-matrix task.
+
+## BB-089 - Temporal containment attribution poisoned unrelated real-site actions
+
+- Found: 2026-08-11 during independent audit and Chrome/Edge real-site QA.
+- Minimal repro: load a production HTTPS page with unrelated denied background traffic,
+  then issue a read-only wait, scroll/navigation key, or open a search control. The
+  overlapping action can inherit the background request's prevention and fail even when
+  its own UI effect succeeds.
+- Root cause: driver and policy-proxy prevention slots used temporal overlap as causal
+  attribution. Fetch interception has no proof that an arbitrary request was initiated by
+  the current trusted input.
+- Fix: remove temporal command attribution from the proxy and direct host. Main-frame
+  Document interception and exact related-target tickets remain the only causal
+  prevention evidence. HTTPS CONNECT denials remain aggregate and require explicit
+  grants rather than guessed resource classes.
+- Regression/evidence: `QA-REAL-SITES-002`; three consecutive Chrome and one Edge
+  public-site batches preserve useful media/commerce/business-console interactions without temporal
+  background-request poisoning.
+- Status: closed.
+
+## BB-090 - Packed MCP included a development JavaScript source map
+
+- Found: 2026-08-11 during independent audit.
+- Minimal repro: build and pack the MCP, list the tarball, and inspect
+  `package/dist/index.js.map`; the pack checker did not reject `.js.map`.
+- Root cause: MCP build enabled esbuild source maps and the forbidden-file expression
+  rejected `.map.ts`, not `.js.map`.
+- Fix: production MCP build disables source maps and pack validation rejects every `.map`.
+- Regression/evidence: `pack:check` passes with only compiled guardian/runtime JavaScript,
+  package metadata, and README; no `.map` entry is present.
+- Status: closed.
+
+## BB-091 - Synthetic fixtures overstated direct-runtime usability
+
+- Found: 2026-08-11 in the requested real-site Chrome/Edge matrix.
+- Minimal repro: run `pnpm eval:real-sites` against the four fixed public media,
+  discussion, commerce, and business sites encoded by the QA harness.
+- Root cause: the prior direct matrix used controlled localhost fixtures and did not cover
+  anti-bot/interstitial behavior or production accessibility/control discovery.
+- Result after hardening: media interaction, commerce search fill/submit/post-navigation
+  observation, and the logged-out business-console shell pass in Chrome and Edge. The discussion site consistently
+  exposes fewer than three useful accessibility nodes. All sessions and owned resources
+  clean up.
+- Status: closed for the owner-approved unauthenticated release scope. Reddit remains an
+  explicit external block classification; authenticated Meta is an optional operator
+  workflow and is not a release gate under Decision 43.
+
+## BB-092 - Hard MCP-host termination could orphan Chromium and its identity lease
+
+- Found: 2026-08-11 during independent lifecycle review.
+- Minimal repro: start a direct owned session, terminate the MCP process without running
+  shutdown handlers, then inspect the detached Chromium process and identity lease.
+- Root cause: Chromium was detached and all cleanup authority lived in the process that
+  had just been killed.
+- Fix: launch production Chromium through a separate IPC guardian with exact process-tree
+  ownership and a marker/dev/ino/nonce-bound cleanup plan. Add explicit stale-lease
+  recovery that refuses a live recorded PID.
+- Regression/evidence: deterministic guardian disconnect/exact-cleanup tests and current
+  Chrome/Edge forced-host-loss stages prove browser-tree termination and ephemeral
+  identity removal. Windows temp-root cleanup awaits the exact bounded handle release.
+- Status: closed on Windows; current-tree Linux rerun remains a release-matrix task.
+
+## BB-093 - Direct sessions ignored bridge-compatible command deadlines
+
+- Found: 2026-08-11 during independent contract review.
+- Minimal repro: dispatch a queued or already-running direct command with a deadline;
+  the host rejected timeout options instead of preserving `not_started` versus
+  `outcome_unknown` semantics.
+- Root cause: the direct session pump had FIFO and caps but no per-entry deadline state.
+- Fix: add bounded timers to queue entries. Queued expiry removes the command; running
+  expiry rejects the caller but keeps FIFO occupied until the executor settles. Expose a
+  bounded top-level `browser.act.timeoutMs` and retain the 60-second default.
+- Regression/evidence: pump/direct-host deadline regressions, complete root discovery,
+  and current Chrome/Edge direct matrices pass.
+- Status: closed.
+
+## BB-094 - Production CDP event bursts terminally overflowed the default queue
+
+- Found: 2026-08-11 during repeated commerce-storefront search QA.
+- Minimal repro: open the selected public commerce storefront, fill its search control, and press Enter.
+  Network/Target events can exceed 256 while a request-stage Fetch acknowledgement is
+  in flight; the pipe terminates with `cdp_event_queue_overflow`, and the action returns
+  `containment_fence_failed`.
+- Root cause: the private transport default used only one quarter of its already-audited
+  hard queue ceiling. Synthetic fixtures never generated the production event burst.
+- Fix: use the existing bounded 1,024-event ceiling as the default. Retain terminal
+  overflow behavior, per-message byte caps, and explicit lower-cap regression injection.
+  Owned-runtime Fetch request IDs that vanish before acknowledgement defer to the
+  launch-time proxy and never fabricate a driver prevention; extension mode stays
+  fail-closed.
+- Regression/evidence: pipe/WebSocket overflow tests retain explicit small caps; driver
+  request-churn regressions pass; three consecutive Chrome storefront workflows and one
+  Edge workflow pass, followed by a complete Edge 9/9 direct matrix.
+- Status: closed.
+
+## BB-095 - Direct host reported incomplete driver statuses as completed
+
+- Found: 2026-08-11 during trusted-mask commerce QA.
+- Minimal repro: make a direct driver action return `stale_target`, `not_found`,
+  `ambiguous`, or `timed_out`; the host emitted `ok:true,outcome:completed`.
+- Root cause: direct-host dispatch mapped every non-containment driver delta through the
+  success constructor and treated status as diagnostic only.
+- Fix: map pre-dispatch targeting failures to retry-safe `not_started`, wait-only timeout
+  to `not_started`, post-dispatch timeout/failure to non-retryable `outcome_unknown`, and
+  blocked/approval results to `prevented`. Preserve only verified and
+  `dispatched_unverified` action deltas as completed.
+- Regression/evidence: direct-host status matrix covers all incomplete classes; the
+  deterministic gate passes 598 tests with zero failures.
+- Status: closed.
+
+## BB-096 - Sensitive-zone masking could not bind an exact observed ref
+
+- Found: 2026-08-11 on the real Mercato search page.
+- Minimal repro: mask the visible search field with its form selector; multiple matching
+  responsive inputs correctly produce `ambiguous`, while the public mask schema cannot
+  accept the already-observed exact ref.
+- Root cause: sensitive zones supported selector/name/label only, losing the strongest
+  stable targeting primitive used by ordinary actions.
+- Fix: add one exact `ref` alternative to protocol, strict runtime schema, public MCP
+  schema, eval schema, redaction, and driver target resolution. Multiple discriminators
+  remain invalid and stale refs remain fail-closed.
+- Regression/evidence: strict parser/schema tests plus Windows Chrome/Edge and Linux
+  Mercato exact-ref trusted masked PNG receipts pass.
+- Status: closed.
+
+## BB-097 - Containment evidence rejected an honest post-action prevention code
+
+- Found: 2026-08-11 during the pinned Linux direct matrix.
+- Minimal repro: the restricted fetch fixture returns
+  `outcome:prevented,errorCode:post_action_network_write` with destination count zero;
+  the live classifier emits `action_other` and fails the gate.
+- Root cause: the evidence allowlist recognized request-stage containment codes but not
+  the closed post-action network/dialog reconciliation codes.
+- Fix: admit only the exact closed reconciliation codes and retain zero-request server
+  counters as the independent effect proof. Bounded diagnostic facts never copy raw
+  result/page fields.
+- Regression/evidence: containment classifier regression, full local containment matrix,
+  and Linux run `linux-cft-b31c63a63adfb7f00677` pass.
+- Status: closed.
+
+## BB-098 - Closed Windows Chrome profiles were rejected by a persistent database LOCK file
+
+- Found: 2026-08-11 during the operator-authorized Chrome Default import.
+- Minimal repro: close every Chrome process and prepare a normal long-lived Default
+  profile containing its zero-byte `LOCK` database artifact.
+- Root cause: the importer treated a profile-subtree database `LOCK` as browser-liveness
+  evidence even though Chromium retains that file while closed.
+- Fix: rely on the independent all-family process-table proof plus user-data-level
+  `Singleton*` indicators; do not classify profile database lock files as active-browser
+  ownership.
+- Regression/evidence: the focused profile-store suite imports a closed fixture with a
+  persistent `LOCK`, while `SingletonLock` and failed closure evidence remain rejected.
+- Status: closed.
+
+## BB-099 - The production Windows source-closure verifier could never prove closure
+
+- Found: 2026-08-11 during the operator-authorized Chrome Default import.
+- Minimal repro: run the default Windows closure verifier with Chrome stopped. Windows
+  contributes PID 0, and unrelated process command lines may contain line breaks; either
+  condition made the entire bounded snapshot invalid.
+- Root cause: the provider included the System Idle Process and collected command lines
+  even though Windows family detection is executable-based.
+- Fix: filter PID 0 at the CIM provider boundary and collect only PID, name, and executable
+  path. Injected malformed process evidence remains fail-closed.
+- Regression/evidence: default Windows verification now reaches the real all-Chrome
+  process decision; focused hostile-provider tests remain green.
+- Status: closed.
+
+## BB-100 - Failed imported-profile QA emitted stale cleanup state and leaked temp roots
+
+- Found: 2026-08-11 when the authorized profile proved logged out on Meta.
+- Minimal repro: fail authenticated QA after a successful opaque import. The harness wrote
+  its receipt before `finally`, silently swallowed cleanup errors, and gated root removal
+  on a stale flag; three owner-marked empty temp roots accumulated.
+- Root cause: failure reporting preceded the cleanup transaction and early import failures
+  had no root-removal path.
+- Fix: emit exactly once after identity deletion/root cleanup, prioritize a bounded cleanup
+  failure, remove owned roots after pre-import failures, and include only closed auth/site
+  status categories. The three prior direct-child owner-marked roots were identity-checked
+  and removed.
+- Regression/evidence: repeated authenticated-QA failures now report
+  `identityRemoved:true,cleanupConfirmed:true`; zero profile-import temp roots remain.
+- Status: closed.
+
+## BB-101 - Live page-input QA invoked Chrome's reserved F12 shortcut
+
+- Found: 2026-08-11 in final release pass 1/3.
+- Minimal repro: dispatch F12 to the page fixture, then resolve and click the same semantic
+  input before the Control+Shift+P chord. Chrome may open/focus DevTools, and the page
+  action correctly returns `stale_target`.
+- Root cause: the live harness conflated descriptor fidelity with a browser-reserved
+  accelerator. F12 descriptor shape was already covered deterministically.
+- Fix: retain deterministic F12/F24 descriptor tests and use non-reserved F2 for the real
+  page-level function-key lifecycle.
+- Regression/evidence: static live-contract test rejects F12 in the smoke while requiring
+  the deterministic F12 descriptor test; focused Chrome input smoke passes before the
+  release sequence restarts.
+- Status: closed.
+
+## BB-102 - Identical release trees could produce different npm tarball bytes
+
+- Found: 2026-08-11 after the first corrected three-pass release sequence.
+- Minimal repro: run the complete release gate three times from candidate SHA-256
+  `5d526eea…f3aa2`; passes 1-2 produced artifact `dfad098d…c6d6f`, while pass 3
+  produced `93556727…85bbf` at the same 133,103-byte size.
+- Root cause: the release delegated archive construction to `pnpm pack` and neither
+  controlled all tar/gzip metadata nor compared independent rebuild bytes.
+- Fix: build the five-file package with a reviewed deterministic USTAR encoder, fixed
+  order/modes/UID/GID/mtime, canonical LF text, zeroed host-neutral gzip metadata, and an
+  exact allowlist. Existing install/catalog/live gates still consume the resulting tgz.
+- Regression/evidence: source mtime changes produce byte-identical archives; two immediate
+  full pack checks both produce 132,631 bytes with SHA-256
+  `4f8e1910c74eef3b1de5873034e35c6b5490d5f014435dfcf30dbf90dbe7bae6`.
+- Status: closed; final release sequence restarted from 0/3.
+
+## BB-103 - YouTube QA treated one transient zero-node AX snapshot as terminal
+
+- Found: 2026-08-11 in the deterministic-archive release sequence, Windows Edge real-site
+  stage.
+- Minimal repro: navigate an isolated Edge identity to YouTube, wait for the visible body,
+  and take one accessibility observation. A dynamic shell transition can yield zero nodes
+  even though bounded text, page input, document readiness, and screenshot paths work.
+- Root cause: the YouTube workflow required accessibility nodes even though its PageDown
+  action is untargeted and the production-site harness already had a bounded text fallback.
+- Fix: require useful accessibility or bounded text evidence before PageDown, then retain
+  the post-action visible-body and in-memory screenshot proof. No retry or sleep was added.
+- Regression/evidence: static real-site contract requires the shared accessibility/text
+  evidence path; focused Edge real-site QA must pass before release restarts.
+- Status: closed.
+
+## BB-104 - Containment live QA ignored the retryable cleanup contract
+
+- Found: 2026-08-12 in final release pass 1 after the denied popup-form request was
+  prevented and its destination counter remained zero.
+- Minimal repro: run the sequential popup containment matrix until Windows reports one
+  session stop as `direct_cleanup_uncertain`; the harness immediately asserted
+  `stopped:true` and failed instead of retrying the exact cleanup transaction.
+- Root cause: the containment harness predated the direct host's explicit retryable
+  cleanup outcome. The real-site harness honored that contract, but containment teardown
+  still treated its first uncertain acknowledgement as terminal.
+- Fix: retry `browser.session.stop` exactly once and immediately only when the host returns
+  `direct_cleanup_uncertain`, then retain the existing stopped-state and zero-residue
+  assertions. No browser action is replayed, and no sleep or timeout widening is added.
+- Regression/evidence: the static live-contract test requires the closed-code retry path;
+  three consecutive complete Chrome containment matrices pass with every denied
+  destination counter at zero and every session teardown clean.
+- Status: closed; final release sequence restarted from 0/3.

@@ -146,10 +146,14 @@ function validateRawField(raw: unknown, spec: BrowserActionFieldSpec, label: str
   if (spec.kind === "sensitiveZones") {
     if (!Array.isArray(raw) || raw.length === 0 || raw.length > spec.cap) invalid(`${label} is invalid`);
     for (const [index, zone] of raw.entries()) {
-      validateObjectKeys(zone, ["selector", "name", "label"], `${label}[${index}]`);
+      validateObjectKeys(zone, ["ref", "selector", "name", "label"], `${label}[${index}]`);
       const record = objectRecord(zone)!;
-      const values = [record.selector, record.name, record.label];
-      if (!values.some((value) => typeof value === "string" && value.trim()) || values.some((value) => value !== undefined && (typeof value !== "string" || !value.trim() || value.length > spec.itemCap))) invalid(`${label}[${index}] is invalid`);
+      const values = [record.ref, record.selector, record.name, record.label];
+      const configured = values.filter((value) => value !== undefined);
+      if (configured.length !== 1
+        || configured.some((value) => typeof value !== "string" || !value.trim() || value.length > spec.itemCap)) {
+        invalid(`${label}[${index}] must contain exactly one bounded ref, selector, name, or label`);
+      }
     }
     return;
   }
@@ -411,10 +415,12 @@ function sensitiveZoneArray(raw: unknown, cap: number, itemCap: number): Browser
   const zones = raw.slice(0, cap).flatMap((value) => {
     const input = objectRecord(value);
     if (!input) return [];
+    const ref = boundedString(input.ref, itemCap);
     const selector = boundedString(input.selector, itemCap);
     const name = boundedString(input.name, itemCap);
     const label = boundedString(input.label, itemCap);
-    return selector || name || label ? [{ ...(selector ? { selector } : {}), ...(name ? { name } : {}), ...(label ? { label } : {}) }] : [];
+    const configured = [ref, selector, name, label].filter((value) => value !== undefined);
+    return configured.length === 1 ? [{ ...(ref ? { ref } : {}), ...(selector ? { selector } : {}), ...(name ? { name } : {}), ...(label ? { label } : {}) }] : [];
   });
   return zones.length > 0 ? zones : undefined;
 }

@@ -1,9 +1,9 @@
-# Codex Subagent Orchestrator Guide
+# Codex Worker Orchestrator Guide
 
 ## Purpose
 
 This guide defines a reusable way for one Codex orchestrator to coordinate parallel
-implementation with GPT-5.6 Sol subagents. It is project-agnostic: repository
+implementation with GPT-5.6 Sol workers in shared Codex tasks. It is project-agnostic: repository
 instructions, applicable skills, approved plans, and user constraints always take
 precedence.
 
@@ -21,8 +21,9 @@ and the truth of all completion claims.
   slots, run at most three subagents alongside the orchestrator.
 - Use fewer workers when dependency order or file ownership does not permit safe
   parallelism. Concurrency is a latency tool, not a delivery requirement.
-- Reuse a live subagent for a related correction or follow-up when practical. Start a
-  new subagent only for a genuinely independent lane or after the prior agent has ended.
+- Reuse a live worker for a related correction or follow-up when practical, but only when
+  its model is known to satisfy this policy. Start a new worker only for a genuinely
+  independent lane or after the prior worker has ended.
 
 This policy supersedes the earlier GPT-5.3 Codex Spark thread policy. Spark task IDs may
 remain in historical evidence, but no new work depends on Spark availability.

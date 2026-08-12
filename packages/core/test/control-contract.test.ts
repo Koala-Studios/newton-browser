@@ -43,7 +43,7 @@ test("new target descriptors feed the safety floor", () => {
   assert.equal(decision.reasons.includes("social_engagement_action"), true);
 });
 
-test("compact observations accept bbox arrays from the extension but do not expose raw DOM", () => {
+test("compact observations accept driver bbox arrays but do not expose raw DOM", () => {
   const result = redactBrowserResult({
     kind: "observation",
     mode: "cdp",

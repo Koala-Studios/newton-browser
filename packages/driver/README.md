@@ -1,13 +1,21 @@
 # Newton Browser Driver
 
-Browser-side runtime and Chrome DevTools Protocol driver for Newton Browser.
+Strict TypeScript browser-control runtime for the direct owned-browser host.
 
-## Exports
+## Primary exports
 
-- `driver`: CDP-backed observe, screenshot, action, and target-resolution logic.
-- `controller`: transport-injected session runtime.
-- `chrome-tabs-port`: Chrome extension tab/debugger adapter for the runtime.
+- `driver`: CDP observe, screenshot, action, containment, input, dialog, and target logic.
+- `direct-session-runtime`: composes a direct debugger port, page-effects port, command
+  pump, exact origin grants, and deterministic cleanup for one owned browser target.
+- `direct-debugger-port`: maps private browser-level CDP transport to the driver contract.
+- `direct-page-effects`: non-security cosmetic effects for direct sessions.
+- `raster-mask`: bounded trusted post-capture PNG redaction for sensitive zones.
+- `target-registry`: bounded target/frame/session/ref topology for same-process frames,
+  workers, and nested OOPIFs.
 
 ## Boundary
 
-This package assumes a browser extension environment only at the port/driver edge. The controller is transport-injected and can be tested with fake ports. Keep app-specific labels, API routes, packet logic, and server concerns outside this package.
+The driver must not own MCP framing, browser process creation, identity storage, proxy
+listeners, application routes, model calls, or provider credentials. It receives explicit
+private-CDP and page-effect ports. Production TypeScript
+must compile strictly and emitted artifacts must remain deterministic and source-free.

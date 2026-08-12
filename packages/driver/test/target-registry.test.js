@@ -86,6 +86,107 @@ test("origin enrichment is allowed but known conflicts are atomic", () => {
   assert.deepEqual(registry.getSnapshot(), before);
 });
 
+test("blocked Document provenance enriches only an exact existing parent or child-session frame", () => {
+  const parent = mainRegistry();
+  parent.registerFrame({ frameId: "restricted", targetId: "main" });
+  assert.equal(parent.recordBlockedFrameOrigin({
+    frameId: "restricted",
+    sourceTargetId: "main",
+    sourceSessionId: null,
+    origin: "https://denied.test",
+  }), true);
+  assert.equal(parent.listObservationRoutes().find((route) => route.frameId === "restricted")?.origin, "https://denied.test");
+
+  const child = mainRegistry();
+  child.registerTarget({
+    targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "child-session",
+  });
+  child.registerFrame({ frameId: "nested", targetId: "child" });
+  assert.equal(child.recordBlockedFrameOrigin({
+    frameId: "nested",
+    sourceTargetId: "child",
+    sourceSessionId: "child-session",
+    origin: "https://nested-denied.test",
+  }), true);
+  assert.equal(child.listObservationRoutes().find((route) => route.frameId === "nested")?.origin, "https://nested-denied.test");
+});
+
+test("blocked Document provenance queues bounded metadata without creating a frame", () => {
+  const registry = mainRegistry({ maxFrames: 1 });
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "late-frame",
+    sourceTargetId: "main",
+    sourceSessionId: null,
+    origin: "https://denied.test",
+  }), true);
+  assert.equal(registry.frameIdentity("late-frame"), null);
+  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 1, detached: 0 });
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "over-cap",
+    sourceTargetId: "main",
+    sourceSessionId: null,
+    origin: "https://other.test",
+  }), false);
+
+  registry.registerFrame({ frameId: "late-frame", targetId: "main" });
+  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "late-frame")?.origin, "https://denied.test");
+  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 1, waiting: 0, detached: 0 });
+});
+
+test("blocked Document provenance rejects conflicts, stale ownership, popup pages, and detached ids", () => {
+  const registry = mainRegistry();
+  registry.registerFrame({ frameId: "known", targetId: "main", origin: "https://known.test" });
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "known", sourceTargetId: "main", sourceSessionId: null, origin: "https://denied.test",
+  }), false);
+  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "known")?.origin, "https://known.test");
+
+  registry.registerTarget({
+    targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "child-session",
+  });
+  registry.registerFrame({ frameId: "child-frame", targetId: "child" });
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "child-frame", sourceTargetId: "main", sourceSessionId: null, origin: "https://denied.test",
+  }), false);
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "child-frame", sourceTargetId: "child", sourceSessionId: "stale-session", origin: "https://denied.test",
+  }), false);
+
+  registry.registerTarget({ targetId: "popup", type: "page", parentTargetId: "main", sessionId: "popup-session" });
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "popup-frame", sourceTargetId: "popup", sourceSessionId: "popup-session", origin: "https://popup.test",
+  }), false);
+  registry.detachFrame("removed");
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "removed", sourceTargetId: "main", sourceSessionId: null, origin: "https://denied.test",
+  }), false);
+});
+
+test("queued blocked provenance is fenced by session replacement, detach, and document commit", () => {
+  const registry = mainRegistry();
+  registry.registerTarget({
+    targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "old-session",
+  });
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "late-child", sourceTargetId: "child", sourceSessionId: "old-session", origin: "https://denied.test",
+  }), true);
+  registry.registerSession("child", "new-session");
+  registry.registerFrame({ frameId: "late-child", targetId: "child" });
+  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "late-child")?.origin, "");
+
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "removed", sourceTargetId: "main", sourceSessionId: null, origin: "https://removed.test",
+  }), true);
+  registry.detachFrame("removed");
+  assert.equal(registry.getSnapshot().counts.frames.waiting, 0);
+
+  assert.equal(registry.recordBlockedFrameOrigin({
+    frameId: "next-document", sourceTargetId: "main", sourceSessionId: null, origin: "https://next.test",
+  }), true);
+  registry.commitTopLevelDocument("main");
+  assert.equal(registry.getSnapshot().counts.frames.waiting, 0);
+});
+
 test("refs require a committed document and main routing survives commits", () => {
   const registry = new TargetRegistry();
   registry.registerTarget({ targetId: "main", type: "page", sessionId: "root-session" });
@@ -135,6 +236,487 @@ test("OOPIF refs require a live child session and route through it", () => {
   registry.registerSession("child", "child-session");
   const ref = registry.createRef("child", 21, { frameId: "root" });
   assert.equal(registry.resolveRef(ref).sessionId, "child-session");
+});
+
+test("iframe owner routes are exact, bounded, and ordered outer-to-inner", () => {
+  const registry = mainRegistry();
+  registry.registerTarget({
+    targetId: "child",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "outer-frame",
+    sessionId: "child-session",
+  });
+  registry.registerTarget({
+    targetId: "nested",
+    type: "iframe",
+    parentTargetId: "child",
+    hostFrameId: "inner-frame",
+    sessionId: "nested-session",
+  });
+
+  assert.deepEqual(registry.iframeOwnerRoutes("nested"), [
+    { targetId: "main", sessionId: null, frameId: "outer-frame" },
+    { targetId: "child", sessionId: "child-session", frameId: "inner-frame" },
+  ]);
+  assert.equal(Object.isFrozen(registry.iframeOwnerRoutes("nested")), true);
+  assert.deepEqual(registry.iframeOwnerRoutes("child"), [
+    { targetId: "main", sessionId: null, frameId: "outer-frame" },
+  ]);
+  assert.deepEqual(registry.iframeOwnerRoutes("main"), []);
+
+  registry.registerTarget({
+    targetId: "ambiguous",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "outer-frame",
+    sessionId: "ambiguous-session",
+  });
+  throwsCode(() => registry.iframeOwnerRoutes("child"), CODES.FRAME_CONFLICT);
+
+  registry.detachTarget("child");
+  throwsCode(() => registry.iframeOwnerRoutes("nested"), CODES.TARGET_NOT_FOUND);
+});
+
+test("same-process frame owner routes are exact, sessionless, and ordered outer-to-inner", () => {
+  const registry = mainRegistry();
+  registry.registerFrame({ frameId: "outer", targetId: "main", backendNodeId: 10 });
+  registry.registerFrame({ frameId: "inner", targetId: "main", parentFrameId: "outer", backendNodeId: 20 });
+
+  assert.deepEqual(registry.frameOwnerRoutes("outer"), [
+    { targetId: "main", sessionId: null, frameId: "outer" },
+  ]);
+  assert.deepEqual(registry.frameOwnerRoutes("inner"), [
+    { targetId: "main", sessionId: null, frameId: "outer" },
+    { targetId: "main", sessionId: null, frameId: "inner" },
+  ]);
+  assert.equal(Object.isFrozen(registry.frameOwnerRoutes("inner")), true);
+
+  registry.detachFrame("outer");
+  throwsCode(() => registry.frameOwnerRoutes("inner"), CODES.FRAME_DETACHED);
+
+  const pending = mainRegistry();
+  pending.registerFrame({ frameId: "waiting", targetId: "missing", parentFrameId: "unknown" });
+  throwsCode(() => pending.frameOwnerRoutes("waiting"), CODES.FRAME_DETACHED);
+
+  const mismatched = mainRegistry();
+  mismatched.registerTarget({ targetId: "other", type: "page" });
+  mismatched.registerFrame({ frameId: "parent", targetId: "main" });
+  mismatched.registerFrame({ frameId: "child", targetId: "main", parentFrameId: "parent" });
+  mismatched.frames.get("parent").targetId = "other";
+  throwsCode(() => mismatched.frameOwnerRoutes("child"), CODES.FRAME_CONFLICT);
+
+  const cyclic = mainRegistry();
+  cyclic.registerFrame({ frameId: "parent", targetId: "main" });
+  cyclic.registerFrame({ frameId: "child", targetId: "main", parentFrameId: "parent" });
+  cyclic.frames.get("parent").parentFrameId = "child";
+  throwsCode(() => cyclic.frameOwnerRoutes("child"), CODES.FRAME_CONFLICT);
+});
+
+test("combined owner routes preserve same-process ancestry across nested OOPIF boundaries", () => {
+  const registry = mainRegistry();
+  registry.registerFrame({ frameId: "outer-same", targetId: "main" });
+  registry.registerFrame({ frameId: "child-host", targetId: "main", parentFrameId: "outer-same" });
+  registry.registerTarget({
+    targetId: "child-host",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "child-host",
+    sessionId: "child-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "child-host", targetId: "child-host" });
+  registry.registerFrame({ frameId: "child-same", targetId: "child-host", parentFrameId: "child-host" });
+  registry.registerFrame({ frameId: "nested-host", targetId: "child-host", parentFrameId: "child-same" });
+  registry.registerTarget({
+    targetId: "nested-host",
+    type: "iframe",
+    parentTargetId: "child-host",
+    hostFrameId: "nested-host",
+    sessionId: "nested-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "nested-host", targetId: "nested-host" });
+  registry.registerFrame({ frameId: "nested-same", targetId: "nested-host", parentFrameId: "nested-host" });
+
+  assert.deepEqual(registry.embeddingOwnerRoutes("child-host", "child-same"), [
+    { targetId: "main", sessionId: null, frameId: "outer-same" },
+    { targetId: "main", sessionId: null, frameId: "child-host" },
+    { targetId: "child-host", sessionId: "child-session", frameId: "child-same" },
+  ]);
+  assert.deepEqual(registry.embeddingOwnerRoutes("nested-host", "nested-same"), [
+    { targetId: "main", sessionId: null, frameId: "outer-same" },
+    { targetId: "main", sessionId: null, frameId: "child-host" },
+    { targetId: "child-host", sessionId: "child-session", frameId: "child-same" },
+    { targetId: "child-host", sessionId: "child-session", frameId: "nested-host" },
+    { targetId: "nested-host", sessionId: "nested-session", frameId: "nested-same" },
+  ]);
+  assert.deepEqual(registry.frameRoutingSummary(), {
+    attachedIframeTargetCount: 2,
+    inProcessFrameCount: 3,
+    maxAttachedIframeTargetDepth: 2,
+  });
+  registry.detachFrame("child-same");
+  throwsCode(() => registry.embeddingOwnerRoutes("nested-host", "nested-same"), CODES.FRAME_CONFLICT);
+  assert.deepEqual(registry.frameRoutingSummary(), {
+    attachedIframeTargetCount: 1,
+    inProcessFrameCount: 1,
+    maxAttachedIframeTargetDepth: 1,
+  });
+});
+
+test("frame routing summary caps live actionable topology counts", () => {
+  const inProcess = mainRegistry({ maxFrames: 80 });
+  for (let index = 0; index < 70; index += 1) {
+    inProcess.registerFrame({ frameId: `same-${index}`, targetId: "main" });
+  }
+  assert.deepEqual(inProcess.frameRoutingSummary(), {
+    attachedIframeTargetCount: 0,
+    inProcessFrameCount: 64,
+    maxAttachedIframeTargetDepth: 0,
+  });
+
+  const attached = mainRegistry({ maxTargets: 80, maxFrames: 80 });
+  let parentTargetId = "main";
+  let parentFrameId = null;
+  for (let index = 1; index <= 70; index += 1) {
+    const frameId = `oopif-${index}`;
+    attached.registerFrame({
+      frameId,
+      targetId: parentTargetId,
+      ...(parentFrameId ? { parentFrameId } : {}),
+    });
+    attached.registerTarget({
+      targetId: frameId,
+      type: "iframe",
+      parentTargetId,
+      hostFrameId: frameId,
+      sessionId: `session-${index}`,
+    });
+    attached.reconcileOopifFrame({ frameId, targetId: frameId });
+    parentTargetId = frameId;
+    parentFrameId = frameId;
+  }
+  assert.deepEqual(attached.frameRoutingSummary(), {
+    attachedIframeTargetCount: 64,
+    inProcessFrameCount: 0,
+    maxAttachedIframeTargetDepth: 64,
+  });
+});
+
+test("OOPIF boundary reconciliation adopts a parent-first frame and fences its prior refs", () => {
+  const registry = mainRegistry();
+  registry.registerFrame({ frameId: "main-frame", targetId: "main", backendNodeId: 1 });
+  registry.registerFrame({
+    frameId: "oopif",
+    targetId: "main",
+    parentFrameId: "main-frame",
+    backendNodeId: 2,
+  });
+  const oldRef = registry.createRef("main", 3, { frameId: "oopif" });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+  });
+  registry.registerSession("oopif", "oopif-session");
+
+  const frame = registry.reconcileOopifFrame({
+    frameId: "oopif",
+    targetId: "oopif",
+    backendNodeId: 4,
+  });
+
+  assert.equal(frame.targetId, "oopif");
+  assert.equal(frame.parentFrameId, null);
+  throwsCode(() => registry.resolveRef(oldRef), CODES.FRAME_DETACHED);
+  const newRef = registry.createRef("oopif", 3, { frameId: "oopif" });
+  assert.notEqual(newRef, oldRef);
+  assert.equal(registry.resolveRef(newRef).sessionId, "oopif-session");
+});
+
+test("OOPIF boundary reconciliation keeps child ownership when the parent observation arrives second", () => {
+  const registry = mainRegistry();
+  registry.registerFrame({ frameId: "main-frame", targetId: "main", backendNodeId: 1 });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "oopif-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 2 });
+  const ref = registry.createRef("oopif", 3, { frameId: "oopif" });
+
+  const frame = registry.reconcileOopifFrame({
+    frameId: "oopif",
+    targetId: "main",
+    parentFrameId: "main-frame",
+    backendNodeId: 4,
+  });
+
+  assert.equal(frame.targetId, "oopif");
+  assert.equal(registry.resolveRef(ref).targetId, "oopif");
+  throwsCode(
+    () => registry.registerFrame({ frameId: "oopif", targetId: "main", parentFrameId: "main-frame" }),
+    CODES.FRAME_CONFLICT,
+  );
+});
+
+test("frame swap reconciliation permits one exact OOPIF adoption and keeps old refs fenced", () => {
+  const registry = mainRegistry();
+  registry.registerFrame({ frameId: "oopif", targetId: "main", backendNodeId: 2 });
+  const oldRef = registry.createRef("main", 3, { frameId: "oopif" });
+  registry.beginFrameSwap("oopif", "main");
+  throwsCode(() => registry.resolveRef(oldRef), CODES.FRAME_DETACHED);
+  throwsCode(
+    () => registry.registerFrame({ frameId: "oopif", targetId: "main", backendNodeId: 4 }),
+    CODES.FRAME_CONFLICT,
+  );
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "oopif-session",
+  });
+
+  registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 4 });
+
+  const newRef = registry.createRef("oopif", 3, { frameId: "oopif" });
+  assert.notEqual(newRef, oldRef);
+  assert.equal(registry.resolveRef(newRef).sessionId, "oopif-session");
+  const duplicate = registry.reconcileOopifFrame({ frameId: "oopif", targetId: "main", backendNodeId: 5 });
+  assert.equal(duplicate.targetId, "oopif");
+  registry.beginFrameSwap("oopif", "main");
+  assert.equal(registry.resolveRef(newRef).targetId, "oopif");
+});
+
+test("an unknown swap is a no-op and does not mislabel the frame as terminally detached", () => {
+  const registry = mainRegistry();
+  registry.beginFrameSwap("oopif", "main");
+  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 0, detached: 0 });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "oopif-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 1 });
+  assert.equal(registry.createRef("oopif", 2, { frameId: "oopif" }), "d1:f1:e2");
+});
+
+test("an active child OOPIF can swap, detach its old target session, and reattach with the same identity", () => {
+  const registry = mainRegistry({ maxTargets: 2, maxFrames: 1 });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "old-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 1 });
+  const oldRef = registry.createRef("oopif", 2, { frameId: "oopif" });
+
+  registry.beginFrameSwap("oopif", "oopif");
+  assert.equal(registry.targetForSession("old-session"), undefined);
+  assert.deepEqual(registry.getSnapshot().counts.targets, { active: 1, waiting: 0, detached: 1 });
+  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 0, detached: 1 });
+  throwsCode(
+    () => registry.registerTarget({ targetId: "overflow", type: "page", parentTargetId: "main" }),
+    CODES.MAX_TARGETS_EXCEEDED,
+  );
+  throwsCode(
+    () => registry.registerFrame({ frameId: "overflow", targetId: "main", backendNodeId: 3 }),
+    CODES.MAX_FRAMES_EXCEEDED,
+  );
+
+  registry.detachTarget("oopif");
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "new-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 4 });
+
+  throwsCode(() => registry.resolveRef(oldRef), CODES.FRAME_DETACHED);
+  const newRef = registry.createRef("oopif", 2, { frameId: "oopif" });
+  assert.notEqual(newRef, oldRef);
+  assert.equal(registry.resolveRef(newRef).sessionId, "new-session");
+});
+
+test("a normal frame removal terminalizes an active swap exactly once", () => {
+  const registry = mainRegistry({ maxTargets: 2, maxFrames: 1 });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "old-session",
+  });
+  registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 1 });
+  const oldRef = registry.createRef("oopif", 2, { frameId: "oopif" });
+
+  registry.beginFrameSwap("oopif", "oopif");
+  registry.detachFrame("oopif");
+  registry.detachFrame("oopif");
+
+  throwsCode(() => registry.resolveRef(oldRef), CODES.FRAME_DETACHED);
+  assert.deepEqual(registry.getSnapshot().counts.targets, { active: 1, waiting: 0, detached: 1 });
+  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 0, detached: 1 });
+  throwsCode(
+    () => registry.registerTarget({
+      targetId: "oopif",
+      type: "iframe",
+      parentTargetId: "main",
+      hostFrameId: "oopif",
+      sessionId: "new-session",
+    }),
+    CODES.TARGET_CONFLICT,
+  );
+  throwsCode(
+    () => registry.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 3 }),
+    CODES.FRAME_CONFLICT,
+  );
+});
+
+test("exact swap reattachment updates origin and ignores stale old-session detach", () => {
+  const registry = mainRegistry();
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "old-session",
+    origin: "https://old.test",
+  });
+  registry.reconcileOopifFrame({
+    frameId: "oopif",
+    targetId: "oopif",
+    backendNodeId: 1,
+    origin: "https://old.test",
+  });
+  registry.beginFrameSwap("oopif", "oopif");
+  throwsCode(
+    () => registry.registerTarget({
+      targetId: "oopif",
+      type: "iframe",
+      parentTargetId: "main",
+      hostFrameId: "oopif",
+      sessionId: "old-session",
+      origin: "https://new.test",
+    }),
+    CODES.SESSION_CONFLICT,
+  );
+  assert.equal(registry.targetForSession("old-session"), undefined);
+  assert.deepEqual(registry.getSnapshot().counts.targets, { active: 1, waiting: 0, detached: 1 });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+    sessionId: "new-session",
+    origin: "https://new.test",
+  });
+  registry.detachTarget("oopif", "old-session");
+  registry.reconcileOopifFrame({
+    frameId: "oopif",
+    targetId: "oopif",
+    backendNodeId: 2,
+    origin: "https://new.test",
+  });
+  registry.detachTarget("oopif", "old-session");
+
+  const ref = registry.createRef("oopif", 3, { frameId: "oopif" });
+  const route = registry.resolveRef(ref);
+  assert.equal(route.sessionId, "new-session");
+  assert.equal(route.origin, "https://new.test");
+});
+
+test("a pending hosted target subtree is suspended nonterminally across swap", () => {
+  const registry = mainRegistry({ maxTargets: 3, maxFrames: 1 });
+  registry.registerFrame({ frameId: "oopif", targetId: "parent", backendNodeId: 1 });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "parent",
+    hostFrameId: "oopif",
+    sessionId: "old-session",
+    origin: "https://old.test",
+  });
+  registry.beginFrameSwap("oopif", "parent");
+
+  assert.equal(registry.targetForSession("old-session"), undefined);
+  assert.deepEqual(registry.getSnapshot().counts.targets, { active: 1, waiting: 1, detached: 1 });
+  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 0, detached: 1 });
+
+  registry.registerTarget({
+    targetId: "parent",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "parent-host",
+    origin: "https://parent.test",
+  });
+  registry.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "parent",
+    hostFrameId: "oopif",
+    sessionId: "new-session",
+    origin: "https://new.test",
+  });
+  registry.reconcileOopifFrame({
+    frameId: "oopif",
+    targetId: "oopif",
+    backendNodeId: 2,
+    origin: "https://new.test",
+  });
+  assert.equal(registry.resolveRef(registry.createRef("oopif", 3, { frameId: "oopif" })).sessionId, "new-session");
+});
+
+test("frame swap reconciliation rejects terminal, unrelated, and over-cap resurrection", () => {
+  const removed = mainRegistry();
+  removed.registerFrame({ frameId: "oopif", targetId: "main", backendNodeId: 1 });
+  removed.detachFrame("oopif");
+  removed.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "main",
+    hostFrameId: "oopif",
+  });
+  throwsCode(
+    () => removed.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 2 }),
+    CODES.FRAME_CONFLICT,
+  );
+
+  const unrelated = mainRegistry();
+  unrelated.registerTarget({ targetId: "other", type: "page", parentTargetId: "main" });
+  unrelated.registerFrame({ frameId: "oopif", targetId: "main", backendNodeId: 1 });
+  const stableRef = unrelated.createRef("main", 2, { frameId: "oopif" });
+  throwsCode(() => unrelated.beginFrameSwap("oopif", "other"), CODES.FRAME_CONFLICT);
+  assert.equal(unrelated.resolveRef(stableRef).targetId, "main");
+  unrelated.beginFrameSwap("oopif", "main");
+  unrelated.registerTarget({
+    targetId: "oopif",
+    type: "iframe",
+    parentTargetId: "other",
+    hostFrameId: "oopif",
+  });
+  throwsCode(
+    () => unrelated.reconcileOopifFrame({ frameId: "oopif", targetId: "oopif", backendNodeId: 2 }),
+    CODES.FRAME_CONFLICT,
+  );
+
+  const bounded = mainRegistry({ maxFrames: 1 });
+  bounded.registerFrame({ frameId: "oopif", targetId: "main", backendNodeId: 1 });
+  bounded.beginFrameSwap("oopif", "main");
+  assert.equal(bounded.getSnapshot().counts.frames.detached, 1);
+  throwsCode(
+    () => bounded.registerFrame({ frameId: "other-frame", targetId: "main", backendNodeId: 2 }),
+    CODES.MAX_FRAMES_EXCEEDED,
+  );
 });
 
 test("out-of-order session, frame, and target events reconcile deterministically", () => {
@@ -276,11 +858,49 @@ test("top-level navigation may replace the document origin", () => {
   assert.equal(registry.createRef("main", 1), "d2:e1");
 });
 
-test("workers are tracked but never actionable", () => {
+test("dedicated and module workers are tracked but excluded from observation and action routes", () => {
   const registry = mainRegistry();
-  registry.registerTarget({ targetId: "worker", type: "worker", sessionId: "worker-session" });
-  throwsCode(() => registry.createRef("worker", 1), CODES.NON_ACTIONABLE_TARGET);
-  assert.equal(registry.getSnapshot().counts.targets.active, 2);
+  registry.registerTarget({
+    targetId: "dedicated-worker",
+    type: "worker",
+    sessionId: "dedicated-worker-session",
+    origin: "https://example.test",
+  });
+  registry.registerTarget({
+    targetId: "module-worker",
+    type: "worker",
+    sessionId: "module-worker-session",
+    origin: "https://example.test",
+  });
+  throwsCode(() => registry.createRef("dedicated-worker", 1), CODES.NON_ACTIONABLE_TARGET);
+  throwsCode(() => registry.createRef("module-worker", 1), CODES.NON_ACTIONABLE_TARGET);
+  assert.deepEqual(registry.listObservationRoutes().map((route) => route.targetId), ["main"]);
+  assert.equal(registry.getSnapshot().counts.targets.active, 3);
+});
+
+test("related page target subtrees remain containment-only and non-actionable", () => {
+  const registry = mainRegistry();
+  registry.registerTarget({
+    targetId: "popup", type: "page", parentTargetId: "main", sessionId: "popup-session", origin: "https://example.test",
+  });
+  registry.registerFrame({ frameId: "popup-root", targetId: "popup", origin: "https://example.test" });
+  registry.registerFrame({ frameId: "popup-host", targetId: "popup", backendNodeId: 10, origin: "https://example.test" });
+  registry.registerTarget({
+    targetId: "popup-oopif", type: "iframe", parentTargetId: "popup", hostFrameId: "popup-host",
+    sessionId: "popup-oopif-session", origin: "https://example.test",
+  });
+  registry.registerFrame({ frameId: "popup-oopif-root", targetId: "popup-oopif", origin: "https://example.test" });
+  registry.registerTarget({
+    targetId: "popup-worker", type: "worker", parentTargetId: "popup", sessionId: "popup-worker-session",
+  });
+
+  assert.deepEqual(registry.listObservationRoutes().map((route) => route.targetId), ["main"]);
+  assert.equal(registry.relatedPageAncestorForSession("popup-session")?.targetId, "popup");
+  assert.equal(registry.relatedPageAncestorForSession("popup-oopif-session")?.targetId, "popup");
+  assert.equal(registry.relatedPageAncestorForSession("popup-worker-session")?.targetId, "popup");
+  throwsCode(() => registry.createRef("popup", 1, { frameId: "popup-root" }), CODES.NON_ACTIONABLE_TARGET);
+  throwsCode(() => registry.createRef("popup-oopif", 2, { frameId: "popup-oopif-root" }), CODES.NON_ACTIONABLE_TARGET);
+  throwsCode(() => registry.frameOwnerRoutes("popup-oopif-root"), CODES.FRAME_CONFLICT);
 });
 
 test("ref storage is exact, bounded, and cannot resurrect a retired ref", () => {

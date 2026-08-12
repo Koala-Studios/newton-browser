@@ -2,6 +2,7 @@ const ORIGIN_CAP = 32;
 const ORIGIN_LENGTH_CAP = 512;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const CONNECTION_TYPES = new Set(["WebSocket", "EventSource"]);
+const EXECUTABLE_TYPES = new Set(["Script", "Worker", "SharedWorker", "ServiceWorker"]);
 
 export class OriginContainmentError extends Error {
   readonly code: string;
@@ -74,7 +75,7 @@ export function compileOriginGrant(primaryOrigin: unknown, allowedOrigins: reado
 }
 
 type PausedRequestInput = {
-  request?: { url?: unknown; method?: unknown } | null;
+  request?: { url?: unknown; method?: unknown; headers?: unknown } | null;
   isNavigationRequest?: unknown;
   resourceType?: unknown;
 };
@@ -82,7 +83,7 @@ type PausedRequestInput = {
 type PausedTargetInput = { url?: unknown; initiatorUrl?: unknown };
 
 export type ContainmentDecision = Readonly<{
-  action: "continue" | "continue_without_body_access" | "fail" | "resume" | "hold" | "block";
+  action: "continue" | "fail" | "resume" | "hold" | "block";
   reason: string;
   granted: boolean;
 }>;
@@ -92,11 +93,22 @@ export function decidePausedRequest(input: PausedRequestInput | null | undefined
   const url = String(request.url ?? "");
   const method = String(request.method ?? "GET").toUpperCase();
   if (grant.contains(url)) return decision("continue", "granted_origin", true);
-  if (input?.isNavigationRequest === true) return decision("fail", "ungranted_navigation", false);
+  if (input?.isNavigationRequest === true || input?.resourceType === "Document") return decision("fail", "ungranted_navigation", false);
   if (MUTATING_METHODS.has(method)) return decision("fail", "ungranted_mutation", false);
   if (CONNECTION_TYPES.has(String(input?.resourceType ?? ""))) return decision("fail", "ungranted_connection", false);
-  if (method === "GET" || method === "HEAD") return decision("continue_without_body_access", "read_only_subresource", false);
+  if (EXECUTABLE_TYPES.has(String(input?.resourceType ?? "")) || isExecutableDestination(request.headers)) {
+    return decision("fail", "ungranted_target", false);
+  }
   return decision("fail", "unsupported_ungranted_request", false);
+}
+
+function isExecutableDestination(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  for (const [name, header] of Object.entries(value)) {
+    if (name.toLowerCase() !== "sec-fetch-dest" || typeof header !== "string") continue;
+    return ["script", "worker", "sharedworker", "serviceworker"].includes(header.toLowerCase());
+  }
+  return false;
 }
 
 export function decidePausedTarget(input: PausedTargetInput | null | undefined, grant: OriginGrant): ContainmentDecision {

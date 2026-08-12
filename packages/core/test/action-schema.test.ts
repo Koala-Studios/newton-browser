@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   BROWSER_ACTION_FIELDS,
   BROWSER_ACTION_FIELD_SPECS,
+  BROWSER_ACTION_JSON_SCHEMA,
   IDEMPOTENCY_KEY_MAXIMUM_LENGTH,
   IDEMPOTENCY_KEY_MINIMUM_LENGTH,
   normalizeIdempotencyKey,
@@ -15,7 +16,7 @@ import {
 test("action schema fields survive parse and redact", () => {
   const parsed = parseBrowserAction({
     kind: "screenshot",
-    sensitiveZones: [{ selector: "[data-private]", label: "private" }],
+    sensitiveZones: [{ selector: "[data-private]" }],
     fullPage: true,
     device: "mobile",
     waitMs: 10_000,
@@ -31,7 +32,9 @@ test("action schema fields survive parse and redact", () => {
   assert.equal(redacted.device, "mobile");
   assert.equal(redacted.waitMs, 10_000);
   assert.deepEqual(parsed.clip, { x: 1, y: 3, width: 300, height: 201 });
+  assert.deepEqual(parseBrowserAction({ kind: "screenshot", sensitiveZones: [{ ref: "d1:e1" }] }).sensitiveZones, [{ ref: "d1:e1" }]);
   assert.throws(() => parseBrowserAction({ kind: "screenshot", unknown: true }), /unsupported field/);
+  assert.throws(() => parseBrowserAction({ kind: "screenshot", sensitiveZones: [{ selector: "#private", label: "private" }] }), /exactly one/u);
 });
 
 test("only action value is replaced as the secret field", () => {
@@ -43,6 +46,39 @@ test("only action value is replaced as the secret field", () => {
 
   assert.equal(redacted.value, "[REDACTED]");
   assert.deepEqual(redacted.target, { role: "textbox", name: "Display name" });
+});
+
+test("internal frame routing diagnostic is not accepted by the public action parser", () => {
+  assert.throws(() => parseBrowserAction({ kind: "observe", includeFrameRouting: true }), /unsupported field/);
+});
+
+test("click can atomically wait for its bounded causal effect", () => {
+  const action = parseBrowserAction({
+    kind: "click",
+    role: "button",
+    name: "Launch worker",
+    waitFor: { text: "worker-blocked", timeoutMs: 4_000 },
+    timeoutMs: 5_000,
+  });
+
+  assert.deepEqual(action, {
+    kind: "click",
+    role: "button",
+    name: "Launch worker",
+    waitFor: { text: "worker-blocked", timeoutMs: 4_000 },
+    timeoutMs: 5_000,
+  });
+  assert.deepEqual(redactBrowserAction(action), action);
+  assert.equal(BROWSER_ACTION_JSON_SCHEMA["x-newtonVariants"].click.includes("waitFor"), true);
+  assert.equal(BROWSER_ACTION_JSON_SCHEMA["x-newtonVariants"].click.includes("timeoutMs"), true);
+  assert.throws(
+    () => parseBrowserAction({ kind: "click", name: "Launch worker", waitFor: { text: "done", timeoutMs: 99 } }),
+    /timeoutMs is outside bounds/,
+  );
+  assert.throws(
+    () => parseBrowserAction({ kind: "click", name: "Launch worker", timeoutMs: 120_001 }),
+    /outside bounds/,
+  );
 });
 
 test("idempotency keys are validated with a bounded URL-safe format", () => {

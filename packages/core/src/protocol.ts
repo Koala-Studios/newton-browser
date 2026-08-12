@@ -28,10 +28,6 @@ export const BROWSER_ACTION_KINDS = [
 
 export type BrowserActionKind = (typeof BROWSER_ACTION_KINDS)[number];
 
-export const BROWSER_CONTROL_TRANSPORTS = ["auto", "local_ephemeral", "local_dev_durable"] as const;
-
-export type BrowserControlTransportMode = (typeof BROWSER_CONTROL_TRANSPORTS)[number];
-
 export const BROWSER_ACTION_RESULT_STATUSES = [
   "verified",
   "dispatched_unverified",
@@ -124,12 +120,13 @@ export type BrowserAction = {
   maxNodes?: number;
   roles?: string[];
   includeInteractive?: boolean;
+  includeFrameRouting?: boolean;
   timeoutMs?: number;
   x?: number;
   y?: number;
   keys?: string[];
   files?: string[];
-  sensitiveZones?: Array<{ selector?: string; name?: string; label?: string }>;
+  sensitiveZones?: Array<{ ref?: string; selector?: string; name?: string; label?: string }>;
   checked?: boolean;
   intent?: string;
   // Screenshot capture options (Proposal 29 / D5): full scroll-down page, a wait
@@ -224,7 +221,7 @@ export type BrowserSignals = {
 
 export type BrowserPreventiveDecision = {
   stage: "preflight" | "request" | "target";
-  action: "continue" | "continue_without_body_access" | "resume" | "hold" | "fail" | "block";
+  action: "continue" | "resume" | "hold" | "fail" | "block";
   reason: string;
   granted: boolean;
   origin?: string;
@@ -270,6 +267,12 @@ export type BrowserExcludedFrame = {
   reason: "origin_not_granted";
 };
 
+export type BrowserFrameRouting = {
+  attachedIframeTargetCount: number;
+  inProcessFrameCount: number;
+  maxAttachedIframeTargetDepth: number;
+};
+
 export type BrowserObservationResult = {
   kind: "observation";
   mode: "passive" | "cdp";
@@ -286,6 +289,7 @@ export type BrowserObservationResult = {
   // Set when a page-initiated JavaScript dialog is blocking the renderer (WS9.4).
   pendingDialog?: BrowserPendingDialog;
   excludedFrames?: BrowserExcludedFrame[];
+  frameRouting?: BrowserFrameRouting;
 };
 
 export type BrowserScreenshotResult = {
@@ -300,6 +304,8 @@ export type BrowserScreenshotResult = {
   // Proposal 29 / D5. `dataUrl` is the inline base64 image (only when the caller
   // requested it) and is NEVER persisted — it is stripped before any DB write.
   dataUrl?: string;
+  format?: "png" | "jpeg";
+  requestedFormat?: "png" | "jpeg";
   device?: "mobile" | "desktop" | "viewport";
   fullPage?: boolean;
   truncated?: boolean;
@@ -330,6 +336,7 @@ export type BrowserObservationDelta = {
   reason?: string;
   changed?: Record<string, unknown>;
   excludedFrames?: BrowserExcludedFrame[];
+  frameRouting?: BrowserFrameRouting;
 };
 
 // A readable-text observation (WS9.1): the page's main/article text (falling back
@@ -397,7 +404,7 @@ export type BrowserNetworkLog = {
   reason?: string;
 };
 
-// Created by the MCP host after redaction/projection. Page content and extension
+// Created by the MCP host after redaction/projection. Page content and browser
 // payloads cannot select this trust label or overwrite its session binding.
 export type PageProvenance = {
   trust: "untrusted_page_content";
@@ -409,73 +416,6 @@ export type PageProvenance = {
 
 export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | BrowserConsoleLog | BrowserNetworkLog | { kind: "ack"; message: string };
 
-export type BrowserControlStatus = {
-  ok: boolean;
-  transport: BrowserControlTransportMode;
-  connected: boolean;
-  message?: string;
-};
-
-export type ListTabsInput = { transport?: BrowserControlTransportMode };
-
-export type ListTabsResult = {
-  tabs: Array<BrowserTabRef & { id?: string; active?: boolean; lastSeenAt?: string }>;
-};
-
-export type ClaimTabInput = {
-  transport?: BrowserControlTransportMode;
-  title?: string;
-  url?: string;
-  tabId?: number;
-};
-
-export type ClaimTabResult = {
-  sessionId?: string;
-  tab: BrowserTabRef;
-};
-
-export type ObserveInput = {
-  transport?: BrowserControlTransportMode;
-  sessionId?: string;
-  query?: string;
-  maxNodes?: number;
-  roles?: string[];
-  mode?: "full" | "diff";
-  format?: "compact" | "json";
-  includeGeometry?: boolean;
-  includeInteractive?: boolean;
-  limit?: number;
-};
-
-export type ScreenshotInput = {
-  transport?: BrowserControlTransportMode;
-  sessionId?: string;
-  clip?: { x: number; y: number; width: number; height: number };
-  fullPage?: boolean;
-  waitMs?: number;
-  device?: "mobile" | "desktop";
-  inline?: boolean;
-};
-
-export type ActInput = {
-  transport?: BrowserControlTransportMode;
-  sessionId?: string;
-  action: BrowserAction;
-  idempotencyKey?: string;
-  requestedRiskClass?: BrowserRiskClass;
-};
-
-export type WaitForInput = {
-  transport?: BrowserControlTransportMode;
-  sessionId?: string;
-  waitFor: BrowserWaitFor;
-};
-
-export type FinalizeTabsInput = {
-  transport?: BrowserControlTransportMode;
-  keep?: Array<{ tabId?: number; sessionId?: string; status: "handoff" | "deliverable" }>;
-};
-
 export type ActResult = {
   status: BrowserActionResultStatus;
   verified: boolean;
@@ -483,14 +423,3 @@ export type ActResult = {
   changed?: Record<string, unknown>;
   observation?: BrowserObservationResult | BrowserObservationDelta;
 };
-
-export interface BrowserControlTransport {
-  status(): Promise<BrowserControlStatus>;
-  listTabs(input: ListTabsInput): Promise<ListTabsResult>;
-  claimTab(input: ClaimTabInput): Promise<ClaimTabResult>;
-  observe(input: ObserveInput): Promise<BrowserObservationResult>;
-  screenshot(input: ScreenshotInput): Promise<BrowserScreenshotResult>;
-  act(input: ActInput): Promise<ActResult>;
-  waitFor(input: WaitForInput): Promise<ActResult>;
-  finalize(input: FinalizeTabsInput): Promise<{ ok: boolean }>;
-}

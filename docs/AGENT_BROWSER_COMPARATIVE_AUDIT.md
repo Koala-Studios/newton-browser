@@ -1,5 +1,10 @@
 # Newton Browser / agent-browser comparative implementation audit
 
+> Historical audit snapshot. This report compares the extension-era Newton revision
+> named below. Newton's current working tree has since moved to an owned-browser direct
+> CDP architecture. Use `README.md`, `ROADMAP.md`, and `docs/PROGRESS_LEDGER.md` for the
+> current product boundary; retain this document only as source-attributed design history.
+
 - Date: 2026-08-08
 - Newton Browser revision: `a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a` (`0.4.5`)
 - agent-browser revision: [`acbc22bdc5d4f6c5a88d97d4a4745d3c5eb0591f`](https://github.com/vercel-labs/agent-browser/tree/acbc22bdc5d4f6c5a88d97d4a4745d3c5eb0591f) (`0.33.2`)
@@ -260,7 +265,7 @@ Do not copy agent-browser's direct Markdown HTTP reader into Newton without a pr
 
 Rust's compiler covers agent-browser's daemon logic, but its codebase also demonstrates a tradeoff: `actions.rs` has grown beyond 14,000 lines. Native code does not guarantee modularity or easier maintenance.
 
-Newton has a more immediate type-safety issue: strict TypeScript covers `*.ts`, but the critical [`driver.js`](../packages/driver/src/driver.js) and [`controller.js`](../packages/driver/src/controller.js) files are copied verbatim into the extension build and are excluded from `tsconfig.json`. Before a language rewrite, convert them to TypeScript or enable checked JSDoc/`checkJs`. This would catch action/result/session drift at far lower cost.
+Newton has a more immediate type-safety issue: strict TypeScript covers `*.ts`, but the critical [`driver.js`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/driver.js) and [`controller.js`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/controller.js) files are copied verbatim into the extension build and are excluded from `tsconfig.json`. Before a language rewrite, convert them to TypeScript or enable checked JSDoc/`checkJs`. This would catch action/result/session drift at far lower cost.
 
 JavaScript/TypeScript advantages for Newton:
 
@@ -319,7 +324,7 @@ If Rust wins the defined budgets, replace only the MCP host/relay and retain the
 
 Newton's concurrency is not merely a named-session flag. The loopback bridge can coordinate multiple independent MCP host instances, atomically select one eligible Chrome/Edge extension owner per session, and bind each session to a separate owned tab/group. This is a useful product-level distinction from agent-browser's named daemon sessions.
 
-The missing invariant is inside one Newton session. [`controller.js`](../packages/driver/src/controller.js#L329) passes each incoming callback directly to async `runCommand`; the WebSocket and extension event surfaces can deliver another callback while the first is awaiting CDP. The driver itself has one mutable `activeActionSignals` slot in [`driver.js`](../packages/driver/src/driver.js#L1474), so overlapping commands can mix signal windows and input sequences. A comment says the “per-session command pump” serializes calls, but no such pump exists.
+The missing invariant is inside one Newton session. [`controller.js`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/controller.js#L329) passes each incoming callback directly to async `runCommand`; the WebSocket and extension event surfaces can deliver another callback while the first is awaiting CDP. The driver itself has one mutable `activeActionSignals` slot in [`driver.js`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/driver.js#L1474), so overlapping commands can mix signal windows and input sequences. A comment says the “per-session command pump” serializes calls, but no such pump exists.
 
 agent-browser's daemon accepts concurrent client connections but holds a Tokio mutex across command execution in [`daemon.rs`](https://github.com/vercel-labs/agent-browser/blob/acbc22bdc5d4f6c5a88d97d4a4745d3c5eb0591f/cli/src/native/daemon.rs#L505). Newton should borrow the invariant, not the global shape:
 
@@ -384,7 +389,7 @@ Do not weaken this gate in pursuit of agent-browser feature parity. Add agent-br
 
 **Observed Newton state**
 
-- The bridge caps global pending commands and queues only while a session lacks a subscriber; subscribed sessions do not have a per-session in-flight cap in [`bridge.ts`](../apps/mcp-server/src/bridge.ts#L447).
+- The bridge caps global pending commands and queues only while a session lacks a subscriber; subscribed sessions do not have a per-session in-flight cap in [`bridge.ts`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/apps/mcp-server/src/bridge.ts#L447).
 - The extension subscription invokes `runCommand` directly for every callback.
 - The driver has one mutable action-signal window and dispatches multi-event mouse/key sequences without a session lock.
 - `ActInput.idempotencyKey` is declared in [`protocol.ts`](../packages/core/src/protocol.ts#L398) but has no implementation use.
@@ -424,8 +429,8 @@ Create one `SessionCommandPump` per controller:
 
 Newton rechecks the tab origin before and after commands and closes an owned session after an escape. That prevents continued reading/control, but it does not prevent the first disallowed request:
 
-- `navigate` issues `Page.navigate` before controller reconciliation in [`driver.js`](../packages/driver/src/driver.js#L600);
-- target auto-attach currently uses `waitForDebuggerOnStart: false` in [`driver.js`](../packages/driver/src/driver.js#L98);
+- `navigate` issues `Page.navigate` before controller reconciliation in [`driver.js`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/driver.js#L600);
+- target auto-attach currently uses `waitForDebuggerOnStart: false` in [`driver.js`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/driver.js#L98);
 - popup, worker, iframe, click-driven navigation, and network-write signals are primarily detected after the fact;
 - a result described as `blocked` after a network write or target creation can mean “detected after effect,” not “prevented.”
 
@@ -486,7 +491,7 @@ Adapt this to `chrome.debugger` event delivery and Newton's target registry. The
 
 **Observed Newton defect**
 
-In local [`startSession`](../packages/driver/src/controller.js#L94), the host session is created and inserted into `sessions` before driver attachment and live-origin verification. If attach or verification throws, the catch block removes the owned tab but does not remove the controller, detach a partial debugger, or call `transport.stopSession`. This can leave a host session/controller referencing a closed tab.
+In local [`startSession`](https://github.com/Koala-Studios/newton-browser/blob/a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a/packages/driver/src/controller.js#L94), the host session is created and inserted into `sessions` before driver attachment and live-origin verification. If attach or verification throws, the catch block removes the owned tab but does not remove the controller, detach a partial debugger, or call `transport.stopSession`. This can leave a host session/controller referencing a closed tab.
 
 agent-browser recently added atomic attach rollback and explicit tests around this seam. Newton should implement a small transaction/state machine:
 
@@ -836,13 +841,17 @@ The cleanest approach for most recommendations is specification-first reimplemen
 
 ### Newton Browser
 
+> Historical source map for the audited extension-era tree. Deleted paths are named as
+> historical evidence only; the current direct-runtime source map is in `README.md` and
+> `docs/NO_EXTENSION_ARCHITECTURE_RESEARCH.md`.
+
 - [`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts) — action/result/session contract
 - [`packages/core/src/risk.ts`](../packages/core/src/risk.ts) — structural safety floor
 - [`packages/core/src/redaction.ts`](../packages/core/src/redaction.ts) — host-boundary result redaction
 - [`apps/mcp-server/src/mcp-server.ts`](../apps/mcp-server/src/mcp-server.ts) — MCP surface and framing
-- [`apps/mcp-server/src/bridge.ts`](../apps/mcp-server/src/bridge.ts) — loopback relay, ownership, bounds, pending commands
-- [`apps/extension/src/local-transport.js`](../apps/extension/src/local-transport.js) — multi-host extension transport
-- [`packages/driver/src/controller.ts`](../packages/driver/src/controller.ts) — session/tab ownership and command routing
+- `apps/mcp-server/src/bridge.ts` (deleted) — historical loopback relay, ownership, bounds, pending commands
+- `apps/extension/src/local-transport.js` (deleted) — historical multi-host extension transport
+- `packages/driver/src/controller.ts` (deleted) — historical session/tab ownership and command routing
 - [`packages/driver/src/driver.ts`](../packages/driver/src/driver.ts) — CDP observation, resolution, input, verification, signals
 - [`scripts/release-check.mjs`](../scripts/release-check.mjs) and [`RELEASE.md`](RELEASE.md) — release gate and evidence summary
 

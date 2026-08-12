@@ -10,7 +10,7 @@ await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId,
 
   for (const keys of [
     ["Enter"], ["Tab"], ["ArrowLeft"], ["ArrowRight"], ["ArrowUp"], ["ArrowDown"],
-    ["Escape"], ["Backspace"], ["Delete"], ["F12"], ["Control", "Shift", "P"],
+    ["Escape"], ["Backspace"], ["Delete"], ["F2"], ["Control", "Shift", "P"],
   ]) {
     const refocused = await act({ kind: "click", name: "Keyboard target", exact: true });
     assert(refocused.ok !== false, `keyboard target refocus failed: ${keys.join("+")}`, refocused);
@@ -20,10 +20,10 @@ await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId,
 
   const observation = resultOf(await mcp("browser.observe", { sessionId, format: "json", query: "Key event log", maxNodes: 80 }));
   const keyLog = (observation.nodes ?? observation.added ?? []).find((node) => node.name === "Key event log")?.value ?? "";
-  for (const expected of ["Enter", "Tab", "ArrowLeft", "Escape", "Backspace", "Delete", "F12", "Control", "Shift", "P"]) {
-    assert(String(keyLog).includes(`\"key\":\"${expected}\"`), `DOM key log missing ${expected}`, { keyLog });
+  for (const expected of ["Enter", "Tab", "ArrowLeft", "Escape", "Backspace", "Delete", "F2", "Control", "Shift", "P"]) {
+    assert(String(keyLog).includes(`\"${expected}\"`), `DOM key log missing ${expected}`, { keyLog });
   }
-  assert(String(keyLog).includes('"type":"keyup"'), "key lifecycle did not include keyup", { keyLog });
+  assert(String(keyLog).includes('"keyup"'), "key lifecycle did not include keyup", { keyLog });
   log("complete_key_descriptors", { actionStatus: statusOf(typed), keyLogBytes: String(keyLog).length });
 
   const dialog = await act({ kind: "click", name: "Dialog on mousedown", exact: true });

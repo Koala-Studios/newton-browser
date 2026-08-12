@@ -16,9 +16,18 @@ await build({
   platform: "node",
   format: "esm",
   target: "node20",
-  external: ["ws"],
-  sourcemap: true,
+  sourcemap: false,
   banner: { js: "#!/usr/bin/env node" },
+  logLevel: "warning",
+});
+await build({
+  entryPoints: [path.join(root, "apps", "mcp-server", "src", "browser-runtime", "browser-guardian.ts")],
+  outfile: path.join(outputDirectory, "browser-guardian.js"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  sourcemap: false,
   logLevel: "warning",
 });
 fs.chmodSync(path.join(outputDirectory, "index.js"), 0o755);

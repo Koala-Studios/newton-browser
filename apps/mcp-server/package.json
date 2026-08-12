@@ -3,7 +3,7 @@
   "version": "0.4.5",
   "license": "MIT",
   "type": "module",
-  "description": "Local stdio MCP host and localhost WebSocket relay for the Newton Browser extension.",
+  "description": "Local stdio MCP browser host that owns isolated Chrome or Edge over private CDP pipes.",
   "author": "Koala Studios",
   "homepage": "https://github.com/Koala-Studios/newton-browser#readme",
   "repository": {
@@ -28,11 +28,9 @@
   "bin": {
     "newton-browser": "./dist/index.js"
   },
-  "dependencies": {
-    "ws": "^8.21.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@newton-browser/core": "workspace:*",
-    "@types/ws": "^8.18.1"
+    "@newton-browser/driver": "workspace:*"
   }
 }

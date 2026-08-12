@@ -48,7 +48,10 @@ test("strict nested objects reject unknown fields", () => {
   assert.throws(() => parseBrowserAction({ kind: "fill_form", fields: [{ ref: "d1:e1", value: "x", typo: true }] }), /unsupported field/);
   assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1", role: "button" } }), /ambiguous target/);
   assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1" }, selector: "#submit" }), /ambiguous target/);
-  assert.throws(() => parseBrowserAction({ kind: "screenshot", sensitiveZones: [{}] }), /invalid/);
+  assert.throws(
+    () => parseBrowserAction({ kind: "screenshot", sensitiveZones: [{}] }),
+    (error: any) => error?.code === "invalid_arguments",
+  );
   assert.throws(() => parseBrowserAction({ kind: "fill_form", fields: [{ ref: "d1:e1", value: "" }] }), /value is required/);
   const nested = parseBrowserAction({ kind: "fill_form", fields: [{ target: { role: "textbox", name: "Email" }, value: "ada@example.com" }] });
   assert.deepEqual(nested.fields?.[0]?.target, { role: "textbox", name: "Email" });

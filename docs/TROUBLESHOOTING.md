@@ -1,25 +1,50 @@
 # Troubleshooting
 
-- `browser.*` tools are absent: confirm the client config shape, absolute tarball path, Node 24+, and restart the client. Run the configured command with `--version` outside the client.
-- `extension_disconnected`: load the unpacked extension in the same Chrome/Edge profile, open its popup once if the service worker is asleep, and call `browser.status` again.
-- `pairing_required` or `authentication_failed`: hardened `paired` mode is enabled. Run `--doctor`, replace the extension popup secret, and restart the client. Never paste the secret into MCP arguments.
-- `host_collision`: another 20 processes occupy the bounded port range. Stop stale Newton Browser clients and inspect `127.0.0.1:17321-17340`; do not widen the range casually.
-- `--doctor` reports `no_running_host`: config and loopback checks succeeded, but no MCP client host is active. Start or restart the configured client, then call `browser.status`.
-- `--doctor` reports `extension.state:"disconnected"`: load the extension in the intended profile. In default `local_trust`, no popup action is required; in optional `paired` mode, verify the pairing secret.
-- `origin_required`, `invalid_origin`, or `origin_not_granted`: pass an exact HTTP(S) origin such as `https://example.com`, not a page URL, wildcard, credentialed URL, or path.
-- `queue_full`, `command_timeout`, or `session_limit`: wait for the current command, stop unused sessions, and retry once after observing state.
-- Queue or timeout diagnosis: request `browser.status` with `detail:"full"` or run
-  `--doctor`. Inspect `sessionDiagnostics`, `commandMetrics`, and the reported framing
-  limits. A queued timeout is `not_started`; a command lost after dispatch is
-  `outcome_unknown` and must not be retried automatically.
-- `dialog_blocked`: answer the scoped dialog, then re-observe. `discarded`,
-  `debugger_conflict`, `target_gone`, and `renderer_unresponsive` are distinct lifecycle
-  failures; do not treat them as a generic timeout or reload a current-tab session.
-- `result_too_large`: use screenshot `delivery:"image"` or `delivery:"file"`; inline delivery is deliberately bounded.
-- `invalid_file_path`, `file_type_not_allowed`, `file_too_large`, or `file_total_too_large`: use exact non-symlink absolute paths to allowed image/video files within the documented caps.
-- `hidden_file_input_requires_ref`: observe immediately before acting and pass the hidden input's fresh `ref`.
-- pending JavaScript dialog: an open `alert`/`confirm`/`prompt`/`beforeunload` dialog blocks the page and is reported as `pendingDialog` on observations. Answer it with the `dialog_accept` (optionally `promptText`) or `dialog_dismiss` act kind. The legacy `handle_dialog` kind returns `use_dialog_accept_or_dismiss`.
-- `blocked_by_floor`: inspect decision reasons. Sensitive-field blocks mean no keystrokes were sent. A post-action network-write block can occur after input dispatch; observe before retrying.
-- stale or ambiguous target: re-observe after rerender/navigation and use the new ref. Never reuse a ref across a known SPA replacement.
+- `browser.*` tools absent: verify the stdio configuration, package/absolute tarball path,
+  Node 20+, and restart the MCP client. Run the configured command with `--version`.
+- Status has no `mode:"direct"`: run `setup --browser chrome|edge`, verify the
+  configured executable with `--doctor`, and restart the MCP client.
+- Direct status is configured but `ready:false`: expected before the first session. Start
+  one owned session; runtime readiness belongs to that session process.
+- `direct_runtime_unavailable`: stop the exact session if retained and run
+  `doctor --live`. Do not switch control planes or retry an effect blindly.
+- `direct_cleanup_uncertain`: preserve the session descriptor and bounded error. Retry
+  cleanup/stop; do not start new effects until process/proxy/lease cleanup is confirmed.
+- `configured_identity_busy`: close the owning session/login, select another operator-
+  created identity, or omit identity for public isolated work. Never break the lease file.
+  If the owning process is known to have crashed, run `identity lease-inspect` and then
+  the explicit `identity lease-recover --id ...`; recovery refuses any live recorded PID
+  and also requires every process from that identity's browser family to be closed.
+- `owned_browser_runtime_failed` or browser discovery failure: verify a current local Chrome
+  or Edge regular executable, exact configured family, and live doctor result.
+- `origin_required`, `invalid_origin`, or `origin_not_granted`: pass an exact normalized
+  HTTP(S) origin, not a path, wildcard, credentialed URL, or page-provided suggestion.
+- Missing third-party HTTPS assets: add only the exact required HTTPS origins. CONNECT
+  exposes no resource type, so Newton intentionally does not infer passive CDN access.
+- `queue_full` or `session_limit`: allow admitted work to settle and stop unused sessions.
+- `command_timeout`: use the reported outcome. `not_started` may be retried deliberately;
+  `outcome_unknown` must not be repeated automatically. Observe current state first.
+- `stale_target`, `target_moved`, `not_found`, or `ambiguous`: re-observe after navigation/
+  rerender and use a fresh narrower ref. Never synthesize or repair refs semantically.
+- `dialog_blocked`: use the typed dialog accept/dismiss action after obtaining any required
+  effect authorization, then re-observe.
+- `discarded`, `debugger_conflict`, `target_gone`, or `renderer_unresponsive`: treat these
+  as distinct lifecycle failures. Do not collapse them into a generic timeout.
+- `result_too_large`: use a smaller queried/role-filtered observation or screenshot image/
+  file delivery. Inline screenshots are deliberately bounded.
+- screenshot with sensitive zones fails: target geometry or trusted raster masking could
+  not be proven. Do not remove the policy or request an unmasked fallback; use a fresh
+  observation, a narrower zone, or non-image evidence.
+- file-input errors: use exact operator-authorized, non-symlink absolute image/video paths
+  within the type/count/size caps and a fresh file-input ref. Newton never submits the form.
+- network body unavailable: bodies are intentionally omitted unless granted-origin,
+  supported, bounded UTF-8 text. There is no raw/base64 escape hatch.
 
-For cleanup, finalize each deliverable or handoff tab deliberately, otherwise call `browser.session.stop`. Use `browser.stop_all` only when global cleanup is intended.
+For diagnostics, request `browser.status` with `detail:"full"`, run ordinary `--doctor`
+for configuration, or run `doctor --live` for an explicit disposable launch.
+Inspect only bounded host-authored codes and counts; do not log page/profile content.
+
+For cleanup, use `browser.session.finalize({disposition:"close"})` or
+`browser.session.stop`. Direct mode does not support deliverable/handoff/current-tab.
+Use `browser.stop_all` only when global cleanup is intended, then confirm
+`browser.sessions.list` is empty.

@@ -1,8 +1,12 @@
 # Plan 02: Transactional Session Lifecycle and Bounded Framing
 
-- Status: approved; deterministic implementation complete, live MV3 restart acceptance pending
+> Historical implementation plan. Its transactional lifecycle and bounded-framing
+> requirements remain, but MV3/relay-specific files and restart gates were superseded by
+> the direct owned-browser lifecycle in Plans 13-15.
+
+- Status: superseded execution plan; retained as design history
 - Classification: core lifecycle and security gate
-- Dependencies: Plan 01 relay epoch/outcome types
+- Dependencies: Plan 01 command outcome types
 
 ## 1. Objective
 
@@ -158,8 +162,13 @@ pnpm pack:check
 git diff --check
 ```
 
-Live evidence must prove no tab, debugger, binding, paused target, session, or port remains
-after each injected failure and after an MV3 worker restart.
+Live evidence must prove the public-observable residue boundary after an MV3 worker
+restart: no owned tab, session, queued command, listener port, or bounded host/extension
+binding summary remains. Debugger attachment, paused-target state, and private extension
+binding storage are not observable through the public harness without adding a privileged
+diagnostic. Their zero-residue guarantee is therefore proved by deterministic injected
+driver/extension regressions. Adding a private live diagnostic requires separate approval;
+the plan must not inspect Chrome profile state or expose those internals publicly.
 
 ## 6. Exit and rollback
 

@@ -4,6 +4,8 @@ const SESSION_FINALIZING_ERROR = "session_finalizing";
 const SESSION_QUEUE_FULL_ERROR = "session_queue_full";
 const INVALID_COMMAND_SIZE_ERROR = "invalid_command_size";
 const INVALID_EXECUTOR_ERROR = "invalid_executor";
+const COMMAND_TIMEOUT_NOT_STARTED = "command_timeout_not_started";
+const COMMAND_TIMEOUT_OUTCOME_UNKNOWN = "command_timeout_outcome_unknown";
 
 type PumpError = Error & { code: string };
 
@@ -13,6 +15,9 @@ type QueueEntry = {
   execute: (item: unknown) => unknown;
   resolve: (output: unknown) => void;
   reject: (reason?: unknown) => void;
+  timer: NodeJS.Timeout | null;
+  running: boolean;
+  settled: boolean;
 };
 
 export type SessionCommandPumpOptions = {
@@ -108,6 +113,7 @@ export class SessionCommandPump {
     item: Item,
     bytes: number,
     execute: (item: Item) => Output | PromiseLike<Output>,
+    timeoutMs?: number,
   ): Promise<Awaited<Output>> {
     if (this.closed) {
       return Promise.reject(createError(SESSION_FINALIZING_ERROR));
@@ -116,6 +122,9 @@ export class SessionCommandPump {
       return Promise.reject(createError(INVALID_EXECUTOR_ERROR));
     }
     if (!isSafeNonNegativeInteger(bytes)) {
+      return Promise.reject(createError(INVALID_COMMAND_SIZE_ERROR));
+    }
+    if (timeoutMs !== undefined && (!isSafePositiveInteger(timeoutMs) || timeoutMs > 300_000)) {
       return Promise.reject(createError(INVALID_COMMAND_SIZE_ERROR));
     }
 
@@ -127,13 +136,21 @@ export class SessionCommandPump {
     }
 
     return new Promise<Awaited<Output>>((resolve, reject) => {
-      this.queue.push({
+      const entry: QueueEntry = {
         item,
         bytes,
         execute: (queuedItem) => execute(queuedItem as Item),
         resolve: (output) => resolve(output as Awaited<Output>),
         reject,
-      });
+        timer: null,
+        running: false,
+        settled: false,
+      };
+      if (timeoutMs !== undefined) {
+        entry.timer = setTimeout(() => this._timeout(entry), timeoutMs);
+        entry.timer.unref();
+      }
+      this.queue.push(entry);
       this.queuedBytes += bytes;
       void this._drain();
     });
@@ -147,6 +164,8 @@ export class SessionCommandPump {
     const queued = this.queue.splice(0, this.queue.length);
     this.queuedBytes = 0;
     for (const entry of queued) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.settled = true;
       entry.reject(error);
     }
   }
@@ -182,13 +201,21 @@ export class SessionCommandPump {
         this.queuedBytes -= entry.bytes;
         this.runningCount += 1;
         this.runningBytes += entry.bytes;
+        entry.running = true;
 
         try {
           const output = await Promise.resolve().then(() => entry.execute(entry.item));
-          entry.resolve(output);
+          if (!entry.settled) {
+            entry.settled = true;
+            entry.resolve(output);
+          }
         } catch (error) {
-          entry.reject(error);
+          if (!entry.settled) {
+            entry.settled = true;
+            entry.reject(error);
+          }
         } finally {
+          if (entry.timer) clearTimeout(entry.timer);
           this.runningCount -= 1;
           this.runningBytes -= entry.bytes;
           this._resolveCloseIfNeeded();
@@ -198,5 +225,20 @@ export class SessionCommandPump {
       this._draining = false;
       this._resolveCloseIfNeeded();
     }
+  }
+
+  private _timeout(entry: QueueEntry): void {
+    if (entry.settled) return;
+    entry.settled = true;
+    if (!entry.running) {
+      const index = this.queue.indexOf(entry);
+      if (index >= 0) {
+        this.queue.splice(index, 1);
+        this.queuedBytes -= entry.bytes;
+      }
+      entry.reject(createError(COMMAND_TIMEOUT_NOT_STARTED));
+      return;
+    }
+    entry.reject(createError(COMMAND_TIMEOUT_OUTCOME_UNKNOWN));
   }
 }

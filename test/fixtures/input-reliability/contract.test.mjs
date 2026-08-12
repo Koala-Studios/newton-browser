@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import { DialogTracker, InputDispatcher, keyDescriptor } from "../../../packages/driver/dist/input-dispatcher.js";
 import { RendererLiveness } from "../../../packages/driver/dist/renderer-liveness.js";
@@ -51,4 +52,11 @@ test("renderer fixture covers every event-driven lifecycle category", () => {
   liveness.transition("target:recovery", "reconciling", { epoch: 1 });
   assert.equal(liveness.transition("target:recovery", "healthy", { epoch: 1 }).state, "healthy");
   assert.equal(liveness.transition("target:recovery", "terminal", { epoch: 1 }).state, "terminal");
+});
+
+test("input fixture keeps key evidence compact instead of exposing an unbounded event history", () => {
+  const source = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  assert.match(source, /keys:\s*\[\.\.\.new Set\(/u);
+  assert.match(source, /types:\s*\[\.\.\.new Set\(/u);
+  assert.doesNotMatch(source, /JSON\.stringify\(keyEvents\)/u);
 });

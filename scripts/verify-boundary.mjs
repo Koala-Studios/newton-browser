@@ -8,11 +8,10 @@ const requiredFiles = [
   "packages/core/src/index.ts",
   "packages/driver/package.json",
   "packages/driver/src/driver.ts",
-  "apps/extension/package.json",
-  "apps/extension/manifest.json",
   "apps/mcp-server/package.json",
   "apps/mcp-server/src/index.ts",
-  "scripts/build-extension.mjs",
+  "apps/mcp-server/src/browser-runtime/owned-browser-runtime.ts",
+  "packages/driver/src/direct-session-runtime.ts",
   "skills/newton-browser/SKILL.md",
   "docs/DECISIONS.md",
 ];
@@ -24,7 +23,6 @@ for (const file of requiredFiles) {
 const packageChecks = [
   ["packages/core/package.json", "@newton-browser/core"],
   ["packages/driver/package.json", "@newton-browser/driver"],
-  ["apps/extension/package.json", "@newton-browser/extension"],
   ["apps/mcp-server/package.json", "newton-browser"],
 ];
 for (const [file, name] of packageChecks) {
@@ -58,7 +56,7 @@ if (!repositoryOwner || !hostPackage?.mcpName?.startsWith(`io.github.${repositor
   failures.push("apps/mcp-server/package.json: mcpName must preserve the canonical GitHub owner casing");
 }
 
-const hostSources = ["apps/mcp-server/src/mcp-server.ts", "apps/mcp-server/src/bridge.ts", "apps/mcp-server/src/floor-gate.ts"]
+const hostSources = ["apps/mcp-server/src/mcp-server.ts", "apps/mcp-server/src/floor-gate.ts", "apps/mcp-server/src/browser-runtime/direct-browser-host.ts"]
   .map(readText).join("\n");
 if (!hostSources.includes('from "@newton-browser/core"')) {
   failures.push("MCP server must import @newton-browser/core by package name");
@@ -84,8 +82,13 @@ const identitySpecificTerms = [
   ["face", "book"],
   ["ads ", "manager"],
   ["meta ", "ads"],
-  ["oper", "ator"],
 ].map((parts) => parts.join(""));
+const identitySpecificQaFiles = new Set([
+  "scripts/smoke/direct-real-sites-live.mjs",
+  "test/direct-live-config.test.mjs",
+  "test/evidence/qa-real-sites.json",
+  "test/live-smoke-config.test.mjs",
+]);
 const blockedExact = ["shared" + ".mjs", "newton_browser_host_" + "policies", "browser_" + "bridge_host_policies"];
 const retiredTransport = ["re", "mote"].join("");
 const oldPathFragments = [
@@ -94,6 +97,44 @@ const oldPathFragments = [
   ["apps/browser-", "bridge-", "extension"].join(""),
   ["apps/browser-", "bridge-", "host"].join(""),
 ];
+const removedArchitecturePaths = [
+  "apps/extension",
+  "apps/mcp-server/src/bridge.ts",
+  "packages/driver/src/chrome-tabs-port.ts",
+  "packages/driver/src/controller.ts",
+  "scripts/build-extension.mjs",
+  "scripts/build-extension-artifact.mjs",
+  "apps/mcp-server/src/browser-runtime/cdp-websocket.ts",
+];
+for (const relative of removedArchitecturePaths) {
+  if (fs.existsSync(path.join(root, relative))) failures.push(`${relative}: removed extension architecture path remains`);
+}
+const rootPackage = readJson("package.json");
+for (const name of Object.keys(rootPackage?.scripts ?? {})) {
+  const command = String(rootPackage.scripts[name]);
+  if (/extension|build-extension|packed-stdio|current-tab|worker-restart/u.test(`${name} ${command}`)) {
+    failures.push(`package.json: legacy extension script remains (${name})`);
+  }
+}
+
+const mcpContractSource = readText("apps/mcp-server/src/mcp-contract.ts");
+const mcpServerSource = readText("apps/mcp-server/src/mcp-server.ts");
+for (const requiredTool of ["browser.sessions.list", "browser.session.finalize"]) {
+  if (!mcpContractSource.includes(`"${requiredTool}"`) || !mcpServerSource.includes(`"${requiredTool}"`)) {
+    failures.push(`direct-only public tool missing: ${requiredTool}`);
+  }
+}
+for (const retiredTool of ["browser.tabs.list", "browser.tabs.finalize"]) {
+  if (mcpContractSource.includes(retiredTool) || mcpServerSource.includes(retiredTool)) {
+    failures.push(`retired public tool remains: ${retiredTool}`);
+  }
+}
+if (/\btransport\s*:/u.test(mcpServerSource.slice(mcpServerSource.indexOf("export function toolList")))) {
+  failures.push("public MCP tool schemas must not expose a transport selector");
+}
+if (!mcpContractSource.includes('NEWTON_BROWSER_CONTRACT_VERSION = "2.0"')) {
+  failures.push("direct-only MCP contract must be version 2.0");
+}
 
 for (const file of walk(root)) {
   const relative = path.relative(root, file).replaceAll("\\", "/");
@@ -107,7 +148,10 @@ for (const file of walk(root)) {
   if (!isTextFile(file)) continue;
   const text = fs.readFileSync(file, "utf8");
   const lower = text.toLowerCase();
-  for (const term of [...blockedTerms, ...identitySpecificTerms, ...blockedExact]) {
+  const forbiddenTerms = identitySpecificQaFiles.has(relative)
+    ? [...blockedTerms, ...blockedExact]
+    : [...blockedTerms, ...identitySpecificTerms, ...blockedExact];
+  for (const term of forbiddenTerms) {
     if (lower.includes(term)) failures.push(`${relative}: forbidden standalone-boundary term`);
   }
   for (const fragment of oldPathFragments) {

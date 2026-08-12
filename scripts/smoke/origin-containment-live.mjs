@@ -1,112 +1,357 @@
-import { createNewtonBrowserHost } from "../../apps/mcp-server/src/bridge.ts";
+import { createDefaultDirectBrowserHost } from "../../apps/mcp-server/src/browser-runtime/default-direct-host.ts";
+import { discoverBrowserExecutable } from "../../apps/mcp-server/src/browser-runtime/browser-discovery.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 import { startFixtureServers } from "../../test/fixtures/server.mjs";
 import { scheduler } from "node:timers/promises";
-import { resolveLiveBrowserTarget, resolveLiveHostPort } from "./live-config.mjs";
+import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { resolveLiveBrowserTarget } from "./live-config.mjs";
+import { classifyCompletedContainmentAttempt, classifyContainmentAttempt, classifyDestinationRequest, classifyFixtureObserveFailure, classifyFixturePrimaryCounter, classifyInitialNavigationFailure, classifySessionStartFailure, containmentFixtureDocumentChecks } from "./origin-containment-diagnostics.mjs";
 
 const fixturePort = Number(process.env.NEWTON_BROWSER_CONTAINMENT_FIXTURE_PORT ?? 18341);
-const hostPort = resolveLiveHostPort();
 const browserTarget = resolveLiveBrowserTarget();
 let fixture;
 let bridge;
+let directRoot;
 
 try {
   fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1 });
-  bridge = createNewtonBrowserHost({ browserTarget });
-  const listener = await bridge.listen(hostPort, "127.0.0.1");
-  await waitFor(() => bridge.getStatus().extensionConnected ? bridge.getStatus() : null, "extension connection", 45_000);
-  log("origin_containment_servers_ready", { browserTarget, hostPort: listener.port, origin: fixture.origin, destination: fixture.crossOrigin });
-
-  const restrictedSession = await startSession([fixture.origin], "origin-containment-restricted");
-  resultOf(await mcp("browser.act", { sessionId: restrictedSession, action: { kind: "navigate", url: `${fixture.origin}/origin-containment/primary.html` } }));
-  const initial = await waitFor(() => {
-    const snapshot = fixture.containment.snapshot();
-    return snapshot.destinationResourceRequests >= 2 ? snapshot : null;
-  }, "read-only destination resources", 10_000);
-  assert(initial.destinationApplicationRequests === 0, "read-only resources reached an application endpoint", initial);
-  log("read_only_resources_ok", { destinationResourceRequests: initial.destinationResourceRequests, destinationApplicationRequests: 0 });
-
-  fixture.containment.reset();
-  for (const [name, marker] of [
-    ["Cross-origin fetch mutation", "fetch-dispatched"],
-    ["Cross-origin beacon", "beacon-dispatched"],
-    ["Cross-origin form mutation", "form-dispatched"],
-    ["Cross-origin popup", "popup-dispatched"],
-    ["Cross-origin controlled frame", "frame-dispatched"],
-    ["Cross-origin worker", "worker-dispatched"],
-    ["Cross-origin WebSocket", "websocket-dispatched"],
-    ["Cross-origin EventSource", "eventsource-dispatched"],
-  ]) {
-    const attempted = await mcp("browser.act", { sessionId: restrictedSession, action: { kind: "click", name, exact: true, waitFor: { text: marker } } });
-    assertAttemptClassified(attempted, name);
-    assertZeroDestinationApplications(name);
-  }
-
-  const redirected = await mcp("browser.act", {
-    sessionId: restrictedSession,
-    action: { kind: "navigate", url: `${fixture.origin}/origin-containment/redirect-to-destination` },
+  directRoot = createDirectRoot();
+  const executable = discoverBrowserExecutable({ family: browserTarget, env: process.env });
+  if (!executable) throw new Error("direct_browser_unavailable");
+  bridge = createDefaultDirectBrowserHost({
+    ...process.env,
+    NEWTON_BROWSER_BROWSER: browserTarget,
+    NEWTON_BROWSER_BROWSER_EXECUTABLE: executable.path,
+    NEWTON_BROWSER_CONFIG_DIR: directRoot.root,
+    NEWTON_BROWSER_PROFILE_STORE_DIR: path.join(directRoot.root, "identities"),
   });
-  assertAttemptClassified(redirected, "ungranted redirect");
-  assertZeroDestinationApplications("ungranted redirect");
-  log("preventive_zero_request_ok", { attemptedPaths: 9, destinationApplicationRequests: 0 });
-  await stopSession(restrictedSession);
+  await bridge.listen();
+  log("origin_containment_servers_ready", { browserTarget });
 
-  fixture.containment.reset();
-  const allowedSession = await startSession([fixture.origin, fixture.crossOrigin], "origin-containment-allowed");
-  resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "navigate", url: `${fixture.origin}/origin-containment/primary.html` } }));
-  fixture.containment.reset();
-  resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", name: "Cross-origin controlled frame", exact: true, waitFor: { text: "frame-dispatched" } } }));
-  await waitFor(() => fixture.containment.snapshot().destinationApplicationRequests === 1 ? fixture.containment.snapshot() : null, "allowed destination frame request", 10_000);
-  const allowedFrame = await observeUntil(allowedSession, (observation) => (observation.nodes ?? []).some((node) => String(node.name ?? "").includes("frame destination control") && node.frameOrigin === fixture.crossOrigin), "allowed destination frame observation");
-  assert((allowedFrame.nodes ?? []).some((node) => String(node.name ?? "").includes("frame destination control") && node.frameOrigin === fixture.crossOrigin), "allowed destination frame was not observable with provenance", allowedFrame);
-  log("allowed_frame_ok", { destinationApplicationRequests: 1 });
+  await runRestrictedSanityAndNonPopupCoverage();
 
-  fixture.containment.reset();
-  resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "navigate", url: `${fixture.origin}/origin-containment/redirect-to-destination` } }));
-  const allowedRedirect = await waitFor(() => fixture.containment.snapshot().destinationApplicationRequests === 1 ? fixture.containment.snapshot() : null, "allowed redirect destination", 10_000);
-  assert(allowedRedirect.entries.some((entry) => entry.pathname.endsWith("/redirect.html")), "allowed redirect destination was not recorded", allowedRedirect);
-  log("allowed_redirect_ok", { destinationApplicationRequests: allowedRedirect.destinationApplicationRequests });
+  for (const popupCase of [
+    { id: "popup_window", name: "Popup via window open", endpoint: "/origin-containment/application/popup-window.html" },
+    { id: "popup_anchor", name: "Popup via anchor target blank", endpoint: "/origin-containment/application/popup-anchor.html" },
+    { id: "popup_form", name: "Popup via form target blank", endpoint: "/origin-containment/application/popup-form.html" },
+    { id: "popup_programmatic_anchor", name: "Popup via programmatic anchor", endpoint: "/origin-containment/application/popup-programmatic-anchor.html" },
+    { id: "popup_redirect", name: "Popup via denied redirect", endpoint: "/origin-containment/application/redirect.html", mainControl: "/origin-containment/redirect-to-destination" },
+  ]) await runRestrictedPopupCase(popupCase);
 
-  await stopSession(allowedSession);
+  await runAllowedNonPopupCoverage();
+
+  await runAllowedPopupCase({
+    id: "popup_same_allowed",
+    name: "Allowed same-origin popup",
+    allowedOrigins: [fixture.origin],
+    endpoint: "/origin-containment/application/popup-same.html",
+    originRole: "main",
+  });
+  await runAllowedPopupCase({
+    id: "popup_granted_allowed",
+    name: "Allowed granted-origin popup",
+    allowedOrigins: [fixture.origin, fixture.crossOrigin],
+    endpoint: "/origin-containment/application/popup-granted.html",
+    originRole: "destination",
+  });
   log("origin_containment_live_pass", { zeroUnintendedRequests: true, allowedOriginContinues: true });
 } catch (error) {
-  log("origin_containment_live_fail", { message: error?.message ?? String(error), detail: error?.detail });
+  log("origin_containment_live_fail", boundedFailure(error));
   process.exitCode = 1;
 } finally {
-  try { bridge?.stopAll(); await bridge?.close(); } catch {}
+  let directCleanupConfirmed = bridge === undefined;
+  try {
+    await bridge?.stopAll();
+    await bridge?.close();
+    directCleanupConfirmed = true;
+  } catch {}
   try { await fixture?.close(); } catch {}
+  if (directRoot && directCleanupConfirmed) removeDirectRoot(directRoot);
+}
+
+function createDirectRoot() {
+  const parent = fs.realpathSync.native(os.tmpdir());
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(parent, "newton-direct-containment-live-")));
+  const stat = fs.lstatSync(root);
+  const nonce = randomBytes(32).toString("hex");
+  fs.writeFileSync(path.join(root, ".owner"), nonce, { flag: "wx", mode: 0o600 });
+  return Object.freeze({ root, parent, nonce, dev: stat.dev, ino: stat.ino });
+}
+
+function removeDirectRoot(owned) {
+  const resolved = fs.realpathSync.native(owned.root);
+  const stat = fs.lstatSync(resolved);
+  const marker = path.join(resolved, ".owner");
+  const markerStat = fs.lstatSync(marker);
+  if (resolved !== owned.root || path.dirname(resolved) !== owned.parent
+    || !/^newton-direct-containment-live-[^/\\]+$/u.test(path.basename(resolved))
+    || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== owned.dev || stat.ino !== owned.ino
+    || !markerStat.isFile() || markerStat.isSymbolicLink() || fs.readFileSync(marker, "utf8") !== owned.nonce) {
+    throw new Error("direct containment live cleanup refused");
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
+
+async function runRestrictedSanityAndNonPopupCoverage() {
+  let restrictedSession;
+  let primaryFailed = false;
+  try {
+    restrictedSession = await startSession([fixture.origin], "origin-containment-restricted");
+    await navigateToContainmentFixture(restrictedSession);
+    const initial = fixture.containment.snapshot();
+    assert(initial.destinationResourceRequests === 0, "ungranted resource reached destination", initial);
+    assert(initial.destinationApplicationRequests === 0, "ungranted application request reached destination", initial);
+    log("ungranted_resources_zero", { destinationResourceRequests: 0, destinationApplicationRequests: 0 });
+    fixture.containment.reset();
+    for (const [attemptId, name] of [
+      ["fetch_mutation", "Cross-origin fetch mutation"],
+      ["beacon", "Cross-origin beacon"],
+      ["form_mutation", "Cross-origin form mutation"],
+      ["controlled_frame", "Cross-origin controlled frame"],
+      ["worker", "Cross-origin worker"],
+      ["websocket", "Cross-origin WebSocket"],
+      ["eventsource", "Cross-origin EventSource"],
+    ]) {
+      await assertPreventedAttempt(attemptId, () => mcp("browser.act", {
+        sessionId: restrictedSession,
+        action: { kind: "click", name, exact: true, ...(attemptId === "worker" ? { waitFor: { text: "worker-blocked" } } : {}) },
+      }), { requirePrevented: false });
+    }
+    await assertPreventedAttempt("redirect", () => mcp("browser.act", {
+      sessionId: restrictedSession,
+      action: { kind: "navigate", url: `${fixture.origin}/origin-containment/redirect-to-destination` },
+    }), { requirePrevented: true });
+    log("preventive_zero_request_ok", { attemptedPaths: 8, destinationApplicationRequests: 0 });
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    if (restrictedSession) {
+      try { await stopSession(restrictedSession, "initial_restricted"); }
+      catch (error) {
+        if (!primaryFailed) throw error;
+        log("initial_restricted_cleanup_failed");
+      }
+    }
+  }
+}
+
+async function runAllowedNonPopupCoverage() {
+  let allowedSession;
+  let primaryFailed = false;
+  try {
+    fixture.containment.reset();
+    allowedSession = await startSession([fixture.origin, fixture.crossOrigin], "origin-containment-allowed");
+    resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "navigate", url: `${fixture.origin}/origin-containment/primary.html` } }));
+    fixture.containment.reset();
+    await actThenWait(allowedSession, { kind: "click", name: "Cross-origin controlled frame", exact: true }, { text: "frame-dispatched" }, "allowed controlled-frame dispatch");
+    await waitFor(() => fixture.containment.snapshot().destinationApplicationRequests === 1 ? fixture.containment.snapshot() : null, "allowed destination frame request", 10_000);
+    const allowedFrame = await observeUntil(allowedSession, (observation) => (observation.nodes ?? []).some((node) => String(node.name ?? "").includes("frame destination control") && node.frameOrigin === fixture.crossOrigin), "allowed destination frame observation");
+    assert((allowedFrame.nodes ?? []).some((node) => String(node.name ?? "").includes("frame destination control") && node.frameOrigin === fixture.crossOrigin), "allowed destination frame was not observable with provenance", allowedFrame);
+    log("allowed_frame_ok", { destinationApplicationRequests: 1 });
+
+    fixture.containment.reset();
+    resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "navigate", url: `${fixture.origin}/origin-containment/redirect-to-destination` } }));
+    const allowedRedirect = await waitFor(() => fixture.containment.snapshot().destinationApplicationRequests === 1 ? fixture.containment.snapshot() : null, "allowed redirect destination", 10_000);
+    assert(allowedRedirect.entries.some((entry) => entry.pathname.endsWith("/redirect.html")), "allowed redirect destination was not recorded", allowedRedirect);
+    log("allowed_redirect_ok", { destinationApplicationRequests: allowedRedirect.destinationApplicationRequests });
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    if (allowedSession) {
+      try { await stopSession(allowedSession, "allowed_non_popup"); }
+      catch (error) {
+        if (!primaryFailed) throw error;
+        log("allowed_non_popup_cleanup_failed");
+      }
+    }
+  }
 }
 
 async function startSession(allowedOrigins, instanceLabel) {
   const started = await mcp("browser.session.start", {
     origin: fixture.origin,
     allowedOrigins,
-    tabMode: "owned_group",
     goal: "preventive origin containment live proof",
     instanceLabel,
   });
+  if (!started.sessionId) log(`containment_session_start_${classifySessionStartFailure(started)}`);
   assert(started.sessionId, "containment session did not start", started);
   await waitFor(async () => {
-    const listed = await mcp("browser.tabs.list", {});
-    return listed.sessions?.some((session) => session.sessionId === started.sessionId && session.ownedTabId) ? listed : null;
+    const listed = await mcp("browser.sessions.list", {});
+    return listed.sessions?.some((session) => session.sessionId === started.sessionId && session.lifecycleState === "active") ? listed : null;
   }, "containment session binding", 20_000);
   return started.sessionId;
 }
 
-async function stopSession(sessionId) {
-  const stopped = await mcp("browser.session.stop", { sessionId });
+async function stopSession(sessionId, label = "session") {
+  let stopped = await mcp("browser.session.stop", { sessionId });
+  if (stopped?.ok === false && stopped?.errorCode === "direct_cleanup_uncertain") {
+    log(`${label}_cleanup_retry`);
+    stopped = await mcp("browser.session.stop", { sessionId });
+  }
   assert(stopped.stopped === true, "containment session did not stop", stopped);
+  await waitFor(() => !bridge.listSessions().some((session) => session.sessionId === sessionId), `${label} teardown`, 10_000);
+  log(`${label}_teardown_clean`);
 }
 
-function assertAttemptClassified(result, label) {
-  const status = result?.errorCode ?? result?.result?.errorCode ?? result?.result?.status ?? result?.status ?? result?.result?.actionStatus;
-  const outcome = result?.outcome ?? result?.result?.outcome;
-  assert(outcome === "prevented" || ["blocked", "prevented", "ungranted_navigation", "origin_not_granted"].includes(status), `${label} was not classified as prevented`, result);
+async function runRestrictedPopupCase(popupCase) {
+  let sessionId;
+  let primaryFailed = false;
+  try {
+    sessionId = await startSession([fixture.origin], `containment-${popupCase.id}`);
+    await navigateToContainmentFixture(sessionId);
+    fixture.containment.reset();
+    await assertPreventedAttempt(popupCase.id, () => mcp("browser.act", {
+      sessionId,
+      action: {
+        kind: "click",
+        name: popupCase.name,
+        exact: true,
+        ...(popupCase.id === "popup_form" ? { waitFor: { text: "popup-form-dispatched" } } : {}),
+      },
+    }), { requirePrevented: false, endpoint: popupCase.endpoint, ...(popupCase.mainControl ? { mainControl: popupCase.mainControl } : {}) });
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    if (sessionId) {
+      try {
+        await stopSession(sessionId, popupCase.id);
+      } catch (error) {
+        if (!primaryFailed) throw error;
+        log(`${popupCase.id}_cleanup_failed`);
+      }
+    }
+  }
 }
 
-function assertZeroDestinationApplications(label) {
+async function runAllowedPopupCase(popupCase) {
+  let sessionId;
+  let primaryFailed = false;
+  try {
+    sessionId = await startSession(popupCase.allowedOrigins, `containment-${popupCase.id}`);
+    await navigateToContainmentFixture(sessionId);
+    fixture.containment.reset();
+    log(`${popupCase.id}_attempt_start`);
+    const result = await mcp("browser.act", {
+      sessionId,
+      action: { kind: "click", name: popupCase.name, exact: true },
+    });
+    const classification = classifyCompletedContainmentAttempt(result);
+    log(`${popupCase.id}_action_${classification}`);
+    assert(classification === "completed", `${popupCase.id} action did not complete honestly`);
+    const reached = await waitFor(() => {
+      const current = fixture.containment.snapshot();
+      return fixedRequestCount(current, popupCase.originRole, "GET", popupCase.endpoint, "application") === 1
+        ? current
+        : null;
+    }, `${popupCase.id} popup document`, 10_000);
+    log(`${popupCase.id}_document_verified`);
+    const snapshot = reached;
+    const endpointCount = fixedRequestCount(snapshot, popupCase.originRole, "GET", popupCase.endpoint, "application");
+    log(`${popupCase.id}_counter_${endpointCount === 1 ? "one" : "other"}`);
+    log(`${popupCase.id}_request_${classifyDestinationRequest(snapshot)}`);
+    assert(endpointCount === 1, `${popupCase.id} did not reach its exact allowed endpoint`);
+    assert(snapshot.destinationApplicationRequests === (popupCase.originRole === "destination" ? 1 : 0), `${popupCase.id} destination count was not exact`);
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    if (sessionId) {
+      try {
+        await stopSession(sessionId, popupCase.id);
+      } catch (error) {
+        if (!primaryFailed) throw error;
+        log(`${popupCase.id}_cleanup_failed`);
+      }
+    }
+  }
+}
+
+async function navigateToContainmentFixture(sessionId) {
+  const navigated = await mcp("browser.act", {
+    sessionId,
+    action: { kind: "navigate", url: `${fixture.origin}/origin-containment/primary.html` },
+  });
+  if (navigated?.ok === false) {
+    log(`containment_initial_navigation_class_${classifyContainmentAttempt(navigated)}`);
+    log(`containment_initial_navigation_${classifyInitialNavigationFailure(navigated)}`);
+  }
+  resultOf(navigated);
+  log("containment_initial_navigation_completed");
+  await waitForContainmentFixtureMarker(sessionId);
+}
+
+async function waitForContainmentFixtureMarker(sessionId) {
+  const observed = await mcp("browser.observe", { sessionId, format: "json", maxNodes: 240 });
+  if (observed?.ok === false) {
+    log(`containment_fixture_observe_${classifyFixtureObserveFailure(observed)}`);
+    logContainmentFixturePrimaryCounter();
+  }
+  const observation = resultOf(observed);
+  const checks = containmentFixtureDocumentChecks(observation, fixture.origin);
+  assert(checks.originExact, "containment fixture origin was not exact");
+  assert(checks.titleExact, "containment fixture title was not exact");
+  assert(checks.nodesNonempty, "containment fixture observation had no nodes");
+  assert(checks.requiredNamesPresent, "containment fixture controls were incomplete");
+  log("containment_fixture_document_verified");
+  return observation;
+}
+
+function logContainmentFixturePrimaryCounter() {
+  const category = classifyFixturePrimaryCounter(fixture.containment.snapshot());
+  log(`containment_fixture_primary_counter_${category}`);
+}
+
+async function assertPreventedAttempt(attemptId, attempt, expected = {}) {
+  log(`${attemptId}_attempt_start`);
+  const result = await attempt();
+  const classification = classifyContainmentAttempt(result);
   const snapshot = fixture.containment.snapshot();
-  assert(snapshot.destinationApplicationRequests === 0, `${label} reached the destination application`, snapshot);
+  const counterStatus = snapshot.destinationApplicationRequests === 0 ? "zero" : "nonzero";
+  log(`${attemptId}_action_${classification}`);
+  if (classification === "other") {
+    const envelope = typeof result?.ok === "boolean" ? result : result?.result;
+    const outcome = envelope?.outcome;
+    const code = envelope?.errorCode;
+    const status = envelope?.status ?? envelope?.actionStatus;
+    log(`${attemptId}_fact_ok_${envelope?.ok === true ? "true" : envelope?.ok === false ? "false" : "missing"}`);
+    log(`${attemptId}_fact_outcome_${["completed", "prevented", "outcome_unknown", "not_started"].includes(outcome) ? outcome : "other"}`);
+    log(`${attemptId}_fact_code_${["ungranted_navigation", "ungranted_mutation", "ungranted_connection", "ungranted_target", "unsupported_ungranted_request", "post_action_network_write", "post_action_dialog", "not_found", "ambiguous", "stale_target", "timed_out", "runner_contract_invalid"].includes(code) ? code : "other"}`);
+    log(`${attemptId}_fact_status_${["verified", "dispatched_unverified", "blocked", "not_found", "ambiguous", "stale_target", "timed_out", "failed"].includes(status) ? status : "other"}`);
+  }
+  log(`${attemptId}_counter_${counterStatus}`);
+  if (classification !== "prevented" && classification !== "completed") {
+    log(`${attemptId}_failure_${classifyInitialNavigationFailure(result)}`);
+  }
+  if (counterStatus === "nonzero") log(`${attemptId}_request_${classifyDestinationRequest(snapshot)}`);
+  if (expected.requirePrevented === true) {
+    assert(classification === "prevented", `${attemptId} action did not report a preventive outcome`);
+    assert((result?.retrySafe ?? result?.result?.retrySafe) === true, `${attemptId} preventive outcome was not retry-safe`);
+  } else {
+    assert(classification === "prevented" || classification === "completed", `${attemptId} action outcome was dishonest`);
+  }
+  assert(snapshot.destinationApplicationRequests === 0, `${attemptId} reached the destination application`);
+  if (expected.endpoint) assert(fixedRequestCount(snapshot, "destination", "GET", expected.endpoint, "application") === 0, `${attemptId} reached its denied endpoint`);
+  if (expected.mainControl) {
+    const sourceCount = fixedRequestCount(snapshot, "main", "GET", expected.mainControl, "control");
+    log(`${attemptId}_redirect_source_${sourceCount === 0 ? "zero" : sourceCount === 1 ? "one" : "other"}`);
+    assert(sourceCount <= 1, `${attemptId} redirect source count exceeded one`);
+  }
+}
+
+function fixedRequestCount(snapshot, originRole, method, pathname, kind) {
+  return (snapshot?.entries ?? []).filter((entry) => entry?.originRole === originRole
+    && entry?.method === method && entry?.pathname === pathname && entry?.kind === kind).length;
+}
+
+function hasName(observation, name) {
+  return (observation?.nodes ?? []).some((node) => String(node?.name ?? "").trim() === name);
 }
 
 async function mcp(name, args) {
@@ -114,6 +359,17 @@ async function mcp(name, args) {
   const text = response?.result?.content?.find((item) => item.type === "text")?.text;
   assert(typeof text === "string", `missing MCP result for ${name}`, response);
   return JSON.parse(text);
+}
+
+async function actThenWait(sessionId, action, waitFor, label) {
+  const actedEnvelope = await mcp("browser.act", { sessionId, action });
+  resultOf(actedEnvelope);
+  const waitedEnvelope = await mcp("browser.act", { sessionId, action: { kind: "wait_for", waitFor } });
+  if (waitedEnvelope?.ok === false) log(`allowed_frame_wait_${classifyInitialNavigationFailure(waitedEnvelope)}`);
+  const waited = resultOf(waitedEnvelope);
+  const status = waited?.actionStatus ?? waited?.status;
+  assert(status === "verified", `${label} was not verified`, { status: status ?? "missing" });
+  return waited;
 }
 
 async function observeUntil(sessionId, predicate, label) {
@@ -147,4 +403,8 @@ function assert(condition, message, detail = {}) {
 
 function log(step, detail = {}) {
   console.log(JSON.stringify({ step, ...detail }));
+}
+
+function boundedFailure(error) {
+  return { message: String(error?.message ?? error).slice(0, 240) };
 }

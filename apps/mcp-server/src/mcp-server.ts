@@ -3,16 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
-import { BROWSER_ACTION_JSON_SCHEMA, BROWSER_CONTROL_TRANSPORTS, classifyVersionSkew, parseBrowserAction, redactBrowserResult, type BridgeResultEvent, type BrowserControlTransportMode, type BrowserFloorDecision, type PageProvenance } from "@newton-browser/core";
+import { BROWSER_ACT_JSON_SCHEMA, parseBrowserAction, redactBrowserResult, type BridgeResultEvent, type BrowserFloorDecision, type PageProvenance } from "@newton-browser/core";
 
 import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
-import type { NewtonBrowserHost } from "./bridge.ts";
-import { createNewtonBrowserHost } from "./bridge.ts";
+import type { DirectBrowserHost } from "./browser-runtime/direct-browser-host.ts";
+import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
 import { McpFrameParser, McpFrameParseError, type McpMessageMode } from "./mcp-frame-parser.ts";
 import { evaluateHostFloor } from "./floor-gate.ts";
 import { normalizeAgentActionResult, projectObservation, type AgentObservationOptionsInput } from "./agent-output.ts";
 import { annotationsForTool, MCP_SERVER_INSTRUCTIONS, NEWTON_BROWSER_CONTRACT_VERSION } from "./mcp-contract.ts";
 
+export type BrowserHost = DirectBrowserHost;
 type JsonRpcId = string | number | null;
 type JsonRpcRequest = { jsonrpc: "2.0"; id?: JsonRpcId; method?: string; params?: Record<string, unknown> };
 type JsonRpcResponse = { jsonrpc: "2.0"; id: JsonRpcId; result?: unknown; error?: { code: number; message: string; data?: unknown } };
@@ -20,45 +21,38 @@ type MessageMode = McpMessageMode;
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 type ToolCallResult = { content: ToolContent[]; isError?: boolean };
 
-const LOCAL_TRANSPORTS = new Set<BrowserControlTransportMode>(BROWSER_CONTROL_TRANSPORTS);
 const CURRENT_PROTOCOL = SUPPORTED_MCP_PROTOCOLS.at(-1)!;
 const INLINE_SCREENSHOT_CAP = 1_000_000;
 const SCREENSHOT_BYTES_CAP = 16 * 1024 * 1024;
 const FINALIZATION_LEDGER_CAP = 256;
 const FINALIZATION_LEDGER_TTL_MS = 10 * 60_000;
-type FinalizationDisposition = "close" | "deliverable" | "handoff";
+type FinalizationDisposition = "close";
 type FinalizationRecord = {
   disposition: FinalizationDisposition;
   event: Extract<BridgeResultEvent, { ok: true }>;
   createdAt: number;
 };
-const finalizationLedgers = new WeakMap<NewtonBrowserHost, Map<string, FinalizationRecord>>();
+const finalizationLedgers = new WeakMap<BrowserHost, Map<string, FinalizationRecord>>();
 
-export async function startNewtonBrowserMcpServer(input: { bridge?: NewtonBrowserHost; port?: number; host?: string } = {}): Promise<void> {
-  const readinessTimeoutMs = Number(process.env.NEWTON_BROWSER_READINESS_TIMEOUT_MS);
-  const bridge = input.bridge ?? createNewtonBrowserHost({
-    ...(Number.isFinite(readinessTimeoutMs) ? { limits: { readinessTimeoutMs: Math.max(50, readinessTimeoutMs) } } : {}),
-    observerRegistryDirectory: process.env.NEWTON_BROWSER_OBSERVER_REGISTRY_DIR,
-    observerToken: process.env.NEWTON_BROWSER_OBSERVER_TOKEN,
-  });
-  let startupErrorCode: string | undefined;
+export async function startNewtonBrowserMcpServer(input: { bridge?: BrowserHost } = {}): Promise<void> {
+  const bridge = input.bridge ?? createDefaultDirectBrowserHost();
+  await bridge.listen();
   try {
-    await bridge.listen(input.port, input.host ?? "127.0.0.1");
-  } catch (error) {
-    const code = errorCode(error);
-    if (code !== "host_collision") throw error;
-    startupErrorCode = code;
+    await serveNewtonBrowserMcpConnection({ bridge, readable: process.stdin, writable: process.stdout });
+  } finally {
+    await shutdownBrowserHost(bridge);
   }
-  await serveNewtonBrowserMcpConnection({ bridge, readable: process.stdin, writable: process.stdout, startupErrorCode });
-  bridge.stopAll();
+}
+
+export async function shutdownBrowserHost(bridge: BrowserHost): Promise<void> {
+  try { await bridge.stopAll(); } catch { /* close is the authoritative retry/terminal cleanup path */ }
   await bridge.close();
 }
 
 export async function serveNewtonBrowserMcpConnection(input: {
-  bridge: NewtonBrowserHost;
+  bridge: BrowserHost;
   readable: Readable;
   writable: Writable;
-  startupErrorCode?: string;
 }): Promise<void> {
   let complete = false;
   let errorResponded = false;
@@ -81,7 +75,7 @@ export async function serveNewtonBrowserMcpConnection(input: {
 
   const parser = new McpFrameParser(
     async (message, mode) => {
-      const response = await handleMcpMessage(input.bridge, message as JsonRpcRequest, { startupErrorCode: input.startupErrorCode });
+      const response = await handleMcpMessage(input.bridge, message as JsonRpcRequest);
       if (response) writeMessage(input.writable, response, mode);
     },
     async (error, mode) => writeErrorResponse(error, mode),
@@ -130,7 +124,7 @@ export async function serveNewtonBrowserMcpConnection(input: {
   return;
 }
 
-export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonRpcRequest, input: { startupErrorCode?: string } = {}): Promise<JsonRpcResponse | null> {
+export async function handleMcpMessage(bridge: BrowserHost, message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
   if (message.id === undefined && message.method?.startsWith("notifications/")) return null;
   const id = message.id ?? null;
   if (message.method === "initialize") {
@@ -157,7 +151,7 @@ export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonR
       const params = asObject(message.params ?? {}, "params");
       const name = requiredString(params.name, "name");
       const args = isObject(params.arguments) ? params.arguments : {};
-      return response(id, await callTool(bridge, name, args, input));
+      return response(id, await callTool(bridge, name, args));
     } catch (error) {
       return response(id, toolError(errorCode(error), error instanceof Error ? error.message : String(error)));
     }
@@ -165,98 +159,90 @@ export async function handleMcpMessage(bridge: NewtonBrowserHost, message: JsonR
   return errorResponse(id, -32601, `Unsupported MCP method: ${message.method ?? "unknown"}.`);
 }
 
-async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<string, unknown>, input: { startupErrorCode?: string } = {}): Promise<ToolCallResult> {
-  const transport = resolveTransport(args.transport);
-  if (!LOCAL_TRANSPORTS.has(transport)) return toolError("unsupported_transport", "Only local Newton Browser transports are supported.");
-  if (input.startupErrorCode) {
-    return toolError(input.startupErrorCode, "No loopback port is available in the configured Newton Browser range.", {
-      nextAction: "stop_stale_newton_browser_hosts_or_free_a_configured_port",
-    });
-  }
-
+async function callTool(bridge: BrowserHost, name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
   if (name === "browser.status") {
     const status = bridge.getStatus();
-    const versionSkew = classifyVersionSkew(NEWTON_BROWSER_VERSION, status.extensionVersion);
-    const nextAction = versionSkew === "incompatible"
-      ? status.extensionVersion && status.extensionVersion > NEWTON_BROWSER_VERSION ? "update the npm package" : "update the extension"
-      : undefined;
-    const fullStatus = {
-      ready: status.extensionConnected,
+    const runtimeState = status.runtimeReady
+      ? "ready"
+      : status.cleanupUncertainCount > 0
+        ? "cleanup_uncertain"
+        : status.sessionCount === 0 ? "idle" : "starting";
+    const directStatus = {
+      ready: status.runtimeReady,
+      configured: status.configured,
+      runtimeState,
+      mode: "direct",
       version: NEWTON_BROWSER_VERSION,
-      protocolVersions: SUPPORTED_MCP_PROTOCOLS,
-      contractVersion: NEWTON_BROWSER_CONTRACT_VERSION,
-      ...status,
-      paired: status.authMode === "paired" && status.extensionConnected,
-      zeroTouch: status.authMode === "local_trust",
-      hostCountSeenByExtension: status.eligibleClientCount,
-      hostVersion: NEWTON_BROWSER_VERSION,
-      extensionVersion: status.extensionVersion,
-      versionSkew: versionSkew === "unknown" ? "none" : versionSkew,
-      ...(nextAction ? { nextAction } : {}),
+      browserFamilies: status.browserFamilies,
+      sessionCount: status.sessionCount,
+      activeSessionCount: status.activeSessionCount,
+      cleanupUncertainCount: status.cleanupUncertainCount,
     };
-    const compactStatus = {
-      ready: status.extensionConnected,
-      version: NEWTON_BROWSER_VERSION,
-      authMode: status.authMode,
-      browserTarget: status.browserTarget,
-      minimumBrowserMajor: status.minimumBrowserMajor,
-      extensionVersion: status.extensionVersion,
-      versionSkew: versionSkew === "unknown" ? "none" : versionSkew,
-      ...(nextAction ? { nextAction } : {}),
-    };
-    return toolJson(args.detail === "full" ? fullStatus : compactStatus, !status.extensionConnected, status.extensionConnected ? undefined : "extension_disconnected");
+    return toolJson(args.detail === "full"
+      ? { ...directStatus, contractVersion: NEWTON_BROWSER_CONTRACT_VERSION, limits: status.limits, sessionDiagnostics: status.sessionDiagnostics }
+      : directStatus,
+    !status.configured || status.cleanupUncertainCount > 0,
+    !status.configured || status.cleanupUncertainCount > 0 ? "direct_runtime_unavailable" : undefined);
   }
 
   if (name === "browser.session.start") {
     const origin = requiredHttpOrigin(args.origin);
     const allowedOrigins = normalizeAllowedOrigins(args.allowedOrigins, origin);
+    const identityId = args.identityId === undefined ? undefined : requiredIdentityId(args.identityId);
+    const browserFamily = args.browser === undefined ? undefined : requiredBrowserFamily(args.browser);
     const created = bridge.createSession({
       origin,
       allowedOrigins,
       goal: typeof args.goal === "string" ? args.goal.slice(0, 240) : "",
-      tabMode: args.tabMode === "current" ? "current" : "owned_group",
       instanceLabel: process.env.NEWTON_BROWSER_INSTANCE_LABEL?.trim().slice(0, 120)
         || (typeof args.instanceLabel === "string" ? args.instanceLabel.slice(0, 120) : "mcp"),
-      ...(args.incognito === true && args.tabMode !== "current" ? { incognito: true } : {}),
+      ...(identityId ? { identityId } : {}),
+      ...(browserFamily ? { browserFamily } : {}),
     });
     try {
       const session = await bridge.waitForSessionReady(created.sessionId);
       if (!session.liveOrigin || !allowedOrigins.includes(session.liveOrigin)) {
-        bridge.stopSession(created.sessionId);
+        if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+          return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
+        }
         return toolError("origin_not_granted", "The attached tab is outside the session origin grant.");
       }
       if (isObject(args.observe)) {
-        const event = await bridge.dispatch(created.sessionId, prepareActionForRelay(actionForTool("browser.observe", args.observe)) as never);
+        const event = await bridge.dispatch(created.sessionId, prepareActionForDispatch(actionForTool("browser.observe", args.observe)) as never);
         if (!event.ok) {
-          bridge.stopSession(created.sessionId);
+          if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+            return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
+          }
           return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
         }
         const observation = observationEnvelope(event, args.observe);
         if (!observation.ok) {
-          bridge.stopSession(created.sessionId);
+          if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+            return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
+          }
           return toolJson(observation, true);
         }
         return toolJson({ sessionId: created.sessionId, session, observation });
       }
-      return toolJson({ sessionId: created.sessionId, transport, session });
+      return toolJson({ sessionId: created.sessionId, session });
     } catch (error) {
+      if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+        return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
+      }
       return toolError(errorCode(error), error instanceof Error ? error.message : String(error));
     }
   }
 
-  if (name === "browser.tabs.list") return toolJson({ transport, sessions: bridge.listSessions() });
+  if (name === "browser.sessions.list") return toolJson({ sessions: bridge.listSessions() });
   if (name === "browser.session.stop") {
-    bridge.stopSession(requiredString(args.sessionId, "sessionId"));
-    return toolJson({ stopped: true, transport });
+    const event = await bridge.dispatch(requiredString(args.sessionId, "sessionId"), { kind: "__stop" } as any);
+    if (!event.ok) return toolJson({ stopped: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
+    return toolJson({ stopped: true, ...publicCommandMetadata(event) });
   }
-  if (name === "browser.tabs.finalize") {
+  if (name === "browser.session.finalize") {
     const sessionId = requiredString(args.sessionId, "sessionId");
-    const disposition: FinalizationDisposition | null = args.disposition === "close"
-      || args.disposition === "deliverable"
-      || args.disposition === "handoff"
-      ? args.disposition
-      : null;
-    if (!disposition) return toolError("invalid_finalize_disposition", "Disposition must be close, deliverable, or handoff.");
+    const disposition: FinalizationDisposition | null = args.disposition === "close" ? "close" : null;
+    if (!disposition) return toolError("invalid_finalize_disposition", "Disposition must be close.");
     const finalized = finalizationRecord(bridge, sessionId);
     if (finalized) {
       if (finalized.disposition !== disposition) {
@@ -267,24 +253,27 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
           sequence: finalized.event.sequence,
           outcome: "prevented",
           retrySafe: true,
-          transport,
         }, true);
       }
       return toolJson({
         ok: true,
         ...(isObject(finalized.event.result) ? finalized.event.result : {}),
         ...publicCommandMetadata(finalized.event),
-        transport,
       });
     }
     const event = await bridge.dispatch(sessionId, { kind: "__finalize", disposition } as any);
-    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event), transport }, true);
+    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
     storeFinalizationRecord(bridge, sessionId, disposition, event);
-    return toolJson({ ok: true, ...(isObject(event.result) ? event.result : {}), ...publicCommandMetadata(event), transport });
+    return toolJson({ ok: true, ...(isObject(event.result) ? event.result : {}), ...publicCommandMetadata(event) });
   }
   if (name === "browser.stop_all") {
-    bridge.stopAll();
-    return toolJson({ stopped: true, transport });
+    const sessionIds = bridge.listSessions().map((session) => session.sessionId);
+    const results = await Promise.all(sessionIds.map((sessionId) => bridge.dispatch(sessionId, { kind: "__stop" } as any)));
+    const failed = results.find((event) => !event.ok);
+    if (failed && !failed.ok) {
+      return toolJson({ stopped: false, errorCode: failed.errorCode, ...publicCommandMetadata(failed) }, true);
+    }
+    return toolJson({ stopped: true, stoppedCount: results.length });
   }
 
   if (name === "browser.console" || name === "browser.network") {
@@ -295,42 +284,59 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
       ? { kind: "console", level: args.level, pattern: args.pattern, limit: clampNumber(args.limit, 100, 1, 500), clear: args.clear === true }
       : { kind: "network", urlPattern: args.urlPattern, requestId: args.requestId, limit: clampNumber(args.limit, 100, 1, 500) };
     const event = await bridge.dispatch(sessionId, action as never);
-    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event), transport }, true);
+    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
     const result = redactObservationResult(event.result);
     const resultOrigin = isObject(result) && typeof result.origin === "string" ? result.origin : session.liveOrigin ?? session.origin;
     const capturedAt = isObject(result) && typeof result.capturedAt === "string" ? result.capturedAt : undefined;
-    return toolJson({ ok: true, result, provenance: publicPageProvenance(event, resultOrigin, capturedAt), ...publicCommandMetadata(event), transport });
+    return toolJson({ ok: true, result, provenance: publicPageProvenance(event, resultOrigin, capturedAt), ...publicCommandMetadata(event) });
   }
 
   if (["browser.observe", "browser.screenshot", "browser.act"].includes(name)) {
     const sessionId = requiredString(args.sessionId, "sessionId");
     const session = bridge.listSessions().find((candidate) => candidate.sessionId === sessionId);
     if (!session) return toolError("unknown_session", "The session does not exist.");
-    const action = prepareActionForRelay(actionForTool(name, args));
+    const action = prepareActionForDispatch(actionForTool(name, args));
     if (name === "browser.act" && isObject(action) && action.kind === "handle_dialog") {
       return toolJson({
         ok: false,
         errorCode: "use_dialog_accept_or_dismiss",
         message: "Use action kind \"dialog_accept\" (optionally with promptText) or \"dialog_dismiss\" to respond to a JavaScript dialog.",
         decision: { class: "blocked", commitBoundary: "none", reasons: ["use_dialog_accept_or_dismiss"] },
-        transport,
       }, true);
     }
     if (name === "browser.act" && isObject(action) && action.kind === "fill_form") {
-      return await runFillForm(bridge, sessionId, session, action, transport, typeof args.idempotencyKey === "string" ? args.idempotencyKey : undefined);
+      return await runFillForm(
+        bridge,
+        sessionId,
+        session,
+        action,
+        typeof args.idempotencyKey === "string" ? args.idempotencyKey : undefined,
+        typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+      );
     }
     const verdict = evaluateHostFloor({ session, action });
-    if (!verdict.relay) {
+    if (!verdict.dispatchAllowed) {
       if (name === "browser.act") return toolJson(preventedActionEnvelope(verdict.errorCode ?? "blocked_by_floor", verdict.decision), true);
-      return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision), transport }, true);
+      return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision) }, true);
     }
-    const dispatchOptions = name === "browser.act" && args.idempotencyKey !== undefined
-      ? { idempotencyKey: args.idempotencyKey as string }
+    if (name === "browser.act" && isObject(action) && ["observe", "screenshot", "console", "network"].includes(String(action.kind))) {
+      return toolJson({
+        ok: false,
+        errorCode: "use_dedicated_tool",
+        message: "Use browser.observe, browser.screenshot, browser.console, or browser.network for this operation.",
+        decision: { class: "blocked", commitBoundary: "none", reasons: ["use_dedicated_tool"] },
+      }, true);
+    }
+    const dispatchOptions = name === "browser.act" && (args.idempotencyKey !== undefined || args.timeoutMs !== undefined)
+      ? {
+          ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey as string } : {}),
+          ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs as number } : {}),
+        }
       : undefined;
     const event = await bridge.dispatch(sessionId, verdict.action, dispatchOptions);
     if (!event.ok) {
       if (name === "browser.act") return toolJson(agentActionEnvelope(event, event.decision ?? verdict.decision, session), true);
-      return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), ...publicCommandMetadata(event), transport }, true);
+      return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), ...publicCommandMetadata(event) }, true);
     }
     const decision = strongestDecision(verdict.decision, event.decision);
     if (name === "browser.screenshot") return screenshotToolResult(event, decision, args);
@@ -341,6 +347,15 @@ async function callTool(bridge: NewtonBrowserHost, name: string, args: Record<st
     return toolJson(observation, !observation.ok);
   }
   return toolError("unknown_tool", `Unknown tool: ${name}`);
+}
+
+async function cleanupFailedSessionStart(bridge: BrowserHost, sessionId: string): Promise<boolean> {
+  try {
+    await bridge.stopSession(sessionId);
+    return true;
+  } catch {
+    return !bridge.listSessions().some((session) => session.sessionId === sessionId);
+  }
 }
 
 function observationEnvelope(event: Extract<BridgeResultEvent, { ok: true }>, args: AgentObservationOptionsInput) {
@@ -419,12 +434,12 @@ function preventedActionEnvelope(errorCode: string, decision: BrowserFloorDecisi
 // blocked or failed field and reports a per-field summary, so a sensitive field in
 // the middle of a form halts the batch exactly like a standalone fill would.
 async function runFillForm(
-  bridge: NewtonBrowserHost,
+  bridge: BrowserHost,
   sessionId: string,
   session: unknown,
   action: Record<string, unknown>,
-  transport: BrowserControlTransportMode,
   idempotencyKey?: string,
+  timeoutMs?: number,
 ): Promise<ToolCallResult> {
   const parsed = parseBrowserAction(action);
   const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
@@ -436,14 +451,17 @@ async function runFillForm(
     const fillAction = { kind: "fill", ...fields[index] };
     const verdict = evaluateHostFloor({ session: session as never, action: fillAction });
     strongest = strongest ? strongestDecision(strongest, verdict.decision) : verdict.decision;
-    if (!verdict.relay) {
+    if (!verdict.dispatchAllowed) {
       results.push({ index, status: "blocked", reason: verdict.decision.reasons.at(-1) ?? "blocked_by_floor" });
       return toolJson({ ...preventedActionEnvelope("blocked_by_floor", strongest), stoppedAt: index, fields: results }, true);
     }
     const fieldIdempotencyKey = idempotencyKey
       ? createHash("sha256").update(`${idempotencyKey}:${index}`).digest("base64url")
       : undefined;
-    const event = await bridge.dispatch(sessionId, verdict.action, fieldIdempotencyKey ? { idempotencyKey: fieldIdempotencyKey } : undefined);
+    const event = await bridge.dispatch(sessionId, verdict.action, {
+      ...(fieldIdempotencyKey ? { idempotencyKey: fieldIdempotencyKey } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
     if (!event.ok) {
       results.push({ index, status: "failed", reason: event.errorCode });
       return toolJson({ ...agentActionEnvelope(event, event.decision ?? strongest, session), stoppedAt: index, fields: results }, true);
@@ -489,13 +507,14 @@ function actionForTool(name: string, args: Record<string, unknown>): unknown {
       ...(args.device === "mobile" || args.device === "desktop" ? { device: args.device } : {}),
       waitMs: clampNumber(args.waitMs, 0, 0, 10_000),
       ...(clip ? { clip } : {}),
+      ...(Array.isArray(args.sensitiveZones) ? { sensitiveZones: args.sensitiveZones } : {}),
       ...(args.format === "jpeg" ? { format: "jpeg", quality: clampNumber(args.quality, 70, 1, 100) } : {}),
     };
   }
   return isObject(args.action) ? args.action : {};
 }
 
-export function prepareActionForRelay(raw: unknown): unknown {
+export function prepareActionForDispatch(raw: unknown): unknown {
   if (!isObject(raw) || raw.kind !== "set_files") return raw;
   if (!Array.isArray(raw.files)) throw new Error("files_required");
   if (raw.files.length > 8) throw new Error("file_count_exceeded");
@@ -538,9 +557,9 @@ function hasAllowedFileSignature(file: string, extension: string): boolean {
 function screenshotToolResult(event: Extract<BridgeResultEvent, { ok: true }>, decision: BrowserFloorDecision, args: Record<string, unknown>): ToolCallResult {
   const raw = event.result;
   const commandMetadata = publicCommandMetadata(event);
-  if (!isObject(raw) || typeof raw.dataUrl !== "string") return toolError("screenshot_unavailable", "The extension returned no screenshot bytes.", commandMetadata);
+  if (!isObject(raw) || typeof raw.dataUrl !== "string") return toolError("screenshot_unavailable", "The browser runtime returned no screenshot bytes.", commandMetadata);
   const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(raw.dataUrl);
-  if (!match?.[2]) return toolError("invalid_screenshot", "The extension returned malformed screenshot bytes.", commandMetadata);
+  if (!match?.[2]) return toolError("invalid_screenshot", "The browser runtime returned malformed screenshot bytes.", commandMetadata);
   const imageMime = `image/${match[1]}`;
   const buffer = Buffer.from(match[2], "base64");
   if (buffer.length > SCREENSHOT_BYTES_CAP) return toolError("result_too_large", "Screenshot exceeds the 16 MiB result bound.", { recommendedDelivery: "file", ...commandMetadata });
@@ -589,7 +608,6 @@ function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, 
 }
 
 export function toolList(): Array<Record<string, unknown>> {
-  const transport = { type: "string", enum: BROWSER_CONTROL_TRANSPORTS };
   const observationOutput = {
     format: { type: "string", enum: ["compact", "json"] },
     includeGeometry: { type: "boolean" },
@@ -602,15 +620,14 @@ export function toolList(): Array<Record<string, unknown>> {
     maxChars: { type: "number", minimum: 200, maximum: 200_000 },
   };
   return [
-    tool("browser.status", "Report readiness; detail defaults to compact.", { transport, detail: { type: "string", enum: ["compact", "full"] } }),
-    tool("browser.session.start", "Start and attach an origin-scoped browser session.", {
-      transport,
+    tool("browser.status", "Report readiness; detail defaults to compact.", { detail: { type: "string", enum: ["compact", "full"] } }),
+    tool("browser.session.start", "Start an isolated origin-scoped browser session; optionally select a browser and opaque identity.", {
       origin: { type: "string" },
       allowedOrigins: { type: "array", items: { type: "string" } },
       goal: { type: "string" },
-      tabMode: { type: "string", enum: ["owned_group", "current"] },
       instanceLabel: { type: "string" },
-      incognito: { type: "boolean" },
+      identityId: { type: "string", pattern: "^nbi_[a-f0-9]{32}$" },
+      browser: { type: "string", enum: ["chrome", "edge"] },
       observe: {
         anyOf: [
           { type: "boolean", const: false },
@@ -618,15 +635,14 @@ export function toolList(): Array<Record<string, unknown>> {
         ],
       },
     }, ["origin"]),
-    tool("browser.observe", "Observe a session tab; compact geometry-free output is default.", { transport, sessionId: { type: "string" }, ...observationOutput }, ["sessionId"]),
+    tool("browser.observe", "Observe a session tab; compact geometry-free output is default.", { sessionId: { type: "string" }, ...observationOutput }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", {
-      transport,
       sessionId: { type: "string" },
-      action: BROWSER_ACTION_JSON_SCHEMA,
+      action: BROWSER_ACT_JSON_SCHEMA,
       idempotencyKey: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" },
+      timeoutMs: { type: "integer", minimum: 1, maximum: 300000 },
     }, ["sessionId", "action"]),
     tool("browser.screenshot", "Capture and deliver a screenshot.", {
-      transport,
       sessionId: { type: "string" },
       delivery: { type: "string", enum: ["image", "file", "inline"] },
       outputDirectory: { type: "string" },
@@ -637,26 +653,48 @@ export function toolList(): Array<Record<string, unknown>> {
       region: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" } } },
       format: { type: "string", enum: ["png", "jpeg"] },
       quality: { type: "number" },
+      sensitiveZones: {
+        type: "array", minItems: 1, maxItems: 32,
+        items: {
+          type: "object", additionalProperties: false, minProperties: 1, maxProperties: 1,
+          oneOf: [{ required: ["ref"] }, { required: ["selector"] }, { required: ["name"] }, { required: ["label"] }],
+          properties: {
+            ref: { type: "string", minLength: 1, maxLength: 240 },
+            selector: { type: "string", minLength: 1, maxLength: 240 },
+            name: { type: "string", minLength: 1, maxLength: 240 },
+            label: { type: "string", minLength: 1, maxLength: 240 },
+          },
+        },
+      },
     }, ["sessionId"]),
     tool("browser.console", "Read or filter buffered console text; clear:true empties it.", {
-      transport, sessionId: { type: "string" }, level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string" }, limit: { type: "number" }, clear: { type: "boolean" },
+      sessionId: { type: "string" }, level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string" }, limit: { type: "number" }, clear: { type: "boolean" },
     }, ["sessionId"]),
     tool("browser.network", "List request metadata or fetch one granted-origin text body; never returns headers or opaque bodies.", {
-      transport, sessionId: { type: "string" }, urlPattern: { type: "string" }, requestId: { type: "string" }, limit: { type: "number" },
+      sessionId: { type: "string" }, urlPattern: { type: "string" }, requestId: { type: "string" }, limit: { type: "number" },
     }, ["sessionId"]),
-    tool("browser.tabs.list", "List this host's local sessions.", { transport }),
-    tool("browser.tabs.finalize", "Close, retain, or hand off one session tab.", {
-      transport,
+    tool("browser.sessions.list", "List this host's local sessions.", {}),
+    tool("browser.session.finalize", "Finalize and close a session after confirmed cleanup.", {
       sessionId: { type: "string" },
-      disposition: { type: "string", enum: ["close", "deliverable", "handoff"] },
+      disposition: { type: "string", enum: ["close"] },
     }, ["sessionId", "disposition"]),
-    tool("browser.session.stop", "Stop one local session.", { transport, sessionId: { type: "string" } }, ["sessionId"]),
-    tool("browser.stop_all", "Stop all local sessions.", { transport }),
+    tool("browser.session.stop", "Stop one local session.", { sessionId: { type: "string" } }, ["sessionId"]),
+    tool("browser.stop_all", "Stop all local sessions.", {}),
   ];
 }
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []): Record<string, unknown> {
   return { name, description, annotations: annotationsForTool(name), inputSchema: { type: "object", properties, ...(required.length ? { required } : {}), additionalProperties: false } };
+}
+
+function requiredIdentityId(value: unknown): string {
+  if (typeof value !== "string" || !/^nbi_[a-f0-9]{32}$/u.test(value)) throw new Error("invalid_identity_id");
+  return value;
+}
+
+function requiredBrowserFamily(value: unknown): "chrome" | "edge" {
+  if (value !== "chrome" && value !== "edge") throw new Error("invalid_browser_family");
+  return value;
 }
 
 function publicCommandMetadata(event: BridgeResultEvent) {
@@ -669,7 +707,7 @@ function publicCommandMetadata(event: BridgeResultEvent) {
   };
 }
 
-function finalizationRecord(bridge: NewtonBrowserHost, sessionId: string): FinalizationRecord | null {
+function finalizationRecord(bridge: BrowserHost, sessionId: string): FinalizationRecord | null {
   const ledger = finalizationLedgers.get(bridge);
   if (!ledger) return null;
   const now = Date.now();
@@ -680,7 +718,7 @@ function finalizationRecord(bridge: NewtonBrowserHost, sessionId: string): Final
 }
 
 function storeFinalizationRecord(
-  bridge: NewtonBrowserHost,
+  bridge: BrowserHost,
   sessionId: string,
   disposition: FinalizationDisposition,
   event: Extract<BridgeResultEvent, { ok: true }>,
@@ -722,7 +760,7 @@ function toolError(code: string, message: string, detail: Record<string, unknown
 
 // Secret/PII redaction of observation results before they reach the MCP client
 // (the model). The driver produces raw accessible names, values, and page text on
-// the loopback relay; the host is the exfiltration boundary, so redaction runs here
+// the private driver transport; the host is the exfiltration boundary, so redaction runs here
 // (as the driver's own comment documents). Only real observation kinds are touched —
 // finalize acks and other control results pass through unchanged.
 function redactObservationResult(result: unknown): any {
@@ -768,13 +806,6 @@ function response(id: JsonRpcId, result: unknown): JsonRpcResponse {
 
 function errorResponse(id: JsonRpcId, code: number, message: string, data?: unknown): JsonRpcResponse {
   return { jsonrpc: "2.0", id, error: { code, message, ...(data === undefined ? {} : { data }) } };
-}
-
-function resolveTransport(value: unknown): BrowserControlTransportMode {
-  if (value === undefined) return "auto";
-  return typeof value === "string" && BROWSER_CONTROL_TRANSPORTS.includes(value as BrowserControlTransportMode)
-    ? value as BrowserControlTransportMode
-    : "invalid" as BrowserControlTransportMode;
 }
 
 function writeMessage(writable: Writable, message: JsonRpcResponse, mode: MessageMode): void {

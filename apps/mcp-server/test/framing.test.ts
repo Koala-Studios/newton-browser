@@ -733,6 +733,7 @@ test("awaits an async tools/call handler before serve resolves", async () => {
   const release = createDeferred();
 
   const bridge = {
+    getStatus: () => ({}),
     createSession: () => ({ sessionId: "session_1" }),
     waitForSessionReady: async () => {
       started.resolve();

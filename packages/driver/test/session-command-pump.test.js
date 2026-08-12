@@ -306,3 +306,53 @@ test("SessionCommandPump exposes bounded diagnostics without payload content", a
   release.resolve();
   await Promise.all([first, second]);
 });
+
+test("SessionCommandPump times out queued work as not started without disturbing FIFO", async () => {
+  const pump = new SessionCommandPump({ maxItems: 4, maxBytes: 1024 });
+  const started = deferredGate();
+  const release = deferredGate();
+  const first = pump.enqueue("first", 1, async () => {
+    started.resolve();
+    await release.promise;
+    return "first";
+  });
+  await started.promise;
+  const expired = pump.enqueue("expired", 1, () => "must-not-run", 5);
+  await assert.rejects(expired, (error) => error?.code === "command_timeout_not_started");
+  assert.equal(pump.snapshot().queueLength, 0);
+  release.resolve();
+  assert.equal(await first, "first");
+});
+
+test("SessionCommandPump reports running timeout as outcome unknown and holds FIFO until settlement", async () => {
+  const pump = new SessionCommandPump({ maxItems: 4, maxBytes: 1024 });
+  const started = deferredGate();
+  const release = deferredGate();
+  const timeline = [];
+  const timed = pump.enqueue("timed", 1, async () => {
+    timeline.push("timed-start");
+    started.resolve();
+    await release.promise;
+    timeline.push("timed-end");
+    return "timed";
+  }, 5);
+  await started.promise;
+  const next = pump.enqueue("next", 1, () => {
+    timeline.push("next");
+    return "next";
+  });
+  await assert.rejects(timed, (error) => error?.code === "command_timeout_outcome_unknown");
+  assert.deepEqual(timeline, ["timed-start"]);
+  assert.equal(pump.snapshot().runningCount, 1);
+  assert.equal(pump.snapshot().queueLength, 1);
+  release.resolve();
+  assert.equal(await next, "next");
+  assert.deepEqual(timeline, ["timed-start", "timed-end", "next"]);
+});
+
+test("SessionCommandPump rejects timeout values outside the closed contract", async () => {
+  const pump = new SessionCommandPump({ maxItems: 4, maxBytes: 1024 });
+  for (const timeout of [0, -1, 1.5, 300_001, Number.NaN]) {
+    await assert.rejects(pump.enqueue("invalid", 1, () => "nope", timeout), /invalid_command_size/);
+  }
+});

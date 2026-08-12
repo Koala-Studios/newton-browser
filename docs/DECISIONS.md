@@ -1,6 +1,12 @@
 # Newton Browser 0.1 Contract Decisions
 
-Status: locked for implementation on 2026-07-10. Changes require an explicit decision entry and matching contract tests.
+> Decision log, not a current architecture specification. Decisions 1-32 describe the
+> former extension/relay implementation where later entries do not explicitly retain
+> them. Decisions 33-35 supersede that control plane with the owned-browser, direct-CDP
+> runtime. Use `AGENTS.md`, `README.md`, and `docs/SECURITY.md` for the current contract.
+
+Status: append-only historical record. Current changes require an explicit decision
+entry and matching contract tests.
 
 ## 1. Multi-host mechanism: bounded port-range discovery
 
@@ -65,6 +71,10 @@ Every `browser.act` response, successful or blocked, carries:
 
 ## 5. Mandatory session origin
 
+> Superseded lifecycle wording: Decision 42 replaces the extension/current-tab
+> implementation below with blank-first, directly owned Chromium processes. The exact
+> normalized-origin requirement remains current.
+
 `browser.session.start` requires `origin`. It must parse as HTTP(S) and is stored as normalized `URL.origin`. `allowedOrigins` defaults to `[origin]`; every entry must independently parse as an exact normalized HTTP(S) origin. Wildcards, paths, credentials, fragments, and origin-less sessions are rejected with typed `invalid_origin` or `origin_required`.
 
 The tool does not return success until the extension has created/selected the tab, attached the debugger, and reported the tab's live origin. A current-tab session is denied unless the live tab origin is in the grant. Observe and act re-check the live origin for every command, so focus changes cannot move a session outside its grant.
@@ -77,7 +87,7 @@ Newton Browser ships without vendor-specific host-policy manifests. An optional 
 
 ## 7. New lifecycle contracts
 
-### `browser.status`
+### Historical `browser.status`
 
 Input: `{}`. Result:
 
@@ -104,7 +114,10 @@ Input: `{}`. Result:
 
 Default not-ready states use typed `extension_disconnected` or `protocol_mismatch` without opening a tab. Hardened mode can additionally return `pairing_required` or `authentication_failed`.
 
-### `browser.tabs.finalize`
+### Historical `browser.tabs.finalize`
+
+> Superseded by `browser.session.finalize` with the sole disposition `close`. Direct
+> sessions own an isolated browser process and cannot preserve or hand off a user tab.
 
 Input: `{sessionId, disposition:"close | deliverable | handoff"}`.
 
@@ -490,3 +503,177 @@ outcome counts, and fixed MCP framing limits. Samples retain only the latest 256
 values in memory. Compact agent status remains unchanged. These diagnostics never include
 page text, response bodies, cookies, storage, browser profile files, saved credentials, or
 real-user browsing history.
+
+## 32. Do not overclaim top-level popup prevention from an ordinary MV3 tab debugger (2026-08-09)
+
+**Superseded for the primary runtime by Decisions 33 and 35.** The negative MV3 evidence
+remains binding for the migration-only extension path.
+
+Newton will not promote an extension-only popup-containment mechanism without direct
+zero-request evidence. Chrome for Testing 151 rejected Browser-target attachment through
+`chrome.debugger`. A disposable private tab-root autoattach probe was accepted but allowed
+one exact denied noopener popup document request before Newton could contain it. The probe
+was removed and its negative receipt is retained as QA-AIP-004B/BB-081.
+
+Until the owner selects a replacement product boundary, production remains fail-closed at
+session setup rather than claiming a guarantee it cannot enforce. The two approved-for-
+review continuations are Plan 04A, which retains extension-only existing-profile control
+and explicitly narrows arbitrary script-popup coverage, and Plan 04B, which adds a
+Newton-owned isolated Chromium backend capable of browser-level target interception.
+Neither option may be implemented silently: Plan 04A changes the documented guarantee;
+Plan 04B changes the product architecture and packaging boundary.
+
+## 33. Replace the MV3 control plane with MCP-owned isolated browsers (2026-08-10)
+
+The owner selected the isolated-browser continuation. Newton's target product is one MCP
+host that directly owns one Chrome or Edge process per session over a private CDP
+transport. The extension, relay, pairing, MV3 restart, tab-group, and browser-store paths
+are migration-only and will be deleted after direct-runtime parity. Ordinary current-tab
+control is intentionally traded for deterministic process ownership, browser-level CDP,
+containment before initial navigation, simpler installation, and one release surface.
+
+The host remains local-only and is not an installed daemon. Direct CDP pipe is preferred;
+an unauthenticated debug TCP endpoint is not a production default. One session owns its
+process, policy proxy, identity lease, CDP connection, controller, and command queue. This
+preserves concurrent work across sessions while retaining FIFO within one session.
+
+## 34. Authentication continuity uses Newton identities and explicit opaque import (2026-08-10)
+
+The normal authentication path is a persistent Newton-owned browser identity in which the
+operator signs in once. An explicit operator CLI operation may seed a new identity from a
+closed local Chrome/Edge profile. Import copies only a reviewed narrow allowlist as opaque
+bytes into a staged owned directory; Newton does not parse, log, return, edit, merge back,
+or export profile contents. Saved passwords, autofill, history, downloads, extensions,
+restored sessions, service workers, caches, and unknown files are excluded. Locks, source
+mutation, links/path escape, partial copy, or unverifiable consistency fail the import.
+
+This is a deliberate, narrow amendment to the earlier blanket ban on profile-file access.
+It authorizes content-blind copying only, never profile inspection or agent access.
+
+## 35. Preventive origin containment moves outside the browser process (2026-08-10)
+
+Each owned browser launches behind a per-session deny-by-default loopback policy proxy
+whose exact origin grants are committed before process spawn. HTTP, HTTPS CONNECT, and
+WebSocket destinations are rejected before an upstream connection exists. Browser-level
+Target/Fetch control remains defense-in-depth and produces action attribution, but is not
+trusted as the only first-request boundary. Proxy failure fences the session and stops the
+owned browser. Receipts contain only capped counts and closed categories.
+
+## 36. Keep the compact public interface and TypeScript implementation (2026-08-10)
+
+The no-extension migration is not a Rust rewrite and does not copy agent-browser's broad
+tool catalog or second daemon. Newton keeps its strict TypeScript packages, one MCP host,
+11-tool compact contract, stable refs, verified outcomes, and per-session concurrency.
+Process, CDP, proxy, identity, and migration mechanics are operator/runtime concerns and
+must not inflate the default agent context.
+
+## 37. Ship direct operation first as one explicit preview workflow (2026-08-10)
+
+The usable migration path is `preview setup`, one contained `identity login`, ordinary
+stdio MCP operation, and an explicit live doctor. Setup persists only runtime mode,
+browser family, and an opaque Newton identity ID. Ordinary doctor is configuration-only;
+only `preview doctor --live` may launch a disposable browser and claim runtime plus
+cleanup verification.
+
+Public `browser.session.start` may select an operator-created opaque identity and Chrome
+or Edge, but never an executable, profile path, proxy, CDP endpoint, or Chromium switch.
+Persistent identity use is exclusive and family-authoritative. Distinct identities keep
+Newton's cross-session concurrency; commands within a session remain FIFO.
+
+The direct runtime is stdio-first. Persistent Unix-socket continuity is disabled by
+default and, when explicitly enabled, expires orphaned sessions through the same
+authoritative stop/close transaction. The temporary compatibility-path sentence in the
+original decision is superseded by Decision 42: that control plane has been deleted.
+## 38. Browser ownership survives MCP-host termination (2026-08-11)
+
+Production Chromium is launched by a separate local guardian over IPC. Chromium remains
+the exact owned process; the guardian only holds its process-tree PID, CDP pipe endpoints,
+and a closed identity cleanup plan bound to store/identity/lease realpaths, filesystem
+identity, owner-marker nonces, lease nonce, and recorded PID. If the MCP host disconnects
+or is killed, the guardian terminates the exact browser tree, waits for browser exit, then
+releases only that proven lease and optionally its ephemeral identity. A normal host close
+uses the same guardian path, so crash and graceful cleanup cannot diverge silently.
+
+Stale persistent leases are never auto-cleared. `identity lease-recover` is an explicit
+operator action that revalidates the exact lease, refuses recovery if the recorded PID
+exists, and independently requires that no process from the identity's browser family is
+running. The host PID alone is insufficient because a guardian/browser tree can outlive
+it. This conservative gate trades convenience for protection against PID reuse, delayed
+guardian cleanup, path replacement, and concurrent profile access.
+
+## 39. Proxy enforcement is aggregate; action outcomes require causal CDP evidence (2026-08-11)
+
+The policy proxy remains the pre-launch zero-upstream boundary, but it no longer exposes
+or maintains a temporal “current command” slot. Delayed background traffic cannot be
+causally assigned from a time window and therefore cannot truthfully mark an unrelated
+action prevented. Public `prevented` outcomes come only from exact driver Target/Fetch
+evidence associated with the controlled target or command ticket. Proxy ledgers are
+bounded aggregate diagnostics.
+
+HTTPS CONNECT exposes an authority but not a resource type. Newton therefore requires
+explicit exact grants for third-party HTTPS dependencies and will not weaken containment
+by guessing that a tunnel is only for a passive resource.
+
+## 40. Direct command deadlines preserve execution uncertainty (2026-08-11)
+
+Direct session pumps preserve the established outcome distinction. A command
+whose deadline expires in the queue is removed and reported `not_started`; a command
+whose executor has begun is reported `outcome_unknown`, while its executor continues to
+hold FIFO until it settles. No retry or second execution is started automatically.
+Idempotency retains up to 256 exact command hashes for ten minutes. Public
+`browser.act.timeoutMs` is bounded to 1–300,000 ms and the default remains 60 seconds.
+
+## 41. Complete release checks include installed browsers and production sites (2026-08-11)
+
+The former 13-stage gate is named `release:deterministic`. `release:check` is the complete
+local gate: deterministic/packed checks followed by direct live and read-only real-site
+QA in Chrome and, on Windows, Edge. Cross-platform receipts and three unchanged-candidate
+complete passes remain mandatory. Neither fixture-only success nor historical dirty-tree
+receipts can close the release.
+
+## 42. Remove the extension control plane after direct parity implementation (2026-08-11)
+
+The MV3 application, loopback relay, pairing/version-skew plane, Chrome-store artifact,
+current-tab/incognito/tab-handoff adapters, and their release scripts are deleted. The MCP
+host has one production control plane: an owned Chrome or Edge process, launch-time policy
+proxy, inherited private CDP pipe, exclusive Newton identity lease, and guardian. Unix
+socket continuity remains an explicit host-lifetime option, not a browser relay.
+
+Sensitive screenshot zones are no longer page DOM/CSS overlays. Newton pauses controlled
+page targets, resolves exact bounded geometry, captures lossless PNG, masks pixels in the
+trusted Node process, resumes every target, and fails closed on any uncertainty. JPEG
+requests with masks are safely upgraded to PNG.
+
+## 43. Authenticated third-party sites are optional, not a release gate (2026-08-12)
+
+The release usability matrix uses public pages that require no account. Persistent Newton
+identities and operator-driven login remain supported, but authentication availability,
+tenant licensing, provider policy, MFA, and account state are external conditions and are
+not release requirements. Newton agents never enter credentials to satisfy QA.
+
+Opaque import proves only safe, content-blind copying and cleanup. It does not promise
+that authentication survives. Current Windows Chrome App-Bound Encryption can bind data
+created in the standard user-data directory to that directory, so protected cookies may
+not decrypt when the copied profile is launched from Newton's isolated
+`--user-data-dir`. The owner explicitly accepted this boundary and directed completion QA
+to unauthenticated real sites. This decision does not weaken isolation, profile privacy,
+or the optional direct operator-login workflow.
+
+Chromium source evidence: the Windows App-Bound browser test explicitly expects data
+created under the standard user-data directory to fail decryption after a non-standard
+directory launch ([test](https://chromium.googlesource.com/chromium/src/%2B/68b3492d/chrome/browser/os_crypt/app_bound_encryption_win_browsertest.cc)); the implementation's support checks are documented in
+[Chromium source](https://chromium.googlesource.com/chromium/src/%2B/refs/tags/138.0.7204.96/chrome/browser/os_crypt/app_bound_encryption_win.cc).
+
+## 44. Final release evidence is attached to the immutable commit (2026-08-12)
+
+An in-tree receipt cannot truthfully contain the final hash and results of the exact tree
+that already contains that receipt without changing the tree after verification. Newton
+therefore records preparatory and historical receipts under `test/evidence/`, freezes the
+final content, runs the required three complete passes, and places the exact content
+digest, pass durations, artifact hash, test/eval totals, platform receipt, and residue
+result in the commit body that first makes that content durable. Creating the commit does
+not alter its tree. Any later content change requires a new three-pass attestation.
+
+The attestation must remain local unless pushing the branch is separately authorized.
+Public release, npm publication, and browser-store changes remain separate external
+effects and are never implied by a local release commit.

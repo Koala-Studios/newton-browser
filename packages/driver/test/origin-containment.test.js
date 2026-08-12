@@ -30,14 +30,21 @@ test("compiled grants use exact URL origins without prefix or credential tricks"
   assert.equal(originForUrl("wss://example.com/socket"), "https://example.com");
 });
 
-test("paused-request decisions prevent ungranted effects and permit bodyless reads", () => {
+test("paused-request decisions require an explicit origin grant for every resource", () => {
   const grant = compileOriginGrant("https://example.com", ["https://allowed.test"]);
   const cases = [
     [{ request: { url: "https://allowed.test/save", method: "POST" } }, "continue", "granted_origin"],
     [{ request: { url: "https://denied.test/page", method: "GET" }, isNavigationRequest: true }, "fail", "ungranted_navigation"],
+    [{ request: { url: "https://denied.test/popup", method: "GET" }, resourceType: "Document" }, "fail", "ungranted_navigation"],
+    [{ request: { url: "https://denied.test/top", method: "GET" }, resourceType: "Document", isNavigationRequest: false }, "fail", "ungranted_navigation"],
+    [{ request: { url: "https://denied.test/subframe", method: "GET" }, resourceType: "Document" }, "fail", "ungranted_navigation"],
+    [{ request: { url: "https://denied.test/redirect", method: "GET" }, resourceType: "Document", isNavigationRequest: false }, "fail", "ungranted_navigation"],
     [{ request: { url: "https://denied.test/save", method: "POST" } }, "fail", "ungranted_mutation"],
     [{ request: { url: "wss://denied.test/socket", method: "GET" }, resourceType: "WebSocket" }, "fail", "ungranted_connection"],
-    [{ request: { url: "https://cdn.test/image.png", method: "GET" }, resourceType: "Image" }, "continue_without_body_access", "read_only_subresource"],
+    [{ request: { url: "https://denied.test/worker.js", method: "GET" }, resourceType: "Script" }, "fail", "ungranted_target"],
+    [{ request: { url: "https://denied.test/worker.js", method: "GET", headers: { "Sec-Fetch-Dest": "worker" } }, resourceType: "Other" }, "fail", "ungranted_target"],
+    [{ request: { url: "https://cdn.test/image.png", method: "GET" }, resourceType: "Image" }, "fail", "unsupported_ungranted_request"],
+    [{ request: { url: "https://cdn.test/site.css", method: "GET" }, resourceType: "Stylesheet", isNavigationRequest: false }, "fail", "unsupported_ungranted_request"],
     [{ request: { url: "https://denied.test/custom", method: "PROPFIND" } }, "fail", "unsupported_ungranted_request"],
   ];
   for (const [input, action, reason] of cases) assert.deepEqual(decidePausedRequest(input, grant), { action, reason, granted: reason === "granted_origin" });

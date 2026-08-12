@@ -27,7 +27,7 @@ body:
     id: boundaries
     attributes:
       label: Security and product-boundary impact
-      description: Note any effect on localhost-only transport, origin scoping, browser permissions, credentials, or external actions.
+      description: Note any effect on private-CDP/local-only transport, origin scoping, profile safety, credentials, or external actions.
     validations:
       required: true
   - type: checkboxes
