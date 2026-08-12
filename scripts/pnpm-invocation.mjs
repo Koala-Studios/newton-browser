@@ -4,7 +4,9 @@ import path from "node:path";
 export function resolvePnpmInvocation(options = {}) {
   const platform = options.platform ?? process.platform;
   const execPath = options.execPath ?? process.execPath;
-  const npmExecPath = options.npmExecPath ?? process.env.npm_execpath;
+  const npmExecPath = Object.hasOwn(options, "npmExecPath")
+    ? options.npmExecPath
+    : process.env.npm_execpath;
   if (typeof npmExecPath === "string" && npmExecPath.length > 0) {
     requireRegularAbsoluteFile(npmExecPath, "release_pnpm_execpath_invalid");
     return Object.freeze({ command: execPath, argsPrefix: Object.freeze([npmExecPath]) });

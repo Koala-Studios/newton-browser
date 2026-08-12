@@ -1751,5 +1751,6 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   Node on Windows, retains the inherited exact entrypoint under pnpm, and uses the native
   command only on Unix.
 - Regression/evidence: focused tests prove both launch paths and forbid a `.cmd` command;
-  the final three-pass verifier is restarted from zero on the refrozen tree.
+  the direct-Node test explicitly suppresses the parent pnpm environment, and the final
+  three-pass verifier is restarted from zero on the refrozen tree.
 - Status: implemented; final immutable execution pending.
