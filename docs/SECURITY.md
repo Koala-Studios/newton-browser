@@ -34,6 +34,8 @@ or containment of traffic Chromium does not send through the configured proxy.
 Each direct session owns one browser process and one identity lease. Startup is blank-first:
 the proxy and CDP controls are established before the initial granted navigation. Owned
 browsers run with browser extensions disabled, and imported extension data is excluded.
+The launch switch set is fixed by Newton; neither MCP callers nor internal host
+configuration can inject arbitrary Chromium arguments.
 Distinct sessions run concurrently, but the same persistent identity cannot be leased twice.
 The browser is spawned by a separate guardian that owns the exact process tree and an
 identity-bound cleanup plan. MCP-host loss triggers browser-tree termination and releases
@@ -91,20 +93,16 @@ masked JPEG request is safely upgraded to PNG; no unmasked fallback is returned.
 JavaScript dialogs are target-scoped and handled only through typed accept/dismiss actions.
 Accepting a dialog that confirms an external effect still requires caller authorization.
 
-Direct mode supports close finalization only. It does not attach to the user's current tab,
+Direct mode closes sessions through `browser.session.stop`. It does not attach to the user's current tab,
 activate or hand off a user tab, or use incognito as a substitute for an isolated identity.
 Unexpected browser/proxy/CDP loss revokes readiness and initiates owned cleanup. Same-session
 commands are FIFO; independent sessions remain concurrent.
 
 ## Local control transport
 
-Ordinary stdio mode opens no control listener. Explicit continuity mode uses only an
-operator-selected local Unix socket. Browser CDP remains on inherited private pipes.
-
-An optional deployment observer is disabled by default. When explicitly configured, it
-uses a high-entropy token, mode-0600 local registry records, loopback-only endpoints, and
-bounded session metadata. It never exposes page content, origin grants,
-profile contents, or ownership secrets.
+The MCP control plane is newline-delimited stdio only and opens no listener. Browser CDP
+uses inherited private pipes. The per-session origin-policy proxy is the only production
+listener and binds to an ephemeral `127.0.0.1` port.
 
 ## Reporting a vulnerability
 

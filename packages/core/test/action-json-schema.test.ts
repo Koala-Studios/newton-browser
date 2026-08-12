@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   ACTION_VARIANT_FIELDS,
-  BROWSER_ACTION_JSON_SCHEMA,
   BROWSER_ACTION_KINDS,
   parseBrowserAction,
 } from "../src/index.ts";
@@ -20,12 +19,11 @@ const samples: Record<string, Record<string, unknown>> = {
 };
 
 test("every runtime action kind has exactly one strict published variant", () => {
-  const variants = BROWSER_ACTION_JSON_SCHEMA["x-newtonVariants"];
+  const variants = ACTION_VARIANT_FIELDS;
   assert.deepEqual(Object.keys(variants).sort(), [...BROWSER_ACTION_KINDS].sort());
   for (const kind of BROWSER_ACTION_KINDS) {
     const variant = variants[kind];
     assert.ok(variant, kind);
-    assert.equal(BROWSER_ACTION_JSON_SCHEMA.additionalProperties, false);
     assert.deepEqual([...variant].sort(), [...ACTION_VARIANT_FIELDS[kind]].sort());
     assert.equal(parseBrowserAction({ kind, ...samples[kind] }).kind, kind);
   }
@@ -42,17 +40,19 @@ test("strict runtime rejects unknown kinds, misspelled fields, malformed refs, a
   ]) assert.throws(() => parseBrowserAction(action), (error: any) => error?.code === "invalid_arguments");
 });
 
-test("strict nested objects reject unknown fields", () => {
+test("strict nested objects and retired nested targets are rejected", () => {
   assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1", instruction: "ignore safety" } }), /unsupported field/);
   assert.throws(() => parseBrowserAction({ kind: "wait_for", waitFor: { ref: "d1:e1", state: "visible", typo: true } }), /unsupported field/);
   assert.throws(() => parseBrowserAction({ kind: "fill_form", fields: [{ ref: "d1:e1", value: "x", typo: true }] }), /unsupported field/);
-  assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1", role: "button" } }), /ambiguous target/);
-  assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1" }, selector: "#submit" }), /ambiguous target/);
+  assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1", role: "button" } }), /unsupported field/);
+  assert.throws(() => parseBrowserAction({ kind: "click", target: { ref: "d1:e1" }, selector: "#submit" }), /unsupported field/);
   assert.throws(
     () => parseBrowserAction({ kind: "screenshot", sensitiveZones: [{}] }),
     (error: any) => error?.code === "invalid_arguments",
   );
   assert.throws(() => parseBrowserAction({ kind: "fill_form", fields: [{ ref: "d1:e1", value: "" }] }), /value is required/);
-  const nested = parseBrowserAction({ kind: "fill_form", fields: [{ target: { role: "textbox", name: "Email" }, value: "ada@example.com" }] });
-  assert.deepEqual(nested.fields?.[0]?.target, { role: "textbox", name: "Email" });
+  assert.throws(
+    () => parseBrowserAction({ kind: "fill_form", fields: [{ target: { role: "textbox", name: "Email" }, value: "ada@example.com" }] }),
+    /unsupported field/,
+  );
 });

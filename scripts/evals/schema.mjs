@@ -4,7 +4,6 @@ import {
   BROWSER_ACTION_FIELDS,
   BROWSER_ACTION_FIELD_SPECS,
   parseBrowserAction,
-  parseBrowserTarget,
   parseBrowserWaitFor,
 } from "../../packages/core/src/action-schema.ts";
 import { BROWSER_ACTION_KINDS, BROWSER_ACTION_RESULT_STATUSES } from "../../packages/core/src/protocol.ts";
@@ -26,7 +25,6 @@ export const TASK_TOOLS = Object.freeze([
   "browser.session.stop",
   "browser.observe",
   "browser.act",
-  "browser.wait_for",
   "browser.screenshot",
 ]);
 export const TASK_EXPECT_STATUSES = Object.freeze([
@@ -55,14 +53,12 @@ export const FORBID_ACTION_METHODS = Object.freeze([
 ]);
 export const FORBID_EFFECT_TYPES = Object.freeze(["http", "redirect", "beacon", "socket"]);
 const TASK_KEYS = new Set(["id", "description", "fixture", "grant", "steps", "forbid"]);
-const STEP_KEYS = new Set(["tool", "expect", "query", "waitFor", "semanticRef", "action", "metadata"]);
+const STEP_KEYS = new Set(["tool", "expect", "query", "semanticRef", "action", "metadata"]);
 const EXPECT_KEYS = new Set(["status"]);
 const WAIT_FOR_KEYS = new Set(["state", "selector", "url", "title", "text", "role", "name", "ref", "value", "timeoutMs"]);
-const TARGET_KEYS = new Set(["ref", "role", "name", "label", "text", "placeholder", "testId", "selector", "exact", "coordinates"]);
-const TARGET_HINT_KEYS = new Set(["target", "ref", "role", "name", "label", "text", "placeholder", "testId", "selector"]);
-const TARGET_COORD_KEYS = new Set(["x", "y"]);
+const TARGET_HINT_KEYS = new Set(["ref", "role", "name", "label", "text", "placeholder", "testId", "selector"]);
 const FORBID_KEYS = new Set(["origin", "method", "path", "type", "requestId"]);
-const FORM_FIELD_KEYS = new Set(["target", "ref", "role", "name", "label", "placeholder", "testId", "selector", "value"]);
+const FORM_FIELD_KEYS = new Set(["ref", "role", "name", "label", "placeholder", "testId", "selector", "value"]);
 const ACTION_KEYS = Object.freeze(new Set(["kind", ...BROWSER_ACTION_FIELDS]));
 const WAIT_FOR_RULES = Object.freeze({
   state: (input, label) => parseEnum(input, [
@@ -239,14 +235,6 @@ function parseTaskStep(raw, label) {
       ? { query: parseTrimmedString(value.query, `${label}.query`, LIMITS.query) }
       : {}),
   };
-  if (step.tool === "browser.wait_for") {
-    step.waitFor = parseWaitFor(value.waitFor, `${label}.waitFor`, true);
-  } else {
-    const waitFor = parseWaitFor(value.waitFor, `${label}.waitFor`, false);
-    if (waitFor !== undefined) {
-      step.waitFor = waitFor;
-    }
-  }
   if (value.semanticRef !== undefined) {
     step.semanticRef = parseSemanticRef(value.semanticRef, `${label}.semanticRef`);
   }
@@ -312,11 +300,9 @@ function parseAction(raw, label, { allowMissingTarget = false } = {}) {
     action[key] = parseActionField(key, entry, `${label}.${key}`);
   }
   const targetDeferred = allowMissingTarget && actionRequiresTarget(kind) && !hasTargetHint(action);
-  const parsed = parseBrowserAction(targetDeferred
-    ? { ...action, target: { ref: "d1:e1" } }
-    : action);
+  const parsed = parseBrowserAction(targetDeferred ? { ...action, ref: "d1:e1" } : action);
   const normalized = targetDeferred && parsed
-    ? Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "target"))
+    ? Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "ref"))
     : parsed;
   if (!normalized || normalized.kind !== kind) {
     throw new EvalSchemaError(`${label}.kind is invalid`, `${label}.kind`);
@@ -335,8 +321,6 @@ function parseActionField(field, raw, label) {
     throw new EvalSchemaError(`${label} is required`, label);
   }
   switch (spec.kind) {
-    case "target":
-      return parseActionTarget(raw, label);
     case "waitFor":
       return parseWaitForLike(raw, label);
     case "text":
@@ -379,30 +363,6 @@ function parseTargetLike(value, label, rules) {
   }
   return parsed;
 }
-function parseActionTarget(raw, label) {
-  const value = asObject(raw, label);
-  ensureOnlyKeys(label, value, TARGET_KEYS);
-  const parsed = parseTargetLike(value, label, {
-    ref: (input) => parseTrimmedString(input, `${label}.ref`, LIMITS.targetRef),
-    role: (input) => parseTrimmedString(input, `${label}.role`, LIMITS.targetRole),
-    name: (input) => parseTrimmedString(input, `${label}.name`, LIMITS.targetName),
-    label: (input) => parseTrimmedString(input, `${label}.label`, LIMITS.targetLabel),
-    text: (input) => parseTrimmedString(input, `${label}.text`, LIMITS.targetText),
-    placeholder: (input) => parseTrimmedString(input, `${label}.placeholder`, LIMITS.targetPlaceholder),
-    testId: (input) => parseTrimmedString(input, `${label}.testId`, LIMITS.targetTestId),
-    selector: (input) => parseTrimmedString(input, `${label}.selector`, LIMITS.targetSelector),
-    exact: (input) => parseBool(input, `${label}.exact`),
-    coordinates: (input) => parseCoordinates(input, `${label}.coordinates`),
-  });
-  const normalized = parseBrowserTarget(parsed);
-  if (!normalized) {
-    throw new EvalSchemaError(`${label} is invalid`, label);
-  }
-  if (normalized.coordinates && normalized.coordinates.x === undefined && normalized.coordinates.y === undefined) {
-    throw new EvalSchemaError(`${label}.coordinates is invalid`, `${label}.coordinates`);
-  }
-  return freezeShallow(normalized);
-}
 function parseWaitForLike(raw, label) {
   const value = asObject(raw, label);
   ensureOnlyKeys(label, value, WAIT_FOR_KEYS);
@@ -410,17 +370,6 @@ function parseWaitForLike(raw, label) {
   return freezeShallow(parseBrowserWaitFor(parseTargetLike(value, label, WAIT_FOR_RULES)) ?? (() => {
     throw new EvalSchemaError(`${label} is invalid`, label);
   })());
-}
-function parseCoordinates(raw, label) {
-  const value = asObject(raw, label);
-  ensureOnlyKeys(label, value, TARGET_COORD_KEYS);
-  if (!Object.keys(value).length) {
-    throw new EvalSchemaError(`${label} is empty`, label);
-  }
-  return {
-    x: parseStrictInt(value.x, `${label}.x`, -LIMITS.coordInt, LIMITS.coordInt),
-    y: parseStrictInt(value.y, `${label}.y`, -LIMITS.coordInt, LIMITS.coordInt),
-  };
 }
 function parseViewport(raw, label) {
   const value = asObject(raw, label);
@@ -457,7 +406,6 @@ function parseFormFields(raw, label, cap) {
     const value = asObject(entry, fieldLabel);
     ensureOnlyKeys(fieldLabel, value, FORM_FIELD_KEYS);
     const field = {
-      ...(value.target !== undefined ? { target: parseActionTarget(value.target, `${fieldLabel}.target`) } : {}),
       ...(value.ref !== undefined ? { ref: parseTrimmedString(value.ref, `${fieldLabel}.ref`, LIMITS.targetRef) } : {}),
       ...(value.role !== undefined ? { role: parseTrimmedString(value.role, `${fieldLabel}.role`, LIMITS.targetRole) } : {}),
       ...(value.name !== undefined ? { name: parseTrimmedString(value.name, `${fieldLabel}.name`, LIMITS.targetName) } : {}),
@@ -612,7 +560,7 @@ function parseBool(raw, label) {
   return raw;
 }
 function hasTargetHint(value) {
-  return Boolean(value && (value.target || value.ref || value.role || value.name || value.label || value.text || value.placeholder || value.testId || value.selector));
+  return Boolean(value && (value.ref || value.role || value.name || value.label || value.text || value.placeholder || value.testId || value.selector));
 }
 function asObject(raw, label) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {

@@ -3,8 +3,6 @@ import {
   type BrowserAction,
   type BrowserCommitBoundary,
   type BrowserFloorDecision,
-  type BrowserFloorEvidence,
-  type BrowserRiskClass,
   type BrowserSignals,
 } from "./protocol.ts";
 import {
@@ -15,13 +13,12 @@ import {
 } from "./host-policy.ts";
 
 const READ_ONLY_ACTIONS = new Set(["observe", "screenshot", "console", "network"]);
-// Dialog accept/dismiss (WS9.4) respond to a page-initiated JavaScript dialog. They
+// Dialog accept/dismiss respond to a page-initiated JavaScript dialog. They
 // are agentic and never blocked-class: the dialog exists because of an action the
 // agent already took, and leaving it unhandled wedges the renderer. Post-action
 // reconciliation still runs, so an accept that triggers a navigation/network write
 // is caught by the driver like any other agentic click.
 const AGENTIC_ACTIONS = new Set(["scroll", "wait_for", "hover", "move", "back", "forward", "reload", "dialog_accept", "dialog_dismiss", "resize"]);
-const MUTATING_ACTIONS = new Set(["click", "fill", "type", "select", "navigate", "press", "clear", "back", "forward", "reload"]);
 const FILL_ACTIONS = new Set(["fill", "type", "select", "clear", "set_files"]);
 const SECRET_HINT = /password|passcode|secret|token|api[_ -]?key|credential|private[_ -]?key|otp|2fa|one[_ -]?time|verification code|security code/i;
 // Payment / financial / government-id fields. The host never auto-types these: a
@@ -52,113 +49,73 @@ export type BrowserFloorInput = {
   manifest?: BrowserHostPolicyManifest | null | undefined;
   resolved?: BrowserResolvedTarget | null | undefined;
   signals?: BrowserSignals | undefined;
-  requestedClass?: BrowserRiskClass | undefined;
-  // Feature flag (§14): when false, all actuation is rejected while observation
-  // stays live. Defaults to enabled.
-  actuationEnabled?: boolean | undefined;
 };
 
 export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDecision {
-  const reasons: string[] = [];
-  const evidence: BrowserFloorEvidence[] = [];
   if (!BROWSER_ACTION_KINDS.includes(input.action.kind)) {
-    return blocked(["unsupported_action"], "none", [{ kind: "action_kind", value: input.action.kind }]);
+    return blocked("unsupported_action");
   }
 
   const policy = input.policy ?? { allowedOrigins: [] };
   const host = input.origin ? hostMatchesBrowserPolicy({ origin: input.origin, policy }) : null;
   if (host && !host.allowed) {
-    return blocked([host.reason], "none", [{ kind: "origin", value: String(input.origin ?? "") }]);
+    return blocked(host.reason);
   }
-  if (host?.allowed) reasons.push(host.reason);
 
   if (READ_ONLY_ACTIONS.has(input.action.kind)) {
-    return withRequestedUpgrade(
-      { class: "read_only", permissionRequired: "newton_browser.observe", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
-      input.requestedClass,
-    );
+    return { class: "read_only", commitBoundary: "none" };
   }
 
   if (AGENTIC_ACTIONS.has(input.action.kind)) {
-    return withRequestedUpgrade(
-      { class: "agentic", permissionRequired: "newton_browser.agentic_session", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
-      input.requestedClass,
-    );
-  }
-
-  // Mutating actions below. Honor the actuation feature flag first.
-  const actuationEnabled = input.actuationEnabled ?? true;
-  if (!actuationEnabled && MUTATING_ACTIONS.has(input.action.kind)) {
-    return blocked(["actuation_disabled"], "none");
+    return { class: "agentic", commitBoundary: "none" };
   }
 
   // Cross-origin into a frame outside the grant is never auto-allowed.
   if (input.signals?.crossOrigin) {
-    return blocked(["cross_origin_target"], "none", [{ kind: "crossOrigin", value: true }]);
+    return blocked("cross_origin_target");
   }
   if (input.signals?.containmentPrevention) {
-    return blocked([input.signals.containmentPrevention], "none", [{ kind: "containmentPrevention", value: true }]);
+    return blocked(input.signals.containmentPrevention);
   }
 
-  if (["navigate", "back", "forward", "reload"].includes(input.action.kind)) {
-    // Navigation within granted origins is non-committing (§7).
-    return withRequestedUpgrade(
-      { class: "agentic", permissionRequired: "newton_browser.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
-      input.requestedClass,
-    );
+  if (input.action.kind === "navigate") {
+    return { class: "agentic", commitBoundary: "none" };
   }
 
   if (FILL_ACTIONS.has(input.action.kind)) {
     const sensitive = sensitiveFieldReason(input);
     if (sensitive) {
-      return blocked([sensitive], "draft", [{ kind: sensitive, value: true }]);
+      return blocked(sensitive, "draft");
     }
     // Draft edits are always agentic (§7) — value is redacted in artifacts.
-    return withRequestedUpgrade(
-      { class: "agentic", permissionRequired: "newton_browser.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "draft" },
-      input.requestedClass,
-    );
+    return { class: "agentic", commitBoundary: "draft" };
   }
 
   // click / press: decide the commit boundary.
-  const boundary = resolveCommitBoundary(input, evidence);
+  const boundary = resolveCommitBoundary(input);
   if (boundary.effect === "external_effect" || boundary.effect === "commit") {
     return {
-      class: "approval_required",
-      permissionRequired: "newton_browser.act",
-      approvalRequired: true,
-      blocked: false,
-      reasons: [...reasons, boundary.reason],
+      class: "agentic",
+      reason: boundary.reason,
       commitBoundary: boundary.effect,
-      evidence,
     };
   }
 
   // Genuinely ambiguous / non-committing click → agentic, with post-action
   // reconciliation (the driver halts the run if an observed nav/network write
   // reveals a commit after the fact).
-  return withRequestedUpgrade(
-    { class: "agentic", permissionRequired: "newton_browser.act", approvalRequired: false, blocked: false, reasons, commitBoundary: "none" },
-    input.requestedClass,
-  );
+  return { class: "agentic", commitBoundary: "none" };
 }
 
-function resolveCommitBoundary(
-  input: BrowserFloorInput,
-  evidence: BrowserFloorEvidence[],
-): { effect: BrowserCommitBoundary; reason: string } {
+function resolveCommitBoundary(input: BrowserFloorInput): { effect: BrowserCommitBoundary; reason: string } {
   // 1. Host policy is authoritative when present (removes the gray zone). The
   // resolved element name/role lets a rule match a ref/selector-targeted commit.
   const fromHost = matchHostCommitBoundary({ manifest: input.manifest ?? null, action: input.action, resolved: input.resolved ?? null });
-  if (fromHost) {
-    evidence.push({ kind: "host_policy", value: fromHost.reason });
-    return fromHost;
-  }
+  if (fromHost) return fromHost;
 
   // 2. Structural commit detection (no page prose as authority).
   const targetText = `${input.resolved?.accessibleName ?? ""} ${actionTargetText(input.action)}`;
   if ((input.action.kind === "click" || input.action.kind === "press") && SOCIAL_ENGAGEMENT_HINT.test(targetText)) {
-    evidence.push({ kind: "social_engagement_action", value: true });
     return { effect: "external_effect", reason: "social_engagement_action" };
   }
 
@@ -169,14 +126,13 @@ function resolveCommitBoundary(
     Boolean(resolved?.formOwner) ||
     (typeof resolved?.role === "string" && /submit|menuitemcheckbox/i.test(resolved.role));
   if (structurallyCommit) {
-    evidence.push({ kind: "structural_commit", value: true });
     return { effect: "commit", reason: "structural_commit" };
   }
 
-  // 4. Unknown host + submit-like accessible name → conservative stop.
-  const conservativeDefault = (input.manifest?.defaultForUnmatched ?? "conservative") === "conservative";
-  if (conservativeDefault && !input.manifest && SUBMIT_HINT.test(targetText)) {
-    evidence.push({ kind: "unknown_host_submit_like", value: true });
+  // 4. Submit-like accessible structure remains conservative even when a host
+  // policy exists only to configure masks. A policy can raise specificity but
+  // never de-risk an unmatched control.
+  if (SUBMIT_HINT.test(targetText)) {
     return { effect: "commit", reason: "unknown_host_submit_like" };
   }
 
@@ -201,8 +157,6 @@ function sensitiveFieldReason(input: BrowserFloorInput): string | null {
 }
 
 function actionTargetText(action: BrowserAction): string {
-  const target = action.target && typeof action.target === "object" ? action.target : {};
-  const coordinates = "coordinates" in target ? "coordinates" : "";
   return [
     action.ref,
     action.selector,
@@ -212,49 +166,17 @@ function actionTargetText(action: BrowserAction): string {
     action.label,
     action.placeholder,
     action.testId,
-    "ref" in target ? target.ref : undefined,
-    "selector" in target ? target.selector : undefined,
-    "text" in target ? target.text : undefined,
-    "role" in target ? target.role : undefined,
-    "name" in target ? target.name : undefined,
-    "label" in target ? target.label : undefined,
-    "placeholder" in target ? target.placeholder : undefined,
-    "testId" in target ? target.testId : undefined,
-    coordinates,
+    Number.isFinite(action.x) && Number.isFinite(action.y) ? "coordinates" : undefined,
   ].filter(Boolean).join(" ");
 }
 
-function withRequestedUpgrade(decision: BrowserFloorDecision, requested: BrowserRiskClass | undefined): BrowserFloorDecision {
-  if (!requested) return decision;
-  const order: BrowserRiskClass[] = ["read_only", "agentic", "approval_required", "blocked"];
-  if (order.indexOf(requested) <= order.indexOf(decision.class)) return decision;
-  return {
-    ...decision,
-    class: requested,
-    permissionRequired:
-      requested === "read_only"
-        ? "newton_browser.observe"
-        : requested === "agentic"
-          ? "newton_browser.agentic_session"
-          : "newton_browser.act",
-    approvalRequired: requested === "approval_required" || decision.approvalRequired,
-    blocked: requested === "blocked",
-    reasons: [...decision.reasons, "risk_class_raised_by_caller"],
-  };
-}
-
 function blocked(
-  reasons: string[],
+  reason: string,
   commitBoundary: BrowserCommitBoundary = "none",
-  evidence: BrowserFloorEvidence[] = [],
 ): BrowserFloorDecision {
   return {
     class: "blocked",
-    permissionRequired: "newton_browser.act",
-    approvalRequired: false,
-    blocked: true,
-    reasons,
+    reason,
     commitBoundary,
-    evidence,
   };
 }

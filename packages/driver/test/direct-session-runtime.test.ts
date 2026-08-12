@@ -20,15 +20,9 @@ function deferred<T = void>(): Deferred<T> {
 }
 
 test("real direct composition attaches, installs containment, commits initial navigation, and uses no extension globals", async () => {
-  const originalChrome = globalThis.chrome;
-  Object.defineProperty(globalThis, "chrome", {
-    configurable: true,
-    value: new Proxy({}, { get() { throw new Error("extension global accessed"); } }),
-  });
   const transport = new FakeBrowserTransport();
-  try {
-    const runtime = await startDirectDriverSession({
-      bootstrap: { transport, rootTargetId: "root-target", syntheticTabId: 71 },
+  const runtime = await startDirectDriverSession({
+      bootstrap: { transport, rootTargetId: "root-target" },
       primaryOrigin: "https://example.com",
       allowedOrigins: ["https://assets.example.com"],
       initialUrl: "https://example.com/start?direct=1",
@@ -67,49 +61,11 @@ test("real direct composition attaches, installs containment, commits initial na
 
     await runtime.stop();
     assert.equal(runtime.snapshot().state, "stopped");
-    assert.deepEqual(transport.calls.at(-1), {
-      method: "Target.detachFromTarget",
-      params: { sessionId: "root-session" },
-      sessionId: null,
-    });
-  } finally {
-    if (originalChrome === undefined) delete globalThis.chrome;
-    else Object.defineProperty(globalThis, "chrome", { configurable: true, value: originalChrome });
-  }
-});
-
-test("start publishes only after initial observation completes", async () => {
-  const observationStarted = deferred();
-  const releaseObservation = deferred();
-  const order: string[] = [];
-  const observation = { origin: "https://example.com", title: "Ready", nodes: [] };
-  const driver = stubDriver({
-    async observe() {
-      order.push("observe:start");
-      observationStarted.resolve();
-      await releaseObservation.promise;
-      order.push("observe:end");
-      return observation;
-    },
-  }, order);
-  let published = false;
-  const starting = startDirectDriverSession({
-    ...validOptions(),
-    initialObservation: true,
-    driverFactory: () => driver,
-  }).then((runtime) => {
-    published = true;
-    return runtime;
+  assert.deepEqual(transport.calls.at(-1), {
+    method: "Target.detachFromTarget",
+    params: { sessionId: "root-session" },
+    sessionId: null,
   });
-
-  await observationStarted.promise;
-  assert.equal(published, false);
-  assert.deepEqual(order, ["attach", "navigate", "observe:start"]);
-  releaseObservation.resolve();
-  const runtime = await starting;
-  assert.equal(runtime.initialObservation, observation);
-  assert.deepEqual(order, ["attach", "navigate", "observe:start", "observe:end"]);
-  await runtime.stop();
 });
 
 test("one direct runtime executes commands FIFO with exact serialized byte accounting", async () => {
@@ -118,7 +74,7 @@ test("one direct runtime executes commands FIFO with exact serialized byte accou
   const executionOrder: string[] = [];
   const driver = stubDriver({
     async executeAction(action) {
-      const key = String(action.key);
+      const key = String(action.keys?.[0]);
       executionOrder.push(`start:${key}`);
       if (key === "A") {
         firstStarted.resolve();
@@ -129,8 +85,8 @@ test("one direct runtime executes commands FIFO with exact serialized byte accou
     },
   });
   const runtime = await startDirectDriverSession({ ...validOptions(), driverFactory: () => driver });
-  const firstAction = { kind: "press" as const, key: "A" };
-  const secondAction = { kind: "press" as const, key: "B" };
+  const firstAction = { kind: "press" as const, keys: ["A"] };
+  const secondAction = { kind: "press" as const, keys: ["B"] };
   const first = runtime.execute(firstAction, { commandId: "one" });
   await firstStarted.promise;
   const second = runtime.execute(secondAction, { commandId: "two" });
@@ -163,13 +119,62 @@ test("direct runtime preflights each action before execution and does not execut
   const runtime = await startDirectDriverSession({ ...validOptions(), driverFactory: () => driver });
 
   await assert.rejects(
-    runtime.execute({ kind: "click", target: { selector: "]" } }),
+    runtime.execute({ kind: "click", selector: "]" }),
     (error) => error === invalidSelector,
   );
   assert.deepEqual(order, ["preflight:click"]);
 
-  assert.deepEqual(await runtime.execute({ kind: "press", key: "A" }), { status: "verified" });
+  assert.deepEqual(await runtime.execute({ kind: "press", keys: ["A"] }), { status: "verified" });
   assert.deepEqual(order, ["preflight:click", "preflight:press", "execute:press"]);
+  await runtime.stop();
+});
+
+test("aborting provisioning after attach starts prevents initial navigation and detaches", async () => {
+  const attachStarted = deferred();
+  const releaseAttach = deferred();
+  const controller = new AbortController();
+  let navigations = 0;
+  let detaches = 0;
+  const driver = stubDriver({
+    async attach() { attachStarted.resolve(); await releaseAttach.promise; },
+    async detach() { detaches += 1; },
+    async navigateInitialGranted() { navigations += 1; return {}; },
+  });
+  const starting = startDirectDriverSession({
+    ...validOptions(),
+    signal: controller.signal,
+    driverFactory: () => driver,
+  });
+  await attachStarted.promise;
+  controller.abort();
+  releaseAttach.resolve();
+  await assert.rejects(starting, (error) => error instanceof DOMException && error.name === "AbortError");
+  assert.equal(navigations, 0);
+  assert.equal(detaches, 1);
+});
+
+test("resolved-evidence guard runs in FIFO after preflight and before action dispatch", async () => {
+  const order: string[] = [];
+  const blocked = Object.assign(new Error("blocked_by_floor"), { code: "blocked_by_floor" });
+  const driver = stubDriver({
+    async preflightAction() { order.push("preflight"); },
+    async resolveEvidence() {
+      order.push("evidence");
+      return { resolved: { inputType: "password" }, signals: { secretField: true } };
+    },
+    async executeAction() { order.push("execute"); return { status: "verified" }; },
+  });
+  const runtime = await startDirectDriverSession({ ...validOptions(), driverFactory: () => driver });
+
+  await assert.rejects(
+    runtime.execute({ kind: "fill", ref: "d1:e1", value: "must-not-dispatch" }, {}, undefined, undefined, (evidence) => {
+      order.push("guard");
+      assert.deepEqual(evidence, { resolved: { inputType: "password" }, signals: { secretField: true } });
+      throw blocked;
+    }),
+    (error) => error === blocked,
+  );
+  assert.deepEqual(order, ["preflight", "evidence", "guard"]);
   await runtime.stop();
 });
 
@@ -190,8 +195,8 @@ test("two direct runtimes execute concurrently without a shared mutex", async ()
     }),
   });
 
-  const leftCommand = left.execute({ kind: "press", key: "L" });
-  const rightCommand = right.execute({ kind: "press", key: "R" });
+  const leftCommand = left.execute({ kind: "press", keys: ["L"] });
+  const rightCommand = right.execute({ kind: "press", keys: ["R"] });
   await Promise.all([leftStarted.promise, rightStarted.promise]);
   assert.equal(left.snapshot().runningCommands, 1);
   assert.equal(right.snapshot().runningCommands, 1);
@@ -242,16 +247,16 @@ test("stop fences queued work, awaits the running command, and retries an uncert
     },
   });
   const runtime = await startDirectDriverSession({ ...validOptions(), driverFactory: () => driver });
-  const running = runtime.execute({ kind: "press", key: "A" });
+  const running = runtime.execute({ kind: "press", keys: ["A"] });
   await commandStarted.promise;
-  const queued = runtime.execute({ kind: "press", key: "B" });
+  const queued = runtime.execute({ kind: "press", keys: ["B"] });
   const stopping = runtime.stop();
-  await assert.rejects(queued, (error) => error?.code === "session_finalizing");
+  await assert.rejects(queued, (error) => error?.code === "session_stopping");
   assert.deepEqual(runtime.snapshot(), {
     state: "stopping",
     runningCommands: 1,
     queuedCommands: 0,
-    runningBytes: encodedBytes({ action: { kind: "press", key: "A" }, context: {} }),
+    runningBytes: encodedBytes({ action: { kind: "press", keys: ["A"] }, context: {} }),
     queuedBytes: 0,
     queueClosed: true,
   });
@@ -260,7 +265,7 @@ test("stop fences queued work, awaits the running command, and retries an uncert
   await running;
   await assert.rejects(stopping, (error) => error === detachError);
   assert.equal(runtime.snapshot().state, "detach_uncertain");
-  await assert.rejects(runtime.execute({ kind: "press", key: "C" }), (error) => error?.code === "session_finalizing");
+  await assert.rejects(runtime.execute({ kind: "press", keys: ["C"] }), (error) => error?.code === "session_stopping");
 
   await runtime.stop();
   assert.equal(detachCalls, 2);
@@ -284,6 +289,13 @@ test("direct session validates exact bootstrap, normalized unique grants, and in
   await assert.rejects(
     startDirectDriverSession({ ...base, initialUrl: "https://outside.test/" }),
     (error) => error?.code === "direct_session_invalid_initial_url",
+  );
+  await assert.rejects(
+    startDirectDriverSession({
+      ...base,
+      allowedOrigins: Array.from({ length: 32 }, (_, index) => `https://origin-${index}.example`),
+    }),
+    (error) => error?.code === "direct_session_invalid_origin_grant",
   );
 });
 
@@ -334,12 +346,11 @@ class FakeBrowserTransport {
   }
 }
 
-function validOptions(syntheticTabId = 71) {
+function validOptions(identity = 71) {
   return {
     bootstrap: {
       transport: inertTransport(),
-      rootTargetId: `root-${syntheticTabId}`,
-      syntheticTabId,
+      rootTargetId: `root-${identity}`,
     },
     primaryOrigin: "https://example.com",
     allowedOrigins: ["https://assets.example.com"],
@@ -359,7 +370,6 @@ function stubDriver(overrides: Record<string, unknown> = {}, order?: string[]) {
     async attach() { order?.push("attach"); },
     async detach() { order?.push("detach"); },
     async navigateInitialGranted() { order?.push("navigate"); return {}; },
-    async observe() { order?.push("observe"); return { origin: "https://example.com", title: "", nodes: [] }; },
     async executeAction() { return {}; },
     ...overrides,
   };

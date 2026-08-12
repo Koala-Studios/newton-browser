@@ -1,35 +1,20 @@
-import fs from "node:fs";
-import path from "node:path";
-
-import { configDirectory, loadBrowserTarget, loadDirectBrowserConfig } from "../config.ts";
+import { configDirectory, ensureConfigDirectory, loadDirectConfiguration, profileStoreDirectory } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { createConfiguredDirectBrowserHost } from "./configured-direct-host.ts";
 
 export function createDefaultDirectBrowserHost(env: NodeJS.ProcessEnv = process.env) {
   const directory = configDirectory(env);
-  ensurePlainConfigDirectory(directory);
-  const target = loadBrowserTarget({ directory, env });
-  const configured = loadDirectBrowserConfig({ directory, env });
+  ensureConfigDirectory(directory);
+  const configuration = loadDirectConfiguration({ directory, env });
   const explicitPath = env.NEWTON_BROWSER_BROWSER_EXECUTABLE;
-  const browserFamily = resolveBrowserFamily(target, explicitPath, env);
+  const browserFamily = resolveBrowserFamily(configuration.browser, explicitPath, env);
   return createConfiguredDirectBrowserHost({
     env,
-    profileStoreRoot: env.NEWTON_BROWSER_PROFILE_STORE_DIR || path.join(directory, "identities"),
+    profileStoreRoot: profileStoreDirectory(env, directory),
     browserFamily,
-    ...(configured ? { identityId: configured.identityId } : {}),
+    hostPolicies: configuration.hostPolicies,
     ...(explicitPath ? { executablePath: explicitPath } : {}),
   });
-}
-
-function ensurePlainConfigDirectory(directory: string): void {
-  try {
-    if (!fs.existsSync(directory)) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("invalid");
-    fs.chmodSync(directory, 0o700);
-  } catch {
-    throw Object.assign(new Error("configured_profile_store_invalid"), { code: "configured_profile_store_invalid" });
-  }
 }
 
 function resolveBrowserFamily(

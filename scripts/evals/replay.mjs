@@ -16,9 +16,9 @@ const RESULT_KIND_FIELDS = Object.freeze({
   observation_text: new Set(["kind", "nodes"]),
 });
 const ALLOWED_RESULT_NODE_FIELDS = Object.freeze(["ref", "role", "name", "label", "text", "placeholder", "testId", "selector"]);
-const TARGET_HINT_KEYS = Object.freeze(["target", "ref", "role", "name", "label", "text", "placeholder", "testId", "selector"]);
+const TARGET_HINT_KEYS = Object.freeze(["ref", "role", "name", "label", "text", "placeholder", "testId", "selector"]);
 const TARGET_HINT_SET = new Set(TARGET_HINT_KEYS);
-const READ_ONLY_TOOLS = Object.freeze(new Set(["browser.observe", "browser.wait_for", "browser.screenshot"]));
+const READ_ONLY_TOOLS = Object.freeze(new Set(["browser.observe", "browser.screenshot"]));
 const ALLOWED_EFFECT_KEYS = Object.freeze(new Set(["origin", "method", "path", "type", "requestId"]));
 const FORBID_ACTION_METHODS = Object.freeze(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"]);
 const FORBID_EFFECT_TYPES = Object.freeze(["http", "redirect", "beacon", "socket"]);
@@ -52,7 +52,6 @@ const RESULT_NODE_FIELD_LIMITS = Object.freeze({
   selector: LIMITS.targetSelector,
 });
 const TARGET_HINT_LIMITS = Object.freeze({
-  target: LIMITS.stepRef,
   ref: LIMITS.stepRef,
   role: LIMITS.targetRole,
   name: LIMITS.targetName,
@@ -267,7 +266,6 @@ async function prepareStep({ step, previousObservation, resolveRef, context }) {
       skipped: false,
       action: {
         ...(step.query !== undefined ? { query: step.query } : {}),
-        ...(step.waitFor !== undefined ? { waitFor: step.waitFor } : {}),
       },
     };
   }
@@ -294,7 +292,7 @@ async function prepareStep({ step, previousObservation, resolveRef, context }) {
   }
   return {
     skipped: false,
-    action: { ...action, target: { ref: resolution.ref } },
+    action: { ...action, ref: resolution.ref },
     resolvedRef: resolution.ref,
   };
 }

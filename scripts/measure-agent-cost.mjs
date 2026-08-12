@@ -215,8 +215,8 @@ export function readFixtures(root = DEFAULT_FIXTURE_ROOT) {
 }
 
 function serializeObservationProjection(projection, format) {
-  const metadata = { outcome: "completed", retrySafe: false, sessionEpoch: 1, sequence: 1 };
-  const provenance = { trust: "untrusted_page_content", origin: projection.origin, sessionEpoch: 1, capturedAt: projection.capturedAt };
+  const metadata = { outcome: "completed", retrySafe: false, sequence: 1 };
+  const provenance = { trust: "untrusted_page_content", origin: projection.origin, capturedAt: projection.capturedAt };
   if (format === "compact") {
     return serializeForBudget({
       ok: true,
@@ -275,7 +275,7 @@ export function measureActionCase(entry, tokenCounter) {
       maxTokens: entry.maxTokens,
     };
   }
-  const measured = estimateTokensFromString(serializeForBudget({ ...projection, sessionEpoch: 1, sequence: 1 }), tokenCounter);
+  const measured = estimateTokensFromString(serializeForBudget({ ...projection, sequence: 1 }), tokenCounter);
   const exact = measured.method === "token_counter";
   const pass = exact ? measured.count <= entry.maxTokens : undefined;
   return {
@@ -396,7 +396,7 @@ export function measureCase(entry, tokenCounter) {
 }
 
 function normalizeCounterMetadata(tokenCounter) {
-  if (typeof tokenCounter !== "function") return { origin: "fallback", algorithm: "utf8-byte-upper-bound", version: "heuristic-local", name: "fallback" };
+  if (typeof tokenCounter !== "function") throw new Error("token_counter_required");
   return { origin: "injected", name: tokenCounter.name || "custom", ...extractCounterMeta(tokenCounter) };
 }
 
@@ -412,27 +412,6 @@ export function buildReport(entries, tokenCounter) {
     deferred: deferred.length,
     results,
   };
-}
-
-export async function loadInjectedTokenCounterFromFile(counterPath) {
-  const absolute = path.isAbsolute(counterPath) ? counterPath : path.resolve(PROJECT_ROOT, counterPath);
-  const imported = await import(pathToFileURL(absolute).href);
-  const candidate = imported.default ?? imported.counter;
-  if (typeof candidate !== "function") return undefined;
-  if (typeof imported.algorithm === "string") candidate.algorithm = imported.algorithm;
-  if (typeof imported.version === "string") candidate.version = imported.version;
-  if (typeof imported.provenance === "string") candidate.provenance = imported.provenance;
-  return candidate;
-}
-
-export async function loadInjectedTokenCounter() {
-  const counterPath = process.env.AGENT_OUTPUT_TOKEN_COUNTER;
-  if (!counterPath) return undefined;
-  try {
-    return await loadInjectedTokenCounterFromFile(counterPath);
-  } catch {
-    return undefined;
-  }
 }
 
 export function createPinnedTokenCounter() {
@@ -454,8 +433,7 @@ export async function runMeasurement(opts = {}) {
 
 export async function runMeasurementCli() {
   const fixtureRoot = safeString(process.env.AGENT_OUTPUT_FIXTURE_ROOT, DEFAULT_FIXTURE_ROOT);
-  const tokenCounter = await loadInjectedTokenCounter() ?? createPinnedTokenCounter();
-  return buildReport(readFixtures(fixtureRoot), tokenCounter);
+  return buildReport(readFixtures(fixtureRoot), createPinnedTokenCounter());
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

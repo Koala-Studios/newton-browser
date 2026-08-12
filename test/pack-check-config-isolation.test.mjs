@@ -14,7 +14,7 @@ import {
 test("pack-check utility environment cannot mutate user config and is cleaned exactly", () => {
   const userRoot = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-user-sentinel-"));
   const userConfig = path.join(userRoot, "NewtonBrowser");
-  const sentinel = path.join(userConfig, "pairing.json");
+  const sentinel = path.join(userConfig, "config.json");
   const sentinelContents = '{"hostile":"user-sentinel"}\n';
   fs.mkdirSync(userConfig, { recursive: true });
   fs.writeFileSync(sentinel, sentinelContents);
@@ -36,11 +36,11 @@ test("pack-check utility environment cannot mutate user config and is cleaned ex
     const child = spawnSync(process.execPath, [
       "--input-type=module",
       "--eval",
-      "import fs from 'node:fs'; import path from 'node:path'; fs.mkdirSync(process.env.NEWTON_BROWSER_CONFIG_DIR, {recursive:true}); fs.writeFileSync(path.join(process.env.NEWTON_BROWSER_CONFIG_DIR, 'pairing.json'), 'isolated');",
+      "import fs from 'node:fs'; import path from 'node:path'; fs.mkdirSync(process.env.NEWTON_BROWSER_CONFIG_DIR, {recursive:true}); fs.writeFileSync(path.join(process.env.NEWTON_BROWSER_CONFIG_DIR, 'config.json'), 'isolated');",
     ], { env, encoding: "utf8", windowsHide: true });
     assert.equal(child.status, 0, child.stderr);
     assert.equal(fs.readFileSync(sentinel, "utf8"), sentinelContents);
-    assert.equal(fs.readFileSync(path.join(env.NEWTON_BROWSER_CONFIG_DIR, "pairing.json"), "utf8"), "isolated");
+    assert.equal(fs.readFileSync(path.join(env.NEWTON_BROWSER_CONFIG_DIR, "config.json"), "utf8"), "isolated");
 
     cleanupPackCheckTempRoot(packRoot);
     assert.equal(fs.existsSync(packRoot), false);

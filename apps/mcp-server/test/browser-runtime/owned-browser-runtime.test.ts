@@ -10,6 +10,7 @@ import test, { type TestContext } from "node:test";
 
 import type { CdpEventListener, CdpParams, PrivateCdpTransport } from "../../src/browser-runtime/cdp-pipe.ts";
 import { OwnedBrowserRuntimeError, launchOwnedBrowserRuntime } from "../../src/browser-runtime/owned-browser-runtime.ts";
+import { startPolicyProxy } from "../../src/browser-runtime/policy-proxy.ts";
 import {
   acquireNewtonIdentityLease,
   createNewtonIdentity,
@@ -133,7 +134,6 @@ test("composes proxy, exact lease, and Chromium readiness without exposing paths
   assert.equal(Object.isFrozen(bootstrap), true);
   assert.equal(bootstrap.transport, fixture.transport);
   assert.equal(bootstrap.rootTargetId, "owned-root-target");
-  assert.equal(Number.isSafeInteger(bootstrap.syntheticTabId) && bootstrap.syntheticTabId >= 0, true);
   const port = proxyPort(fixture.spawnCalls[0]!.args);
   await runtime.close();
   assert.throws(() => runtime.claimDriverBootstrap(["https://example.com"]), /Owned browser runtime operation failed/u);
@@ -218,6 +218,26 @@ test("rolls back proxy and lease for every confirmed startup failure stage", asy
   assert.equal(fourth.phase, "browser_start");
   assert.equal(readinessFailure.child.exitCode, 0);
   assert.equal(inspectNewtonIdentityLease(readinessFailure.store, readinessFailure.identity.id), "available");
+});
+
+test("confirmed startup rollback closes the policy boundary before releasing its identity lease", async (t) => {
+  const fixture = runtimeFixture(t);
+  let leaseStateWhenProxyClosed = "not_observed";
+  const error = await launchOwnedBrowserRuntime({
+    ...options(fixture),
+    spawn: () => { throw new Error("private spawn failure"); },
+    startProxy: async (proxyOptions) => {
+      const proxy = await startPolicyProxy(proxyOptions);
+      void proxy.closed.then(() => {
+        leaseStateWhenProxyClosed = inspectNewtonIdentityLease(fixture.store, fixture.identity.id);
+      });
+      return proxy;
+    },
+  }).catch((value: unknown) => value);
+  assert.ok(error instanceof OwnedBrowserRuntimeError);
+  assert.equal(error.phase, "browser_start");
+  assert.equal(leaseStateWhenProxyClosed, "active_or_stale");
+  assert.equal(inspectNewtonIdentityLease(fixture.store, fixture.identity.id), "available");
 });
 
 test("rejects family mismatch and forged ProfileStore capabilities with zero process residue", async (t) => {

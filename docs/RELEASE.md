@@ -10,13 +10,21 @@ browser-store release.
    Edge, then Linux Chrome for Testing in the pinned container.
 4. Record unauthenticated read-only public-site evidence and trusted sensitive-zone
    screenshot evidence. Profile import and persistent-identity login are optional operator
-   workflows, not release gates; never claim that opaque import preserves authentication.
+   workflows, not release gates; an imported-identity QA run records identity use but never
+   claims that opaque import preserved authentication.
 5. Require the deterministic five-file USTAR/gzip package receipt and compare its exact
    SHA-256 across all three passes; functional `npm install` success alone is insufficient.
-6. Run `pnpm release:check` three consecutive times on the unchanged candidate. Any source,
-   test, config, lockfile, doc, or skill change resets the count.
-7. Build the npm tarball, verify its allowlist/hash/entry count and packed install from a
-   spaced path, then create the approved release and publish only with separate authority.
+6. Run `pnpm release:check` three consecutive times on the unchanged candidate on both
+   Windows (Chrome and Edge) and Linux (Chrome), and run the pinned Linux Chrome for
+   Testing container. Any source, test, config, lockfile, doc, or skill change resets the
+   count. The command inventories tracked and non-ignored untracked candidate files,
+   records their SHA-256 content digest, and fails if that digest changes during the gate.
+7. Require matching Windows/Linux tarball hashes and bounded platform receipts before the
+   separately approved publish job can create the release or invoke npm publication. The
+   release workflow's `scripts/release-three-pass.mjs` additionally requires one clean
+   tagged tree, one candidate digest across all three platform passes, and matching
+   Windows/Linux commit and Git-tree identities; Linux live receipts live outside the
+   source inventory.
 
 Preparatory receipts belong under `test/evidence/`, contain bounded codes/counts/hashes
 rather than page or profile content, and identify the tested content. The final

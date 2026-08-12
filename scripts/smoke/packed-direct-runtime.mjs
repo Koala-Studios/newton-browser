@@ -7,7 +7,11 @@ import path from "node:path";
 
 import { discoverBrowserExecutable } from "../../apps/mcp-server/src/browser-runtime/browser-discovery.ts";
 
-const TAR_NAME = "newton-browser-0.4.5.tgz";
+const PACKAGE_VERSION = JSON.parse(fs.readFileSync("apps/mcp-server/package.json", "utf8")).version;
+if (typeof PACKAGE_VERSION !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(PACKAGE_VERSION)) {
+  throw new Error("packed_package_version_invalid");
+}
+const TAR_NAME = `newton-browser-${PACKAGE_VERSION}.tgz`;
 const INSTALL_DEADLINE_MS = 120_000;
 const COMMAND_DEADLINE_MS = 30_000;
 const EXIT_DEADLINE_MS = 30_000;
@@ -16,7 +20,7 @@ const MAX_CAPTURE_BYTES = 64 * 1024;
 const TEMP_PREFIX = "newton packed direct ";
 const OWNER_MARKER = ".newton-packed-direct-owner";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const tempParent = fs.realpathSync.native(os.tmpdir());
 const tempOwnership = createOwnedTempRoot(tempParent);
 const runRoot = tempOwnership.root;
@@ -70,18 +74,16 @@ try {
     NEWTON_BROWSER_BROWSER: family,
     NEWTON_BROWSER_BROWSER_EXECUTABLE: browserExecutable,
   });
-  const initialized = await client.request("initialize", {
-    protocolVersion: "2025-11-25",
-    capabilities: {},
-    clientInfo: { name: "packed-direct-runtime", version: "0.4.5" },
-  });
-  requireState(initialized?.result?.protocolVersion === "2025-11-25", "packed_initialize_failed");
+  const discovered = await client.request("server/discover", {});
+  requireState(Array.isArray(discovered?.result?.supportedVersions)
+    && discovered.result.supportedVersions.length === 1
+    && discovered.result.supportedVersions[0] === "2026-07-28", "packed_discovery_failed");
 
   const status = await client.tool("browser.status", {});
   requireSuccess(status, "packed_direct_status_failed");
   requireState(status.value?.mode === "direct"
     && status.value?.configured === true
-    && status.value?.ready === false
+    && status.value?.ready === true
     && status.value?.runtimeState === "idle", "packed_direct_idle_status_invalid");
 
   const started = await client.tool("browser.session.start", { origin });
@@ -115,8 +117,11 @@ try {
     sessionId,
     action: { kind: "click", ref: blockedButton.ref },
   });
-  const containmentOutcome = contained.envelope?.isError === true ? contained.value?.outcome : "completed";
-  requireState(containmentOutcome === "completed" || containmentOutcome === "prevented", "packed_direct_denied_outcome_invalid");
+  const containmentOutcome = contained.value?.outcome;
+  requireState(contained.envelope?.isError !== true
+    && containmentOutcome === "completed"
+    && contained.value?.retrySafe === false
+    && contained.value?.status === "verified", "packed_direct_denied_outcome_invalid");
   requireState(deniedRequests === 0, "packed_direct_denied_request_leaked");
 
   const stopped = await client.tool("browser.session.stop", { sessionId });
@@ -248,7 +253,19 @@ function createMcpClient(entry, environment) {
     requireState(!exited && child.stdin.writable, "packed_direct_cli_unavailable");
     const id = ++nextId;
     const response = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    child.stdin.write(`${JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {},
+          "io.modelcontextprotocol/clientInfo": { name: "packed-direct-runtime", version: PACKAGE_VERSION },
+        },
+      },
+    })}\n`);
     return deadline(response, COMMAND_DEADLINE_MS, "packed_direct_mcp_timeout");
   }
 
@@ -287,7 +304,7 @@ function createMcpClient(entry, environment) {
 }
 
 async function runInstall(environment) {
-  const child = spawn(process.execPath, [npmCli(), "install", "--ignore-scripts", tarball], {
+  const child = spawn(process.execPath, [npmCli(), "install", "--ignore-scripts", "--no-audit", "--no-fund", "--offline", tarball], {
     cwd: installRoot,
     env: cleanPackageManagerEnv(environment),
     windowsHide: true,

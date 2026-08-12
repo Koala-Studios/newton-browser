@@ -15,7 +15,6 @@ const SAFE_OUTCOMES = new Set(["completed", "outcome_unknown", "not_started"]);
 const SAFE_STATUSES = new Set([
   "verified",
   "dispatched_unverified",
-  "needs_approval",
   "blocked",
   "not_found",
   "ambiguous",
@@ -36,22 +35,11 @@ const SAFE_SESSION_START_FAILURE_CODES = new Set([
   "root_debugger_attach_failed",
   "root_protocol_setup_failed",
   "browser_control_attach_failed",
-  "related_autoattach_failed",
+  "browser_page_autoattach_failed",
   "browser_control_fence_failed",
   "root_autoattach_failed",
   "calibration_failed",
-  "overlay_readiness_failed",
-  "tab_provisioning_failed",
-  "tab_acquisition_failed",
-  "tab_claim_failed",
-  "tab_preflight_failed",
-  "owned_tab_create_failed",
-  "owned_tab_initial_validation_failed",
-  "owned_tab_post_claim_validation_failed",
-  "owned_tab_configure_failed",
   "initial_navigation_failed",
-  "session_publication_failed",
-  "readiness_publication_failed",
 ]);
 
 export function classifySessionStartFailure(value) {
@@ -72,10 +60,8 @@ const SAFE_INITIAL_NAVIGATION_FAILURE_CODES = new Set([
 export function classifyInitialNavigationFailure(value) {
   const candidates = [
     ...fixedFailureCandidates(value),
-    value?.reason, value?.status, value?.actionStatus,
-    value?.error?.reason, value?.error?.status, value?.error?.actionStatus,
-    value?.result?.reason, value?.result?.status, value?.result?.actionStatus,
-    value?.result?.error?.reason, value?.result?.error?.status, value?.result?.error?.actionStatus,
+    value?.reason, value?.status,
+    value?.error?.reason, value?.error?.status,
   ];
   const exact = candidates.find((candidate) => SAFE_INITIAL_NAVIGATION_FAILURE_CODES.has(candidate));
   if (exact) return exact;
@@ -130,18 +116,12 @@ function fixedFailureCandidates(value) {
   return [
     value?.errorCode, value?.code, value?.message,
     value?.error?.errorCode, value?.error?.code, value?.error?.message,
-    value?.result?.errorCode, value?.result?.code, value?.result?.message,
-    value?.result?.error?.errorCode, value?.result?.error?.code, value?.result?.error?.message,
   ];
 }
 
 export function classifyContainmentAttempt(result) {
-  const status = result?.errorCode
-    ?? result?.result?.errorCode
-    ?? result?.result?.status
-    ?? result?.status
-    ?? result?.result?.actionStatus;
-  const outcome = result?.outcome ?? result?.result?.outcome;
+  const status = result?.errorCode ?? result?.status;
+  const outcome = result?.outcome;
   if (outcome === "prevented" && PREVENTED_STATUSES.has(status)) return "prevented";
   if (SAFE_OUTCOMES.has(outcome)) return outcome;
   if (SAFE_STATUSES.has(status)) return status;
@@ -149,11 +129,10 @@ export function classifyContainmentAttempt(result) {
 }
 
 export function classifyCompletedContainmentAttempt(result) {
-  const envelope = typeof result?.ok === "boolean" ? result : result?.result;
-  const status = envelope?.status ?? envelope?.actionStatus;
-  return envelope?.ok === true
-    && envelope?.outcome === "completed"
-    && envelope?.retrySafe === false
+  const status = result?.status;
+  return result?.ok === true
+    && result?.outcome === "completed"
+    && result?.retrySafe === false
     && ["verified", "dispatched_unverified"].includes(status)
     ? "completed"
     : "other";

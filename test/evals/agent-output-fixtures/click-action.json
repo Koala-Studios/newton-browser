@@ -4,7 +4,8 @@
   "maxTokens": 125,
   "input": {
     "outcome": "completed",
-    "status": "completed",
+    "status": "verified",
+    "decision": { "class": "agentic", "commitBoundary": "none" },
     "reason": "clicked"
   }
 }

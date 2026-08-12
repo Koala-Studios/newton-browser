@@ -7,12 +7,12 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveLiveBrowserTarget } from "./live-config.mjs";
+import { resolveLiveBrowserFamily } from "./live-config.mjs";
 
 const fixturePort = Number(process.env.NEWTON_BROWSER_FRAME_FIXTURE_PORT ?? 18331);
-const browserTarget = resolveLiveBrowserTarget();
+const browserFamily = resolveLiveBrowserFamily();
 let fixture;
-let bridge;
+let host;
 let directRoot;
 let expectedCrossSiteOrigin = "";
 let expectedThirdOrigin = "";
@@ -23,21 +23,17 @@ try {
   expectedCrossSiteOrigin = crossSiteOrigin;
   expectedThirdOrigin = fixture.thirdOrigin;
   directRoot = createDirectRoot();
-  const executable = discoverBrowserExecutable({ family: browserTarget, env: process.env });
+  const executable = discoverBrowserExecutable({ family: browserFamily, env: process.env });
   if (!executable) throw new Error("direct_browser_unavailable");
-  bridge = createConfiguredDirectBrowserHost({
+  host = createConfiguredDirectBrowserHost({
     env: process.env,
-    browserFamily: browserTarget,
+    browserFamily,
     executablePath: executable.path,
     profileStoreRoot: path.join(directRoot.root, "identities"),
-    chromiumAdditionalArgs: [
-      `--isolate-origins=${crossSiteOrigin},${fixture.thirdOrigin}`,
-    ],
   });
-  await bridge.listen();
-  log("frame_churn_servers_ready", { browserTarget });
+  log("frame_churn_servers_ready", { browserFamily });
 
-  const restrictedSession = await startSession([fixture.origin], "frame-excluded-provenance", crossSiteOrigin, fixture.thirdOrigin);
+  const restrictedSession = await startSession([], "frame-excluded-provenance", crossSiteOrigin, fixture.thirdOrigin);
   const restricted = await observeUntil(restrictedSession, (observation) => hasName(observation, "Same-origin frame button"), "restricted same-origin frame observation");
   log("restricted_same_origin_ready");
   log(`restricted_excluded_${excludedProvenanceCategory(restricted, crossSiteOrigin)}`);
@@ -47,35 +43,21 @@ try {
   log("excluded_frame_provenance_ok");
   await stopSession(restrictedSession);
 
-  const sameProcessSession = await startSession([fixture.origin], "frame-same-process", fixture.origin, fixture.origin);
+  const sameProcessSession = await startSession([], "frame-same-process", fixture.origin, fixture.origin);
   const sameProcessObserved = await observeUntil(sameProcessSession, (observation) => hasName(observation, "Nested-OOPIF frame button"), "same-process nested frame observation");
-  const sameProcessRouting = await observeFrameRouting(sameProcessSession);
-  assertFrameRouting(sameProcessRouting, (routing) => routing.attachedIframeTargetCount === 0 && routing.inProcessFrameCount >= 2, "same-process frame topology was not observed");
-  log("same_process_topology_ok");
-  const sameProcessButton = nodeByNameAndOrigin(sameProcessObserved, "Nested-OOPIF frame button", fixture.origin);
-  const sameProcessClick = actionResultOf(await mcp("browser.act", { sessionId: sameProcessSession, action: { kind: "click", target: { ref: sameProcessButton.ref } } }));
+  const sameProcessButton = (sameProcessObserved.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Nested-OOPIF frame button");
+  assert(typeof sameProcessButton?.ref === "string", "missing same-process nested frame button", sameProcessObserved);
+  const sameProcessClick = await mcp("browser.act", { sessionId: sameProcessSession, action: { kind: "click", ref: sameProcessButton.ref } });
   logActionFailure("same_process_nested_click", sameProcessClick);
   assertActionDispatched(sameProcessClick, "same-process nested frame click");
   await observeUntil(sameProcessSession, (observation) => hasName(observation, "Nested-OOPIF frame button clicked"), "same-process nested frame click effect");
   log("same_process_nested_route_ok");
   await stopSession(sameProcessSession);
 
-  const allowedSession = await startSession([fixture.origin, crossSiteOrigin, fixture.thirdOrigin], "frame-allowed-provenance", crossSiteOrigin, fixture.thirdOrigin);
+  const allowedSession = await startSession([crossSiteOrigin, fixture.thirdOrigin], "frame-allowed-provenance", crossSiteOrigin, fixture.thirdOrigin);
   let observed = await observeUntil(allowedSession, (observation) => hasName(observation, "Granted-OOPIF-1 frame button")
     && hasName(observation, "Nested-OOPIF frame button"), "allowed nested OOPIF observation");
   log("oopif_nodes_ready");
-  const oopifRouting = await observeFrameRouting(allowedSession);
-  log("oopif_topology_facts", {
-    attachedIframeTargets: boundedRoutingCount(oopifRouting?.attachedIframeTargetCount),
-    inProcessFrames: boundedRoutingCount(oopifRouting?.inProcessFrameCount),
-    maxAttachedDepth: boundedRoutingCount(oopifRouting?.maxAttachedIframeTargetDepth),
-  });
-  const attachedOopifTopology = oopifRouting?.attachedIframeTargetCount >= 2
-    && oopifRouting?.maxAttachedIframeTargetDepth >= 2;
-  const inProcessCrossOriginTopology = oopifRouting?.attachedIframeTargetCount === 0
-    && oopifRouting?.inProcessFrameCount >= 4;
-  assert(attachedOopifTopology || inProcessCrossOriginTopology, "cross-origin nested frame topology was not observed");
-  log(attachedOopifTopology ? "oopif_topology_ok" : "cross_origin_in_process_topology_ok");
   const crossButton = nodeByNameAndOrigin(observed, "Granted-OOPIF-1 frame button", crossSiteOrigin);
   log("oopif_cross_node_resolved");
   const nestedButton = nodeByNameAndOrigin(observed, "Nested-OOPIF frame button", fixture.thirdOrigin);
@@ -83,16 +65,16 @@ try {
   assert(/^d\d+:f\d+:e\d+$/.test(crossButton.ref), "OOPIF ref was not frame-qualified", crossButton);
   assert(/^d\d+:f\d+:e\d+$/.test(nestedButton.ref), "nested OOPIF ref was not frame-qualified", nestedButton);
   log("oopif_refs_qualified");
-  const nestedClickEnvelope = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", target: { ref: nestedButton.ref } } });
+  const nestedClickEnvelope = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: nestedButton.ref } });
   log("oopif_action_returned");
-  const nestedClick = actionResultOf(nestedClickEnvelope);
+  const nestedClick = nestedClickEnvelope;
   logActionFailure("cross_site_nested_click", nestedClick);
   assertActionDispatched(nestedClick, "nested OOPIF click");
   log(`cross_site_nested_action_${statusOf(nestedClick) === "verified" ? "verified" : "dispatched_unverified"}`);
   try {
     observed = await observeUntil(allowedSession, (observation) => hasName(observation, "Nested-OOPIF frame button clicked"), "cross-site nested frame click effect");
   } catch (error) {
-    const clickDiagnostic = resultOf(await mcp("browser.observe", { sessionId: allowedSession, format: "json", maxNodes: 320 }));
+    const clickDiagnostic = resultOf(await mcp("browser.observe", { sessionId: allowedSession, format: "json", maxNodes: 240 }));
     log(classifyInputBreadcrumb(clickDiagnostic, "cross_site_click"));
     throw error;
   }
@@ -100,7 +82,7 @@ try {
 
   const staleTarget = nodeByNameAndOrigin(observed, "Frame stale target", crossSiteOrigin);
   const rerender = nodeByNameAndOrigin(observed, "Rerender frame target", crossSiteOrigin);
-  const rerenderClick = resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", target: { ref: rerender.ref } } }));
+  const rerenderClick = resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: rerender.ref } }));
   const rerenderClickStatus = statusOf(rerenderClick);
   if (!["verified", "dispatched_unverified"].includes(rerenderClickStatus)) {
     const safeStatus = ["target_moved", "stale_target", "frame_detached", "target_gone", "blocked", "not_found"]
@@ -114,17 +96,17 @@ try {
   }));
   assert(statusOf(rerenderWait) === "verified", "child-frame rerender was not observed", { status: statusOf(rerenderWait) ?? "missing" });
   log("frame_rerender_observation_ok");
-  const staleResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", target: { ref: staleTarget.ref } } });
+  const staleResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: staleTarget.ref } });
   assertStale(staleResult, "rerendered child-frame ref");
   log("frame_rerender_stale_ref_ok", { ref: staleTarget.ref, status: statusOf(staleResult) });
 
-  observed = resultOf(await mcp("browser.observe", { sessionId: allowedSession, format: "json", maxNodes: 320 }));
+  observed = resultOf(await mcp("browser.observe", { sessionId: allowedSession, format: "json", maxNodes: 240 }));
   const beforeReplace = nodeByNameAndOrigin(observed, "Granted-OOPIF-1 frame button", crossSiteOrigin);
   const nestedBeforeReplace = nodeByNameAndOrigin(observed, "Nested-OOPIF frame button clicked", fixture.thirdOrigin);
-  await actThenWait(allowedSession, { kind: "click", name: "Replace OOPIF target", exact: true }, { text: "oopif-replaced:2" }, "OOPIF target replacement");
-  const replacedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", target: { ref: beforeReplace.ref } } });
+  await actThenWait(allowedSession, { kind: "click", role: "button", name: "Replace OOPIF target", exact: true }, { text: "oopif-replaced:2" }, "OOPIF target replacement");
+  const replacedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: beforeReplace.ref } });
   assertStale(replacedResult, "replaced OOPIF ref");
-  const nestedReplacedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", target: { ref: nestedBeforeReplace.ref } } });
+  const nestedReplacedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: nestedBeforeReplace.ref } });
   assertStale(nestedReplacedResult, "replaced nested OOPIF ref");
   const afterReplaceObservation = await observeUntil(allowedSession, (observation) => hasName(observation, "Granted-OOPIF-2 frame button") && hasName(observation, "Nested-OOPIF frame button"), "replacement nested OOPIF observation");
   const afterReplace = nodeByNameAndOrigin(afterReplaceObservation, "Granted-OOPIF-2 frame button", crossSiteOrigin);
@@ -133,8 +115,8 @@ try {
   assert(nestedAfterReplace.ref !== nestedBeforeReplace.ref, "replacement reused a retired nested OOPIF ref", { nestedBeforeReplace, nestedAfterReplace });
   log("oopif_target_replacement_ok", { before: beforeReplace.ref, after: afterReplace.ref, nestedBefore: nestedBeforeReplace.ref, nestedAfter: nestedAfterReplace.ref, staleStatus: statusOf(replacedResult) });
 
-  await actThenWait(allowedSession, { kind: "click", name: "Detach OOPIF target", exact: true }, { text: "oopif-detached:2" }, "OOPIF target detach");
-  const detachedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", target: { ref: afterReplace.ref } } });
+  await actThenWait(allowedSession, { kind: "click", role: "button", name: "Detach OOPIF target", exact: true }, { text: "oopif-detached:2" }, "OOPIF target detach");
+  const detachedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: afterReplace.ref } });
   assertStale(detachedResult, "detached OOPIF ref");
   log("oopif_detach_ok", { ref: afterReplace.ref, status: statusOf(detachedResult) });
 
@@ -144,10 +126,10 @@ try {
   log("frame_target_churn_live_fail", boundedFailure(error));
   process.exitCode = 1;
 } finally {
-  let directCleanupConfirmed = bridge === undefined;
+  let directCleanupConfirmed = host === undefined;
   try {
-    await bridge?.stopAll();
-    await bridge?.close();
+    await host?.stopAll();
+    await host?.close();
     directCleanupConfirmed = true;
   } catch {}
   try { await fixture?.close(); } catch {}
@@ -177,15 +159,13 @@ function removeDirectRoot(owned) {
   fs.rmSync(resolved, { recursive: true, force: true });
 }
 
-async function startSession(allowedOrigins, instanceLabel, oopifOrigin, nestedOrigin) {
+async function startSession(allowedOrigins, scenario, oopifOrigin, nestedOrigin) {
   const started = await mcp("browser.session.start", {
     origin: fixture.origin,
     allowedOrigins,
-    goal: "frame target churn live proof",
-    instanceLabel,
   });
   assert(started.sessionId, "frame session did not start", started);
-  const restrictedPhase = instanceLabel === "frame-excluded-provenance";
+  const restrictedPhase = scenario === "frame-excluded-provenance";
   if (restrictedPhase) log("restricted_session_started");
   const navigation = await mcp("browser.act", {
     sessionId: started.sessionId,
@@ -216,12 +196,11 @@ async function observeUntil(sessionId, predicate, label) {
   let lastObservation = null;
   try {
     return await waitFor(async () => {
-      const observation = resultOf(await mcp("browser.observe", { sessionId, format: "json", maxNodes: 320 }));
+      const observation = resultOf(await mcp("browser.observe", { sessionId, format: "json", maxNodes: 240 }));
       lastObservation = observation;
       return predicate(observation) ? observation : null;
     }, label, 20_000);
   } catch (error) {
-    const routing = await observeFrameRouting(sessionId).catch(() => null);
     const requests = fixture?.containment?.snapshot?.().entries ?? [];
     log("frame_observe_timeout_facts", {
       firstOopif: hasName(lastObservation, "Granted-OOPIF-1 frame button"),
@@ -245,9 +224,6 @@ async function observeUntil(sessionId, predicate, label) {
       fixtureCrossExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
         ? lastObservation.excludedFrames.filter((frame) => frame?.frameOrigin === fixture?.crossOrigin).length
         : 0),
-      attachedIframeTargets: boundedRoutingCount(routing?.attachedIframeTargetCount),
-      inProcessFrames: boundedRoutingCount(routing?.inProcessFrameCount),
-      maxAttachedDepth: boundedRoutingCount(routing?.maxAttachedIframeTargetDepth),
       destinationFrameRequests: Math.min(64, requests.filter((entry) => entry?.originRole === "destination" && entry?.pathname === "/frame.html").length),
       thirdFrameRequests: Math.min(64, requests.filter((entry) => entry?.originRole === "third" && entry?.pathname === "/frame.html").length),
     });
@@ -256,10 +232,17 @@ async function observeUntil(sessionId, predicate, label) {
 }
 
 async function mcp(name, args) {
-  const response = await handleMcpMessage(bridge, { jsonrpc: "2.0", id: Math.floor(Math.random() * 1e9), method: "tools/call", params: { name, arguments: args } });
+  const response = await handleMcpMessage(host, { jsonrpc: "2.0", id: Math.floor(Math.random() * 1e9), method: "tools/call", params: { name, arguments: args, _meta: modernMcpMeta() } });
   const text = response?.result?.content?.find((item) => item.type === "text")?.text;
-  assert(typeof text === "string", `missing MCP result for ${name}`, response);
+  if (typeof text !== "string") {
+    const code = response?.error?.data?.errorCode;
+    throw new Error(`mcp_${typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/u.test(code) ? code : "response_invalid"}`);
+  }
   return JSON.parse(text);
+}
+
+function modernMcpMeta() {
+  return { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
 }
 
 async function actThenWait(sessionId, action, waitFor, label) {
@@ -286,7 +269,7 @@ function nodeByNameAndOrigin(observation, name, frameOrigin) {
 }
 
 function hasName(observation, name) {
-  return (observation.nodes ?? []).some((node) => String(node.name ?? "").trim() === name);
+  return (observation?.nodes ?? []).some((node) => String(node.name ?? "").trim() === name);
 }
 
 function excludedProvenanceCategory(observation, expectedOrigin) {
@@ -298,30 +281,20 @@ function excludedProvenanceCategory(observation, expectedOrigin) {
 }
 
 function closedOutcome(value) {
-  const outcome = value?.outcome ?? value?.result?.outcome;
+  const outcome = value?.outcome;
   return ["completed", "prevented", "not_started", "outcome_unknown"].includes(outcome) ? outcome : "other";
 }
 
 function closedActionStatus(value) {
-  const status = statusOf(value?.result ?? value);
-  return ["verified", "dispatched_unverified", "needs_approval", "blocked", "not_found", "ambiguous", "stale_target", "timed_out", "failed"].includes(status) ? status : "other";
+  const status = statusOf(value);
+  return ["verified", "dispatched_unverified", "blocked", "not_found", "ambiguous", "stale_target", "timed_out", "failed"].includes(status) ? status : "other";
 }
 
 function closedErrorCode(value) {
-  const code = value?.errorCode ?? value?.result?.errorCode ?? value?.result?.reason;
+  const code = value?.errorCode ?? value?.reason;
   return ["ungranted_navigation", "ungranted_mutation", "ungranted_connection", "unsupported_ungranted_request", "ungranted_target"].includes(code)
     ? code
     : "other";
-}
-
-function boundedRoutingCount(value) {
-  return Number.isSafeInteger(value) && value >= 0 && value <= 64 ? value : null;
-}
-
-async function observeFrameRouting(sessionId) {
-  const event = await bridge.dispatch(sessionId, { kind: "observe", maxNodes: 1, includeFrameRouting: true });
-  assert(event?.ok === true, "internal frame routing observation failed");
-  return event.result?.frameRouting;
 }
 
 function classifyInputBreadcrumb(observation, prefix) {
@@ -331,10 +304,6 @@ function classifyInputBreadcrumb(observation, prefix) {
   if (hasName(observation, "Granted-OOPIF-1 click other")) return `${prefix}_hit_parent_document`;
   if (hasName(observation, "main click oopif-churn-frame")) return `${prefix}_hit_root_owner`;
   return `${prefix}_no_frame_event`;
-}
-
-function assertFrameRouting(routing, predicate, message) {
-  assert(routing && predicate(routing), message);
 }
 
 function assertStale(result, label) {
@@ -365,16 +334,12 @@ function logActionFailure(prefix, result) {
 }
 
 function statusOf(result) {
-  return result?.errorCode ?? result?.result?.errorCode ?? result?.result?.status ?? result?.status ?? result?.result?.actionStatus;
+  return result?.errorCode ?? result?.status;
 }
 
 function resultOf(value) {
   assert(value?.ok !== false, "MCP tool failed", value);
   return value.result ?? value;
-}
-
-function actionResultOf(value) {
-  return value?.ok === false ? value : value?.result ?? value;
 }
 
 function assert(condition, message, detail = {}) {

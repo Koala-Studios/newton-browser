@@ -3,7 +3,7 @@ import http from "node:http";
 import { createConfiguredDirectBrowserHost } from "../../apps/mcp-server/src/browser-runtime/configured-direct-host.ts";
 import { launchOwnedBrowserRuntime } from "../../apps/mcp-server/src/browser-runtime/owned-browser-runtime.ts";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const storeRoot = process.env.NEWTON_BROWSER_PROFILE_STORE_DIR;
 if (!storeRoot) throw new Error("direct_hard_crash_store_required");
 
@@ -34,8 +34,6 @@ const host = createConfiguredDirectBrowserHost({
 const created = host.createSession({
   origin,
   allowedOrigins: [origin],
-  goal: "hard crash guardian acceptance",
-  instanceLabel: "hard-crash-worker",
 });
 await host.waitForSessionReady(created.sessionId, 30_000);
 if (!Number.isSafeInteger(browserPid) || browserPid <= 0 || !ephemeralIdentity) throw new Error("direct_hard_crash_pid_missing");

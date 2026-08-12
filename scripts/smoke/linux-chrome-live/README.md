@@ -32,7 +32,8 @@ persisted diagnostics contain only bounded categories, byte counts, hashes, and 
 step identifiers. Raw browser/page output is deleted with the identity-checked run root.
 
 The runner builds and packs Newton, starts Xvfb, then executes the agent-cost gate,
-the complete direct live suite, and the public real-site suite. Each test owns and
+the complete direct live suite, the public real-site suite, and an exact-tarball
+install/run of the packed Chrome runtime. Each test owns and
 cleans its browser process, private CDP pipe, policy proxy, identity, and lease.
 Receipts record the source digest, browser/runtime versions, selected package versions,
 image identifier, and exact gate statuses. This narrows, rather than guarantees,

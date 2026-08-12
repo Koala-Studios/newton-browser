@@ -1,6 +1,5 @@
 import { createDirectDebuggerPort } from "./direct-debugger-port.js";
 import type { BrowserLevelTransport } from "./direct-debugger-port.js";
-import { createDirectPageEffectsPort } from "./direct-page-effects-port.js";
 import { createNewtonBrowserDriver } from "./driver.js";
 import { SessionCommandPump } from "./session-command-pump.js";
 import type { SessionCommandPumpOptions } from "./session-command-pump.js";
@@ -8,25 +7,24 @@ import type {
   BrowserDriverOptions,
   DriverAction,
   DriverContext,
-  DriverObservation,
   DriverRecord,
-  ObserveOptions,
 } from "./types.js";
+
+export type { DriverAction } from "./types.js";
 
 type DirectSessionState = "active" | "stopping" | "detach_uncertain" | "stopped";
 
 export type DirectDriverBootstrap = Readonly<{
   transport: BrowserLevelTransport;
   rootTargetId: string;
-  syntheticTabId: number;
 }>;
 
 export type DirectSessionDriver = {
-  attach(tabId: number): Promise<void>;
+  attach(): Promise<void>;
   detach(): Promise<void>;
   navigateInitialGranted(url: string): Promise<unknown>;
-  observe(options?: ObserveOptions): Promise<DriverObservation>;
   preflightAction?(action: DriverAction): Promise<void> | void;
+  resolveEvidence?(action: DriverAction): Promise<DriverRecord>;
   executeAction(action: DriverAction, context?: DriverContext): Promise<DriverRecord>;
 };
 
@@ -37,7 +35,7 @@ export type StartDirectDriverSessionOptions = Readonly<{
   primaryOrigin: string;
   allowedOrigins: readonly string[];
   initialUrl: string;
-  initialObservation?: true | ObserveOptions;
+  signal?: AbortSignal;
   pump?: SessionCommandPumpOptions;
   driverFactory?: DirectSessionDriverFactory;
 }>;
@@ -51,17 +49,27 @@ export type DirectDriverSessionSnapshot = Readonly<{
   queueClosed: boolean;
 }>;
 
-type QueuedCommand = Readonly<{ action: DriverAction; context: DriverContext }>;
+export type DirectPreDispatchGuard = (evidence: DriverRecord) => Promise<void> | void;
+
+type QueuedCommand = Readonly<{
+  action: DriverAction;
+  context: DriverContext;
+  guard?: DirectPreDispatchGuard;
+}>;
 
 export type DirectDriverSession = Readonly<{
-  initialObservation: DriverObservation | undefined;
-  execute(action: DriverAction, context?: DriverContext, timeoutMs?: number): Promise<DriverRecord>;
+  execute(
+    action: DriverAction,
+    context?: DriverContext,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    guard?: DirectPreDispatchGuard,
+  ): Promise<DriverRecord>;
   stop(): Promise<void>;
   snapshot(): DirectDriverSessionSnapshot;
 }>;
 
 class DirectDriverSessionRuntime implements DirectDriverSession {
-  readonly initialObservation: DriverObservation | undefined;
   readonly #driver: DirectSessionDriver;
   readonly #pump: SessionCommandPump;
   #state: DirectSessionState = "active";
@@ -70,21 +78,31 @@ class DirectDriverSessionRuntime implements DirectDriverSession {
   constructor(
     driver: DirectSessionDriver,
     pump: SessionCommandPump,
-    initialObservation: DriverObservation | undefined,
   ) {
     this.#driver = driver;
     this.#pump = pump;
-    this.initialObservation = initialObservation;
   }
 
-  execute(action: DriverAction, context: DriverContext = {}, timeoutMs?: number): Promise<DriverRecord> {
+  execute(
+    action: DriverAction,
+    context: DriverContext = {},
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    guard?: DirectPreDispatchGuard,
+  ): Promise<DriverRecord> {
     const serialized = serializeCommand(action, context);
-    const command = JSON.parse(serialized) as QueuedCommand;
+    const parsed = JSON.parse(serialized) as Omit<QueuedCommand, "guard">;
+    const command: QueuedCommand = { ...parsed, ...(guard ? { guard } : {}) };
     const bytes = new TextEncoder().encode(serialized).byteLength;
     return this.#pump.enqueue(command, bytes, async (item) => {
       await this.#driver.preflightAction?.(item.action);
+      if (item.guard) {
+        if (!this.#driver.resolveEvidence) throw directSessionError("direct_session_evidence_unavailable");
+        const evidence = await this.#driver.resolveEvidence(item.action);
+        await item.guard(evidence);
+      }
       return this.#driver.executeAction(item.action, item.context);
-    }, timeoutMs);
+    }, timeoutMs, signal);
   }
 
   stop(): Promise<void> {
@@ -130,32 +148,20 @@ export async function startDirectDriverSession(
   const debuggerPort = createDirectDebuggerPort({
     transport: configuration.bootstrap.transport,
     rootTargetId: configuration.bootstrap.rootTargetId,
-    tabId: configuration.bootstrap.syntheticTabId,
-  });
-  const pageEffectsPort = createDirectPageEffectsPort({
-    syntheticTabId: configuration.bootstrap.syntheticTabId,
-    sendRootCommand: (method, params) => debuggerPort.sendCommand(
-      { tabId: configuration.bootstrap.syntheticTabId },
-      method,
-      params,
-    ),
   });
   const driverFactory = options.driverFactory ?? createNewtonBrowserDriver;
   const driver = driverFactory({
-    ownsTab: true,
-    ownsBrowser: true,
     allowedOrigins: [configuration.primaryOrigin, ...configuration.allowedOrigins],
     debuggerPort,
-    pageEffectsPort,
   });
 
   try {
-    await driver.attach(configuration.bootstrap.syntheticTabId);
+    configuration.signal?.throwIfAborted();
+    await driver.attach();
+    configuration.signal?.throwIfAborted();
     await driver.navigateInitialGranted(configuration.initialUrl);
-    const initialObservation = configuration.initialObservation === undefined
-      ? undefined
-      : await driver.observe(configuration.initialObservation === true ? {} : configuration.initialObservation);
-    return new DirectDriverSessionRuntime(driver, new SessionCommandPump(options.pump), initialObservation);
+    configuration.signal?.throwIfAborted();
+    return new DirectDriverSessionRuntime(driver, new SessionCommandPump(options.pump));
   } catch (error) {
     try {
       await driver.detach();
@@ -171,21 +177,20 @@ function validateConfiguration(options: StartDirectDriverSessionOptions): {
   primaryOrigin: string;
   allowedOrigins: string[];
   initialUrl: string;
-  initialObservation: true | ObserveOptions | undefined;
+  signal?: AbortSignal;
 } {
   if (!options || typeof options !== "object") throw directSessionError("direct_session_invalid_configuration");
   const bootstrap = options.bootstrap;
   if (!bootstrap || typeof bootstrap !== "object"
-    || !hasExactKeys(bootstrap, ["rootTargetId", "syntheticTabId", "transport"])) {
+    || !hasExactKeys(bootstrap, ["rootTargetId", "transport"])) {
     throw directSessionError("direct_session_invalid_bootstrap");
   }
   if (!bootstrap.transport || typeof bootstrap.transport.send !== "function" || typeof bootstrap.transport.onEvent !== "function"
-    || typeof bootstrap.rootTargetId !== "string" || bootstrap.rootTargetId.length === 0
-    || !Number.isSafeInteger(bootstrap.syntheticTabId) || bootstrap.syntheticTabId < 0) {
+    || typeof bootstrap.rootTargetId !== "string" || bootstrap.rootTargetId.length === 0) {
     throw directSessionError("direct_session_invalid_bootstrap");
   }
   const primaryOrigin = exactHttpOrigin(options.primaryOrigin);
-  if (!primaryOrigin || !Array.isArray(options.allowedOrigins)) {
+  if (!primaryOrigin || !Array.isArray(options.allowedOrigins) || options.allowedOrigins.length > 31) {
     throw directSessionError("direct_session_invalid_origin_grant");
   }
   const allowedOrigins: string[] = [];
@@ -205,21 +210,20 @@ function validateConfiguration(options: StartDirectDriverSessionOptions): {
   if ((initial.protocol !== "http:" && initial.protocol !== "https:") || initial.origin !== primaryOrigin) {
     throw directSessionError("direct_session_invalid_initial_url");
   }
-  if (options.initialObservation !== undefined && options.initialObservation !== true
-    && (!options.initialObservation || typeof options.initialObservation !== "object" || Array.isArray(options.initialObservation))) {
-    throw directSessionError("direct_session_invalid_configuration");
+  if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) {
+    throw directSessionError("direct_session_invalid_abort_signal");
   }
   return {
     bootstrap,
     primaryOrigin,
     allowedOrigins,
     initialUrl: initial.href,
-    initialObservation: options.initialObservation,
+    ...(options.signal ? { signal: options.signal } : {}),
   };
 }
 
 function exactHttpOrigin(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > 512 || value !== value.trim()) return null;
   try {
     const parsed = new URL(value);
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.origin !== value) return null;

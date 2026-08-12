@@ -1,7 +1,9 @@
-# Historical extension-era defect ledger
+# Newton Browser defect ledger
 
-> Archived defect history. Deleted extension/relay paths are not current product surfaces;
-> their pass receipts do not close any direct-runtime completion gate.
+Entries before BB-049 are archived extension-era history. Deleted extension/relay paths
+are not current product surfaces, and their receipts do not close a direct-runtime gate.
+Later entries track the owned-browser and modern stateless MCP implementation. Every
+current defect remains pending until the frozen-tree final gate records its regression.
 
 ## BB-048 — Observer focus redundantly mutated an already-active tab
 
@@ -430,8 +432,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Minimal repro: authenticate `mcp-publisher` with the public `Koala-Studios` organization membership and publish `io.github.koala-studios/newton-browser` from `newton-browser@0.4.0`; the Registry grants `io.github.Koala-Studios/*` and rejects the lowercase identifier. Changing only `server.json` then fails npm ownership validation because the published package contains the lowercase `mcpName`.
 - Root cause: release metadata normalized the GitHub organization to lowercase, while the official Registry's open issue #689 documents case-sensitive GitHub namespace authorization using the account's canonical display casing. npm package contents are immutable after publication, so 0.4.0 cannot be corrected in place.
 - Fix: release 0.4.1 with `io.github.Koala-Studios/newton-browser` in both `server.json` and npm package metadata, preserving the exact GitHub owner casing.
-- Regression: `apps/mcp-server/test/registry-metadata.test.ts` and `scripts/verify-boundary.mjs` require exact server/package name and version agreement and derive the required namespace prefix from the canonical repository owner casing.
-- Evidence: official Registry issue #689 and the rejected 403/400 publisher responses recorded in `test/evidence/discovery-ledger.md`.
+- Regression: the historical registry-metadata test required exact server/package name
+  and version agreement. The current boundary gate instead proves public Registry metadata
+  is absent until a separately approved direct-only publication.
+- Evidence: official Registry issue #689 and the rejected 403/400 publisher responses
+  retained in the historical task and GitHub Actions records.
 - Status: closed; fixed in public npm 0.4.1 and verified in the active official Registry record.
 
 ## BB-045 — Partial release retries could not reconcile an existing GitHub Release
@@ -579,6 +584,10 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 
 ## BB-065 - fill_form validated nested targets but parsed the wrong object
 
+> Superseded contract note: the current modern-only action parser rejects nested
+> `target` objects entirely. `fill_form` now accepts only flat target fields, so the
+> historical compatibility path described below no longer exists.
+
 - Minimal repro: parse `{kind:"fill_form",fields:[{target:{role:"textbox",name:"Email"},value:"Ada"}]}`; validation accepted the nested target, then parsing looked for target fields on the enclosing field and discarded the entry.
 - Root cause: `parseFormFields` called `parseBrowserTarget(input)` instead of `parseBrowserTarget(input.target)`.
 - Fix: parse the validated nested target, reject mixed nested/shorthand strategies and empty values, and reject ambiguous target objects instead of silently selecting by priority.
@@ -658,7 +667,9 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Minimal repro: set `NEWTON_BROWSER_EXTENSION_PROBE_MS=10000` and run `pnpm smoke:extension-ready` against a disconnected extension; the script prints its result near 11 seconds but remains alive until the initialize request's 30-second timeout fires.
 - Root cause: successful MCP responses won `Promise.race`, but the losing timeout promises were never cancelled; response arrival between the initial map check and waiter registration was also vulnerable to a lost wakeup.
 - Fix: use a shared response waiter that registers one cancellable timer, removes it on success, cleans its map entry on either outcome, and rechecks the response map after registration.
-- Regression: `test/extension-readiness-lifecycle.test.mjs` proves timer cancellation for ordinary and registration-race responses; the real disconnected probe exits promptly after emitting its bounded result.
+- Regression: the historical extension-readiness lifecycle test proved timer cancellation
+  for ordinary and registration-race responses. That entire probe and test were deleted
+  with the extension architecture.
 - Status: closed.
 
 ## BB-073 - Live eval selected inconsistent browsers and a busy fixed port
@@ -749,11 +760,11 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   silently weakening containment. Plan 04 is split into owner-selectable Plan 04A
   (extension-only narrowed popup boundary) and Plan 04B (isolated Newton-owned browser with
   browser-level CDP).
-- Regression/evidence: bounded receipt
-  `test/evidence/aip04-root-autoattach-probe.json`; post-rollback driver, controller,
-  extension, build, typecheck, pack, and token gates pass; repository search finds no
-  private-probe activation symbol.
-- Status: platform limitation confirmed; product-boundary decision pending.
+- Regression/evidence: the historical disposable-profile probe confirmed the limitation;
+  repository search then proved the private-probe activation path removed.
+- Status: closed by the owned-browser architecture. Newton now owns an isolated Chromium
+  process and browser-level private CDP transport, so it does not depend on MV3 debugger
+  privileges or the discarded probe.
 
 ## BB-082 - Packed doctor could read or create the user's real Newton config
 
@@ -1099,3 +1110,630 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   three consecutive complete Chrome containment matrices pass with every denied
   destination counter at zero and every session teardown clean.
 - Status: closed; final release sequence restarted from 0/3.
+
+## BB-105 - Modern MCP parse errors used a legacy null request ID
+
+- Found: 2026-08-12 during the modern-only schema audit.
+- Minimal repro: send malformed JSON or an invalid request whose ID cannot be recovered;
+  the response serialized `"id":null`.
+- Root cause: the initialization-era response helper modeled every error as having a
+  JSON-RPC ID and used null as a placeholder. MCP `2026-07-28` makes an unknown error ID
+  absent, and its unsupported-version data has only `supported` and `requested`.
+- Fix: make error IDs optional, omit unavailable IDs, and emit the exact `-32022` data
+  shape without a product compatibility alias.
+- Regression/evidence: modern stdio and contract regressions assert omitted IDs and the
+  exact unsupported-version object; the final integrated gate remains pending.
+- Status: implemented; final gate pending.
+
+## BB-106 - Release candidate hashing rejected intentional tracked deletions
+
+- Found: 2026-08-12 while freezing the extension/legacy deletion tree.
+- Minimal repro: run the complete release gate with a tracked extension-era file deleted;
+  `git ls-files` includes the path and the digest routine aborts on `lstat` ENOENT.
+- Root cause: candidate inventory correctly included tracked deletions, but the digest
+  had no canonical representation for their absence.
+- Fix: hash each missing tracked path as an explicit `deleted` record while retaining
+  strict failure for every other filesystem error and unchanged pre/post comparison.
+- Regression/evidence: the deletion-heavy final candidate must complete three passes with
+  one stable digest and `sourceUnchanged:true`; final evidence remains pending.
+- Status: implemented; final gate pending.
+
+## BB-107 - Identity CLI and MCP resolved different profile stores
+
+- Found: 2026-08-12 during the no-compatibility configuration audit.
+- Minimal repro: set `NEWTON_BROWSER_PROFILE_STORE_DIR`, create or list an identity through
+  the CLI, then select it through MCP. MCP used the override while CLI silently used the
+  default config directory. On a clean machine, `identity create` could also fail before
+  `setup` because its config parent did not exist.
+- Root cause: direct host, identity dispatcher, and login utility each assembled the
+  profile-store path independently, and only MCP initialized the config directory.
+- Fix: one strict resolver now serves MCP and every identity utility; overrides must be
+  absolute, bounded, non-root paths, and first use creates only the exact config directory.
+- Regression/evidence: configuration regressions cover shared resolution, invalid roots,
+  and first-use creation; final integrated and packed gates remain pending.
+- Status: implemented; final gate pending.
+
+## BB-108 - Full concurrency diagnostics were not session-addressable
+
+- Found: 2026-08-12 while reviewing multi-session usability.
+- Minimal repro: start two sessions and request `browser.status` with `detail:"full"`;
+  queue diagnostics were anonymous, so an operator or agent could not identify which
+  already-public session owned a running or queued command.
+- Root cause: privacy hardening removed the session key together with private process and
+  profile identifiers even though session IDs are the public application handle.
+- Fix: key each bounded diagnostic by its public session ID and keep process, target,
+  identity, profile, proxy, and lease facts excluded.
+- Regression/evidence: host and live-concurrency regressions select the exact session
+  diagnostic; final integrated and live gates remain pending.
+- Status: implemented; final gate pending.
+
+## BB-109 - Real-site failure receipts preceded cleanup
+
+- Found: 2026-08-12 while reviewing the final seven-site matrix.
+- Minimal repro: let a production-site workflow fail, then make host cleanup reject. The
+  harness had already emitted the site failure receipt and swallowed the later cleanup
+  error, leaving the owned temp root without reporting cleanup uncertainty.
+- Root cause: failure output lived in `catch` while authoritative cleanup lived in
+  `finally`.
+- Fix: retain the bounded failure, complete host/root cleanup first, let cleanup failure
+  supersede the site error, and emit one final receipt with cleanup/root-removal facts.
+- Regression/evidence: the static live contract requires post-finally emission and bounded
+  cleanup facts; final Chrome/Edge real-site gates remain pending.
+- Status: implemented; final gate pending.
+
+## BB-110 - Primary live harnesses could print success before final cleanup
+
+- Found: 2026-08-12 while reconciling final acceptance receipts.
+- Minimal repro: let direct-runtime, setup, or hard-crash workflow assertions pass, then
+  fail host close or owned-temp removal. A success JSON line was already visible even
+  though the process later failed or retained residue.
+- Root cause: workflow evidence was emitted inside `try`; cleanup was deferred to
+  `finally` and was partly swallowed.
+- Fix: retain the candidate receipt, perform authoritative cleanup, let cleanup failure
+  supersede workflow success, and emit one bounded final receipt afterward.
+- Regression/evidence: the static live contract requires post-finally cleanup facts for
+  all three primary harnesses; final live and packed gates remain pending.
+- Status: implemented; final gate pending.
+
+## BB-111 - Packed verification invoked a removed CLI alias
+
+- Found: 2026-08-12 during the final no-compatibility source audit.
+- Minimal repro: run the packed utility matrix after deleting `config print`; the harness
+  still invoked that retired alias and could not prove the actual install workflow.
+- Root cause: the product CLI was simplified before its packed consumer was migrated.
+- Fix: invoke only `install generic` and verify that it emits the exact real Node
+  executable and packed entry path without `npx`.
+- Regression/evidence: the packed gate must install and exercise the exact tarball.
+- Status: implemented; final gate pending.
+
+## BB-112 - Allowed-origin limits disagreed across host and runtime
+
+- Found: 2026-08-12 during an exact contract-cap audit.
+- Minimal repro: start a session with one primary plus 31 distinct secondary origins. The
+  host admitted 32 normalized origins while the runtime rejected 31 secondary entries.
+- Root cause: one layer counted the full canonical set and the other documented the
+  secondary list without defining their relationship.
+- Fix: permit at most 31 secondary origins and at most 32 total normalized origins, with
+  the primary included exactly once; every origin is bounded to 512 characters.
+- Regression/evidence: host and runtime boundary cases cover the exact maximum and the
+  first rejected input.
+- Status: implemented; final gate pending.
+
+## BB-113 - Startup rollback released an identity before closing its proxy
+
+- Found: 2026-08-12 during owned-runtime failure-order review.
+- Minimal repro: make Chromium startup fail after proxy and identity acquisition. Rollback
+  released the identity lease while the session proxy still existed.
+- Root cause: the failure transaction did not reverse acquisition order.
+- Fix: close the proxy before releasing the identity lease and retain cleanup uncertainty
+  if either exact stage cannot be confirmed.
+- Regression/evidence: an injected startup failure records proxy closure while the lease
+  is still active, then proves the identity can be reacquired only afterward.
+- Status: implemented; final gate pending.
+
+## BB-114 - Lost cleanup acknowledgements could report false uncertainty
+
+- Found: 2026-08-12 during MCP cleanup idempotency review.
+- Minimal repro: let session or stop-all cleanup complete, then lose the response. A retry
+  saw an error even though the authoritative session inventory was already empty.
+- Root cause: the MCP wrapper trusted the transport error without reconciling current host
+  state.
+- Fix: after a cleanup error, return idempotent success only when the exact session is
+  absent or the complete inventory is empty; otherwise preserve cleanup uncertainty.
+- Regression/evidence: stop and stop-all acknowledgement-loss cases cover both outcomes.
+- Status: implemented; final gate pending.
+
+## BB-115 - Sensitive screenshot zones accepted malformed element references
+
+- Found: 2026-08-12 during schema/runtime parity review.
+- Minimal repro: pass an arbitrary string as `sensitiveZones[].ref`; JSON schema admitted
+  it before the runtime eventually failed to resolve it.
+- Root cause: the screenshot sub-schema did not reuse the canonical composite-ref grammar.
+- Fix: export one composite-ref pattern and enforce it in core parsing and the public MCP
+  schema.
+- Regression/evidence: contract tests reject malformed zone refs at admission.
+- Status: implemented; final gate pending.
+
+## BB-116 - Blank stdio lines were silently accepted as compatibility input
+
+- Found: 2026-08-12 during strict modern-transport review.
+- Minimal repro: write an empty line to Newton stdin. The transport ignored it instead of
+  emitting a JSON parse error.
+- Root cause: the new line parser retained a permissive behavior from prior framing code.
+- Fix: treat every complete line as one JSON value; an empty line produces `-32700` with
+  no fabricated request ID.
+- Regression/evidence: the modern stdio suite includes an empty-line parse-error case.
+- Status: implemented; final gate pending.
+
+## BB-117 - Packed checks could consult the network and operator npm settings
+
+- Found: 2026-08-12 during hermetic packaging review.
+- Minimal repro: run a packed verification with an empty cache or audit-enabled npm
+  configuration; install could access the registry or emit unrelated audit behavior.
+- Root cause: exact local tarball installs did not explicitly disable online preference,
+  audit, and funding operations.
+- Fix: use offline, no-audit, and no-fund flags for every source and packed live install.
+- Regression/evidence: the packed gates run solely from the built tarball and local cache.
+- Status: implemented; final gate pending.
+
+## BB-118 - An unused native image dependency expanded install and release risk
+
+- Found: 2026-08-12 during dependency-to-source reachability review.
+- Minimal repro: search all production and test imports for `sharp`; no code used it, but
+  package installation still resolved and installed its native dependency graph.
+- Root cause: trusted raster masking had moved to the bundled implementation without
+  pruning its earlier development dependency.
+- Fix: remove `sharp` and regenerate the lockfile without changing runtime behavior.
+- Regression/evidence: the final install, build, test, masking, and packed gates prove the
+  dependency is unnecessary.
+- Status: implemented; final gate pending.
+
+## BB-119 - Live QA retained a second browser-family selector
+
+- Found: 2026-08-12 during the final environment-surface audit.
+- Minimal repro: omit `NEWTON_BROWSER_QA_BROWSER` but set the production
+  `NEWTON_BROWSER_BROWSER` variable; some live fixtures silently selected that family.
+- Root cause: the live helper retained a fallback from the migration period, coupling
+  test selection to product configuration.
+- Fix: accept only `NEWTON_BROWSER_QA_BROWSER` for live QA and default it to Chrome. The
+  release orchestrator passes it explicitly for every family.
+- Regression/evidence: the direct live contract rejects the retired fallback and proves
+  the packed stage is separately wired once in the complete gate.
+- Status: implemented; final gate pending.
+
+## BB-120 - The breaking direct-only candidate reused an incompatible published version
+
+- Found: 2026-08-12 during final package-identity review.
+- Minimal repro: build the migration tree and inspect its package, CLI, MCP server-info,
+  and artifact name; each reported `0.4.5`, the same version as the published MV3 product.
+- Root cause: architecture work changed implementation and contracts without advancing
+  the package identity.
+- Fix: advance every workspace package, CLI/MCP diagnostic, active document, skill, test,
+  and packed-live artifact expectation to `0.5.0`. Historical pinned reports retain their
+  original versions.
+- Regression/evidence: the final packed catalog and exact-tarball gates must agree on
+  `0.5.0` and reject stale artifact names.
+- Status: implemented; final gate pending.
+
+## BB-121 - Direct hosts reloaded policy from the process-global config directory
+
+- Found: 2026-08-12 during the final config-lifetime audit.
+- Minimal repro: create an isolated/default host with a non-default config directory and
+  dispatch an action that depends on one of its `hostPolicies`; the floor gate reloaded
+  the operator-global config instead of using the host's selected configuration.
+- Root cause: policy loading remained hidden inside each floor evaluation after browser
+  selection and profile storage had moved to explicit host composition.
+- Fix: load policy once from the host's exact config directory, deep-clone and freeze it
+  at host construction, and pass that immutable snapshot to every pre-queue and resolved
+  target evaluation.
+- Regression/evidence: a direct-host regression mutates the caller's source manifest
+  after construction and proves the original configured boundary is still authoritative.
+- Status: implemented; final gate pending.
+
+## BB-122 - Public additional-origin input ambiguously accepted the primary origin
+
+- Found: 2026-08-12 while reconciling the public schema, live harnesses, docs, and skill.
+- Minimal repro: start a session with `origin:https://example.com` and repeat that value in
+  `allowedOrigins`; admission silently deduplicated it even though the field is documented
+  as additional grants and the 31-item bound applies only to those grants.
+- Root cause: migration-era callers supplied a full allowlist while the compact public
+  contract had already moved to primary-plus-additional semantics.
+- Fix: `allowedOrigins` is now strictly zero to 31 additional exact origins, may be empty,
+  rejects the primary and duplicates, and is expanded to the full private allowlist only
+  after public validation. Identity login follows the same rule.
+- Regression/evidence: MCP schema/admission, identity-login, live fixture, containment,
+  frame, and real-site call sites use the one strict contract.
+- Status: implemented; final gate pending.
+
+## BB-123 - Linux proved package shape but not the packed browser runtime
+
+- Found: 2026-08-12 during cross-platform release-proof reconciliation.
+- Minimal repro: inspect the Linux Chrome runner: it ran `pack:check`, source live, and
+  real-site QA, but never installed the produced tarball and drove its browser runtime.
+- Root cause: package-structure verification was mistaken for packed-runtime behavioral
+  parity in the no-extension migration.
+- Fix: after source and real-site success, install and run the exact `0.5.0` tarball
+  through the Linux Chrome owned-process workflow and record a separate bounded status.
+- Regression/evidence: the Linux runner contract requires the packed stage and the final
+  receipt distinguishes source-live from packed-live status.
+- Status: implemented; final gate pending.
+
+## BB-124 - Token gate retained an injectable counter and heuristic fallback
+
+- Found: 2026-08-12 during the final environment/fallback audit.
+- Minimal repro: omit or break the token counter; the budget helper returned a UTF-8 byte
+  estimate, and an environment variable could replace the pinned tokenizer used by QA.
+- Root cause: early evaluation scaffolding supported counter injection and deferred
+  heuristic reporting before Newton pinned `js-tiktoken`.
+- Fix: release measurement always uses the pinned `o200k_base` counter; missing, throwing,
+  or non-finite counters fail closed in the lower-level helper. The external counter-file
+  override and heuristic token fallback are removed.
+- Regression/evidence: token-budget tests cover the exact counter and all fail-closed
+  invalid-counter cases; the agent-cost receipt identifies the pinned dependency.
+- Status: implemented; final gate pending.
+
+## BB-125 - Empty vendor-policy merge machinery allowed ambiguous host manifests
+
+- Found: 2026-08-12 during dead-export and config-merge review.
+- Minimal repro: define two host manifests containing the same origin. Selection used the
+  first match, while an empty compiled-in default list and merge map implied a vendor
+  override model Newton does not ship.
+- Root cause: future default-policy scaffolding survived after the product adopted a
+  strictly operator-authored configuration.
+- Fix: delete the default-policy export and merge path, return only validated operator
+  manifests, and reject any origin appearing in more than one manifest.
+- Regression/evidence: config tests cover overlapping origins and the default remains an
+  explicit empty operator policy set with the generic structural floor still active.
+- Status: implemented; final gate pending.
+
+## BB-126 - Runtime and packed smoke duplicated the package version literal
+
+- Found: 2026-08-12 during unused-export and release-identity review.
+- Minimal repro: advance `apps/mcp-server/package.json` without editing the CLI constant
+  and packed harness; server metadata, help, and artifact lookup can disagree.
+- Root cause: the migration treated three package-version strings as independent config.
+- Fix: the runtime reads and validates the adjacent shipped package manifest, and the
+  packed harness derives both tarball name and client metadata from that same manifest.
+  Internal core/driver workspace packages are explicitly private.
+- Regression/evidence: CLI, discovery, package, and packed-runtime gates all compare one
+  authoritative application package version.
+- Status: implemented; final gate pending.
+
+## BB-127 - Release publication verified only an unpinned Linux runner
+
+- Found: 2026-08-12 during release-workflow composition review.
+- Minimal repro: dispatch the release workflow. It ran three Ubuntu passes and could
+  publish without Windows Chrome/Edge proof or the pinned Linux Chrome container.
+- Root cause: cross-platform live evidence was documented as a separate requirement but
+  not represented as a dependency of the publish job.
+- Fix: release verification is now a Windows/Linux matrix with three unchanged-candidate
+  passes per platform, Windows Chrome+Edge coverage, a pinned Linux CFT container run, and
+  bounded receipts whose exact tarball hashes must match before the approval-gated publish
+  job runs. Linux headful CI executes under Xvfb.
+- Regression/evidence: workflow and Linux-harness contract tests cover the required stages;
+  the first real workflow run remains pending the frozen candidate.
+- Status: implemented; final gate pending.
+
+## BB-128 - Platform config defaults could escape an isolated home
+
+- Found: 2026-08-12 during config-root environment review.
+- Minimal repro: on macOS pass an isolated `HOME` without an explicit Newton config
+  override; config resolution used `os.homedir()` and could touch the operator's real
+  application-support directory. Windows without `LOCALAPPDATA` similarly fell into a
+  Unix-style fallback.
+- Root cause: platform defaults mixed process-global home discovery with the supplied
+  environment used by packed and clean-user checks.
+- Fix: derive one home from the supplied `HOME`/`USERPROFILE` environment, then apply the
+  exact Windows, macOS, or XDG platform path; explicit Newton config still wins.
+- Regression/evidence: a platform-aware config test proves an isolated supplied home is
+  authoritative.
+- Status: implemented; final gate pending.
+
+## BB-129 - Production browser launch retained a raw-TypeScript guardian fallback
+
+- Found: 2026-08-12 during alternate-runtime-path review.
+- Minimal repro: launch from source without a compiled adjacent guardian; Chromium startup
+  silently spawned `browser-guardian.ts` through Node's strip-types flag.
+- Root cause: development bring-up support survived after the build and packed artifact
+  made the guardian a required compiled runtime file.
+- Fix: resolve only the adjacent bundled guardian or the exact workspace `dist` guardian;
+  missing compiled output fails startup. Production never selects raw TypeScript.
+- Regression/evidence: the boundary gate rejects guardian source/strip-types fallback and
+  packed/source live gates both require the compiled guardian.
+- Status: implemented; final gate pending.
+
+## BB-130 - Default host read browser and policy configuration from different snapshots
+
+- Found: 2026-08-12 during final configuration-composition review.
+- Minimal repro: replace `config.json` between default-host browser selection and host-policy
+  loading; one host can combine a browser choice from the old file with authorization rules
+  from the new file. Setup could also preserve malformed policy data while changing browser.
+- Root cause: browser preference and host policies had separate public loaders even though
+  they are one authoritative direct-runtime configuration document.
+- Fix: parse and validate both fields from one read, return one frozen configuration
+  snapshot, compose the default host exclusively from it, and validate/canonicalize retained
+  policy state before setup rewrites the browser preference.
+- Regression/evidence: config tests cover the single frozen snapshot and prove setup refuses
+  to carry an invalid policy field into a new configuration.
+- Status: implemented; final gate pending.
+
+## BB-131 - Core builds retained deleted compiled modules
+
+- Found: 2026-08-12 while auditing generated extension-era and compatibility residue.
+- Minimal repro: delete a core source module and run the former `tsc` build; its old `.js`,
+  declaration, and maps remain under `packages/core/dist`, unlike the clean MCP and driver
+  builds. The working tree still contained the retired `version-skew` output.
+- Root cause: the core package invoked TypeScript directly without first replacing its owned
+  output directory.
+- Fix: all core builds now use one clean build script, driver builds invoke that same path,
+  and the boundary gate rejects known retired core/driver compiled modules.
+- Regression/evidence: the final build and boundary stages must leave only outputs derived
+  from the current source inventory.
+- Status: implemented; final gate pending.
+
+## BB-132 - Release workflow did not bind its three passes to one candidate
+
+- Found: 2026-08-12 during final publication-path scrutiny.
+- Minimal repro: allow one release stage to create or modify a non-ignored file between
+  pass one and pass two. Each individual pass can prove only its own before/after digest,
+  while the workflow discarded those receipts and still counted three successes. Linux
+  also placed its live receipts inside the workspace candidate inventory.
+- Root cause: the workflow loop treated exit status as the complete multi-pass invariant
+  and wrote a package-only receipt after the fact.
+- Fix: a cross-platform verifier now requires a clean tagged tree, parses every complete
+  release receipt, requires one identical platform candidate digest and artifact hash
+  across all three passes, rechecks cleanliness, and records commit plus Git tree. Linux
+  live receipts are mounted outside the workspace. Publication requires matching Windows
+  and Linux commit, tree, version, and tarball hash.
+- Regression/evidence: the release workflow has one verifier path on both platforms and
+  the publish job validates both bounded platform receipts against its checked-out tag.
+- Status: implemented; final gate pending.
+
+## BB-133 - Setup duplicated config-directory ownership checks
+
+- Found: 2026-08-12 during final helper and error-surface deduplication.
+- Minimal repro: compare first-use MCP configuration with `setup`; the setup utility used
+  a second directory creator and a unique retired error code rather than the config
+  module's authoritative path/ownership validation.
+- Root cause: setup was implemented before configuration and identity utilities were
+  collapsed onto one resolver.
+- Fix: setup now calls the shared strict config-directory initializer and maps any setup
+  failure to its one public setup code; the duplicate helper and code are removed.
+- Regression/evidence: shared config tests cover absolute/non-root/link/directory behavior,
+  and the final setup/live gate exercises the same initializer.
+- Status: implemented; final gate pending.
+
+## BB-134 - Identity login retained a wider origin limit
+
+- Found: 2026-08-12 during exact-origin constant reconciliation.
+- Minimal repro: pass an identity-login origin longer than 512 characters; the operator
+  utility admitted up to 2,048 while MCP, host, runtime, proxy authority, registry, and
+  documentation all use the 512-character product bound.
+- Root cause: identity login carried an early URL-input cap instead of the final grant cap.
+- Fix: identity login now uses the same 512-character limit before any store or browser
+  access; additional-origin count and duplicate rules were already shared semantically.
+- Regression/evidence: the identity-login suite rejects an otherwise origin-shaped value
+  above the single product bound.
+- Status: implemented; final gate pending.
+
+## BB-135 - Doctor referenced removed Node-version constants
+
+- Found: 2026-08-12 during pre-freeze static symbol reconciliation.
+- Minimal repro: compile `cli.ts` after package-version centralization; the doctor report
+  still reads `MINIMUM_NODE_MAJOR` and `MINIMUM_NODE_RANGE`, but their literals had been
+  removed without replacing those uses.
+- Root cause: runtime version identity and doctor engine reporting were changed in
+  separate edits before the integrated compile gate.
+- Fix: one strict adjacent package-manifest parser now supplies version, Node range, and
+  derived minimum major to every CLI/doctor use. Invalid manifests fail at startup.
+- Regression/evidence: existing version/help/doctor/package tests and the final workspace
+  typecheck exercise the one manifest-derived metadata path.
+- Status: implemented; final gate pending.
+
+## BB-136 - MCP and core typechecking allowed inexact optional/index access
+
+- Found: 2026-08-12 during final compiler-policy reconciliation.
+- Minimal repro: construct an optional configuration field explicitly as `undefined` or
+  index a protocol/config collection without narrowing; the driver rejects these patterns,
+  while the root MCP/core compiler previously admitted them.
+- Root cause: strict driver conversion enabled the three stronger flags only in the driver
+  package rather than the shared workspace contract.
+- Fix: `noImplicitOverride`, `noUncheckedIndexedAccess`, and
+  `exactOptionalPropertyTypes` are now workspace-wide requirements. The final typecheck is
+  the regression gate for every production and script TypeScript source.
+- Regression/evidence: final integrated typecheck must pass without suppressions; any
+  surfaced violation is fixed at its boundary rather than weakening these flags.
+- Status: implemented; final gate pending.
+
+## BB-137 - Real-site QA leaked its owned root on pre-host failure
+
+- Found: 2026-08-12 during the final live-orchestration review.
+- Minimal repro: make direct-host construction fail after the runner creates its owned
+  config/profile root but before assigning `host`. The `finally` block only authorized
+  root removal after a successful host close, so this setup failure retained the root.
+- Root cause: cleanup confirmation was coupled to host cleanup even when no host or
+  browser process had ever been created.
+- Fix: absence of a constructed host is now authoritative confirmation that no host
+  cleanup is required, allowing the independently identity-bound owned root to be removed.
+  A real host cleanup failure still retains the root and fails closed for retry/diagnosis.
+- Regression/evidence: the final real-site QA gate must report `cleanupConfirmed: true`
+  and `temporaryRootRemoved: true` on setup-failure injection as well as success.
+- Status: implemented; final gate pending.
+
+## BB-138 - Core redaction relied on unchecked tuple and optional-state casts
+
+- Found: 2026-08-12 when the frozen candidate first ran the strengthened final compiler
+  gate.
+- Minimal repro: compile `redaction.ts` with unchecked indexed access and exact optional
+  properties. Array destructuring could produce `undefined`, and a broad cast could assign
+  the optional `BrowserWaitFor.state` type instead of a proven state literal.
+- Root cause: both boundaries relied on assertions that were accepted by the prior weaker
+  root compiler configuration.
+- Fix: the four bounding-box entries are converted and narrowed individually, and wait
+  state is accepted only through an explicit closed literal check before assignment.
+- Regression/evidence: the workspace build/typecheck must pass with the stronger flags;
+  existing adversarial redaction tests cover malformed boxes and wait payloads.
+- Status: implemented; final gate pending.
+
+## BB-139 - Driver retained stale error and cursor-paint compatibility symbols
+
+- Found: 2026-08-12 when the frozen candidate advanced from core into the driver build.
+- Minimal repro: compile the driver with unused-parameter errors. The constructor called
+  a deleted `driverError` helper, while two empty cursor-paint methods and their calls
+  remained after the page-effects overlay path was removed.
+- Root cause: the direct-runtime collapse deleted the implementation owners without
+  deleting every call-site symbol from the monolithic driver.
+- Fix: the constructor uses the one typed driver-error helper, and the inert cursor-paint
+  calls and methods are deleted rather than suppressed or renamed.
+- Regression/evidence: driver build/typecheck and the boundary scan must pass with no
+  cursor-paint symbol or retired page-effects adapter.
+- Status: implemented; final gate pending.
+
+## BB-140 - Host boundaries constructed explicit undefined option fields
+
+- Found: 2026-08-12 during the first full workspace typecheck with exact optional
+  properties enabled.
+- Minimal repro: typecheck MCP host/runtime construction. Several adapters supplied
+  `property: undefined` instead of omitting an optional field; action/result normalization
+  repeated conversions that did not preserve narrowing; one internal host branch tested
+  the already-expanded `fill_form` action even though its driver type excludes it.
+- Root cause: the previous compiler accepted loose optional construction and let a
+  host-expansion compatibility check survive below its only valid layer.
+- Fix: optional adapter fields now use conditional construction, values are narrowed once
+  before projection, the observation options type is exported at its real boundary, and
+  the impossible driver-host `fill_form` guard is deleted. No flag was weakened.
+- Regression/evidence: the root and strict driver typechecks pass together with exact
+  optional properties, unchecked indexed access, unused-symbol errors, and no suppression.
+- Status: implemented; final gate pending.
+
+## BB-141 - Eval corpus retained removed action compatibility shapes
+
+- Found: 2026-08-12 during the first frozen-candidate deterministic run.
+- Minimal repro: load the checked-in eval catalog after removing compatibility parsing.
+  Several tasks still used a standalone `browser.wait_for` tool or a nested `target`
+  object instead of the one public `browser.act` action grammar.
+- Root cause: production admission was collapsed before its offline evaluation corpus and
+  replay helper were migrated to the same exact contract.
+- Fix: the eval schema and replay path no longer admit or translate `browser.wait_for`,
+  and every checked-in task uses `browser.act` with flat target fields.
+- Regression/evidence: catalog loading, provider-free replay, malformed-task, and agent-cost
+  tests exercise only the one public action shape.
+- Status: implemented; final gate pending.
+
+## BB-142 - Granted paused related targets were never resumed
+
+- Found: 2026-08-12 while reconciling the related-target containment regressions.
+- Minimal repro: attach a paused about:blank related page, then deliver an allowed
+  `Target.targetInfoChanged` URL. Newton advanced its ticket to `waiting_document` but
+  never issued `Runtime.runIfWaitingForDebugger`, leaving the target permanently paused.
+- Root cause: the allowed transition updated only Newton's ticket state; the corresponding
+  Chromium resume acknowledgement was present on initial setup paths but missing here.
+- Fix: the exact held related session is resumed before its allowed Document settlement
+  is awaited. Denied targets remain closed without resume.
+- Regression/evidence: the focused driver regression requires the exact child-session
+  resume command and still proves denied/uncertain targets fail closed.
+- Status: implemented; final gate pending.
+
+## BB-143 - Screenshot metadata retained untrusted page titles
+
+- Found: 2026-08-12 when the screenshot redaction regression reached the frozen gate.
+- Minimal repro: capture a screenshot on a page whose title contains a card or account
+  label. Pixel data was removed from metadata, but the page-derived title remained.
+- Root cause: screenshot normalization removed the image payload without applying the
+  same content-free rule to adjacent page metadata.
+- Fix: screenshot publication now removes both the encoded image and page title from
+  metadata; only the separately validated image result and bounded safe facts remain.
+- Regression/evidence: the adversarial screenshot test injects a sensitive title and
+  asserts that it is absent from the MCP result.
+- Status: implemented; final gate pending.
+
+## BB-144 - Browser-page auto-attach rollback masked setup failures
+
+- Found: 2026-08-12 after renaming the dedicated-process browser-page auto-attach stage.
+- Minimal repro: make browser-session `Target.setAutoAttach` reject during attach. Rollback
+  immediately attempted the matching disable command even though enable never succeeded;
+  that second failure became `containment_fence_failed` and hid the exact setup code.
+- Root cause: cleanup inferred relationship setup from the existence of a browser-control
+  session rather than tracking acknowledgement of the auto-attach transition.
+- Fix: the driver records browser-page auto-attach as active only after its enable ACK,
+  disables it only in that state, and clears the state on detach or debugger loss.
+- Regression/evidence: attach-stage, root-detach retry, and popup teardown tests cover both
+  pre-ACK rollback and genuinely active cleanup paths.
+- Status: implemented; final gate pending.
+
+## BB-145 - Prevented actions were projected as successful MCP tool calls
+
+- Found: 2026-08-12 during the final modern MCP contract run.
+- Minimal repro: invoke `browser.act` for a causally prevented navigation. The action
+  envelope correctly reports `ok:false`, but the surrounding MCP tool result omitted
+  `isError:true`.
+- Root cause: the tool-result wrapper treated every successfully transported action
+  envelope as a successful tool call instead of preserving the action's authoritative
+  `ok` bit.
+- Fix: `browser.act` sets MCP `isError` whenever the canonical action result is not
+  successful, without flattening or replacing the typed action outcome.
+- Regression/evidence: the MCP contract test requires both `isError:true` and the exact
+  prevented action envelope; Windows and Linux containment live suites pass.
+- Status: implemented; pre-freeze matrix passed.
+
+## BB-146 - Console and network admission constructed absent options as undefined
+
+- Found: 2026-08-12 under the workspace exact-optional compiler contract.
+- Minimal repro: call `browser.console` or `browser.network` without optional filters.
+  Host construction supplied explicit `undefined` properties, which the strict action
+  parser rejects even though the public request correctly omitted them.
+- Root cause: MCP projection copied every schema field mechanically rather than adding
+  optional fields only after narrowing.
+- Fix: construct console/network actions conditionally and omit every absent property.
+- Regression/evidence: focused MCP tests call both tools with no optional filters; full
+  typecheck, deterministic, packed, and live matrices pass.
+- Status: implemented; pre-freeze matrix passed.
+
+## BB-147 - Connected QA retained removed targeting and observation assumptions
+
+- Found: 2026-08-12 during the first complete modern-only live run.
+- Minimal repro: run the frame, input, dialog, or containment harness after strict target
+  admission and the 240-node cap landed. Harnesses still used partial role/name targets,
+  requested 320 nodes, or required same-origin child provenance that the public contract
+  intentionally does not duplicate.
+- Root cause: production compatibility paths were deleted before all live acceptance
+  callers were migrated to the one exact public contract.
+- Fix: use strict role/name pairs, the public observation cap, null-safe names, bounded
+  MCP error codes, and provenance assertions that distinguish same-process from OOPIF
+  routes. No production compatibility parser was restored.
+- Regression/evidence: static harness contracts plus Chrome, Edge, and pinned Linux CFT
+  frame/input/dialog/containment runs pass.
+- Status: implemented; pre-freeze matrix passed.
+
+## BB-148 - Containment QA conflated zero-request enforcement with causal prevention
+
+- Found: 2026-08-12 during connected popup and mutation acceptance.
+- Minimal repro: a side effect can return a completed action while the launch-time proxy
+  independently prevents the denied request; conversely a same-origin popup click can be
+  intentionally rejected by the commit floor before any popup exists. The old harness
+  required every zero-request case to say `prevented` and called floored popup actions
+  allowed successes.
+- Root cause: acceptance collapsed two independent security facts--action causality and
+  network enforcement--and retained a product claim contradicted by the current floor.
+- Fix: validate action outcomes against their exact causal class, always require denied
+  application counters to remain zero, and label floored popup cases `not_started` rather
+  than allowed. Granted non-popup frame and redirect flows still prove positive routing.
+- Regression/evidence: deterministic outcome classification and the Chrome, Edge, and
+  Linux containment counter matrices pass.
+- Status: implemented; pre-freeze matrix passed.
+
+## BB-149 - Real-site QA depended on consent and anti-automation landing pages
+
+- Found: 2026-08-12 in public Windows Chrome/Edge QA.
+- Minimal repro: YouTube redirects a clean isolated identity through a regional consent
+  flow and Reddit can serve an automation challenge, making a read-only availability test
+  measure account/challenge policy instead of Newton's browser control.
+- Root cause: the suite chose volatile interactive landing pages for sites whose public
+  logged-out access varies by region and automation policy.
+- Fix: use the sites' public `robots.txt` endpoints for bounded text-mode reachability and
+  keep full AX/action/screenshot coverage on RFC Editor, Wikipedia, Mercato di Bellina,
+  W3C WAI, and Meta's public business ads surface. Receipts state the coverage mode; they
+  do not imply authenticated access.
+- Regression/evidence: all seven public sites pass Windows Chrome, Windows Edge, and
+  pinned Linux CFT with zero session/identity residue.
+- Status: implemented; pre-freeze matrix passed.

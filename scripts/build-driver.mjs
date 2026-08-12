@@ -4,19 +4,20 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { buildCore } from "./build-core.mjs";
+
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const driverRoot = path.join(root, "packages", "driver");
 const defaultDestination = path.join(driverRoot, "dist");
 const config = path.join(driverRoot, "tsconfig.json");
-const coreConfig = path.join(root, "packages", "core", "tsconfig.build.json");
 const tsc = require.resolve("typescript/bin/tsc");
 
 export function buildDriver({ destination = defaultDestination, quiet = false } = {}) {
   const resolvedDestination = path.resolve(destination);
   prepareDestination(resolvedDestination);
 
-  runTypeScript(["-p", coreConfig, "--pretty", "false"], quiet, "core_typescript_build_failed");
+  buildCore({ quiet });
 
   runTypeScript([
     "-p",

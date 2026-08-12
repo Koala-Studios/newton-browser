@@ -1,5 +1,3 @@
-export const NEWTON_BROWSER_MODULE_ID = "newton-browser";
-
 export const BROWSER_ACTION_KINDS = [
   "observe",
   "screenshot",
@@ -31,7 +29,6 @@ export type BrowserActionKind = (typeof BROWSER_ACTION_KINDS)[number];
 export const BROWSER_ACTION_RESULT_STATUSES = [
   "verified",
   "dispatched_unverified",
-  "needs_approval",
   "blocked",
   "not_found",
   "ambiguous",
@@ -42,23 +39,9 @@ export const BROWSER_ACTION_RESULT_STATUSES = [
 
 export type BrowserActionResultStatus = (typeof BROWSER_ACTION_RESULT_STATUSES)[number];
 
-export const BROWSER_RISK_CLASSES = ["read_only", "agentic", "approval_required", "blocked"] as const;
+export const BROWSER_RISK_CLASSES = ["read_only", "agentic", "blocked"] as const;
 
 export type BrowserRiskClass = (typeof BROWSER_RISK_CLASSES)[number];
-
-export const BROWSER_COMMAND_STATUSES = [
-  "queued",
-  "claimed",
-  "running",
-  "succeeded",
-  "failed",
-  "needs_approval",
-  "blocked",
-  "expired",
-  "cancelled",
-] as const;
-
-export type BrowserCommandStatus = (typeof BROWSER_COMMAND_STATUSES)[number];
 
 export type BrowserCommandOutcome =
   | "not_started"
@@ -66,27 +49,11 @@ export type BrowserCommandOutcome =
   | "prevented"
   | "outcome_unknown";
 
-export const BROWSER_SESSION_STATUSES = ["active", "stopped", "expired"] as const;
-
-export type BrowserSessionStatus = (typeof BROWSER_SESSION_STATUSES)[number];
-
-export type BridgeCommandResultMetadata = {
-  sessionEpoch: number;
+export type BrowserCommandResultMetadata = {
   sequence: number;
   outcome: BrowserCommandOutcome;
   retrySafe: boolean;
-  lateResultDiscarded?: boolean;
 };
-
-export type BrowserTarget =
-  | { ref: string }
-  | { role: string; name?: string; exact?: boolean }
-  | { text: string; exact?: boolean }
-  | { label: string; exact?: boolean }
-  | { placeholder: string; exact?: boolean }
-  | { testId: string }
-  | { selector: string }
-  | { coordinates: { x: number; y: number } };
 
 export type BrowserWaitFor = {
   url?: string;
@@ -103,7 +70,6 @@ export type BrowserWaitFor = {
 
 export type BrowserAction = {
   kind: BrowserActionKind;
-  target?: BrowserTarget;
   waitFor?: BrowserWaitFor;
   ref?: string;
   role?: string;
@@ -120,55 +86,44 @@ export type BrowserAction = {
   maxNodes?: number;
   roles?: string[];
   includeInteractive?: boolean;
-  includeFrameRouting?: boolean;
   timeoutMs?: number;
   x?: number;
   y?: number;
   keys?: string[];
   files?: string[];
   sensitiveZones?: Array<{ ref?: string; selector?: string; name?: string; label?: string }>;
-  checked?: boolean;
-  intent?: string;
-  // Screenshot capture options (Proposal 29 / D5): full scroll-down page, a wait
-  // before capture, a device render, an explicit clip, and inline image return.
+  // Screenshot capture options.
   fullPage?: boolean;
-  device?: "mobile" | "desktop";
-  waitMs?: number;
-  inline?: boolean;
   clip?: { x: number; y: number; width: number; height: number };
-  // Screenshot encoding (WS10.3): JPEG at a quality trades evidence fidelity for a
-  // much smaller payload to the model. PNG is the default.
+  // JPEG trades evidence fidelity for a much smaller payload to the model.
+  // PNG is the default.
   format?: "png" | "jpeg";
   quality?: number;
-  // Observation mode (Proposal 29 / D6): "diff" returns added/removed/updated;
-  // "text" (WS9.1) returns bounded, redacted readable page text.
+  // "diff" returns added/removed/updated; "text" returns bounded, redacted prose.
   mode?: "full" | "diff" | "text";
   // Character cap for `mode: "text"` observations.
   maxChars?: number;
-  // Text supplied to a `dialog_accept` on a JavaScript prompt() dialog (WS9.4).
+  // Text supplied to a `dialog_accept` on a JavaScript prompt() dialog.
   // Ignored for alert/confirm/beforeunload dialogs and for dialog_dismiss.
   promptText?: string;
-  // Owned-tab viewport for the `resize` act kind (WS9.6). Applied via CDP device
-  // metrics and re-applied if the debugger re-attaches. Owned tabs only.
+  // Isolated-process viewport for the `resize` act kind.
   viewport?: { width: number; height: number };
-  // Ordered fields for the `fill_form` act kind (WS9.8). Each entry carries the same
+  // Ordered fields for `fill_form`. Each entry carries the same
   // targeting hints as a fill plus its value. The host expands the batch into
   // sequential fills, each with the full per-field floor, stopping at the first
   // block/failure. Values are redacted in artifacts like any fill value.
   fields?: BrowserFormField[];
-  // Filters for the read-only `console` act kind (WS9.2).
+  // Filters for the read-only `console` act kind.
   level?: string;
   pattern?: string;
   limit?: number;
-  clear?: boolean;
-  // Filters for the read-only `network` act kind (WS9.3). `requestId` switches from
+  // Filters for the read-only `network` act kind. `requestId` switches from
   // listing request metadata to fetching one response body (origin-gated).
   urlPattern?: string;
   requestId?: string;
 };
 
 export type BrowserFormField = {
-  target?: BrowserTarget;
   ref?: string;
   role?: string;
   name?: string;
@@ -179,20 +134,13 @@ export type BrowserFormField = {
   value?: string;
 };
 
-// A page-initiated JavaScript dialog awaiting a decision (WS9.4). Surfaced in
+// A page-initiated JavaScript dialog awaiting a decision. Surfaced in
 // observation/status so an agent can see it must accept or dismiss before the
 // renderer will respond again. The message is redacted like other page text.
 export type BrowserPendingDialog = {
   dialogType: "alert" | "confirm" | "prompt" | "beforeunload";
   message: string;
   defaultPrompt?: string;
-};
-
-export type BrowserTabRef = {
-  tabId?: number;
-  windowId?: number;
-  origin?: string;
-  title?: string;
 };
 
 // What the floor concluded about how far the action commits. `none` = a pure
@@ -206,7 +154,7 @@ export type BrowserCommitBoundary = (typeof BROWSER_COMMIT_BOUNDARIES)[number];
 
 // Observed/structural facts the driver feeds the floor. Page prose is never a
 // signal; only structure (form ownership, submit role) and observed events
-// (navigation, network write, dialog, download) count (§7).
+// (navigation, network write, dialog, download) count.
 export type BrowserSignals = {
   formSubmit?: boolean;        // resolved element is a submit button / owns a form submit
   navigation?: boolean;        // observed navigation (reconciliation only)
@@ -219,26 +167,10 @@ export type BrowserSignals = {
   containmentPrevention?: string; // preventive request/target decision reason
 };
 
-export type BrowserPreventiveDecision = {
-  stage: "preflight" | "request" | "target";
-  action: "continue" | "resume" | "hold" | "fail" | "block";
-  reason: string;
-  granted: boolean;
-  origin?: string;
-};
-
-export type BrowserFloorEvidence = { kind: string; value: string | boolean };
-
 export type BrowserFloorDecision = {
   class: BrowserRiskClass;
-  permissionRequired: "newton_browser.observe" | "newton_browser.act" | "newton_browser.agentic_session";
-  approvalRequired: boolean;
-  blocked: boolean;
-  reasons: string[];
-  // Added in B3. Optional so older persisted decisions stay valid.
-  commitBoundary?: BrowserCommitBoundary;
-  // Surfaced only when the floor needs to explain a risk/block result.
-  evidence?: BrowserFloorEvidence[];
+  reason?: string;
+  commitBoundary: BrowserCommitBoundary;
 };
 
 export type BrowserObservationNode = {
@@ -255,7 +187,6 @@ export type BrowserObservationNode = {
   href?: string;
   elementType?: string;
   bbox?: { x: number; y: number; width: number; height: number };
-  target?: BrowserTarget;
   documentEpoch?: number;
   frameId?: string;
   frameOrigin?: string;
@@ -267,29 +198,20 @@ export type BrowserExcludedFrame = {
   reason: "origin_not_granted";
 };
 
-export type BrowserFrameRouting = {
-  attachedIframeTargetCount: number;
-  inProcessFrameCount: number;
-  maxAttachedIframeTargetDepth: number;
-};
-
 export type BrowserObservationResult = {
   kind: "observation";
-  mode: "passive" | "cdp";
+  mode: "cdp";
   origin: string;
   title: string;
   nodes: BrowserObservationNode[];
   nodeCount: number;
   truncated: boolean;
   capturedAt: string;
-  actionStatus?: BrowserActionResultStatus;
-  verified?: boolean;
   reason?: string;
   changed?: Record<string, unknown>;
-  // Set when a page-initiated JavaScript dialog is blocking the renderer (WS9.4).
+  // Set when a page-initiated JavaScript dialog is blocking the renderer.
   pendingDialog?: BrowserPendingDialog;
   excludedFrames?: BrowserExcludedFrame[];
-  frameRouting?: BrowserFrameRouting;
 };
 
 export type BrowserScreenshotResult = {
@@ -297,22 +219,20 @@ export type BrowserScreenshotResult = {
   mode: "cdp";
   origin: string;
   title: string;
-  artifactId?: string;
   width?: number;
   height?: number;
   capturedAt: string;
-  // Proposal 29 / D5. `dataUrl` is the inline base64 image (only when the caller
-  // requested it) and is NEVER persisted — it is stripped before any DB write.
+  // Transient base64 image returned to the active MCP request when it is within
+  // the 16 MiB cap. Newton does not persist screenshot bytes.
   dataUrl?: string;
   format?: "png" | "jpeg";
   requestedFormat?: "png" | "jpeg";
-  device?: "mobile" | "desktop" | "viewport";
   fullPage?: boolean;
   truncated?: boolean;
   maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable";
 };
 
-// A compact observation delta (Proposal 29 / D6): what changed since the prior
+// A compact observation delta: what changed since the prior
 // observation, instead of a full re-snapshot. `updated` carries only the refs
 // whose accessible name/value changed; `added` carries new nodes (with bbox for
 // targeting); `removed` lists refs that are gone.
@@ -331,15 +251,12 @@ export type BrowserObservationDelta = {
   }>;
   nodeCount: number;
   capturedAt: string;
-  actionStatus?: BrowserActionResultStatus;
-  verified?: boolean;
   reason?: string;
   changed?: Record<string, unknown>;
   excludedFrames?: BrowserExcludedFrame[];
-  frameRouting?: BrowserFrameRouting;
 };
 
-// A readable-text observation (WS9.1): the page's main/article text (falling back
+// A readable-text observation: the page's main/article text (falling back
 // to body innerText), bounded and secret-redacted. Cheaper than a full accessibility
 // snapshot when the caller only needs to read prose, not target controls.
 export type BrowserObservationText = {
@@ -351,12 +268,10 @@ export type BrowserObservationText = {
   chars: number;
   truncated: boolean;
   capturedAt: string;
-  actionStatus?: BrowserActionResultStatus;
-  verified?: boolean;
   reason?: string;
 };
 
-// Buffered console output (WS9.2). Read-only; entries are secret-redacted before
+// Buffered console output. Read-only; entries are secret-redacted before
 // they reach the client. Headers and raw argument objects are never included —
 // only the rendered text, level, and source.
 export type BrowserConsoleEntry = {
@@ -375,7 +290,7 @@ export type BrowserConsoleLog = {
   capturedAt: string;
 };
 
-// Buffered network request metadata (WS9.3). Request/response HEADERS are never
+// Buffered network request metadata. Request/response headers are never
 // buffered or returned (they carry cookies and auth tokens). A body is returned
 // only for a request whose URL origin is within the session grant.
 export type BrowserNetworkEntry = {
@@ -409,17 +324,7 @@ export type BrowserNetworkLog = {
 export type PageProvenance = {
   trust: "untrusted_page_content";
   origin: string;
-  sessionEpoch: number;
-  targetRef?: string;
   capturedAt?: string;
 };
 
-export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | BrowserConsoleLog | BrowserNetworkLog | { kind: "ack"; message: string };
-
-export type ActResult = {
-  status: BrowserActionResultStatus;
-  verified: boolean;
-  reason?: string;
-  changed?: Record<string, unknown>;
-  observation?: BrowserObservationResult | BrowserObservationDelta;
-};
+export type NewtonBrowserResult = BrowserObservationResult | BrowserObservationDelta | BrowserObservationText | BrowserScreenshotResult | BrowserConsoleLog | BrowserNetworkLog | { kind: "ack" };

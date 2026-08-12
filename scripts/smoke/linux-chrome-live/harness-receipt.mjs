@@ -50,7 +50,7 @@ function logReceipt(input, output, label, exitCodeValue) {
   });
 }
 
-function finalReceipt(directory, runId, stage, processExitValue, directSelectionValue, agentValue, liveValue) {
+function finalReceipt(directory, runId, stage, processExitValue, directSelectionValue, agentValue, liveValue, packedLiveValue) {
   assertRunDirectory(directory, runId);
   const processExit = boundedInteger(processExitValue);
   const receipt = {
@@ -62,6 +62,7 @@ function finalReceipt(directory, runId, stage, processExitValue, directSelection
     directRuntimeSelectionStatus: nullableStatus(directSelectionValue),
     agentCostStatus: nullableStatus(agentValue),
     liveStatus: nullableStatus(liveValue),
+    packedLiveStatus: nullableStatus(packedLiveValue),
     gateStatus: processExit,
   };
   writeAtomic(path.join(directory, "gate-status.json"), receipt);

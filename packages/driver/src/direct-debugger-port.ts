@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import type { CdpRecord, DebuggerPort, DebuggerTarget } from "./types.ts";
 
-const DEBUGGER_VERSION = "1.3";
 const BROWSER_SESSION_PREFIX = "newton-direct-browser:";
 const TARGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,256}$/u;
 const SESSION_ID_PATTERN = /^[^\s\0]{1,512}$/u;
@@ -26,7 +25,7 @@ export type BrowserTransportEventListener = (
   event: BrowserTransportEvent,
 ) => void | Promise<void>;
 
-export type DirectDebuggerSource = Readonly<{ tabId: number; sessionId?: string }>;
+export type DirectDebuggerSource = Readonly<{ sessionId?: string }>;
 export type DirectDebuggerEventListener = (
   source: DirectDebuggerSource,
   method: string,
@@ -45,8 +44,7 @@ export type DirectDebuggerPortErrorCode =
   | "direct_debugger_invalid_params"
   | "direct_debugger_not_attached"
   | "direct_debugger_transport_closed"
-  | "direct_debugger_wrong_tab"
-  | "direct_debugger_wrong_version";
+  ;
 
 export type DirectDebuggerPortError = Error & Readonly<{
   code: DirectDebuggerPortErrorCode;
@@ -61,13 +59,11 @@ export type DirectDebuggerPort = DebuggerPort & Readonly<{
 export type DirectDebuggerPortOptions = Readonly<{
   transport: BrowserLevelTransport;
   rootTargetId: string;
-  tabId: number;
 }>;
 
 export function createDirectDebuggerPort(options: DirectDebuggerPortOptions): DirectDebuggerPort {
   const { transport } = options;
   const rootTargetId = requiredTargetId(options.rootTargetId);
-  const tabId = requiredTabId(options.tabId);
   const browserSessionToken = `${BROWSER_SESSION_PREFIX}${randomUUID()}`;
   const listeners = new Set<DirectDebuggerEventListener>();
   let rootSessionId: string | null = null;
@@ -79,9 +75,7 @@ export function createDirectDebuggerPort(options: DirectDebuggerPortOptions): Di
   let terminalError: DirectDebuggerPortError | null = null;
 
   const port: DirectDebuggerPort = {
-    async attach(target, version) {
-      requireTab(target, tabId);
-      if (version !== DEBUGGER_VERSION) throw directError("direct_debugger_wrong_version", false, false);
+    async attach() {
       requireOperational(terminalError);
       if (attachInProgress || rootSessionId !== null || unsubscribeTransport !== null) {
         throw directError("direct_debugger_already_attached", false, false);
@@ -114,7 +108,6 @@ export function createDirectDebuggerPort(options: DirectDebuggerPortOptions): Di
               event.sessionId,
               attachedSessionId,
               browserSessionToken,
-              tabId,
               eventListeners,
             );
           }).finally(() => { pendingEventCount -= 1; });
@@ -183,8 +176,7 @@ export function createDirectDebuggerPort(options: DirectDebuggerPortOptions): Di
       attachInProgress = false;
     },
 
-    async detach(target) {
-      requireTab(target, tabId);
+    async detach() {
       const attachedSessionId = requireAttached(rootSessionId);
       try {
         await transport.send("Target.detachFromTarget", { sessionId: attachedSessionId }, null);
@@ -201,7 +193,6 @@ export function createDirectDebuggerPort(options: DirectDebuggerPortOptions): Di
     },
 
     async sendCommand(target: DebuggerTarget, method: string, params: CdpRecord): Promise<CdpRecord> {
-      requireTab(target, tabId);
       requireOperational(terminalError);
       const attachedSessionId = requireAttached(rootSessionId);
       const safeMethod = requiredMethod(method);
@@ -265,19 +256,18 @@ async function dispatchEvent(
   sessionId: string | null | undefined,
   rootSessionId: string,
   browserSessionToken: string,
-  tabId: number,
   listeners: readonly DirectDebuggerEventListener[],
 ): Promise<void> {
   if (!METHOD_PATTERN.test(method) || !isRecord(params)) return;
   let source: DirectDebuggerSource;
   if (sessionId === null || sessionId === undefined) {
-    source = { tabId, sessionId: browserSessionToken };
+    source = { sessionId: browserSessionToken };
   } else if (!SESSION_ID_PATTERN.test(sessionId) || isReservedSession(sessionId)) {
     return;
   } else if (sessionId === rootSessionId) {
-    source = { tabId };
+    source = {};
   } else {
-    source = { tabId, sessionId };
+    source = { sessionId };
   }
   for (const listener of [...listeners]) {
     try { await listener(source, method, params); } catch { /* preserve ordered delivery to remaining listeners */ }
@@ -293,15 +283,6 @@ function isSyntheticBrowserDetach(method: string, params: UnknownRecord, browser
 function requiredTargetId(value: string): string {
   if (!TARGET_ID_PATTERN.test(value)) throw new Error("direct_debugger_invalid_root_target");
   return value;
-}
-
-function requiredTabId(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error("direct_debugger_invalid_tab_id");
-  return value;
-}
-
-function requireTab(target: { tabId: number | null }, expectedTabId: number): void {
-  if (!target || target.tabId !== expectedTabId) throw directError("direct_debugger_wrong_tab", false, false);
 }
 
 function requireAttached(sessionId: string | null): string {

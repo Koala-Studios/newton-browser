@@ -2,37 +2,29 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createNewtonBrowserDriver as createDriver } from "../dist/driver.js";
+import { compileOriginGrant } from "../dist/origin-containment.js";
 
 function createNewtonBrowserDriver(options = {}) {
+  const allowedOrigins = options.allowedOrigins ?? ["https://example.com"];
   const debuggerPort = options.debuggerPort ?? {
-    attach: (target, version) => globalThis.chrome.debugger.attach(target, version),
-    detach: (target) => globalThis.chrome.debugger.detach(target),
-    sendCommand: (target, method, params) => new Promise((resolve, reject) => {
-      globalThis.chrome.debugger.sendCommand(target, method, params, (result) => {
-        const error = globalThis.chrome.runtime.lastError;
-        if (error) reject(new Error(error.message));
-        else resolve(result ?? {});
-      });
-    }),
+    async attach() {},
+    async detach() {},
+    async sendCommand() { return {}; },
   };
-  const send = (tabId, message) => globalThis.chrome.tabs.sendMessage(tabId, message).catch(() => ({}));
-  const pageEffectsPort = options.pageEffectsPort ?? {
-    async begin(tabId, effectOptions) {
-      await globalThis.chrome.scripting.insertCSS({ target: { tabId }, files: ["src/overlay.css"] }).catch(() => {});
-      await globalThis.chrome.scripting.executeScript({ target: { tabId }, files: ["src/overlay.js"] }).catch(() => {});
-      await send(tabId, { type: "NB_DRIVE_BEGIN", ...effectOptions });
-    },
-    async end(tabId) { await send(tabId, { type: "NB_DRIVE_END" }); },
-    async scroll(tabId, dy) { await send(tabId, { type: "NB_DRIVE_SCROLL", dy }); },
-    async move(tabId, point) { await send(tabId, { type: "NB_DRIVE_MOVE", ...point }); },
-    async click(tabId, point) { await send(tabId, { type: "NB_DRIVE_CLICK", ...point }); },
-    async field(tabId, rect) { await send(tabId, { type: "NB_DRIVE_FIELD", rect }); },
-  };
-  return createDriver({ ...options, debuggerPort, pageEffectsPort });
+  const driver = createDriver({ ...options, allowedOrigins, debuggerPort });
+  driver.containment = compileOriginGrant(allowedOrigins[0], allowedOrigins.slice(1));
+  return driver;
+}
+
+function primeObservationDriver(driver, origin = "https://example.com") {
+  driver.mainTargetId = "main-target";
+  driver.containmentReady = true;
+  driver.targetRegistry.registerTarget({ targetId: "main-target", type: "page", origin });
+  driver.targetRegistry.commitTopLevelDocument("main-target", origin);
 }
 
 function initialNavigationDriver(cdp) {
-  const driver = createNewtonBrowserDriver({ ownsTab: true, allowedOrigins: ["https://example.com"] });
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
   driver.attached = true;
   driver.containmentReady = true;
   driver.protocolGeneration = 1;
@@ -257,145 +249,13 @@ test("initial owned navigation fails closed when buffered commit evidence exceed
   assert.equal(driver.initialNavigation, null);
 });
 
-test("driver emulates focus for an inactive owned tab and restores it on detach", async () => {
-  const originalChrome = globalThis.chrome;
-  const debuggerCalls = [];
-  globalThis.chrome = {
-    debugger: {
-      async attach(target, version) { debuggerCalls.push({ method: "attach", target, version }); },
-      async detach(target) { debuggerCalls.push({ method: "detach", target }); },
-    },
-    runtime: { lastError: null },
-  };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    const commands = [];
-    driver.cdp = async (method, params, route) => {
-      commands.push({ method, params, ...(route ? { route } : {}) });
-      return method === "Target.attachToBrowserTarget" ? { sessionId: "browser-control" } : {};
-    };
-    driver.calibrate = async () => {};
-    driver.reassertOverlay = async () => {};
-    driver.sendToPage = async () => {};
-
-    await driver.attach(17);
-    await driver.detach();
-    assert.equal(driver.browserControlSessionId, null);
-    assert.equal(driver.browserRootSessionId, null);
-
-    const fetchEnable = commands.findIndex((call) => call.method === "Fetch.enable");
-    const autoAttach = commands.findIndex((call) => call.method === "Target.setAutoAttach" && call.params.autoAttach === true);
-    assert.equal(fetchEnable >= 0 && fetchEnable < autoAttach, true, "root Fetch containment is installed before child auto-attach");
-    assert.equal(commands[autoAttach].params.waitForDebuggerOnStart, true);
-    assert.deepEqual(commands[autoAttach].params.filter, [
-      { type: "iframe", exclude: false },
-      { type: "worker", exclude: false },
-      { type: "shared_worker", exclude: false },
-      { type: "service_worker", exclude: false },
-      { exclude: true },
-    ]);
-    assert.deepEqual(commands.find((call) => call.method === "Target.autoAttachRelated"), {
-      method: "Target.autoAttachRelated",
-      params: { targetId: "tab-17", waitForDebuggerOnStart: true, filter: [{ type: "page", exclude: false }, { exclude: true }] },
-      route: { sessionId: "browser-control" },
-    });
-    assert.deepEqual(commands.filter((call) => call.method === "Emulation.setFocusEmulationEnabled"), [
-      { method: "Emulation.setFocusEmulationEnabled", params: { enabled: true } },
-      { method: "Emulation.setFocusEmulationEnabled", params: { enabled: false } },
-    ]);
-    assert.deepEqual(debuggerCalls, [
-      { method: "attach", target: { tabId: 17 }, version: "1.3" },
-      { method: "detach", target: { tabId: 17 } },
-    ]);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("owned-browser attach uses non-pausing page and child auto-attach", async () => {
-  const originalChrome = globalThis.chrome;
-  globalThis.chrome = {
-    debugger: { async attach() {}, async detach() {} },
-    runtime: { lastError: null },
-  };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], ownsBrowser: true });
-    const commands = [];
-    driver.cdp = async (method, params, route) => {
-      commands.push({ method, params, route });
-      return method === "Target.attachToBrowserTarget" ? { sessionId: "browser-control" } : {};
-    };
-    driver.calibrate = async () => {};
-    driver.reassertOverlay = async () => {};
-
-    await driver.attach(18);
-
-    assert.deepEqual(commands.find((call) => call.method === "Target.setAutoAttach"
-      && call.route?.sessionId === "browser-control"), {
-      method: "Target.setAutoAttach",
-      params: {
-        autoAttach: true,
-        flatten: true,
-        waitForDebuggerOnStart: false,
-        filter: [{ type: "page", exclude: false }, { exclude: true }],
-      },
-      route: { sessionId: "browser-control" },
-    });
-    assert.deepEqual(commands.find((call) => call.method === "Target.setAutoAttach"
-      && call.route?.sessionId === undefined && call.params?.autoAttach === true)?.params, {
-      autoAttach: true,
-      flatten: true,
-      waitForDebuggerOnStart: false,
-      filter: [
-        { type: "iframe", exclude: false },
-        { type: "worker", exclude: false },
-        { type: "shared_worker", exclude: false },
-        { type: "service_worker", exclude: false },
-        { exclude: true },
-      ],
-    });
-    assert.equal(commands.some((call) => call.method === "Target.autoAttachRelated"), false);
-    await driver.detach();
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("driver routes flattened CDP commands through an exact child session", async () => {
-  const originalChrome = globalThis.chrome;
+test("injected debugger port receives attach, session-routed commands, and detach without touching Chrome globals", async () => {
   const calls = [];
-  globalThis.chrome = {
-    debugger: {
-      sendCommand(target, method, params, callback) {
-        calls.push({ target, method, params });
-        callback({ ok: true });
-      },
-    },
-    runtime: { lastError: null },
-  };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    driver.tabId = 17;
-    await driver.cdp("Accessibility.getFullAXTree", {}, { sessionId: "child-session", timeoutMs: 100 });
-    assert.deepEqual(calls, [{
-      target: { tabId: 17, sessionId: "child-session" },
-      method: "Accessibility.getFullAXTree",
-      params: {},
-    }]);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("injected debugger port receives exact attach, routed commands, and detach without touching Chrome globals", async () => {
-  const originalChrome = globalThis.chrome;
-  const calls = [];
-  globalThis.chrome = new Proxy({}, { get() { throw new Error("unexpected Chrome global access"); } });
   const debuggerPort = {
-    async attach(target, version) { calls.push({ kind: "attach", target, version }); },
-    async detach(target) { calls.push({ kind: "detach", target }); },
-    async sendCommand(target, method, params) {
-      calls.push({ kind: "command", target, method, params });
+    async attach() { calls.push({ kind: "attach" }); },
+    async detach() { calls.push({ kind: "detach" }); },
+    async sendCommand(source, method, params) {
+      calls.push({ kind: "command", source, method, params });
       if (method === "Target.getTargetInfo") {
         return { targetInfo: { targetId: "main-target", url: "https://example.com/" } };
       }
@@ -403,112 +263,30 @@ test("injected debugger port receives exact attach, routed commands, and detach 
       return {};
     },
   };
-  const pageEffectsPort = noopPageEffectsPort();
-  try {
-    const driver = createNewtonBrowserDriver({
-      allowedOrigins: ["https://example.com"],
-      debuggerPort,
-      pageEffectsPort,
-    });
-    await driver.attach(17);
-    await driver.cdp("Accessibility.getFullAXTree", { depth: 2 }, { sessionId: "child-session", timeoutMs: 100 });
-    await driver.detach();
-
-    assert.deepEqual(calls[0], { kind: "attach", target: { tabId: 17 }, version: "1.3" });
-    assert.deepEqual(calls.find((call) => call.method === "Accessibility.getFullAXTree"), {
-      kind: "command",
-      target: { tabId: 17, sessionId: "child-session" },
-      method: "Accessibility.getFullAXTree",
-      params: { depth: 2 },
-    });
-    assert.deepEqual(calls.at(-1), { kind: "detach", target: { tabId: 17 } });
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("injected page effects port receives non-security cosmetic effects without touching Chrome globals", async () => {
-  const originalChrome = globalThis.chrome;
-  const effects = [];
-  globalThis.chrome = new Proxy({}, { get() { throw new Error("unexpected Chrome global access"); } });
-  const pageEffectsPort = noopPageEffectsPort({
-    async begin(tabId, options) { effects.push({ kind: "begin", tabId, options }); },
-    async end(tabId) { effects.push({ kind: "end", tabId }); },
-    async scroll(tabId, dy) { effects.push({ kind: "scroll", tabId, dy }); },
-    async move(tabId, point) { effects.push({ kind: "move", tabId, point }); },
-    async click(tabId, point) { effects.push({ kind: "click", tabId, point }); },
-    async field(tabId, rect) { effects.push({ kind: "field", tabId, rect }); },
-  });
-  const debuggerPort = {
-    async attach() {},
-    async detach() {},
-    async sendCommand() { return {}; },
-  };
-  try {
-    const driver = createNewtonBrowserDriver({
-      accent: "#123456",
-      ownerLabel: "Port test",
-      debuggerPort,
-      pageEffectsPort,
-    });
-    driver.attached = true;
-    driver.tabId = 23;
-    driver.relationshipCleanupComplete = true;
-    driver.cdp = async () => ({});
-    driver.evalNumber = async () => 0;
-    driver.dispatchInput = async () => {};
-    driver.waitForScrollPositionChange = async () => 10;
-    driver.observeDelta = async () => ({ added: [], removed: [], updated: [] });
-
-    await driver.reassertOverlay();
-    await driver.scroll({ kind: "scroll", value: 240 });
-    driver.paintCursorClick(8, 9);
-    driver.paintCursorField({ x: 20, y: 30 });
-    await driver.detach();
-
-    assert.deepEqual(effects, [
-      { kind: "begin", tabId: 23, options: { accent: "#123456", ownerLabel: "Port test" } },
-      { kind: "scroll", tabId: 23, dy: 240 },
-      { kind: "move", tabId: 23, point: { x: 8, y: 9 } },
-      { kind: "click", tabId: 23, point: { x: 8, y: 9 } },
-      { kind: "move", tabId: 23, point: { x: 20, y: 30 } },
-      { kind: "field", tabId: 23, rect: { x: 8, y: 18, width: 24, height: 24 } },
-      { kind: "end", tabId: 23 },
-    ]);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("thrown injected cosmetic effects stay non-gating", async () => {
-  const failing = noopPageEffectsPort();
-  for (const method of Object.keys(failing)) failing[method] = async () => { throw new Error("hostile effect detail"); };
   const driver = createNewtonBrowserDriver({
-    pageEffectsPort: failing,
-    debuggerPort: { async attach() {}, async detach() {}, async sendCommand() { return {}; } },
+    allowedOrigins: ["https://example.com"],
+    debuggerPort,
   });
-  driver.attached = true;
-  driver.tabId = 41;
-  driver.relationshipCleanupComplete = true;
-  driver.cdp = async () => ({});
-  driver.evalNumber = async () => 0;
-  driver.dispatchInput = async () => {};
-  driver.waitForScrollPositionChange = async () => 0;
-  driver.observeDelta = async () => ({ added: [], removed: [], updated: [] });
-
-  await driver.reassertOverlay();
-  await driver.scroll({ kind: "scroll", value: 1 });
-  driver.paintCursorClick(1, 2);
-  driver.paintCursorField({ x: 3, y: 4 });
+  await driver.attach();
+  await driver.cdp("Accessibility.getFullAXTree", { depth: 2 }, { sessionId: "child-session", timeoutMs: 100 });
   await driver.detach();
+
+  assert.deepEqual(calls[0], { kind: "attach" });
+  assert.deepEqual(calls.find((call) => call.method === "Accessibility.getFullAXTree"), {
+    kind: "command",
+    source: { sessionId: "child-session" },
+    method: "Accessibility.getFullAXTree",
+    params: { depth: 2 },
+  });
+  assert.deepEqual(calls.at(-1), { kind: "detach" });
 });
 
 test("subscribed debugger processes an event emitted during attach and preserves exact event sources", async () => {
   let harness;
   harness = subscribedDebuggerHarness({
-    async onAttach(target) {
+    async onAttach() {
       await harness.emit(
-        { tabId: target.tabId },
+        {},
         "Runtime.consoleAPICalled",
         { type: "log", args: [{ value: "during attach" }] },
       );
@@ -517,7 +295,6 @@ test("subscribed debugger processes an event emitted during attach and preserves
   const driver = createNewtonBrowserDriver({
     allowedOrigins: ["https://example.com"],
     debuggerPort: harness.port,
-    pageEffectsPort: noopPageEffectsPort(),
   });
   const forwarded = [];
   const recordDebuggerEvent = driver.recordDebuggerEvent.bind(driver);
@@ -526,15 +303,15 @@ test("subscribed debugger processes an event emitted during attach and preserves
     return recordDebuggerEvent(source, method, params);
   };
 
-  await driver.attach(17);
+  await driver.attach();
   assert.equal(driver.consoleBuffer[0]?.text, "during attach");
   await harness.emit(
-    { tabId: 17, sessionId: "child-session" },
+    { sessionId: "child-session" },
     "Page.frameNavigated",
     { frame: { id: "child-frame", url: "https://example.com/frame" } },
   );
   assert.deepEqual(forwarded.at(-1), {
-    source: { tabId: 17, sessionId: "child-session" },
+    source: { sessionId: "child-session" },
     method: "Page.frameNavigated",
     params: { frame: { id: "child-frame", url: "https://example.com/frame" } },
   });
@@ -547,9 +324,8 @@ test("subscribed debugger delivery stays ordered across asynchronous event work"
   const driver = createNewtonBrowserDriver({
     allowedOrigins: ["https://example.com"],
     debuggerPort: harness.port,
-    pageEffectsPort: noopPageEffectsPort(),
   });
-  await driver.attach(17);
+  await driver.attach();
   const order = [];
   let firstStartedResolve;
   let releaseFirstResolve;
@@ -564,8 +340,8 @@ test("subscribed debugger delivery stays ordered across asynchronous event work"
     order.push(`end:${method}`);
   };
 
-  const first = harness.emit({ tabId: 17 }, "Test.first", {});
-  const second = harness.emit({ tabId: 17 }, "Test.second", {});
+  const first = harness.emit({}, "Test.first", {});
+  const second = harness.emit({}, "Test.second", {});
   await firstStarted;
   assert.deepEqual(order, ["start:Test.first"]);
   releaseFirstResolve();
@@ -586,9 +362,8 @@ test("root attach failure and setup rollback release their debugger event subscr
   const rootFailure = createNewtonBrowserDriver({
     allowedOrigins: ["https://example.com"],
     debuggerPort: rootFailureHarness.port,
-    pageEffectsPort: noopPageEffectsPort(),
   });
-  await assert.rejects(rootFailure.attach(17), (error) => error?.code === "root_debugger_attach_failed");
+  await assert.rejects(rootFailure.attach(), (error) => error?.code === "root_debugger_attach_failed");
   assert.equal(rootFailure.attached, false);
   assert.equal(rootFailure.debuggerEventUnsubscribe, null);
   assert.equal(rootFailureHarness.unsubscribeCount(), 1);
@@ -607,9 +382,8 @@ test("root attach failure and setup rollback release their debugger event subscr
   const driver = createNewtonBrowserDriver({
     allowedOrigins: ["https://example.com"],
     debuggerPort: harness.port,
-    pageEffectsPort: noopPageEffectsPort(),
   });
-  await assert.rejects(driver.attach(17), (error) => error?.code === "root_protocol_setup_failed");
+  await assert.rejects(driver.attach(), (error) => error?.code === "root_protocol_setup_failed");
   assert.equal(driver.attached, false);
   assert.equal(driver.debuggerEventUnsubscribe, null);
   assert.equal(harness.unsubscribeCount(), 1);
@@ -627,14 +401,13 @@ test("detach failure retains the debugger subscription until one confirmed retry
   const driver = createNewtonBrowserDriver({
     allowedOrigins: ["https://example.com"],
     debuggerPort: harness.port,
-    pageEffectsPort: noopPageEffectsPort(),
   });
-  await driver.attach(17);
+  await driver.attach();
   await assert.rejects(driver.detach(), (error) => error?.code === "shutdown_detach_failed");
   assert.equal(harness.hasListener(), true);
   assert.equal(harness.unsubscribeCount(), 0);
   await harness.emit(
-    { tabId: 17 },
+    {},
     "Runtime.consoleAPICalled",
     { type: "log", args: [{ value: "still owned" }] },
   );
@@ -650,27 +423,14 @@ test("detach failure retains the debugger subscription until one confirmed retry
 
 test("driver event recorder remains usable before a private port is attached", async () => {
   const driver = createNewtonBrowserDriver();
-  driver.tabId = 17;
   await driver.recordDebuggerEvent(
-    { tabId: 17 },
+    {},
     "Runtime.consoleAPICalled",
     { type: "log", args: [{ value: "external" }] },
   );
   assert.deepEqual(driver.consoleBuffer.map((entry) => entry.text), ["external"]);
   assert.equal(driver.debuggerEventUnsubscribe, null);
 });
-
-function noopPageEffectsPort(overrides = {}) {
-  return {
-    async begin() {},
-    async end() {},
-    async scroll() {},
-    async move() {},
-    async click() {},
-    async field() {},
-    ...overrides,
-  };
-}
 
 function subscribedDebuggerHarness({ onAttach, onDetach, onCommand } = {}) {
   let listener = null;
@@ -684,13 +444,10 @@ function subscribedDebuggerHarness({ onAttach, onDetach, onCommand } = {}) {
         listener = null;
       };
     },
-    async attach(target, version) {
-      assert.equal(version, "1.3");
-      await onAttach?.(target);
-    },
-    async detach(target) { await onDetach?.(target); },
-    async sendCommand(target, method, params) {
-      const overridden = await onCommand?.(target, method, params);
+    async attach() { await onAttach?.(); },
+    async detach() { await onDetach?.(); },
+    async sendCommand(source, method, params) {
+      const overridden = await onCommand?.(source, method, params);
       if (overridden !== undefined) return overridden;
       if (method === "Target.getTargetInfo") {
         return { targetInfo: { targetId: "main-target", url: "https://example.com/" } };
@@ -711,62 +468,52 @@ function subscribedDebuggerHarness({ onAttach, onDetach, onCommand } = {}) {
 }
 
 test("root debugger detach failure retains ownership and retries without relationship cleanup", async () => {
-  const originalChrome = globalThis.chrome;
   let detachAttempts = 0;
-  globalThis.chrome = {
-    debugger: {
-      async detach(target) {
-        detachAttempts += 1;
-        assert.deepEqual(target, { tabId: 17 });
-        if (detachAttempts === 1) throw new Error("raw browser detail");
-      },
+  const debuggerPort = {
+    async attach() {},
+    async detach() {
+      detachAttempts += 1;
+      if (detachAttempts === 1) throw new Error("raw browser detail");
     },
-    runtime: { lastError: null },
+    async sendCommand() { return {}; },
   };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    primeRelatedDriver(driver);
-    driver.attached = true;
-    driver.tabId = 17;
-    driver.mainFrameId = "main-frame";
-    driver.sendToPage = async () => {};
-    const calls = [];
-    driver.cdp = async (method, params, route) => {
-      calls.push({ method, params, route });
-      return {};
-    };
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], debuggerPort });
+  primeRelatedDriver(driver);
+  driver.attached = true;
+  driver.mainFrameId = "main-frame";
+  const calls = [];
+  driver.cdp = async (method, params, route) => {
+    calls.push({ method, params, route });
+    return {};
+  };
 
-    await assert.rejects(driver.detach(), (error) => {
-      assert.equal(error?.code, "shutdown_detach_failed");
-      assert.equal(error?.message, "shutdown_detach_failed");
-      return true;
-    });
-    assert.equal(driver.attached, true);
-    assert.equal(driver.tabId, 17);
-    assert.equal(driver.mainTargetId, "main-target");
-    assert.equal(driver.mainFrameId, "main-frame");
-    assert.equal(driver.relationshipCleanupComplete, true);
-    assert.equal(driver.browserControlSessionId, null);
-    assert.equal(driver.closing, true);
-    assert.equal(driver.containmentReady, false);
-    assert.equal(calls.filter((call) => call.method === "Target.detachFromTarget").length, 1);
+  await assert.rejects(driver.detach(), (error) => {
+    assert.equal(error?.code, "shutdown_detach_failed");
+    assert.equal(error?.message, "shutdown_detach_failed");
+    return true;
+  });
+  assert.equal(driver.attached, true);
+  assert.equal(driver.mainTargetId, "main-target");
+  assert.equal(driver.mainFrameId, "main-frame");
+  assert.equal(driver.relationshipCleanupComplete, true);
+  assert.equal(driver.browserControlSessionId, null);
+  assert.equal(driver.closing, true);
+  assert.equal(driver.containmentReady, false);
+  assert.equal(calls.filter((call) => call.method === "Target.detachFromTarget").length, 1);
 
-    await driver.detach();
-    assert.equal(calls.filter((call) => call.method === "Target.detachFromTarget").length, 1);
-    assert.equal(calls.filter((call) => call.method === "Target.setAutoAttach" && call.params?.autoAttach === false).length, 1);
-    assert.equal(driver.attached, false);
-    assert.equal(driver.tabId, null);
-    assert.equal(driver.mainTargetId, null);
-    assert.equal(driver.relationshipCleanupComplete, false);
-    assert.equal(detachAttempts, 2);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  await driver.detach();
+  assert.equal(calls.filter((call) => call.method === "Target.detachFromTarget").length, 1);
+  assert.equal(calls.filter((call) => call.method === "Target.setAutoAttach" && call.params?.autoAttach === false).length, 1);
+  assert.equal(driver.attached, false);
+  assert.equal(driver.mainTargetId, null);
+  assert.equal(driver.relationshipCleanupComplete, false);
+  assert.equal(detachAttempts, 2);
 });
 
 function primeRelatedDriver(driver, browserSessionId = "browser-control") {
   driver.mainTargetId = "main-target";
   driver.browserControlSessionId = browserSessionId;
+  driver.browserPageAutoAttachActive = true;
   driver.containmentReady = true;
   driver.targetRegistry.registerTarget({ targetId: "main-target", type: "page", origin: "https://example.com" });
   driver.targetRegistry.commitTopLevelDocument("main-target");
@@ -790,37 +537,27 @@ test("relationship-scoped duplicate root attachment resumes without duplicate se
 });
 
 test("attach drains the related-target queue before publishing containment readiness", async () => {
-  const originalChrome = globalThis.chrome;
-  globalThis.chrome = {
-    debugger: { async attach() {}, async detach() {} },
-    runtime: { lastError: null },
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  const order = [];
+  driver.calibrate = async () => { order.push("calibrate"); };
+  driver.cdp = async (method, _params, route) => {
+    if (method === "Target.getTargetInfo") return { targetInfo: { targetId: "main-target", type: "page", url: "about:blank" } };
+    if (method === "Target.attachToBrowserTarget") return { sessionId: "browser-control" };
+    if (method === "Target.setAutoAttach" && route?.sessionId === "browser-control") {
+      order.push("browser-page-autoattach");
+      driver.recordDebuggerEvent({ sessionId: "browser-control" }, "Target.attachedToTarget", {
+        sessionId: "duplicate-root",
+        waitingForDebugger: true,
+        targetInfo: { targetId: "main-target", type: "page", url: "https://example.com" },
+      }).catch(() => {});
+    }
+    if (method === "Runtime.runIfWaitingForDebugger" && route?.sessionId === "duplicate-root") order.push("resume-root");
+    return {};
   };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    const order = [];
-    driver.sendToPage = async () => {};
-    driver.reassertOverlay = async () => {};
-    driver.calibrate = async () => { order.push("calibrate"); };
-    driver.cdp = async (method, _params, route) => {
-      if (method === "Target.attachToBrowserTarget") return { sessionId: "browser-control" };
-      if (method === "Target.autoAttachRelated") {
-        order.push("auto-attach-related");
-        driver.recordDebuggerEvent({ sessionId: "browser-control" }, "Target.attachedToTarget", {
-          sessionId: "duplicate-root",
-          waitingForDebugger: true,
-          targetInfo: { targetId: "tab-17", type: "page", url: "https://example.com" },
-        }).catch(() => {});
-      }
-      if (method === "Runtime.runIfWaitingForDebugger" && route?.sessionId === "duplicate-root") order.push("resume-root");
-      return {};
-    };
-    await driver.attach(17);
-    assert.equal(driver.containmentReady, true);
-    assert.deepEqual(order, ["auto-attach-related", "resume-root", "calibrate"]);
-    await driver.detach();
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  await driver.attach();
+  assert.equal(driver.containmentReady, true);
+  assert.deepEqual(order, ["browser-page-autoattach", "resume-root", "calibrate"]);
+  await driver.detach();
 });
 
 test("related denied popup is controlled before close and prevention is acknowledged centrally", async () => {
@@ -838,10 +575,10 @@ test("related denied popup is controlled before close and prevention is acknowle
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://denied.test/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
 
-  const result = await driver.executeAction({ kind: "click", target: { selector: "#open" } }, { commandId: "cmd-popup" });
+  const result = await driver.executeAction({ kind: "click", selector: "#open" }, { commandId: "cmd-popup" });
   const setup = calls.findIndex((call) => call.method === "Fetch.enable" && call.route?.sessionId === "popup-session");
   const close = calls.findIndex((call) => call.method === "Target.closeTarget");
   assert.equal(setup, -1);
@@ -854,10 +591,7 @@ test("related denied popup is controlled before close and prevention is acknowle
 });
 
 test("a denied worker target is command-scoped and acknowledged closed before prevention", async () => {
-  const driver = createNewtonBrowserDriver({
-    allowedOrigins: ["https://example.com"],
-    ownsBrowser: true,
-  });
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
   primeRelatedDriver(driver);
   const calls = [];
   let closeResolve;
@@ -883,11 +617,11 @@ test("a denied worker target is command-scoped and acknowledged closed before pr
         url: "https://denied.test/worker.js",
       },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
 
   let settled = false;
-  const action = driver.executeAction({ kind: "click", target: { selector: "#worker" } })
+  const action = driver.executeAction({ kind: "click", selector: "#worker" })
     .finally(() => { settled = true; });
   await closeStarted;
   assert.equal(settled, false);
@@ -903,10 +637,7 @@ test("a denied worker target is command-scoped and acknowledged closed before pr
 });
 
 test("a denied worker outside a command is closed without poisoning the next command", async () => {
-  const driver = createNewtonBrowserDriver({
-    allowedOrigins: ["https://example.com"],
-    ownsBrowser: true,
-  });
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
   primeRelatedDriver(driver);
   const calls = [];
   driver.cdp = async (method, params, route) => {
@@ -925,18 +656,15 @@ test("a denied worker outside a command is closed without poisoning the next com
   assert.equal(driver.relatedLaunchTickets.size, 0);
   assert.equal(calls.filter((call) => call.method === "Target.closeTarget").length, 1);
 
-  driver.executeActionNow = async () => ({ status: "verified", verified: true, changed: {} });
-  const result = await driver.executeAction({ kind: "click", target: { selector: "#next" } });
+  driver.executeActionNow = async () => ({ status: "verified", changed: {} });
+  const result = await driver.executeAction({ kind: "click", selector: "#next" });
   assert.equal(result.status, "verified");
   assert.equal(result.changed.containmentPrevention, undefined);
 });
 
 test("owned-browser unpaused workers stay proxy-only and never enter the actionable registry", async () => {
   for (const rawType of ["worker", "shared_worker", "service_worker"]) {
-    const driver = createNewtonBrowserDriver({
-      allowedOrigins: ["https://example.com"],
-      ownsBrowser: true,
-    });
+    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
     primeRelatedDriver(driver);
     const calls = [];
     driver.cdp = async (method, params, route) => {
@@ -964,7 +692,7 @@ test("owned-browser unpaused popups are proxy-guarded and never become actionabl
     ["about:blank", "https://denied.test/popup", "blocked"],
     ["about:blank", "https://example.com/popup", "verified"],
   ]) {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], ownsBrowser: true });
+    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
     primeRelatedDriver(driver);
     const calls = [];
     driver.cdp = async (method, params, route) => {
@@ -982,10 +710,10 @@ test("owned-browser unpaused popups are proxy-guarded and never become actionabl
           targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: changedUrl },
         });
       }
-      return { status: "verified", verified: true, changed: {} };
+      return { status: "verified", changed: {} };
     };
 
-    const result = await driver.executeAction({ kind: "click", target: { selector: "#popup" } });
+    const result = await driver.executeAction({ kind: "click", selector: "#popup" });
     assert.equal(result.status, expectedStatus);
     assert.equal(driver.targetRegistry.targetForSession("popup-session"), undefined);
     assert.equal(calls.some((call) => call.method === "Fetch.enable" && call.route?.sessionId === "popup-session"), false);
@@ -998,7 +726,7 @@ test("owned-browser unpaused popups are proxy-guarded and never become actionabl
 });
 
 test("owned-browser unpaused child setup is deferred across input and flushed afterward", async () => {
-  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], ownsBrowser: true });
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
   primeRelatedDriver(driver);
   driver.activeCommandToken = 7;
   const calls = [];
@@ -1030,7 +758,7 @@ test("owned-browser child setup excludes a transient unconfigurable route withou
     targetInfo: { targetId: "child", type: "iframe", url: "https://example.com/frame" },
   };
   const makeDriver = () => {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], ownsBrowser: true });
+    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
     primeRelatedDriver(driver);
     const calls = [];
     driver.cdp = async (method, params, route) => {
@@ -1073,10 +801,10 @@ test("related popup prevention is not authoritative before close acknowledgement
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://denied.test/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
   let settled = false;
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } }).finally(() => { settled = true; });
+  const action = driver.executeAction({ kind: "click", selector: "#open" }).finally(() => { settled = true; });
   await started;
   assert.equal(settled, false);
   acknowledgeClose();
@@ -1100,11 +828,11 @@ test("related about:blank is controlled and resumed before its first Document se
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "about:blank" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
 
   let settled = false;
-  const action = driver.executeAction({ kind: "click", target: { selector: "#x" } }).finally(() => { settled = true; });
+  const action = driver.executeAction({ kind: "click", selector: "#x" }).finally(() => { settled = true; });
   await resumed;
   await Promise.resolve();
   assert.equal(settled, false);
@@ -1139,10 +867,10 @@ test("related about:blank allowed Document settles from browser target commit wi
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "about:blank" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
 
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const action = driver.executeAction({ kind: "click", selector: "#open" });
   await resumed;
   await driver.recordDebuggerEvent({ sessionId: "popup-session" }, "Fetch.requestPaused", {
     requestId: "allowed-document",
@@ -1181,7 +909,7 @@ test("related popup prevention settles before root post-click probing", async ()
     return { kind: "observation_delta", nodes: [] };
   };
 
-  const result = await driver.executeAction({ kind: "click", target: { selector: "#popup" } });
+  const result = await driver.executeAction({ kind: "click", selector: "#popup" });
   assert.equal(result.status, "blocked");
   assert.equal(result.reason, "ungranted_target");
   assert.equal(result.changed.containmentPrevention, "ungranted_target");
@@ -1208,10 +936,10 @@ test("command waits for deferred child Document prevention and does not attribut
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://example.com/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
   let actionSettled = false;
-  const first = driver.executeAction({ kind: "click", target: { selector: "#open" } }).finally(() => { actionSettled = true; });
+  const first = driver.executeAction({ kind: "click", selector: "#open" }).finally(() => { actionSettled = true; });
   await resumed;
   await Promise.resolve();
   assert.equal(actionSettled, false);
@@ -1224,8 +952,8 @@ test("command waits for deferred child Document prevention and does not attribut
   assert.equal(firstResult.status, "blocked");
   assert.equal(firstResult.reason, "ungranted_navigation");
 
-  driver.executeActionNow = async () => ({ status: "verified", verified: true, changed: {} });
-  const second = await driver.executeAction({ kind: "click", target: { selector: "#next" } });
+  driver.executeActionNow = async () => ({ status: "verified", changed: {} });
+  const second = await driver.executeAction({ kind: "click", selector: "#next" });
   assert.equal(second.status, "verified");
   assert.equal(second.changed.containmentPrevention, undefined);
 });
@@ -1248,8 +976,8 @@ test("root causal fence captures a related attach deferred beyond action dispatc
     if (method === "Target.closeTarget") return { success: true };
     return {};
   };
-  driver.executeActionNow = async () => ({ status: "verified", verified: true, changed: {} });
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  driver.executeActionNow = async () => ({ status: "verified", changed: {} });
+  const action = driver.executeAction({ kind: "click", selector: "#open" });
   await resumed;
   await driver.recordDebuggerEvent({ sessionId: "popup-session" }, "Fetch.requestPaused", {
     requestId: "denied", request: { url: "https://denied.test", method: "GET" }, resourceType: "Document",
@@ -1275,9 +1003,9 @@ test("concrete granted noopener popup settles only after allowed redirect Docume
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", url: "https://example.com/start" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const action = driver.executeAction({ kind: "click", selector: "#open" });
   await resumed;
   for (const [requestId, url] of [["doc-1", "https://example.com/start"], ["doc-2", "https://redirect.test/final"]]) {
     await driver.recordDebuggerEvent({ sessionId: "popup-session" }, "Fetch.requestPaused", {
@@ -1298,9 +1026,9 @@ test("concrete granted noopener popup settles only after allowed redirect Docume
       request: { url: "https://denied.test/write", method: "POST" },
       resourceType: "Fetch",
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const next = await driver.executeAction({ kind: "click", target: { selector: "#next" } });
+  const next = await driver.executeAction({ kind: "click", selector: "#next" });
   assert.equal(next.status, "verified");
   assert.equal(next.changed.containmentPrevention, undefined);
   await driver.closeOutstandingRelatedLaunches();
@@ -1322,9 +1050,9 @@ test("unexpected related target detach before allowed commit is uncertainty", as
       sessionId: "popup-session", waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://example.com/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const action = driver.executeAction({ kind: "click", selector: "#open" });
   await resumed;
   await driver.recordDebuggerEvent({ sessionId: "browser-control" }, "Target.detachedFromTarget", {
     targetId: "popup", sessionId: "popup-session",
@@ -1381,10 +1109,10 @@ test("sequential closed popup failures consume only their originating command to
         targetId,
         sessionId,
       });
-      return { status: "verified", verified: true, changed: {} };
+      return { status: "verified", changed: {} };
     };
     await assert.rejects(
-      driver.executeAction({ kind: "click", target: { selector: "#open" } }),
+      driver.executeAction({ kind: "click", selector: "#open" }),
       (error) => error?.code === "containment_fence_failed",
     );
     assert.equal(driver.relatedCommandFailures.size, 0);
@@ -1392,8 +1120,8 @@ test("sequential closed popup failures consume only their originating command to
   }
 
   driver.containmentReady = true;
-  driver.executeActionNow = async () => ({ status: "verified", verified: true, changed: {} });
-  const next = await driver.executeAction({ kind: "click", target: { selector: "#next" } });
+  driver.executeActionNow = async () => ({ status: "verified", changed: {} });
+  const next = await driver.executeAction({ kind: "click", selector: "#next" });
   assert.equal(next.status, "verified");
   assert.equal(next.changed.containmentPrevention, undefined);
   assert.equal(driver.relatedCommandFailures.size, 0);
@@ -1422,25 +1150,20 @@ test("related page must be paused and a queued setup failure prevents command co
       waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://denied.test" },
     }).catch(() => {});
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
   await assert.rejects(
-    driver.executeAction({ kind: "click", target: { selector: "#open" } }),
+    driver.executeAction({ kind: "click", selector: "#open" }),
     (error) => error?.code === "containment_fence_failed",
   );
   assert.equal(driver.containmentReady, false);
 });
 
 test("related popup setup failures close before fail-closed teardown", async () => {
-  const originalChrome = globalThis.chrome;
-  globalThis.chrome = { debugger: { async detach() {} }, runtime: { lastError: null } };
-  try {
-    for (const failedMethod of ["Target.setAutoAttach", "Runtime.enable", "Fetch.enable"]) {
+  for (const failedMethod of ["Target.setAutoAttach", "Runtime.enable", "Fetch.enable"]) {
       const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
       primeRelatedDriver(driver);
       driver.attached = true;
-      driver.tabId = 17;
-      driver.sendToPage = async () => {};
       const calls = [];
       driver.cdp = async (method, params, route) => {
         calls.push({ method, params, route });
@@ -1456,21 +1179,17 @@ test("related popup setup failures close before fail-closed teardown", async () 
       const close = calls.findIndex((call) => call.method === "Target.closeTarget");
       const disable = calls.findIndex((call) => call.method === "Target.setAutoAttach" && call.params?.autoAttach === false);
       assert.equal(close >= 0 && close < disable, true, failedMethod);
-    }
-  } finally {
-    globalThis.chrome = originalChrome;
   }
 });
 
 test("failed popup close blocks teardown and retains exact cleanup identity", async () => {
-  const originalChrome = globalThis.chrome;
-  let chromeDetach = 0;
-  globalThis.chrome = { debugger: { async detach() { chromeDetach += 1; } }, runtime: { lastError: null } };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  let rootDetach = 0;
+  const driver = createNewtonBrowserDriver({
+    allowedOrigins: ["https://example.com"],
+    debuggerPort: { async attach() {}, async detach() { rootDetach += 1; }, async sendCommand() { return {}; } },
+  });
     primeRelatedDriver(driver);
     driver.attached = true;
-    driver.tabId = 17;
     driver.cdp = async (method) => method === "Target.closeTarget" ? { success: false } : {};
     driver.closing = true;
     await assert.rejects(driver.recordDebuggerEvent({ sessionId: "browser-control" }, "Target.attachedToTarget", {
@@ -1480,21 +1199,13 @@ test("failed popup close blocks teardown and retains exact cleanup identity", as
     await assert.rejects(driver.detach(), (error) => error?.code === "containment_fence_failed");
     assert.equal(driver.browserControlSessionId, "browser-control");
     assert.equal(driver.relatedLaunchTickets.has("popup"), true);
-    assert.equal(chromeDetach, 0);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  assert.equal(rootDetach, 0);
 });
 
 test("popup delivered during teardown is closed before relationship detach", async () => {
-  const originalChrome = globalThis.chrome;
-  globalThis.chrome = { debugger: { async detach() {} }, runtime: { lastError: null } };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
     primeRelatedDriver(driver);
     driver.attached = true;
-    driver.tabId = 17;
-    driver.sendToPage = async () => {};
     const order = [];
     driver.cdp = async (method, _params, route) => {
       if (method === "Target.getTargetInfo" && route?.sessionId === "browser-control" && !order.includes("delivered")) {
@@ -1509,10 +1220,7 @@ test("popup delivered during teardown is closed before relationship detach", asy
       return {};
     };
     await driver.detach();
-    assert.equal(order.indexOf("closed") < order.indexOf("detached-browser"), true);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  assert.equal(order.indexOf("closed") < order.indexOf("detached-browser"), true);
 });
 
 test("unknown flattened sessions cannot mutate buffers, dialogs, signals, or registry", async () => {
@@ -1567,9 +1275,9 @@ test("a denied related grandchild is attributed to the originating popup command
       sessionId: "parent-session", waitingForDebugger: true,
       targetInfo: { targetId: "parent-popup", type: "page", openerId: "main-target", url: "https://example.com/parent" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const action = driver.executeAction({ kind: "click", selector: "#open" });
   await parentResumed;
   await driver.recordDebuggerEvent({ sessionId: "browser-control" }, "Target.attachedToTarget", {
     sessionId: "grandchild-session", waitingForDebugger: true,
@@ -1601,9 +1309,9 @@ test("a pending popup descendant Document denial prevents its originating comman
       sessionId: "popup-session", waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://example.com/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const action = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const action = driver.executeAction({ kind: "click", selector: "#open" });
   await popupResumed;
   await driver.recordDebuggerEvent({ sessionId: "popup-session" }, "Target.attachedToTarget", {
     sessionId: "popup-child-session", waitingForDebugger: true,
@@ -1634,9 +1342,9 @@ test("a settled popup descendant denial is failed without poisoning a later comm
       sessionId: "popup-session", waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://example.com/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const first = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const first = driver.executeAction({ kind: "click", selector: "#open" });
   await driver.recordDebuggerEvent({ sessionId: "popup-session" }, "Fetch.requestPaused", {
     requestId: "popup-document", request: { url: "https://example.com/popup", method: "GET" }, resourceType: "Document",
   });
@@ -1656,9 +1364,9 @@ test("a settled popup descendant denial is failed without poisoning a later comm
       resourceType: "Document",
       frameId: "popup-child",
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const second = await driver.executeAction({ kind: "click", target: { selector: "#next" } });
+  const second = await driver.executeAction({ kind: "click", selector: "#next" });
   assert.equal(second.status, "verified");
   assert.equal(second.changed.containmentPrevention, undefined);
   assert.equal(calls.some((call) => call.method === "Fetch.failRequest" && call.route?.sessionId === "popup-child-session"), true);
@@ -1679,9 +1387,9 @@ test("a settled popup worker denial is failed without poisoning a later command"
       sessionId: "popup-session", waitingForDebugger: true,
       targetInfo: { targetId: "popup", type: "page", openerId: "main-target", url: "https://example.com/popup" },
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const first = driver.executeAction({ kind: "click", target: { selector: "#open" } });
+  const first = driver.executeAction({ kind: "click", selector: "#open" });
   await driver.recordDebuggerEvent({ sessionId: "popup-session" }, "Fetch.requestPaused", {
     requestId: "popup-document", request: { url: "https://example.com/popup", method: "GET" }, resourceType: "Document",
   });
@@ -1701,9 +1409,9 @@ test("a settled popup worker denial is failed without poisoning a later command"
       request: { url: "https://denied.test/write", method: "POST" },
       resourceType: "Fetch",
     });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
-  const second = await driver.executeAction({ kind: "click", target: { selector: "#next" } });
+  const second = await driver.executeAction({ kind: "click", selector: "#next" });
   assert.equal(second.status, "verified");
   assert.equal(second.changed.containmentPrevention, undefined);
   assert.equal(calls.some((call) => call.method === "Fetch.failRequest" && call.route?.sessionId === "popup-worker-session"), true);
@@ -1758,14 +1466,13 @@ test("related launch tickets are bounded and overflow is closed", async () => {
 });
 
 test("multiple unacknowledged overflow closes permanently fence bounded teardown", async () => {
-  const originalChrome = globalThis.chrome;
-  let chromeDetach = 0;
-  globalThis.chrome = { debugger: { async detach() { chromeDetach += 1; } }, runtime: { lastError: null } };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  let rootDetach = 0;
+  const driver = createNewtonBrowserDriver({
+    allowedOrigins: ["https://example.com"],
+    debuggerPort: { async attach() {}, async detach() { rootDetach += 1; }, async sendCommand() { return {}; } },
+  });
     primeRelatedDriver(driver);
     driver.attached = true;
-    driver.tabId = 17;
     driver.cdp = async (method) => method === "Target.closeTarget" ? { success: false } : {};
     await assert.rejects(
       driver.closeUntrackedRelatedTarget("overflow-a", "browser-control", "close-a"),
@@ -1780,10 +1487,7 @@ test("multiple unacknowledged overflow closes permanently fence bounded teardown
     driver.cdp = async (method) => method === "Target.closeTarget" ? { success: true } : {};
     await assert.rejects(driver.detach(), (error) => error?.code === "containment_fence_failed");
     assert.equal(driver.attached, true);
-    assert.equal(chromeDetach, 0);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  assert.equal(rootDetach, 0);
 });
 
 test("wrong browser sessions and separate drivers cannot admit each other's popups", async () => {
@@ -1809,45 +1513,33 @@ test("wrong browser sessions and separate drivers cannot admit each other's popu
   assert.equal(first.targetRegistry.targetForSession("stale-popup"), undefined);
 });
 
-test("attach fails closed when relationship-scoped browser capability setup fails", async () => {
-  const originalChrome = globalThis.chrome;
+test("attach fails closed when browser-page auto-attach setup fails", async () => {
   let detached = 0;
-  globalThis.chrome = {
-    debugger: { async attach() {}, async detach() { detached += 1; } },
-    runtime: { lastError: null },
-  };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    driver.sendToPage = async () => {};
+  const debuggerPort = { async attach() {}, async detach() { detached += 1; }, async sendCommand() { return {}; } };
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], debuggerPort });
     driver.cdp = async (method) => {
+      if (method === "Target.getTargetInfo") return { targetInfo: { targetId: "main-target", type: "page", url: "about:blank" } };
       if (method === "Target.attachToBrowserTarget") return { sessionId: "browser-control" };
-      if (method === "Target.autoAttachRelated") throw new Error("unsupported");
+      if (method === "Target.setAutoAttach") throw new Error("unsupported");
       return {};
     };
-    await assert.rejects(driver.attach(17), (error) => error?.code === "related_autoattach_failed");
+    await assert.rejects(driver.attach(), (error) => error?.code === "browser_page_autoattach_failed");
     assert.equal(driver.attached, false);
     assert.equal(driver.containmentReady, false);
     assert.equal(driver.browserControlSessionId, null);
-    assert.equal(detached, 1);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  assert.equal(detached, 1);
 });
 
 test("attach failures expose only exact closed stage codes and preserve typed security failures", async () => {
-  const originalChrome = globalThis.chrome;
   let failDebuggerAttach = false;
-  globalThis.chrome = {
-    debugger: {
-      async attach() { if (failDebuggerAttach) throw new Error("raw debugger path"); },
-      async detach() {},
-    },
-    runtime: { lastError: null },
+  const debuggerPort = {
+    async attach() { if (failDebuggerAttach) throw new Error("raw debugger path"); },
+    async detach() {},
+    async sendCommand() { return {}; },
   };
-  try {
     failDebuggerAttach = true;
-    const rootAttach = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    await assert.rejects(rootAttach.attach(17), (error) => {
+    const rootAttach = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], debuggerPort });
+    await assert.rejects(rootAttach.attach(), (error) => {
       assert.deepEqual({ code: error?.code, message: error?.message, detail: error?.detail }, {
         code: "root_debugger_attach_failed", message: "root_debugger_attach_failed", detail: undefined,
       });
@@ -1859,27 +1551,27 @@ test("attach failures expose only exact closed stage codes and preserve typed se
     const stages = [
       { code: "root_protocol_setup_failed", fail(method) { return method === "DOM.enable"; } },
       { code: "browser_control_attach_failed", fail(method) { return method === "Target.attachToBrowserTarget"; } },
-      { code: "related_autoattach_failed", fail(method) { return method === "Target.autoAttachRelated"; } },
+      { code: "browser_page_autoattach_failed", fail(method, _params, route) { return method === "Target.setAutoAttach" && route?.sessionId === "browser-control"; } },
       { code: "browser_control_fence_failed", fail(method, _params, route) { return method === "Target.getTargetInfo" && route?.sessionId === "browser-control"; } },
-      { code: "root_autoattach_failed", fail(method, params) { return method === "Target.setAutoAttach" && params?.autoAttach === true; } },
+      { code: "root_autoattach_failed", fail(method, params, route) { return method === "Target.setAutoAttach" && params?.autoAttach === true && route?.sessionId === undefined; } },
       { code: "calibration_failed", calibration: true, fail() { return false; } },
-      { code: "overlay_readiness_failed", overlay: true, fail() { return false; } },
     ];
     for (const stage of stages) {
-      const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-      driver.sendToPage = async () => {};
+      const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], debuggerPort });
       driver.calibrate = stage.calibration ? async () => { throw new Error("raw calibration metrics"); } : async () => {};
-      driver.reassertOverlay = stage.overlay ? async () => { throw new Error("raw overlay page detail"); } : async () => {};
       let failed = false;
       driver.cdp = async (method, params, route) => {
         if (!failed && stage.fail(method, params, route)) {
           failed = true;
           throw new Error("raw protocol and page detail");
         }
+        if (method === "Target.getTargetInfo" && route?.sessionId !== "browser-control") {
+          return { targetInfo: { targetId: "main-target", type: "page", url: "about:blank" } };
+        }
         if (method === "Target.attachToBrowserTarget") return { sessionId: "browser-control" };
         return {};
       };
-      await assert.rejects(driver.attach(17), (error) => {
+      await assert.rejects(driver.attach(), (error) => {
         assert.deepEqual({ code: error?.code, message: error?.message, detail: error?.detail }, {
           code: stage.code, message: stage.code, detail: undefined,
         });
@@ -1888,60 +1580,49 @@ test("attach failures expose only exact closed stage codes and preserve typed se
       assert.equal(driver.attached, false, stage.code);
     }
 
-    const preserved = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    preserved.sendToPage = async () => {};
+    const preserved = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], debuggerPort });
     preserved.cdp = async (method) => {
       if (method === "DOM.enable") throw Object.assign(new Error("frame_conflict"), { code: "frame_conflict" });
+      if (method === "Target.getTargetInfo") return { targetInfo: { targetId: "main-target", type: "page", url: "about:blank" } };
       return {};
     };
-    await assert.rejects(preserved.attach(17), (error) => error?.code === "frame_conflict");
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  await assert.rejects(preserved.attach(), (error) => error?.code === "frame_conflict");
 });
 
 test("attach rollback preserves retryable ownership when root debugger detach fails", async () => {
-  const originalChrome = globalThis.chrome;
   let allowDetach = false;
-  globalThis.chrome = {
-    debugger: {
-      async attach() {},
-      async detach() { if (!allowDetach) throw new Error("raw detach failure"); },
-    },
-    runtime: { lastError: null },
+  const debuggerPort = {
+    async attach() {},
+    async detach() { if (!allowDetach) throw new Error("raw detach failure"); },
+    async sendCommand() { return {}; },
   };
-  try {
-    const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-    driver.sendToPage = async () => {};
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], debuggerPort });
     driver.cdp = async (method) => {
+      if (method === "Target.getTargetInfo") return { targetInfo: { targetId: "main-target", type: "page", url: "about:blank" } };
       if (method === "Target.attachToBrowserTarget") return { sessionId: "browser-control" };
-      if (method === "Target.autoAttachRelated") throw new Error("unsupported");
+      if (method === "Target.setAutoAttach") throw new Error("unsupported");
       return {};
     };
-    await assert.rejects(driver.attach(17), (error) => {
+    await assert.rejects(driver.attach(), (error) => {
       assert.equal(error?.code, "shutdown_detach_failed");
       assert.equal(error?.message, "shutdown_detach_failed");
       return true;
     });
     assert.equal(driver.attached, true);
-    assert.equal(driver.tabId, 17);
-    assert.equal(driver.mainTargetId, "tab-17");
+    assert.equal(driver.mainTargetId, "main-target");
     assert.equal(driver.relationshipCleanupComplete, true);
     assert.equal(driver.browserControlSessionId, null);
     allowDetach = true;
     await driver.detach();
-    assert.equal(driver.attached, false);
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
+  assert.equal(driver.attached, false);
 });
 
 test("mutating command fails closed when browser control identity is missing or detached", async () => {
   const missing = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
   missing.containmentReady = true;
-  missing.executeActionNow = async () => ({ status: "verified", verified: true, changed: {} });
+  missing.executeActionNow = async () => ({ status: "verified", changed: {} });
   await assert.rejects(
-    missing.executeAction({ kind: "click", target: { selector: "#x" } }),
+    missing.executeAction({ kind: "click", selector: "#x" }),
     (error) => error?.code === "containment_fence_failed",
   );
   assert.equal(missing.containmentReady, false);
@@ -1951,10 +1632,10 @@ test("mutating command fails closed when browser control identity is missing or 
   detached.cdp = async () => ({});
   detached.executeActionNow = async () => {
     await detached.recordDebuggerEvent({}, "Target.detachedFromTarget", { sessionId: "browser-control" });
-    return { status: "verified", verified: true, changed: {} };
+    return { status: "verified", changed: {} };
   };
   await assert.rejects(
-    detached.executeAction({ kind: "click", target: { selector: "#x" } }),
+    detached.executeAction({ kind: "click", selector: "#x" }),
     (error) => error?.code === "containment_fence_failed",
   );
   assert.equal(detached.browserControlSessionId, null);
@@ -2013,8 +1694,9 @@ test("driver records flattened target/frame lifecycle without swallowing detach"
   assert.equal(driver.targetRegistry.getSnapshot().counts.targets.active, 1);
 });
 
-test("driver observation emits stable refs and excludes bridge overlay nodes", async () => {
+test("driver observation emits stable refs for every actionable page node", async () => {
   const driver = createNewtonBrowserDriver();
+  primeObservationDriver(driver);
   let boxCalls = 0;
   driver.evalString = async (expression) => {
     if (expression === "location.href") return "https://example.com/page";
@@ -2029,53 +1711,26 @@ test("driver observation emits stable refs and excludes bridge overlay nodes", a
       nodes: [
         axNode(101, "button", "Save"),
         axNode(102, "link", "Docs"),
-        axNode(103, "button", "Bridge cursor"),
+        axNode(103, "button", "Cursor"),
       ],
     };
   };
-  driver.isOwnedOverlayNodeCached = async (backendNodeId) => backendNodeId === 103;
+  driver.describedNodeFactsCached = async () => ({ localName: "button", attributes: {} });
   driver.boxFor = async (backendNodeId) => {
     boxCalls += 1;
     return { x: backendNodeId, y: 10, width: 80, height: 20 };
   };
 
   const first = await driver.observe({ maxNodes: 10 });
-  assert.deepEqual(first.nodes.map((node) => node.ref), ["d1:e101", "d1:e102"]);
-  assert.deepEqual(first.nodes.map((node) => node.name), ["Save", "Docs"]);
+  assert.deepEqual(first.nodes.map((node) => node.ref), ["d1:e101", "d1:e102", "d1:e103"]);
+  assert.deepEqual(first.nodes.map((node) => node.name), ["Save", "Docs", "Cursor"]);
   assert.equal(driver.refIndex.get("d1:e101").backendNodeId, 101);
   assert.equal(driver.refIndex.get("d1:e102").backendNodeId, 102);
-  assert.equal(boxCalls, 2);
-  assert.equal("frameRouting" in first, false);
+  assert.equal(boxCalls, 3);
 
   const second = await driver.observe({ maxNodes: 10 });
-  assert.deepEqual(second.nodes.map((node) => node.ref), ["d1:e101", "d1:e102"]);
-  assert.equal(boxCalls, 2, "unchanged nodes reuse cached bboxes when the page has not scrolled");
-  assert.equal("frameRouting" in second, false);
-
-  driver.targetRegistry.frameRoutingSummary = () => ({
-    attachedIframeTargetCount: 2,
-    inProcessFrameCount: 3,
-    maxAttachedIframeTargetDepth: 2,
-  });
-  const withRouting = await driver.observe({ maxNodes: 10, includeFrameRouting: true });
-  assert.deepEqual(withRouting.frameRouting, {
-    attachedIframeTargetCount: 2,
-    inProcessFrameCount: 3,
-    maxAttachedIframeTargetDepth: 2,
-  });
-});
-
-test("driver forwards the internal frame-routing observe flag only when requested", async () => {
-  const driver = createNewtonBrowserDriver();
-  const options = [];
-  driver.observe = async (value) => {
-    options.push(value);
-    return { kind: "observation", mode: "cdp", origin: "https://example.com", title: "", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date(0).toISOString() };
-  };
-  await driver.executeAction({ kind: "observe" });
-  await driver.executeAction({ kind: "observe", includeFrameRouting: true });
-  assert.equal("includeFrameRouting" in options[0], false);
-  assert.equal(options[1].includeFrameRouting, true);
+  assert.deepEqual(second.nodes.map((node) => node.ref), ["d1:e101", "d1:e102", "d1:e103"]);
+  assert.equal(boxCalls, 3, "unchanged nodes reuse cached bboxes when the page has not scrolled");
 });
 
 test("driver full-page screenshot bounds clip size and marks truncation", async () => {
@@ -2086,7 +1741,6 @@ test("driver full-page screenshot bounds clip size and marks truncation", async 
     if (expression === "document.title") return "Long page";
     return "";
   };
-  driver.sendToPage = async () => {};
   driver.cdp = async (method, params) => {
     cdpCalls.push({ method, params });
     if (method === "Page.getLayoutMetrics") {
@@ -2098,7 +1752,7 @@ test("driver full-page screenshot bounds clip size and marks truncation", async 
     return {};
   };
 
-  const result = await driver.screenshot({ fullPage: true, inline: true });
+  const result = await driver.screenshot({ fullPage: true });
   const shot = cdpCalls.find((call) => call.method === "Page.captureScreenshot");
   assert.ok(shot);
   assert.deepEqual(shot.params.clip, { x: 0, y: 0, width: 2880, height: 6000, scale: 0.5 });
@@ -2139,7 +1793,7 @@ test("driver resolveEvidence uses AX accessible name and commit signals", async 
     return {};
   };
 
-  const evidence = await driver.resolveEvidence({ kind: "click", target: { ref } });
+  const evidence = await driver.resolveEvidence({ kind: "click", ref });
   assert.deepEqual(evidence, {
     resolved: {
       role: "button",
@@ -2659,7 +2313,7 @@ test("a focused child node automatically receives trusted click input through it
   driver.paintCursorClick = () => {};
   driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
 
-  await driver.click({ kind: "click", target: { ref: "unused" } });
+  await driver.click({ kind: "click", ref: "unused" });
 
   assert.equal(calls.find((call) => call.method === "DOM.focus")?.route?.sessionId, "child-session");
   const inputCalls = calls.filter((call) => call.method.startsWith("Input."));
@@ -2682,7 +2336,7 @@ test("a same-process framed click skips root backend-id hit testing and dispatch
   driver.paintCursorClick = () => {};
   driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
 
-  await driver.click({ kind: "click", target: { ref: "unused" } });
+  await driver.click({ kind: "click", ref: "unused" });
 
   const inputCalls = calls.filter((call) => call.method.startsWith("Input."));
   assert.equal(inputCalls.length, 3);
@@ -2737,7 +2391,7 @@ test("session-backed framed click automatically dispatches one target-local stre
     driver.paintCursorClick = () => {};
     driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
 
-    await driver.click({ kind: "click", target: { ref: "unused" } });
+    await driver.click({ kind: "click", ref: "unused" });
 
     const ordered = calls.filter((call) => call.method === "verify-framed-point" || call.method.startsWith("Input."));
     assert.deepEqual(ordered.map((call) => [call.method, call.params?.type ?? null]), [
@@ -2813,7 +2467,7 @@ test("automatic target-session click fails closed without a unique live child se
     driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
     driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date(0).toISOString() });
 
-    const result = await driver.click({ kind: "click", target: { ref: "unused" } });
+    const result = await driver.click({ kind: "click", ref: "unused" });
     assert.equal(result.status, "stale_target");
     assert.equal(calls.some((call) => call.method === "Input.dispatchMouseEvent" && call.params?.type !== "mouseMoved"), false);
     assert.equal(calls.some((call) => call.method.startsWith("Input.")), false);
@@ -2965,7 +2619,7 @@ test("automatic target-session click handles detach by exact dispatch phase and 
       return {};
     };
 
-    const result = await driver.click({ kind: "click", target: { ref: "unused" } });
+    const result = await driver.click({ kind: "click", ref: "unused" });
     await driver.inputDispatcher.whenIdle();
     return { inputTypes, result };
   };
@@ -2983,7 +2637,7 @@ test("automatic target-session click handles detach by exact dispatch phase and 
 });
 
 test("owned root click reports a missing release acknowledgement once after causal verification", async () => {
-  const driver = createNewtonBrowserDriver({ ownsBrowser: true });
+  const driver = createNewtonBrowserDriver();
   const inputCalls = [];
   let signatures = 0;
   let waitForInput = null;
@@ -3014,7 +2668,7 @@ test("owned root click reports a missing release acknowledgement once after caus
 
   const result = await driver.click({
     kind: "click",
-    target: { selector: "#popup" },
+    selector: "#popup",
     waitFor: { text: "popup-opened" },
     timeoutMs: 4_000,
   });
@@ -3062,7 +2716,7 @@ test("automatic target-session click keeps root and child dialogs session scoped
   const rootCalls = [];
   rootDialog.dialogTracker.open("root", { type: "alert", message: "root" });
   rootDialog.cdp = async (method, params, route) => { rootCalls.push({ method, params, route }); return {}; };
-  await rootDialog.click({ kind: "click", target: { ref: "unused" } });
+  await rootDialog.click({ kind: "click", ref: "unused" });
   assert.equal(rootCalls.filter((call) => call.method.startsWith("Input.")).length, 3);
 
   const childDialog = makeDriver();
@@ -3074,7 +2728,7 @@ test("automatic target-session click keeps root and child dialogs session scoped
   );
   childDialog.cdp = async (method, params, route) => { childCalls.push({ method, params, route }); return {}; };
   await assert.rejects(
-    childDialog.click({ kind: "click", target: { ref: "unused" } }),
+    childDialog.click({ kind: "click", ref: "unused" }),
     (error) => error?.code === "dialog_blocked",
   );
   assert.equal(childCalls.some((call) => call.method.startsWith("Input.")), false);
@@ -3089,7 +2743,7 @@ test("driver rejects ambiguous accessible-name and selector targets", async () =
     ],
   });
   await assert.rejects(
-    accessible.resolveTarget({ kind: "click", target: { role: "button", name: "Duplicate target", exact: true } }),
+    accessible.resolveTarget({ kind: "click", role: "button", name: "Duplicate target", exact: true }),
     /ambiguous/,
   );
 
@@ -3099,7 +2753,7 @@ test("driver rejects ambiguous accessible-name and selector targets", async () =
     if (method === "DOM.querySelectorAll") return { nodeIds: [2, 3] };
     return {};
   };
-  await assert.rejects(selector.resolveTarget({ kind: "click", target: { selector: ".duplicate" } }), /ambiguous/);
+  await assert.rejects(selector.resolveTarget({ kind: "click", selector: ".duplicate" }), /ambiguous/);
 });
 
 test("driver reports target_moved when an attached target never stabilizes", async () => {
@@ -3109,13 +2763,14 @@ test("driver reports target_moved when an attached target never stabilizes", asy
   driver.cdp = async () => ({});
   driver.observe = async () => ({ kind: "observation", nodes: [], nodeCount: 0, capturedAt: "2026-07-10T00:00:00.000Z" });
 
-  const result = await driver.click({ kind: "click", target: { ref: "e7" } });
+  const result = await driver.click({ kind: "click", ref: "e7" });
   assert.equal(result.status, "stale_target");
   assert.equal(result.reason, "target_moved");
 });
 
 test("driver observes same-origin iframe AX trees and excludes cross-origin frames", async () => {
   const driver = createNewtonBrowserDriver();
+  primeObservationDriver(driver);
   const requestedFrames = [];
   driver.evalString = async (expression) => {
     if (expression === "location.href") return "https://example.com/page";
@@ -3141,7 +2796,6 @@ test("driver observes same-origin iframe AX trees and excludes cross-origin fram
     }
     return {};
   };
-  driver.isOwnedOverlayNodeCached = async () => false;
   driver.boxFor = async (backendNodeId) => ({ x: backendNodeId, y: 10, width: 80, height: 20 });
 
   const observation = await driver.observe({ maxNodes: 10 });
@@ -3292,10 +2946,10 @@ test("missing loader identity preserves snapshot behavior and keeps navigation e
 
 test("driver enriches AX state and same-origin DOM facts without mutating the page", async () => {
   const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  primeObservationDriver(driver);
   const calls = [];
   driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/form" : expression === "document.title" ? "Form" : "";
   driver.evalNumber = async () => 0;
-  driver.isOwnedOverlayNodeCached = async () => false;
   driver.boxFor = async (backendNodeId) => ({ x: backendNodeId, y: 1, width: 20, height: 10 });
   driver.cdp = async (method, params) => {
     calls.push({ method, params });
@@ -3331,10 +2985,10 @@ test("driver enriches AX state and same-origin DOM facts without mutating the pa
 
 test("optional interactive discovery recovers an AX-missing control with zero DOM writes", async () => {
   const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  primeObservationDriver(driver);
   const calls = [];
   driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/app" : expression === "document.title" ? "App" : "";
   driver.evalNumber = async () => 0;
-  driver.isOwnedOverlayNodeCached = async () => false;
   driver.boxFor = async () => ({ x: 1, y: 2, width: 30, height: 12 });
   driver.axNameFor = async () => "Custom action";
   driver.elementFacts = async () => ({ role: "button", accessibleName: "Custom action", disabled: false });
@@ -3357,10 +3011,10 @@ test("optional interactive discovery recovers an AX-missing control with zero DO
 
 test("diff observation reports state-only AX changes", async () => {
   const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  primeObservationDriver(driver);
   let checked = false;
   driver.evalString = async (expression) => expression === "location.href" ? "https://example.com/form" : expression === "document.title" ? "Form" : "";
   driver.evalNumber = async () => 0;
-  driver.isOwnedOverlayNodeCached = async () => false;
   driver.describedNodeFactsCached = async () => ({ localName: "input", attributes: { type: "checkbox" } });
   driver.boxFor = async () => ({ x: 1, y: 1, width: 20, height: 20 });
   driver.cdp = async (method) => {
@@ -3453,7 +3107,7 @@ test("driver observes and resolves a granted OOPIF through its exact flattened s
   const observation = await driver.observe({});
   const ref = observation.nodes[0].ref;
   assert.match(ref, /^d1:f\d+:e77$/);
-  assert.equal((await driver.resolveTarget({ target: { ref } })).sessionId, "child-session");
+  assert.equal((await driver.resolveTarget({ kind: "click", ref })).sessionId, "child-session");
   assert.equal(calls.some((call) => call.method === "Accessibility.getFullAXTree" && call.route?.sessionId === "child-session"), true);
   assert.equal(calls.some((call) => call.method === "DOM.getContentQuads" && call.route?.sessionId === "child-session"), true);
 });
@@ -3803,7 +3457,7 @@ test("driver routes a composite-ref fill through the recorded child session", as
   driver.cdp = async (_method, _params, route) => { routed.push(route); return {}; };
   driver.observeDelta = async () => ({ kind: "observation_delta", nodes: [], nodeCount: 0 });
 
-  await driver.fill({ kind: "fill", target: { ref }, value: "hello" });
+  await driver.fill({ kind: "fill", ref, value: "hello" });
   assert.equal(routed.length > 5, true);
   assert.equal(routed.some((route) => route?.sessionId === "child-session"), true);
   assert.equal(routed.some((route) => route?.sessionId === undefined), false);
@@ -3843,7 +3497,7 @@ test("framed fill verifies after pointer movement and aborts all post-failure in
   const successActionablePoint = success.actionablePoint;
   success.actionablePoint = async (...args) => { successCalls.push({ method: "actionable-point" }); return successActionablePoint(...args); };
   success.verifyFramedPoint = async () => { successCalls.push({ method: "verify-framed-point" }); return true; };
-  await success.fill({ kind: "fill", target: { ref: "unused" }, value: "hello" });
+  await success.fill({ kind: "fill", ref: "unused", value: "hello" });
   assert.equal(successCalls.findIndex((call) => call.method === "DOM.focus")
     < successCalls.findIndex((call) => call.method === "actionable-point"), true);
   const successOrder = successCalls
@@ -3871,7 +3525,7 @@ test("framed fill verifies after pointer movement and aborts all post-failure in
     blockedCalls.push({ method: "verify-framed-point" });
     return false;
   };
-  const result = await blocked.fill({ kind: "fill", target: { ref: "unused" }, value: "must-not-dispatch" });
+  const result = await blocked.fill({ kind: "fill", ref: "unused", value: "must-not-dispatch" });
   assert.equal(result.status, "stale_target");
   assert.equal(result.reason, "frame_owner_hit_failed");
   const postFailureInput = blockedCalls.filter((call) => call.method.startsWith("Input.") && call.params?.type !== "mouseMoved");
@@ -3888,7 +3542,7 @@ test("framed fill verifies after pointer movement and aborts all post-failure in
     }
     return {};
   };
-  const uncertainResult = await uncertain.fill({ kind: "fill", target: { ref: "unused" }, value: "must-not-retry" });
+  const uncertainResult = await uncertain.fill({ kind: "fill", ref: "unused", value: "must-not-retry" });
   assert.equal(uncertainResult.status, "dispatched_unverified");
   assert.equal(uncertainResult.reason, "input_dispatch_uncertain");
   assert.equal(uncertainCalls.some((call) => call.method === "Input.insertText"), false);
@@ -3902,7 +3556,6 @@ test("framed hover fails closed when its post-move projected proof changes", asy
     targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "child-host", sessionId: "child-session",
   });
   const calls = [];
-  let reportedMove = false;
   let settled = false;
   driver.resolveTarget = async () => ({ targetId: "child", sessionId: "child-session", frameId: "child-root", backendNodeId: 77 });
   driver.actionablePoint = async () => {
@@ -3923,14 +3576,12 @@ test("framed hover fails closed when its post-move projected proof changes", asy
     return false;
   };
   driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
-  driver.sendToPage = async () => { reportedMove = true; };
   driver.settleShort = async () => { settled = true; };
   driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date(0).toISOString() });
 
-  const result = await driver.hover({ kind: "hover", target: { ref: "unused" } });
+  const result = await driver.hover({ kind: "hover", ref: "unused" });
   assert.equal(result.status, "stale_target");
   assert.equal(result.reason, "frame_topology_changed");
-  assert.equal(reportedMove, false);
   assert.equal(settled, false);
   assert.deepEqual(calls.filter((call) => call.method.startsWith("Input.") || call.method === "verify-framed-point")
     .map((call) => [call.method, call.params?.type ?? null]), [
@@ -3958,9 +3609,9 @@ test("targeted keyboard actions use the child session while global and sessionle
       if (method === "Runtime.callFunctionOn") return { result: { value: false } };
       return {};
     };
-    if (kind === "press") await driver.press({ kind: "press", target: { ref: "unused" }, keys: ["Enter"] });
-    if (kind === "clear") await driver.clear({ kind: "clear", target: { ref: "unused" } });
-    if (kind === "select") await driver.select({ kind: "select", target: { ref: "unused" }, value: "Choice" });
+    if (kind === "press") await driver.press({ kind: "press", ref: "unused", keys: ["Enter"] });
+    if (kind === "clear") await driver.clear({ kind: "clear", ref: "unused" });
+    if (kind === "select") await driver.select({ kind: "select", ref: "unused", value: "Choice" });
     return calls.filter((call) => call.method.startsWith("Input."));
   };
 
@@ -3983,8 +3634,8 @@ test("targeted keyboard actions use the child session while global and sessionle
     if (method === "Runtime.callFunctionOn") return { result: { value: true } };
     return {};
   };
-  await domOnly.select({ kind: "select", target: { ref: "unused" }, value: "Choice" });
-  await domOnly.setFiles({ kind: "set_files", target: { ref: "unused" }, files: ["C:\\fixture\\asset.png"] });
+  await domOnly.select({ kind: "select", ref: "unused", value: "Choice" });
+  await domOnly.setFiles({ kind: "set_files", ref: "unused", files: ["C:\\fixture\\asset.png"] });
   assert.equal(domCalls.some((call) => call.method.startsWith("Input.")), false);
   assert.equal(domCalls.filter((call) => call.method === "Runtime.callFunctionOn" || call.method === "DOM.setFileInputFiles")
     .every((call) => call.route?.sessionId === "child-session"), true);
@@ -4017,7 +3668,7 @@ test("driver never heals stale or detached composite refs by semantic rematching
   driver.targetRegistry.commitTopLevelDocument("main");
   let observed = false;
   driver.observe = async () => { observed = true; return { nodes: [{ ref: "d2:e7", role: "button", name: "Same name" }] }; };
-  await assert.rejects(driver.resolveTarget({ target: { ref: staleRef, name: "Same name" } }), (error) => error?.code === "stale_target");
+  await assert.rejects(driver.resolveTarget({ kind: "click", ref: staleRef, name: "Same name" }), (error) => error?.code === "stale_target");
   assert.equal(observed, false);
 });
 
@@ -4071,7 +3722,6 @@ test("driver verifies scroll state when Chrome drops the wheel acknowledgement",
     if (method === "Input.dispatchMouseEvent") throw new Error("cdp_timeout_input_dispatchmouseevent");
     return {};
   };
-  driver.sendToPage = async () => {};
   driver.observeDelta = async () => ({ kind: "observation_delta", nodes: [] });
 
   const result = await driver.scroll({ value: 900 });
@@ -4144,7 +3794,7 @@ test("driver click dispatches complete CDP mouse button state", async () => {
     capturedAt: "2026-06-30T00:00:00.000Z",
   });
 
-  await driver.click({ kind: "click", target: { ref: "e7" } });
+  await driver.click({ kind: "click", ref: "e7" });
 
   assert.deepEqual(commandOrder.slice(0, 4), ["DOM.focus", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent"]);
   assert.deepEqual(mouseEvents, [
@@ -4167,7 +3817,7 @@ test("driver rejects a target that moves after pointer entry before pressing", a
   driver.pressMouse = async () => { pressed = true; };
   driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-07-10T00:00:00.000Z" });
 
-  const result = await driver.click({ kind: "click", target: { ref: "e7" } });
+  const result = await driver.click({ kind: "click", ref: "e7" });
 
   assert.equal(result.status, "stale_target");
   assert.equal(result.reason, "target_moved");
@@ -4197,7 +3847,7 @@ test("driver returns bounded evidence for an element intercepting a click", asyn
   };
   driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z" });
 
-  const result = await driver.click({ kind: "click", target: { ref: "d2:e7" } });
+  const result = await driver.click({ kind: "click", ref: "d2:e7" });
   assert.equal(result.reason, "click_intercepted");
   assert.deepEqual(result.changed.blocker, blocker);
   assert.equal(pressed, false);
@@ -4237,12 +3887,10 @@ test("driver reconciles post-action network writes after an allowed click", asyn
     capturedAt: "2026-06-30T00:00:00.000Z",
   });
 
-  const result = await driver.click({ kind: "click", target: { ref: "e7" } });
+  const result = await driver.click({ kind: "click", ref: "e7" });
   assert.equal(result.status, "blocked");
-  assert.equal(result.verified, false);
   assert.equal(result.reason, "post_action_network_write");
   assert.equal(result.changed.networkWrite, true);
-  assert.equal(result.observation.actionStatus, "blocked");
   assert.equal(result.observation.changed.networkWrite, true);
 });
 
@@ -4269,7 +3917,7 @@ test("driver ignores read-only network traffic during post-action reconciliation
     capturedAt: "2026-06-30T00:00:00.000Z",
   });
 
-  const result = await driver.click({ kind: "click", target: { ref: "e7" } });
+  const result = await driver.click({ kind: "click", ref: "e7" });
   assert.equal(result.status, "dispatched_unverified");
   assert.equal(result.changed.networkWrite, undefined);
 });
@@ -4296,7 +3944,7 @@ test("driver sets exact files through DOM.setFileInputFiles and returns sanitize
     return {};
   };
 
-  const result = await driver.executeAction({ kind: "set_files", target: { ref: "e7" }, files: ["C:\\fixtures\\asset.png"] });
+  const result = await driver.executeAction({ kind: "set_files", ref: "e7", files: ["C:\\fixtures\\asset.png"] });
   assert.deepEqual(commands, [{ method: "DOM.setFileInputFiles", params: { backendNodeId: 7, files: ["C:\\fixtures\\asset.png"] } }]);
   assert.equal(result.status, "verified");
   assert.deepEqual(result.changed.files, [{ filename: "asset.png", sizeBytes: 12, mimeType: "image/png" }]);
@@ -4315,14 +3963,14 @@ test("driver requires a fresh ref for hidden inputs, enforces multiple, and supp
   driver.cdp = async (method, params) => { commands.push({ method, params }); return {}; };
 
   await assert.rejects(
-    driver.executeAction({ kind: "set_files", target: { selector: "#hidden" }, files: ["C:\\fixtures\\asset.png"] }),
+    driver.executeAction({ kind: "set_files", selector: "#hidden", files: ["C:\\fixtures\\asset.png"] }),
     /hidden_file_input_requires_ref/,
   );
   await assert.rejects(
-    driver.executeAction({ kind: "set_files", target: { ref: "e9" }, files: ["C:\\fixtures\\one.png", "C:\\fixtures\\two.png"] }),
+    driver.executeAction({ kind: "set_files", ref: "e9", files: ["C:\\fixtures\\one.png", "C:\\fixtures\\two.png"] }),
     /file_input_not_multiple/,
   );
-  const cancelled = await driver.executeAction({ kind: "set_files", target: { ref: "e9" }, files: [] });
+  const cancelled = await driver.executeAction({ kind: "set_files", ref: "e9", files: [] });
   assert.equal(cancelled.status, "verified");
   assert.deepEqual(commands, [{ method: "DOM.setFileInputFiles", params: { backendNodeId: 9, files: [] } }]);
   assert.equal(commands.some((entry) => /click|submit/i.test(entry.method)), false);
@@ -4330,6 +3978,7 @@ test("driver requires a fresh ref for hidden inputs, enforces multiple, and supp
 
 test("driver observation emits a fresh ref for a hidden file input", async () => {
   const driver = createNewtonBrowserDriver();
+  primeObservationDriver(driver);
   driver.cdp = async (method) => {
     if (method === "Runtime.evaluate") return { result: { value: method.includes?.("scrollY") ? "0" : "https://example.com/upload" } };
     if (method === "Accessibility.getFullAXTree") return { nodes: [] };
@@ -4342,7 +3991,7 @@ test("driver observation emits a fresh ref for a hidden file input", async () =>
   driver.fileInputDisplayFacts = async () => ({ name: "Creative asset", bbox: null });
 
   const observation = await driver.observe({});
-  assert.deepEqual(observation.nodes, [{ ref: "d1:e71", role: "file", name: "Creative asset", documentEpoch: 1, target: { ref: "d1:e71" } }]);
+  assert.deepEqual(observation.nodes, [{ ref: "d1:e71", role: "file", name: "Creative asset", documentEpoch: 1 }]);
   assert.equal(driver.refIndex.get("d1:e71").backendNodeId, 71);
 });
 
@@ -4451,11 +4100,12 @@ test("driver dialog_dismiss rejects the dialog and a no-op is typed when none is
   assert.deepEqual(calls.find((c) => c.method === "Page.handleJavaScriptDialog").params, { accept: false });
 });
 
-test("driver resize applies an owned-tab viewport and persists it across re-attach", async () => {
-  const driver = createNewtonBrowserDriver({ ownsTab: true, allowedOrigins: ["https://example.com"] });
+test("driver resize applies an isolated-process viewport and persists it across re-attach", async () => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
   const calls = [];
   driver.cdp = async (method, params) => {
     calls.push({ method, params });
+    if (method === "Target.getTargetInfo") return { targetInfo: { targetId: "main-target", type: "page", url: "about:blank" } };
     return method === "Target.attachToBrowserTarget" ? { sessionId: "browser-control" } : {};
   };
   driver.settleShort = async () => {};
@@ -4469,28 +4119,10 @@ test("driver resize applies an owned-tab viewport and persists it across re-atta
   assert.equal(metrics.params.height, 768);
 
   // A re-attach must re-apply the stored viewport.
-  const originalChrome = globalThis.chrome;
-  globalThis.chrome = { debugger: { async attach() {}, async detach() {} }, runtime: { lastError: null } };
-  try {
-    calls.length = 0;
-    driver.calibrate = async () => {};
-    driver.reassertOverlay = async () => {};
-    driver.sendToPage = async () => {};
-    await driver.attach(21);
-    assert.ok(calls.some((c) => c.method === "Emulation.setDeviceMetricsOverride" && c.params.width === 1024));
-  } finally {
-    globalThis.chrome = originalChrome;
-  }
-});
-
-test("driver resize refuses a current (non-owned) tab", async () => {
-  const driver = createNewtonBrowserDriver({ ownsTab: false });
-  driver.cdp = async () => { throw new Error("should not dispatch"); };
-  driver.observe = async () => ({ kind: "observation", mode: "cdp", origin: "https://example.com", title: "Example", nodes: [], nodeCount: 0, truncated: false, capturedAt: new Date().toISOString() });
-  const result = await driver.executeAction({ kind: "resize", viewport: { width: 800, height: 600 } });
-  assert.equal(result.status, "failed");
-  assert.equal(result.reason, "resize_needs_owned_tab");
-  assert.equal(driver.sessionViewport, null);
+  calls.length = 0;
+  driver.calibrate = async () => {};
+  await driver.attach();
+  assert.ok(calls.some((c) => c.method === "Emulation.setDeviceMetricsOverride" && c.params.width === 1024));
 });
 
 test("driver buffers console output and filters by level and pattern", async () => {
@@ -4508,9 +4140,8 @@ test("driver buffers console output and filters by level and pattern", async () 
   const matched = driver.getConsole({ pattern: "careful" });
   assert.equal(matched.entries.length, 1);
   assert.equal(matched.entries[0].level, "warn");
-  const cleared = driver.getConsole({ clear: true });
-  assert.equal(cleared.entries.length, 3);
-  assert.equal(driver.getConsole({}).entries.length, 0);
+  const repeated = driver.getConsole({});
+  assert.equal(repeated.entries.length, 3);
 });
 
 test("driver buffers network request metadata without headers", async () => {
@@ -4603,7 +4234,7 @@ test("driver Fetch containment blocks ungranted effects without temporally attri
   assert.equal(signalWindow.finish().containmentPrevention, undefined);
 });
 
-test("owned-browser Fetch request churn relies on the proxy without poisoning the page session", async () => {
+test("Fetch request churn relies on the policy proxy without poisoning the page session", async () => {
   const paused = [
     {
       requestId: "vanished-denied",
@@ -4616,20 +4247,13 @@ test("owned-browser Fetch request churn relies on the proxy without poisoning th
       resourceType: "Image",
     },
   ];
-  const owned = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"], ownsBrowser: true });
-  owned.cdp = async (method) => {
+  const driver = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
+  driver.cdp = async (method) => {
     if (method === "Fetch.failRequest" || method === "Fetch.continueRequest") throw new Error("request_already_gone");
     return {};
   };
-  for (const event of paused) await owned.recordDebuggerEvent({}, "Fetch.requestPaused", event);
-  assert.equal(owned.protocolEventFailure, null);
-
-  const legacy = createNewtonBrowserDriver({ allowedOrigins: ["https://example.com"] });
-  legacy.cdp = owned.cdp;
-  await assert.rejects(
-    legacy.recordDebuggerEvent({}, "Fetch.requestPaused", paused[0]),
-    /request_already_gone/,
-  );
+  for (const event of paused) await driver.recordDebuggerEvent({}, "Fetch.requestPaused", event);
+  assert.equal(driver.protocolEventFailure, null);
 });
 
 test("driver Fetch containment blocks an unflagged unrelated Document without temporal attribution", async () => {
@@ -4759,14 +4383,13 @@ test("driver preflights explicit navigation before Page.navigate", async () => {
 test("driver screenshot honors jpeg format and quality", async () => {
   const driver = createNewtonBrowserDriver();
   let captureParams = null;
-  driver.applyDeviceEmulation = async () => ({ restore: async () => {}, clip: null });
   driver.evalNumber = async () => 100;
   driver.evalString = async (expression) => (expression === "location.href" ? "https://example.com/" : "Example");
   driver.cdp = async (method, params) => {
     if (method === "Page.captureScreenshot") { captureParams = params; return { data: "ZmFrZQ==" }; }
     return {};
   };
-  const shot = await driver.screenshot({ format: "jpeg", quality: 55, inline: true });
+  const shot = await driver.screenshot({ format: "jpeg", quality: 55 });
   assert.equal(captureParams.format, "jpeg");
   assert.equal(captureParams.quality, 55);
   assert.match(shot.dataUrl, /^data:image\/jpeg;base64,/);
@@ -4777,7 +4400,6 @@ test("driver applies trusted post-capture masking and upgrades masked JPEG to PN
   const driver = createNewtonBrowserDriver();
   const order = [];
   let captureParams = null;
-  driver.applyDeviceEmulation = async () => ({ restore: async () => { order.push("restore"); }, clip: null });
   driver.evalNumber = async () => 0;
   driver.evalString = async (expression) => (expression === "location.href" ? "https://example.com/" : "Example");
   driver.resolveMaskTargets = async () => { order.push("resolve"); return [{ backendNodeId: 7 }]; };
@@ -4793,7 +4415,6 @@ test("driver applies trusted post-capture masking and upgrades masked JPEG to PN
   };
   const shot = await driver.screenshot({
     format: "jpeg",
-    inline: true,
     clip: { x: 0, y: 0, width: 1, height: 1 },
     sensitiveZones: [{ selector: "#secret" }],
   });
@@ -4803,13 +4424,12 @@ test("driver applies trusted post-capture masking and upgrades masked JPEG to PN
   assert.equal(shot.requestedFormat, "jpeg");
   assert.equal(shot.maskDisposition, "mask_applied");
   assert.match(shot.dataUrl, /^data:image\/png;base64,/u);
-  assert.deepEqual(order, ["resolve", "pause", "measure", "capture", "resume", "restore"]);
+  assert.deepEqual(order, ["resolve", "pause", "measure", "capture", "resume"]);
 });
 
 test("driver never captures when a configured sensitive zone cannot be resolved", async () => {
   const driver = createNewtonBrowserDriver();
   let captures = 0;
-  driver.applyDeviceEmulation = async () => ({ restore: async () => {}, clip: null });
   driver.evalNumber = async () => 0;
   driver.resolveMaskTargets = async () => { throw new Error("mask_target_unavailable"); };
   driver.cdp = async (method) => { if (method === "Page.captureScreenshot") captures += 1; return {}; };
@@ -4822,8 +4442,6 @@ test("driver never captures when a configured sensitive zone cannot be resolved"
 
 test("driver propagates trusted-mask resume uncertainty after capture", async () => {
   const driver = createNewtonBrowserDriver();
-  let restored = false;
-  driver.applyDeviceEmulation = async () => ({ restore: async () => { restored = true; }, clip: null });
   driver.evalNumber = async () => 0;
   driver.evalString = async () => "";
   driver.resolveMaskTargets = async () => [{ backendNodeId: 7 }];
@@ -4836,13 +4454,11 @@ test("driver propagates trusted-mask resume uncertainty after capture", async ()
     driver.screenshot({ clip: { x: 0, y: 0, width: 1, height: 1 }, sensitiveZones: [{ selector: "#secret" }] }),
     /mask_page_resume_failed/u,
   );
-  assert.equal(restored, true);
 });
 
 test("driver derives trusted mask scroll geometry only after every target is frozen", async () => {
   const driver = createNewtonBrowserDriver();
   let frozen = false;
-  driver.applyDeviceEmulation = async () => ({ restore: async () => {}, clip: null });
   driver.resolveMaskTargets = async () => [{ backendNodeId: 7 }];
   driver.pauseForRasterMask = async () => {
     frozen = true;

@@ -1,45 +1,33 @@
-import type { BrowserAction, BrowserPendingDialog, BrowserTarget, BrowserWaitFor } from "@newton-browser/core";
+import type { BrowserAction, BrowserActionKind, BrowserPendingDialog, BrowserWaitFor } from "@newton-browser/core";
 
-export type { BrowserAction, BrowserPendingDialog, BrowserTarget, BrowserWaitFor };
+export type { BrowserAction, BrowserPendingDialog, BrowserWaitFor };
 
 export type BrowserDriverOptions = {
-  accent?: string;
-  ownerLabel?: string;
-  ownsTab?: boolean;
-  ownsBrowser?: boolean;
-  allowedOrigins?: string[];
-  debuggerPort?: DebuggerPort;
-  pageEffectsPort?: PageEffectsPort;
+  allowedOrigins: string[];
+  debuggerPort: DebuggerPort;
 };
 
 export type CdpRoute = { sessionId?: string | null; timeoutMs?: number };
 
-// Chrome's debugger API is intentionally untyped at this single adapter edge.
+// Chromium CDP is intentionally dynamic at this single private transport edge.
 // Every public payload is validated by core before reaching the driver; CDP
 // results are narrowed by each consuming method before they become public.
 // eslint is not used in this repository; keep the escape confined to this alias.
 export type CdpRecord = Record<string, any>;
 
-export type DebuggerTarget = { tabId: number | null; sessionId?: string };
+export type DebuggerTarget = { sessionId?: string };
 export type DebuggerPort = {
-  attach(target: { tabId: number }, version: string): Promise<void>;
-  detach(target: { tabId: number }): Promise<void>;
+  attach(): Promise<void>;
+  detach(): Promise<void>;
   sendCommand(target: DebuggerTarget, method: string, params: CdpRecord): Promise<CdpRecord>;
   onDebuggerEvent?(
     listener: (source: CdpRecord, method: string, params: CdpRecord) => void | Promise<void>,
   ): () => void;
 };
 
-export type PageEffectsPort = {
-  begin(tabId: number | null, options: { accent?: string; ownerLabel: string }): Promise<void>;
-  end(tabId: number | null): Promise<void>;
-  scroll(tabId: number | null, dy: number): Promise<void>;
-  move(tabId: number | null, point: Point): Promise<void>;
-  click(tabId: number | null, point: Point): Promise<void>;
-  field(tabId: number | null, rect: Box): Promise<void>;
+export type DriverAction = BrowserAction & {
+  kind: Exclude<BrowserActionKind, "fill_form">;
 };
-
-export type DriverAction = BrowserAction;
 export type DriverContext = { commandId?: string };
 
 export type DriverError = Error & { code: string; detail?: string };
@@ -68,10 +56,7 @@ export type ObserveOptions = {
 export type ScreenshotOptions = {
   sensitiveZones?: NonNullable<BrowserAction["sensitiveZones"]>;
   fullPage?: boolean;
-  waitMs?: number;
-  device?: "mobile" | "desktop";
   clip?: NonNullable<BrowserAction["clip"]>;
-  inline?: boolean;
   format?: "png" | "jpeg";
   quality?: number;
 };

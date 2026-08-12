@@ -44,13 +44,14 @@ try {
 
   const child = await runRealSites({
     ...process.env,
-    NEWTON_BROWSER_QA_OWNER: family,
+    NEWTON_BROWSER_QA_BROWSER: family,
     NEWTON_BROWSER_REAL_SITE_IDENTITY_ID: identityId,
     NEWTON_BROWSER_REAL_SITE_PROFILE_STORE: storePath,
   });
   observedSiteResults = safeSiteResults(child.receipt?.sites);
   if (child.code !== 0 || child.receipt?.ok !== true || child.receipt?.persistentIdentityRequested !== true
-    || observedSiteResults.length !== 4 || observedSiteResults.some((site) => site.status !== "passed")) {
+    || child.receipt?.persistentIdentityQa !== true || child.receipt?.authenticationPreservationClaimed !== false
+    || observedSiteResults.length !== 7 || observedSiteResults.some((site) => site.status !== "passed")) {
     fail("profile_import_read_only_qa_failed");
   }
   qaPassed = true;
@@ -163,7 +164,15 @@ function safeCode(error) {
 
 function safeSiteResults(sites) {
   if (!Array.isArray(sites)) return [];
-  const allowedIds = new Set(["rfc_editor", "wikipedia", "mercato_storefront", "w3c_accessibility"]);
+  const allowedIds = new Set([
+    "rfc_editor",
+    "wikipedia",
+    "youtube_public",
+    "reddit_public",
+    "mercato_storefront",
+    "w3c_accessibility",
+    "meta_ads_public",
+  ]);
   return sites.flatMap((site) => {
     if (!allowedIds.has(site?.id) || (site?.status !== "passed" && site?.status !== "failed")) return [];
     const errorCode = typeof site.errorCode === "string" && /^[a-z][a-z0-9_]{0,79}$/u.test(site.errorCode)

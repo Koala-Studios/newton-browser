@@ -6,104 +6,129 @@ import assert from "node:assert/strict";
 
 import { clientConfigTarget, planClientInstall, runInstall, serverInvocation } from "../src/install.ts";
 
-const ENV = { NEWTON_BROWSER_PACKAGE_SPEC: "newton-browser@9.9.9", HOME: "/home/tester", USERPROFILE: "/home/tester" };
-
-test("serverInvocation honors an explicit package spec", () => {
-  const invocation = serverInvocation(ENV);
-  assert.deepEqual(invocation, { command: "npx", args: ["--yes", "--package", "newton-browser@9.9.9", "newton-browser"] });
+const ENV = { HOME: "/home/tester", USERPROFILE: "/home/tester" };
+const INVOCATION = Object.freeze({
+  command: path.resolve("fixtures", "node"),
+  args: [path.resolve("fixtures", "newton-browser", "index.js")],
 });
 
-test("clientConfigTarget resolves per-client, per-OS paths", () => {
-  assert.deepEqual(clientConfigTarget("codex", ENV, "linux"), {
+test("serverInvocation pins one exact local Node entrypoint", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-invocation-"));
+  const command = path.join(directory, process.platform === "win32" ? "node.exe" : "node");
+  const entry = path.join(directory, "index.js");
+  fs.writeFileSync(command, "runtime");
+  fs.writeFileSync(entry, "entry");
+  if (process.platform !== "win32") fs.chmodSync(command, 0o700);
+  try {
+    assert.deepEqual(serverInvocation({ execPath: command, entryPath: entry }), {
+      command: fs.realpathSync.native(command),
+      args: [fs.realpathSync.native(entry)],
+    });
+    assert.throws(() => serverInvocation({ execPath: "node", entryPath: entry }), /server_invocation_unavailable/u);
+    assert.throws(() => serverInvocation({ execPath: command, entryPath: "index.js" }), /server_invocation_unavailable/u);
+    const linkedEntry = path.join(directory, "linked-index.js");
+    try {
+      fs.symlinkSync(entry, linkedEntry, "file");
+      assert.throws(() => serverInvocation({ execPath: command, entryPath: linkedEntry }), /server_invocation_unavailable/u);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("clientConfigTarget edits only Codex and renders generic configuration", () => {
+  assert.deepEqual(clientConfigTarget("codex", ENV, "linux", INVOCATION), {
     kind: "file",
     format: "toml",
     path: path.join("/home/tester", ".codex", "config.toml"),
   });
-  const win = clientConfigTarget("claude-desktop", { ...ENV, APPDATA: "C:/Users/t/AppData/Roaming" }, "win32");
-  assert.equal(win.kind, "file");
-  assert.ok(win.kind === "file" && win.path.includes(path.join("Claude", "claude_desktop_config.json")));
-  const mac = clientConfigTarget("claude-desktop", ENV, "darwin");
-  assert.ok(mac.kind === "file" && mac.path.includes(path.join("Library", "Application Support", "Claude")));
-  const linux = clientConfigTarget("claude-desktop", ENV, "linux");
-  assert.ok(linux.kind === "file" && linux.path.includes(path.join(".config", "Claude")));
-  const code = clientConfigTarget("claude-code", ENV, "linux");
-  assert.ok(code.kind === "manual" && code.command.startsWith("claude mcp add-json newton-browser"));
-  assert.equal(clientConfigTarget("generic", ENV, "linux").kind, "manual");
+  const generic = clientConfigTarget("generic", ENV, "linux", INVOCATION);
+  assert.equal(generic.kind, "manual");
+  assert.match(generic.command, new RegExp(escapeRegex(serializedString(INVOCATION.command))));
+  assert.match(generic.command, new RegExp(escapeRegex(serializedString(INVOCATION.args[0]))));
+  assert.throws(
+    () => clientConfigTarget("retired-client" as never, ENV, "linux", INVOCATION),
+    /unsupported_install_client/u,
+  );
 });
 
-test("codex install appends a table to an existing config", () => {
+test("Codex install appends, conflicts, and force-replaces one exact local table", () => {
   const existing = "[mcp_servers.other]\ncommand = \"node\"\n";
-  const plan = planClientInstall({ client: "codex", existing, env: ENV, platform: "linux" });
-  assert.equal(plan.action, "create");
-  assert.ok(plan.nextContent?.includes("[mcp_servers.other]"));
-  assert.ok(plan.nextContent?.includes("[mcp_servers.newton-browser]"));
-  assert.ok(plan.nextContent?.includes("--package"));
-});
+  const created = planClientInstall({ client: "codex", existing, env: ENV, platform: "linux", invocation: INVOCATION });
+  assert.equal(created.action, "create");
+  assert.match(created.nextContent ?? "", /\[mcp_servers\.newton-browser\]/u);
+  assert.match(created.nextContent ?? "", new RegExp(escapeRegex(serializedString(INVOCATION.command))));
+  assert.equal((created.nextContent ?? "").includes("npx"), false);
+  assert.equal((created.nextContent ?? "").includes("--package"), false);
 
-test("codex install into an empty file has no leading blank line", () => {
-  const plan = planClientInstall({ client: "codex", existing: undefined, env: ENV, platform: "linux" });
-  assert.equal(plan.action, "create");
-  assert.ok(plan.nextContent?.startsWith("[mcp_servers.newton-browser]"));
-});
-
-test("codex install refuses to overwrite without --force, replaces with it", () => {
-  const existing = "[mcp_servers.newton-browser]\ncommand = \"old\"\nargs = []\n\n[other]\nx = 1\n";
-  const conflict = planClientInstall({ client: "codex", existing, env: ENV, platform: "linux" });
+  const conflict = planClientInstall({ client: "codex", existing: created.nextContent, env: ENV, platform: "linux", invocation: INVOCATION });
   assert.equal(conflict.action, "conflict");
-  assert.equal(conflict.entryExists, true);
-  const forced = planClientInstall({ client: "codex", existing, env: ENV, platform: "linux", force: true });
+  const forced = planClientInstall({
+    client: "codex",
+    existing: `${created.nextContent}[other]\nx = 1\n`,
+    env: ENV,
+    platform: "linux",
+    invocation: { command: INVOCATION.command, args: [path.resolve("fixtures", "replacement.js")] },
+    force: true,
+  });
   assert.equal(forced.action, "update");
-  assert.ok(forced.nextContent?.includes("[other]"));
-  assert.ok(forced.nextContent?.includes("--package"));
-  assert.ok(!forced.nextContent?.includes("command = \"old\""));
+  assert.match(forced.nextContent ?? "", /replacement\.js/u);
+  assert.match(forced.nextContent ?? "", /\[other\]/u);
 });
 
-test("claude-desktop install merges into mcpServers without dropping siblings", () => {
-  const existing = JSON.stringify({ mcpServers: { keep: { command: "x" } }, otherTop: true });
-  const plan = planClientInstall({ client: "claude-desktop", existing, env: ENV, platform: "linux" });
-  assert.equal(plan.action, "create");
-  const parsed = JSON.parse(plan.nextContent!);
-  assert.equal(parsed.otherTop, true);
-  assert.deepEqual(parsed.mcpServers.keep, { command: "x" });
-  assert.equal(parsed.mcpServers["newton-browser"].command, "npx");
-});
-
-test("claude-desktop install conflicts on an existing entry unless forced", () => {
-  const existing = JSON.stringify({ mcpServers: { "newton-browser": { command: "stale" } } });
-  assert.equal(planClientInstall({ client: "claude-desktop", existing, env: ENV, platform: "linux" }).action, "conflict");
-  const forced = planClientInstall({ client: "claude-desktop", existing, env: ENV, platform: "linux", force: true });
-  assert.equal(forced.action, "update");
-  assert.equal(JSON.parse(forced.nextContent!).mcpServers["newton-browser"].command, "npx");
-});
-
-test("unparseable JSON is reported, not clobbered", () => {
-  const plan = planClientInstall({ client: "claude-desktop", existing: "{ not json", env: ENV, platform: "linux" });
-  assert.equal(plan.action, "conflict");
-  assert.match(plan.message, /client_config_unparseable/);
-});
-
-test("runInstall writes a backup and the merged file, dry run writes nothing", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "newton-install-"));
-  const env = { ...ENV, HOME: dir, USERPROFILE: dir };
-  const target = path.join(dir, ".codex", "config.toml");
+test("runInstall writes a backup, while dry-run and generic mode do not write", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-install-"));
+  const env = { ...ENV, HOME: directory, USERPROFILE: directory };
+  const target = path.join(directory, ".codex", "config.toml");
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, "[mcp_servers.other]\ncommand = \"node\"\n", "utf8");
 
-  const dry = runInstall({ client: "codex", env, platform: "linux", dryRun: true });
+  const dry = runInstall({ client: "codex", env, platform: "linux", dryRun: true, invocation: INVOCATION });
   assert.equal(dry.wrote, false);
   assert.equal(fs.readFileSync(target, "utf8").includes("newton-browser"), false);
 
-  const applied = runInstall({ client: "codex", env, platform: "linux" });
+  const applied = runInstall({ client: "codex", env, platform: "linux", invocation: INVOCATION });
   assert.equal(applied.wrote, true);
   assert.ok(applied.backupPath && fs.existsSync(applied.backupPath));
-  assert.ok(fs.readFileSync(target, "utf8").includes("[mcp_servers.newton-browser]"));
-  assert.ok(fs.readFileSync(applied.backupPath!, "utf8").includes("[mcp_servers.other]"));
-  fs.rmSync(dir, { recursive: true, force: true });
+  assert.match(fs.readFileSync(target, "utf8"), /\[mcp_servers\.newton-browser\]/u);
+
+  const generic = runInstall({ client: "generic", env, platform: "linux", invocation: INVOCATION });
+  assert.equal(generic.wrote, false);
+  assert.equal(generic.action, "manual");
+  assert.match(generic.manualCommand ?? "", new RegExp(escapeRegex(serializedString(INVOCATION.command))));
+  fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test("manual clients never write and surface a command", () => {
-  const result = runInstall({ client: "claude-code", env: ENV, platform: "linux" });
-  assert.equal(result.wrote, false);
-  assert.equal(result.action, "manual");
-  assert.ok(result.manualCommand?.includes("claude mcp add-json"));
+test("runInstall refuses linked config targets", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-install-link-"));
+  const env = { ...ENV, HOME: directory, USERPROFILE: directory };
+  const targetDirectory = path.join(directory, ".codex");
+  const outside = path.join(directory, "outside.toml");
+  const target = path.join(targetDirectory, "config.toml");
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  fs.writeFileSync(outside, "preserve");
+  try {
+    try { fs.symlinkSync(outside, target, "file"); }
+    catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(String((error as NodeJS.ErrnoException).code))) {
+        context.skip("file links unavailable");
+        return;
+      }
+      throw error;
+    }
+    assert.throws(() => runInstall({ client: "codex", env, platform: "linux", invocation: INVOCATION }), /unsafe_client_config_path/u);
+    assert.equal(fs.readFileSync(outside, "utf8"), "preserve");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function serializedString(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}

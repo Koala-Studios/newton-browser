@@ -15,7 +15,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node20",
+  target: "node24",
   sourcemap: false,
   banner: { js: "#!/usr/bin/env node" },
   logLevel: "warning",
@@ -26,7 +26,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node20",
+  target: "node24",
   sourcemap: false,
   logLevel: "warning",
 });

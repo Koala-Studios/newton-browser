@@ -181,9 +181,9 @@ test("SessionCommandPump waits for active work on close while rejecting queued w
 
   let queuedRejected = false;
   queued.catch((error) => {
-    queuedRejected = error.code === "session_finalizing";
+    queuedRejected = error.code === "session_stopping";
   });
-  await assert.rejects(() => queued, /session_finalizing/);
+  await assert.rejects(() => queued, /session_stopping/);
   assert.equal(queuedRejected, true);
 
   const duringClose = pump.snapshot();
@@ -211,7 +211,7 @@ test("SessionCommandPump closeAfterCurrent resolves immediately when idle and is
   assert.equal(resolved, true);
 
   await firstClose;
-  await assert.rejects(() => pump.enqueue("after-close", 1, () => "never"), /session_finalizing/);
+  await assert.rejects(() => pump.enqueue("after-close", 1, () => "never"), /session_stopping/);
 });
 
 test("SessionCommandPump supports reentrant enqueue and keeps FIFO order", async () => {
@@ -348,6 +348,39 @@ test("SessionCommandPump reports running timeout as outcome unknown and holds FI
   release.resolve();
   assert.equal(await next, "next");
   assert.deepEqual(timeline, ["timed-start", "timed-end", "next"]);
+});
+
+test("SessionCommandPump distinguishes queued cancellation from an already-running uncertain command", async () => {
+  const pump = new SessionCommandPump({ maxItems: 4, maxBytes: 1024 });
+  const started = deferredGate();
+  const release = deferredGate();
+  const runningAbort = new AbortController();
+  const running = pump.enqueue("running", 1, async () => {
+    started.resolve();
+    await release.promise;
+    return "possibly-committed";
+  }, undefined, runningAbort.signal);
+  await started.promise;
+  const queuedAbort = new AbortController();
+  const queued = pump.enqueue("queued", 1, () => "must-not-run", undefined, queuedAbort.signal);
+  queuedAbort.abort();
+  await assert.rejects(queued, (error) => error?.code === "command_cancelled_not_started");
+  runningAbort.abort();
+  await assert.rejects(running, (error) => error?.code === "command_cancelled_outcome_unknown");
+  assert.equal(pump.snapshot().runningCount, 1);
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pump.snapshot().runningCount, 0);
+});
+
+test("SessionCommandPump rejects pre-aborted work as not started", async () => {
+  const pump = new SessionCommandPump({ maxItems: 1, maxBytes: 8 });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    pump.enqueue("never", 1, () => "must-not-run", undefined, controller.signal),
+    (error) => error?.code === "command_cancelled_not_started",
+  );
 });
 
 test("SessionCommandPump rejects timeout values outside the closed contract", async () => {

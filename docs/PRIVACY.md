@@ -30,8 +30,8 @@ protection nor treats authentication preservation as release evidence.
 
 - **Observations and page text:** bounded accessible structure or text is returned to the
   configured MCP client with untrusted-page provenance and host-side redaction.
-- **Screenshots:** captured only on request. File delivery writes to the caller-provided
-  absolute directory. Sensitive zones are masked in trusted post-capture PNG pixels;
+- **Screenshots:** captured only on request and returned as bounded MCP image content.
+  Sensitive zones are masked in trusted post-capture PNG pixels;
   uncertainty fails closed rather than returning an unmasked image.
 - **Console and network evidence:** bounded and redacted. Request headers are never
   returned. Bodies are eligible only for granted-origin supported UTF-8 text; binary,

@@ -523,42 +523,6 @@ export class TargetRegistry {
     return immutable(routes);
   }
 
-  frameRoutingSummary() {
-    const attachedTargets = new Set<string>();
-    const inProcessFrames = new Set<string>();
-    for (const route of this.listObservationRoutes()) {
-      if (route.frameId === null) continue;
-      const target = this.targets.get(route.targetId);
-      const frame = this.frames.get(route.frameId);
-      if (!target || !frame || frame.targetId !== target.targetId || !this.#liveFrame(frame)) continue;
-      if (target.targetId !== this.mainTargetId && target.type === "iframe") attachedTargets.add(target.targetId);
-      if (target.targetId === this.mainTargetId || target.hostFrameId !== frame.frameId) {
-        inProcessFrames.add(`${target.targetId}\u0000${frame.frameId}`);
-      }
-    }
-    let maxDepth = 0;
-    for (const targetId of attachedTargets) {
-      let depth = 0;
-      let current = this.targets.get(targetId);
-      const seen = new Set<string>();
-      while (current && current.targetId !== this.mainTargetId && depth < 64) {
-        if (seen.has(current.targetId) || current.type !== "iframe" || current.parentTargetId === null) {
-          depth = 0;
-          break;
-        }
-        seen.add(current.targetId);
-        depth += 1;
-        current = this.targets.get(current.parentTargetId);
-      }
-      if (current?.targetId === this.mainTargetId) maxDepth = Math.max(maxDepth, depth);
-    }
-    return immutable({
-      attachedIframeTargetCount: Math.min(attachedTargets.size, 64),
-      inProcessFrameCount: Math.min(inProcessFrames.size, 64),
-      maxAttachedIframeTargetDepth: Math.min(maxDepth, 64),
-    });
-  }
-
   commitTopLevelDocument(targetId: string | null = this.mainTargetId, nextOrigin?: unknown) {
     if (targetId === null) fail(TARGET_REGISTRY_ERROR_CODES.DOCUMENT_NOT_FOUND);
     const target = this.targets.get(identifier(targetId, TARGET_REGISTRY_ERROR_CODES.TARGET_NOT_FOUND));

@@ -16,7 +16,8 @@
       "maxTokens": 100,
       "input": {
         "outcome": "completed",
-        "status": "completed",
+        "status": "verified",
+        "decision": { "class": "agentic", "commitBoundary": "draft" },
         "reason": "filled"
       }
     },
@@ -26,7 +27,8 @@
       "maxTokens": 125,
       "input": {
         "outcome": "completed",
-        "status": "completed",
+        "status": "verified",
+        "decision": { "class": "agentic", "commitBoundary": "none" },
         "reason": "clicked"
       }
     },
@@ -43,7 +45,8 @@
       "maxTokens": 120,
       "input": {
         "outcome": "completed",
-        "status": "completed",
+        "status": "verified",
+        "decision": { "class": "read_only", "commitBoundary": "none" },
         "reason": "verified"
       }
     }

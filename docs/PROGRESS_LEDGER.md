@@ -1,94 +1,70 @@
 # Newton Browser progress ledger
 
-## Current completion program — 2026-08-11
+## Active program — modern-only direct runtime
 
-The owner approved completing the no-extension architecture. Implementation is now
-consolidated around one local MCP package that owns isolated Chrome or Edge processes over
-private CDP pipes. The former MV3 application, loopback relay, pairing/version-skew plane,
-current-tab/tab-group/incognito compatibility runtime, browser-store assets, and extension
-build/release paths have been deleted.
+Newton is being collapsed to one local architecture: stateless MCP `2026-07-28` on stdio,
+one isolated owned Chrome or Edge process per session, private CDP pipes, exact-origin
+containment, and ten compact tools.
 
-This is the completed direct-only candidate. The current tree has
-passed its consolidated deterministic gate, Windows Chrome/Edge direct and public
-real-site matrices, and the pinned Linux Chrome-for-Testing container. The
-operator-authorized Chrome Default opaque import ran successfully with exact
-source/identity cleanup. On 2026-08-12 the owner explicitly removed authenticated-site QA
-from the release scope and directed Newton to validate only sites that do not require
-sign-in. This is also the honest Windows boundary: Chrome App-Bound Encryption can prevent
-cookies copied from the standard user-data directory from decrypting under Newton's
-isolated `--user-data-dir`. An earlier frozen candidate passed `pnpm release:check` three
-times with one byte-identical package. That sequence is historical because the public-site
-receipt and RFC Editor first-navigation correction were materialized afterward. The final
-evidence-bearing tree is finalized only by a commit-body attestation after its required
-three-pass confirmation, per Decision 44.
-Historical extension-era receipts do not close any current gate.
+The implementation and documentation batch is frozen. The integrated deterministic,
+packed, live-browser, real-site, profile-import, and Linux CFT matrices passed on
+2026-08-12. The only remaining release action after this ledger freeze is three
+consecutive `pnpm release:check` executions on the unchanged candidate; publication still
+requires the separately approved clean-tag Windows/Linux workflow.
 
 ## Definition of complete
 
-Newton Browser is complete only when every row below is recorded against the same frozen
-tree and no later source, test, documentation, dependency, or generated-artifact change has
-occurred:
-
-| Gate | Required evidence | Current state |
+| Gate | Required evidence | State |
 | --- | --- | --- |
-| Sole architecture | no production/package/document/skill dependency on the deleted extension, relay, pairing plane, browser store, or current-tab compatibility contracts | pass; direct-only boundary gate passed |
-| Direct runtime | source and exact-packed MCP start/observe/act/screenshot/stop on installed Windows Chrome and Edge and Linux Chrome | pass on Windows Chrome/Edge and pinned Linux Chrome |
-| Concurrency | same-session FIFO plus cross-session progress with distinct processes/identities and zero residue | pass on Windows Chrome/Edge and Linux Chrome |
-| Containment | direct navigation, mutation, connection, popup, worker, frame, redirect, and HTTPS grant behavior with honest outcomes and zero denied application requests | pass on Windows Chrome/Edge and Linux Chrome |
-| Frames/input/lifecycle | same-process and OOPIF routing, nested actions, dialogs, renderer failures, process loss, guardian cleanup, and stale-ref fencing | pass on Windows Chrome/Edge and Linux Chrome |
-| Trusted screenshots | exact sensitive-zone refs are measured under a script/animation freeze and masked in trusted PNG raster bytes; uncertainty never returns unmasked pixels | pass on Mercato in Windows Chrome/Edge and Linux Chrome plus deterministic raster regressions |
-| Agent usability | compact/token gates plus unauthenticated read-only RFC Editor, Wikipedia, Mercato di Bellina storefront, and W3C accessibility workflows | pass on Windows Chrome, Windows Edge twice, and Linux Chrome for Testing; no sign-in-dependent site is in release scope |
-| Optional identity migration | one operator-authorized closed-profile opaque byte copy, identity deletion, no source mutation, and no profile parsing/logging | pass for import and cleanup; authentication preservation is not claimed or release-gated, and standard-profile Google sessions may be unusable after isolated Windows launch because of Chrome App-Bound Encryption |
-| Packaging and platform | exact tarball install/run, Windows Chrome/Edge, Linux Chrome for Testing, bounded receipts, and zero process/proxy/lease/temp residue | pass; final Linux run `linux-cft-3468e9531b2a05d215e1`, source digest `c81f89cfaf4d2f7cc27208f9b3cd4ec66a58606731f607a269ac929d2fe0d8e2` |
-| Release stability | `pnpm release:check` passes three consecutive times on an unchanged frozen tree, with exact hashes and no skipped critical tests | the final commit is valid only when its body records the exact 3/3 attestation required by Decision 44; the latest in-tree precursor receipt is `QA-COMPLETE-006` |
+| Single architecture | no extension, relay, daemon, socket continuity, current-tab, legacy MCP, finalize, page-effects, synthetic-tab, or ownership compatibility paths | passed source, boundary, package, docs, and skill scans |
+| Modern MCP | exact 2026-07-28 metadata/discovery/result/cancellation; old handshake/framing rejected | passed contract, stdio, packed-catalog, and agent-cost gates |
+| Direct runtime | source and exact-packed start/observe/act/screenshot/stop in Chrome and Edge | passed Windows Chrome and Edge plus Linux CFT |
+| Concurrency | same-session FIFO, cross-session progress, distinct processes/identities, zero residue | passed Chrome, Edge, and Linux direct-live suites |
+| Containment | denied navigation/mutation/connection/popup/frame/worker/redirect with honest outcomes and zero denied application requests | passed deterministic and connected-browser counters |
+| Frames/input/lifecycle | same-process and nested OOPIF actions, dialogs, renderer/process loss, guardian cleanup, stale-ref fencing | passed Chrome, Edge, and Linux direct-live suites |
+| Compact output | token budgets, flat actions, one canonical result shape, image-only screenshots | passed deterministic token and packed-contract gates |
+| Real-site usability | read-only public YouTube, Reddit, Mercato di Bellina, Meta public surfaces where accessible, and stable reference sites | seven-site suite passed Chrome, Edge, and Linux |
+| Packaging | exact tarball install/run, source-free artifacts, Windows Chrome/Edge and Linux Chrome, bounded receipts, zero residue | exact 0.5.0 tarball passed all three browser/platform lanes |
+| Authorized opaque import | closed Chrome Default copied through the narrow opaque allowlist, public read-only QA, no authentication-preservation claim, source untouched, identity removed | passed Windows Chrome |
+| Release stability | three unchanged-tree local passes after this ledger freeze; clean-tag Windows/Linux publication receipt remains a separately approved release operation | final immutable execution boundary |
 
-## Implementation status by plan
+## Current implementation inventory
 
-| Plan | Implementation state | Remaining completion evidence |
-| --- | --- | --- |
-| 01 command pump | complete | current deterministic/live evidence passed |
-| 02 lifecycle/framing/guardian | complete | current crash and cross-platform cleanup evidence passed |
-| 03 target/frame/session registry | complete | current Windows/Linux nested frame evidence passed |
-| 04 preventive containment | complete | current popup/worker/frame/redirect matrix passed |
-| 05 input/renderer reliability | complete | current real-browser matrix passed |
-| 06 compact output | complete | current token budgets passed |
-| 07 schemas/provenance/privacy | complete | current schema/redaction gates passed |
-| 08 strict TypeScript/build parity | complete | current typecheck/build parity passed |
-| 09 regression/release program | implementation complete | final commit must carry the Decision 44 attestation |
-| 10 owned browser/private CDP | complete | Windows/Linux live evidence passed |
-| 11 launch-time policy proxy | complete | current containment matrix passed |
-| 12 identities/opaque import | complete optional workflow | imported profile proved closed/copyable/cleanable; authentication preservation is explicitly not a release claim |
-| 13 direct driver/host collapse | complete | current integrated/packed evidence passed |
-| 14 compact agent operations | complete | token evidence and final four-site Chrome/Edge public rerun passed |
-| 15 deletion/release | implementation complete | final commit must carry the Decision 44 attestation; publishing remains separately gated |
-
-## Current implementation facts
-
-- Direct stdio is the ordinary transport. Explicit Unix-socket continuity is local-only
-  and does not install a daemon.
-- Every session owns a browser process, exact origin grant, policy proxy, CDP transport,
-  identity lease, command pump, and guardian ownership record.
-- Initial browser state is blank and containment is established before the first granted
-  navigation.
-- Opaque profile import is operator-only, closed-source-only, allowlisted, stability
-  checked, no-follow, atomic, and never merges back into the source.
-- Screenshot masking is performed after capture inside trusted Node code while page script
-  execution and animations are frozen through CDP. A masked JPEG request is deliberately
-  returned as PNG. Target, geometry, freeze, capture, decode, or resume uncertainty fails
-  closed.
-- Public MCP remains the compact 11-tool surface; process, target, session-routing,
-  filesystem, profile, and proxy identities are not published.
-- The packed MCP is built by a deterministic five-file USTAR/gzip encoder with fixed
-  ordering and metadata; exact artifact SHA-256 equality is required across release passes.
-- No public publishing, remote, license change, or browser-store submission is authorized.
+- Deleted: MV3 application/store assets, relay/pairing, socket continuity, legacy MCP
+  parser/initialization, finalize aliases, synthetic tab IDs, page-effects adapter,
+  owned/unowned driver branches, and screenshot file/inline controls.
+- Retained intentionally: application session IDs, FIFO/idempotency, exact-origin proxy,
+  popup containment, target/frame topology generations, identity leases, guardian cleanup,
+  trusted raster masking, bounded console/network evidence, and authorized opaque import.
+- Public MCP: ten tools; no resources, prompts, tasks, subscriptions, sampling, daemon,
+  or connection-scoped state.
+- Public session state: one canonical origin, exact allowed origins, and one lifecycle
+  state; no duplicate attachment flag or stale live-origin mirror.
+- Public `allowedOrigins` means only zero to 31 additional exact grants; the primary is
+  inserted privately after strict duplicate/repetition validation.
+- Host policy is loaded once from the selected config directory and deep-frozen for the
+  host lifetime together with the browser preference in one validated config snapshot;
+  action evaluation has no process-global config dependency.
+- Core, driver, and MCP builds replace their owned output directories; boundary checks
+  reject stale compiled modules. Publication's three-pass verifier binds all passes to one
+  clean tagged candidate and one per-platform artifact digest.
+- Private test-only topology fields and nested response-shape fallbacks are removed. Frame
+  acceptance proves actual nested observations, actions, effects, provenance, and stale-ref
+  rejection through the same public contract used by agents.
 
 ## Evidence policy
 
-Final evidence belongs under `test/evidence/` and must include the exact source digest,
-platform/browser/runtime versions, bounded stage results, packed artifact hash and entries,
-residue facts, and release pass ordinal. Receipts may contain codes, counts, categories,
-hashes, and fixed step names only; they must not contain page content, credentials, profile
-paths, profile contents, origins from private authenticated work, or raw browser/CDP logs.
+Final receipts under `test/evidence/` identify the exact source digest, platform,
+browser/runtime versions, bounded results, package hash/entries, residue facts, and
+release-pass ordinal. They may contain fixed codes, counts, categories, and hashes only;
+never page content, credentials, profile paths/contents, private origins, or raw CDP logs.
 
-The historical AIP and extension-era records remain under `test/evidence/` for engineering
-traceability. They are explicitly superseded as release evidence by this ledger.
+The retained `bugs.md` and `upstream-provenance.md` files are engineering history only and
+do not close the modern-only gate. Misleading precursor release receipts and obsolete
+extension-era program matrices were removed. Final bounded receipts are created only for
+the frozen modern tree.
+
+The bounded pre-freeze matrix receipt is `test/evidence/qa-modern-direct-preflight.json`.
+The final unchanged-tree pass digest and artifact hash are emitted by
+`scripts/release-complete-local.mjs`; they are reported without editing this candidate
+afterward.

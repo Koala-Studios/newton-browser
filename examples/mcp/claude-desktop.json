@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "newton-browser": {
-      "command": "npx",
-      "args": ["--yes", "--package", "C:\\NewtonBrowser\\newton-browser-0.4.5.tgz", "newton-browser"]
-    }
-  }
-}

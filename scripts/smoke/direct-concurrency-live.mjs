@@ -6,9 +6,10 @@ import path from "node:path";
 
 import { discoverBrowserExecutable } from "../../apps/mcp-server/src/browser-runtime/browser-discovery.ts";
 import { createDefaultDirectBrowserHost } from "../../apps/mcp-server/src/browser-runtime/default-direct-host.ts";
+import { listNewtonIdentities, openProfileStore } from "../../apps/mcp-server/src/browser-runtime/profile-store.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const browser = discoverBrowserExecutable({ family, env: process.env });
 if (!browser) {
   process.stdout.write(`${JSON.stringify({ ok: false, browserFamily: family, errorCode: "direct_browser_unavailable" })}\n`);
@@ -48,7 +49,8 @@ try {
   const sessionB = requiredSessionId(startedB, "direct_session_b_id_missing");
 
   const readyStatus = host.getStatus();
-  if (readyStatus.activeSessionCount !== 2 || readyStatus.identityCount !== 2) {
+  const readyIdentities = listNewtonIdentities(openProfileStore(path.join(runRoot, "identities"))).length;
+  if (readyStatus.activeSessionCount !== 2 || readyIdentities !== 2) {
     fail("direct_isolation_not_proved");
   }
 
@@ -80,7 +82,7 @@ try {
   await Promise.resolve();
   const pendingStatus = await tool("browser.status", { detail: "full" });
   requireSuccess(pendingStatus, "direct_pending_status_failed");
-  const aDiagnostics = diagnosticsFor(pendingStatus.value);
+  const aDiagnostics = diagnosticsFor(pendingStatus.value, sessionA);
   if (aDiagnostics?.runningCommands !== 1 || aDiagnostics.queuedCommands !== 1) {
     fail("direct_fifo_pending_not_proved");
   }
@@ -118,9 +120,10 @@ try {
   if (stoppedA.value.stopped !== true || stoppedB.value.stopped !== true) fail("direct_stop_not_acknowledged");
 
   const stoppedStatus = host.getStatus();
+  const remainingIdentities = listNewtonIdentities(openProfileStore(path.join(runRoot, "identities"))).length;
   if (host.listSessions().length !== 0
       || stoppedStatus.sessionCount !== 0
-      || stoppedStatus.identityCount !== 0
+      || remainingIdentities !== 0
       || stoppedStatus.activeSessionCount !== 0
       || stoppedStatus.cleanupUncertainCount !== 0) {
     fail("direct_cleanup_residue");
@@ -139,7 +142,7 @@ try {
     crossSessionVerifiedProgress: true,
     eventDrivenRelease: true,
     remainingSessions: 0,
-    remainingIdentities: 0,
+    remainingIdentities,
     remainingRuntimeProcesses: 0,
   };
 } catch (error) {
@@ -184,7 +187,7 @@ async function tool(name, args) {
     jsonrpc: "2.0",
     id: ++requestId,
     method: "tools/call",
-    params: { name, arguments: args },
+    params: { name, arguments: args, _meta: modernMcpMeta() },
   });
   const payload = response?.result;
   const text = payload?.content?.[0]?.text;
@@ -194,6 +197,10 @@ async function tool(name, args) {
   } catch {
     fail("direct_mcp_json_invalid");
   }
+}
+
+function modernMcpMeta() {
+  return { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
 }
 
 function createFixture(kind) {
@@ -267,9 +274,9 @@ function requiredSessionId(started, code) {
   return sessionId;
 }
 
-function diagnosticsFor(value) {
+function diagnosticsFor(value, sessionId) {
   return Array.isArray(value?.sessionDiagnostics)
-    ? value.sessionDiagnostics.find((candidate) => candidate?.runningCommands === 1 && candidate?.queuedCommands === 1)
+    ? value.sessionDiagnostics.find((candidate) => candidate?.sessionId === sessionId)
     : undefined;
 }
 

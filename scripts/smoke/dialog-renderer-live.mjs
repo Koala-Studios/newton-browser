@@ -3,14 +3,14 @@ import { runInputReliabilityLive } from "../../test/fixtures/input-reliability/l
 await runInputReliabilityLive("dialog-renderer-live", async ({ mcp, sessionId, resultOf, statusOf, assert, log }) => {
   const act = (action) => mcp("browser.act", { sessionId, action });
   for (const name of ["Dialog on click", "Same-origin frame dialog", "Cross-origin frame dialog"]) {
-    const dialog = await act({ kind: "click", name, exact: true });
+    const dialog = await act({ kind: "click", role: "button", name, exact: true });
     assert(statusOf(dialog) === "dialog_blocked", `${name} did not preserve dialog_blocked`, dialog);
     const dismissed = await act({ kind: "dialog_dismiss" });
     assert(dismissed.ok !== false, `${name} could not be dismissed`, dismissed);
     log("scoped_dialog", { name, status: statusOf(dialog) });
   }
 
-  const frameAck = await act({ kind: "click", name: "Cross-origin frame acknowledgement", exact: true });
+  const frameAck = await act({ kind: "click", role: "button", name: "Cross-origin frame acknowledgement", exact: true });
   assert(frameAck.ok !== false, "cross-origin frame did not recover after its scoped dialog", frameAck);
 
   const invalidSelector = await act({ kind: "click", selector: "]" });
@@ -20,9 +20,9 @@ await runInputReliabilityLive("dialog-renderer-live", async ({ mcp, sessionId, r
   const observed = resultOf(await mcp("browser.observe", { sessionId, format: "json", query: "Removable target", maxNodes: 80 }));
   const staleRef = (observed.nodes ?? observed.added ?? []).find((node) => node.name === "Removable target")?.ref;
   assert(typeof staleRef === "string", "removable target ref missing", observed);
-  const removed = await act({ kind: "click", name: "Remove target", exact: true });
+  const removed = await act({ kind: "click", role: "button", name: "Remove target", exact: true });
   assert(removed.ok !== false, "fixture target removal failed", removed);
-  const stale = await act({ kind: "click", target: { ref: staleRef } });
+  const stale = await act({ kind: "click", ref: staleRef });
   assert(["stale_target", "target_gone", "not_found"].includes(statusOf(stale)), "removed target lost its lifecycle category", stale);
   log("target_lifecycle", { status: statusOf(stale) });
 

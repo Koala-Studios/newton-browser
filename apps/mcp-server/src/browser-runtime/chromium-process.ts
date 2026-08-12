@@ -63,7 +63,6 @@ export type ChromiumLaunchOptions = Readonly<{
   executablePath: string;
   userDataDir: string;
   headless?: boolean;
-  additionalArgs?: readonly string[];
   readyDeadlineMs?: number;
   stderrDiagnosticBytes?: number;
   spawn?: SpawnLike;
@@ -180,9 +179,9 @@ export async function launchChromium(options: ChromiumLaunchOptions): Promise<Ch
   const supervisedChild = supervisedBrowserProcess(child, Number(pid));
   const supervisor = new ProcessSupervisor({
     child: supervisedChild,
-    platform: options.platform,
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
     gracefulClose: () => transport.send("Browser.close").then(() => undefined),
-    killTree: options.killTree,
+    ...(options.killTree === undefined ? {} : { killTree: options.killTree }),
   });
   try {
     const rootTargetId = await protocolReadyWhileRunning(transport, child, boundedReadyDeadline(options.readyDeadlineMs));
@@ -217,17 +216,14 @@ function monitorProcessExit(child: ChildProcess): ProcessExitState {
   return state;
 }
 
-export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "additionalArgs" | "policyProxy">): readonly string[] {
+export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "policyProxy">): readonly string[] {
   const directory = path.resolve(options.userDataDir);
-  const additional = options.additionalArgs ?? [];
-  for (const argument of additional) validateAdditionalArgument(argument);
   const proxyArgs = options.policyProxy ? policyProxyLaunchConfiguration(options.policyProxy).args : [];
   const args = [
     ...SAFE_CHROMIUM_ARGS,
     `--user-data-dir=${directory}`,
     ...proxyArgs,
     ...(options.headless === false ? [] : ["--headless=new"]),
-    ...additional,
   ];
   return Object.freeze(args);
 }
@@ -270,26 +266,6 @@ function validateExecutablePath(value: string, platform: NodeJS.Platform): void 
     }
   } catch {
     throw new ChromiumLaunchError("process_spawn");
-  }
-}
-
-function validateAdditionalArgument(argument: string): void {
-  if (!argument.startsWith("--") || argument.includes("\0") || argument.length > 2048) {
-    throw new ChromiumLaunchError("profile_validation");
-  }
-  const lower = argument.toLowerCase();
-  const switchName = lower.split("=", 1)[0];
-  const forbidden = new Set([
-    "--remote-debugging-pipe", "--remote-debugging-port", "--remote-debugging-address",
-    "--user-data-dir", "--profile-directory", "--restore-last-session", "--restore-session",
-    "--app", "--app-id", "--app-launch-url-for-shortcuts-menu-item", "--load-and-launch-app",
-    "--load-extension", "--disable-extensions-except", "--disable-extensions", "--enable-extensions",
-    "--proxy-server", "--proxy-bypass-list", "--proxy-pac-url", "--no-proxy-server",
-    "--proxy-auto-detect", "--proxy-fallback-to-direct", "--use-system-proxy-resolver",
-    "--winhttp-proxy-resolver", "--disable-quic",
-  ]);
-  if (forbidden.has(switchName)) {
-    throw new ChromiumLaunchError("profile_validation");
   }
 }
 
@@ -364,8 +340,8 @@ async function cleanupFailedLaunch(
 ): Promise<Readonly<{ confirmed: boolean; retry?: () => Promise<void> }>> {
   const supervisor = new ProcessSupervisor({
     child: supervisedBrowserProcess(child, Number(browserPid)),
-    platform: options.platform,
-    killTree: options.killTree,
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...(options.killTree === undefined ? {} : { killTree: options.killTree }),
     gracefulDeadlineMs: 1,
     killDeadlineMs: 5_000,
   });
@@ -382,11 +358,12 @@ async function spawnGuardedChromium(
   timeoutMs: number,
 ): Promise<Readonly<{ child: ChildProcess; browserPid: number }>> {
   const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-  const compiledGuardian = path.join(moduleDirectory, "browser-guardian.js");
-  const sourceGuardian = path.join(moduleDirectory, "browser-guardian.ts");
-  const guardianPath = fs.existsSync(compiledGuardian) ? compiledGuardian : sourceGuardian;
-  const nodeArgs = guardianPath.endsWith(".ts") ? ["--experimental-strip-types", guardianPath] : [guardianPath];
-  const child = nodeSpawn(process.execPath, nodeArgs, {
+  const guardianPath = [
+    path.join(moduleDirectory, "browser-guardian.js"),
+    path.resolve(moduleDirectory, "..", "..", "dist", "browser-guardian.js"),
+  ].find((candidate) => fs.existsSync(candidate));
+  if (!guardianPath) throw new ChromiumLaunchError("process_spawn");
+  const child = nodeSpawn(process.execPath, [guardianPath], {
     detached: true,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe", "ipc"],
     windowsHide: true,

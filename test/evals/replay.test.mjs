@@ -71,10 +71,8 @@ function evalTask(overrides = {}) {
           expect: "completed",
           action: {
             kind: "click",
-            target: {
-              role: "button",
-              name: "Save",
-            },
+            role: "button",
+            name: "Save",
           },
         },
       ],
@@ -248,10 +246,8 @@ test("schema rejects nested unknown keys", () => {
         expect: "completed",
         action: {
           kind: "click",
-          target: {
-            role: "button",
-            name: "Save",
-          },
+          role: "button",
+          name: "Save",
         },
       },
     ],
@@ -275,7 +271,7 @@ test("schema rejects nested unknown keys", () => {
         ...base,
         id: "nested-waitfor",
         steps: [
-          { tool: "browser.wait_for", expect: "completed", waitFor: { state: "visible", unknown: "x" } },
+          { tool: "browser.act", expect: "completed", action: { kind: "wait_for", waitFor: { state: "visible", unknown: "x" } } },
         ],
       },
     },
@@ -517,7 +513,8 @@ test("forbidding uses requestId and path matching", async () => {
         expect: "completed",
         action: {
           kind: "click",
-          target: { role: "button", name: "Save" },
+          role: "button",
+          name: "Save",
         },
       },
     ],

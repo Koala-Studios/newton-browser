@@ -19,8 +19,6 @@ const TEMP_PREFIX = "newton-driver-build-parity-";
 const EXPECTED_FILES = [
   "direct-debugger-port.d.ts",
   "direct-debugger-port.js",
-  "direct-page-effects-port.d.ts",
-  "direct-page-effects-port.js",
   "direct-session-runtime.d.ts",
   "direct-session-runtime.js",
   "driver.d.ts",
@@ -35,8 +33,6 @@ const EXPECTED_FILES = [
   "renderer-liveness.js",
   "session-command-pump.d.ts",
   "session-command-pump.js",
-  "session-transaction.d.ts",
-  "session-transaction.js",
   "target-registry.d.ts",
   "target-registry.js",
   "types.d.ts",

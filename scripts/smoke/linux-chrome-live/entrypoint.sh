@@ -46,6 +46,7 @@ STAGE=source_preflight
 DIRECT_SELECTION_STATUS=null
 AGENT_COST_STATUS=null
 LIVE_STATUS=null
+PACKED_LIVE_STATUS=null
 
 record_log() {
   local file=$1 label=$2 status=$3
@@ -63,7 +64,7 @@ cleanup() {
     wait "$XVFB_PID" 2>/dev/null
   fi
   node "$RECEIPT_TOOL" final "$RESULT_RUN_ROOT" "$RUN_ID" "$STAGE" "$status" \
-    "$DIRECT_SELECTION_STATUS" "$AGENT_COST_STATUS" "$LIVE_STATUS" || true
+    "$DIRECT_SELECTION_STATUS" "$AGENT_COST_STATUS" "$LIVE_STATUS" "$PACKED_LIVE_STATUS" || true
   if [[ "$RUN_ROOT" == /tmp/newton-linux-chrome-live.?????? \
         && "$(readlink -f -- "$RUN_ROOT" 2>/dev/null)" == "$RUN_ROOT_REAL" \
         && ! -L "$RUN_ROOT" && -d "$RUN_ROOT" \
@@ -168,17 +169,26 @@ fi
 
 STAGE=direct_live
 set +e
-NEWTON_BROWSER_QA_OWNER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/eval-live.log" pnpm eval:direct-live
+NEWTON_BROWSER_QA_BROWSER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/eval-live.log" pnpm eval:direct-live
 LIVE_STATUS=$?
 set -e
 record_log "$RAW_LOG_ROOT/eval-live.log" eval-live-diagnostics "$LIVE_STATUS"
 if (( LIVE_STATUS == 0 )); then
   STAGE=real_sites
   set +e
-  NEWTON_BROWSER_QA_OWNER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/real-sites.log" pnpm eval:real-sites
+  NEWTON_BROWSER_QA_BROWSER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/real-sites.log" pnpm eval:real-sites
   LIVE_STATUS=$?
   set -e
   record_log "$RAW_LOG_ROOT/real-sites.log" real-sites-diagnostics "$LIVE_STATUS"
 fi
-if (( LIVE_STATUS == 0 )); then STAGE=complete; fi
-exit "$LIVE_STATUS"
+if (( LIVE_STATUS == 0 )); then
+  STAGE=packed_direct
+  set +e
+  NEWTON_BROWSER_QA_BROWSER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/packed-direct.log" pnpm smoke:packed-direct
+  PACKED_LIVE_STATUS=$?
+  set -e
+  record_log "$RAW_LOG_ROOT/packed-direct.log" packed-direct-diagnostics "$PACKED_LIVE_STATUS"
+fi
+if (( LIVE_STATUS != 0 )); then exit "$LIVE_STATUS"; fi
+if (( PACKED_LIVE_STATUS == 0 )); then STAGE=complete; fi
+exit "$PACKED_LIVE_STATUS"

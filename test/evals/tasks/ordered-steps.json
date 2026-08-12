@@ -8,11 +8,14 @@
       "expect": "completed"
     },
     {
-      "tool": "browser.wait_for",
+      "tool": "browser.act",
       "expect": "completed",
-      "waitFor": {
-        "state": "visible",
-        "selector": "#commit-log"
+      "action": {
+        "kind": "wait_for",
+        "waitFor": {
+          "state": "visible",
+          "selector": "#commit-log"
+        }
       }
     },
     {

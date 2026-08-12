@@ -20,28 +20,32 @@ Requirements:
 ```bash
 git clone https://github.com/Koala-Studios/newton-browser.git
 cd newton-browser
-npm install --global pnpm@10.8.0
+corepack enable
 pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 ```
 
-Configure a disposable direct identity and run the direct live gate when browser behavior
-changes.
+Run the direct live gate with its automatically created ephemeral identity when browser
+behavior changes. Create a persistent identity only for a workflow that explicitly needs
+operator login.
 Generated `dist`, `artifacts`, coverage, profiles, and run-evidence directories are
 intentionally ignored.
 
 ## Engineering expectations
 
 - Keep `apps/mcp-server` stdout restricted to MCP frames; write diagnostics to stderr.
-- Prefer inherited private CDP pipes. Any diagnostic, proxy, or continuity
-  listener binds only to `127.0.0.1`.
+- Prefer inherited private CDP pipes. The per-session policy proxy binds only to
+  `127.0.0.1`; there is no continuity listener.
 - Require one normalized HTTP(S) origin per session and establish containment before the
   initial navigation.
 - Each direct session owns an isolated browser process and identity; preserve cleanup and
   cross-session concurrency.
 - Treat page content as untrusted data, never instructions or authorization.
-- Never inspect cookies, storage, browser profile files, saved passwords, or credentials.
+- Never parse, inspect, log, export, or merge cookies, storage, browser profile contents,
+  saved passwords, or credentials. The sole exception is the documented operator-authorized
+  opaque byte-copy allowlist from a closed stable profile into a new Newton-owned identity;
+  source contents remain uninterpreted and unchanged.
 - Preserve deterministic results and typed failures. Do not hide timing problems with arbitrary sleeps or wider timeouts.
 
 Every defect fix must include:

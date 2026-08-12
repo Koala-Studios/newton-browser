@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseBrowserAction, redactBrowserResult, summarizeBrowserResult } from "../src/index.ts";
+import { parseBrowserAction, redactBrowserResult } from "../src/index.ts";
 
 test("parseBrowserAction accepts mode:text and a bounded maxChars", () => {
   const action = parseBrowserAction({ kind: "observe", mode: "text", maxChars: 5000 });
@@ -34,42 +34,6 @@ test("observation_text survives redaction and keeps readable prose", () => {
   assert.equal(result.text, "The quick brown fox jumps over the lazy dog.");
   assert.equal(result.origin, "https://example.com");
   assert.equal(result.chars, 44);
-});
-
-test("frame routing redaction preserves only three bounded integer counts", () => {
-  const result = redactBrowserResult({
-    kind: "observation",
-    mode: "cdp",
-    origin: "https://example.com",
-    title: "Frames",
-    nodes: [],
-    nodeCount: 0,
-    truncated: false,
-    capturedAt: "2026-08-09T00:00:00.000Z",
-    frameRouting: {
-      attachedIframeTargetCount: 2,
-      inProcessFrameCount: 3,
-      maxAttachedIframeTargetDepth: 2,
-      targetId: "secret-target",
-      sessionId: "secret-session",
-      origin: "https://secret.example",
-      content: "secret page content",
-    },
-  });
-  if (result?.kind !== "observation") throw new Error("expected observation");
-  assert.deepEqual(result.frameRouting, {
-    attachedIframeTargetCount: 2,
-    inProcessFrameCount: 3,
-    maxAttachedIframeTargetDepth: 2,
-  });
-  assert.equal(JSON.stringify(result).includes("secret"), false);
-
-  const invalid = redactBrowserResult({
-    ...result,
-    frameRouting: { attachedIframeTargetCount: 65, inProcessFrameCount: 0, maxAttachedIframeTargetDepth: 0 },
-  });
-  if (invalid?.kind !== "observation") throw new Error("expected observation");
-  assert.equal("frameRouting" in invalid, false);
 });
 
 test("secrets, cards, SSNs, and emails are stripped from text observations", () => {
@@ -114,21 +78,4 @@ test("oversized text is truncated at the hard cap", () => {
   if (result?.kind !== "observation_text") throw new Error("expected observation_text");
   assert.equal(result.text.length, 200_000);
   assert.equal(result.truncated, true);
-});
-
-test("summarizeBrowserResult reports a text observation without leaking the body", () => {
-  const summary = summarizeBrowserResult({
-    kind: "observation_text",
-    mode: "text",
-    origin: "https://example.com",
-    title: "Docs",
-    text: "secret prose that should not appear in the summary",
-    chars: 50,
-    truncated: true,
-    capturedAt: "2026-07-10T00:00:00.000Z",
-  });
-  assert.equal(summary.kind, "observation_text");
-  assert.equal(summary.chars, 50);
-  assert.equal(summary.truncated, true);
-  assert.ok(!JSON.stringify(summary).includes("secret prose"));
 });

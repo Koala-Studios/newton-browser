@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { startFixtureServers } from "./fixtures/server.mjs";
 
-test("frame fixture preserves baseline controls and adds deterministic target churn", async (context) => {
+test("frame fixture preserves baseline controls and provides deterministic target churn", async (context) => {
   const fixture = await startFixtureServers({ port: 0, crossOriginPort: 0, thirdOriginPort: 0 });
   context.after(() => fixture.close());
 

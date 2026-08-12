@@ -4,16 +4,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "newton-direct-hard-crash-"));
 const storeRoot = path.join(root, "identity-store");
 const worker = path.resolve("scripts/smoke/direct-hard-crash-worker.mjs");
 let child;
 let observedBrowserPid = 0;
+let receipt = null;
+let terminalFailure = null;
 try {
   child = spawn(process.execPath, ["--experimental-strip-types", worker], {
     cwd: process.cwd(),
-    env: { ...process.env, NEWTON_BROWSER_QA_OWNER: family, NEWTON_BROWSER_PROFILE_STORE_DIR: storeRoot },
+    env: { ...process.env, NEWTON_BROWSER_QA_BROWSER: family, NEWTON_BROWSER_PROFILE_STORE_DIR: storeRoot },
     stdio: ["ignore", "ignore", "pipe", "ipc"],
     windowsHide: true,
   });
@@ -30,18 +32,19 @@ try {
     ? fs.readdirSync(storeRoot).filter((name) => name.startsWith("nbi_") || name.includes("lease"))
     : [];
   if (residue.length !== 0) throw new Error("direct_hard_crash_identity_residue");
-  process.stdout.write(`${JSON.stringify({ ok: true, browserFamily: family, browserProcessTerminated: true, ephemeralIdentityRemoved: true })}\n`);
+  receipt = { ok: true, browserFamily: family, browserProcessTerminated: true, ephemeralIdentityRemoved: true };
 } catch (error) {
   const identities = fs.existsSync(storeRoot) ? fs.readdirSync(storeRoot).filter((name) => name.startsWith("nbi_")) : [];
   const leases = identities.filter((identity) => fs.existsSync(path.join(storeRoot, identity, ".newton-browser-profile-lease"))).length;
-  process.stdout.write(`${JSON.stringify({
+  terminalFailure = error;
+  receipt = {
     ok: false,
     browserFamily: family,
     errorCode: safeCode(error),
     browserProcessAlive: observedBrowserPid > 0 && processExists(observedBrowserPid),
     identityCount: Math.min(identities.length, 64),
     leaseCount: Math.min(leases, 64),
-  })}\n`);
+  };
   process.exitCode = 1;
 } finally {
   if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -49,8 +52,21 @@ try {
   // the identity. Windows may retain a directory handle during that bounded
   // transition, so await the exact owned temp root instead of reporting a false
   // failure after the browser and identity cleanup have both been proven.
-  await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 });
+  try { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 100, retryDelay: 50 }); } catch {
+    terminalFailure = Object.assign(new Error("direct_hard_crash_temp_cleanup_failed"), { code: "direct_hard_crash_temp_cleanup_failed" });
+    process.exitCode = 1;
+  }
 }
+
+process.stdout.write(`${JSON.stringify(terminalFailure ? {
+  ...receipt,
+  ok: false,
+  errorCode: safeCode(terminalFailure),
+  temporaryRootRemoved: !fs.existsSync(root),
+} : {
+  ...receipt,
+  temporaryRootRemoved: true,
+})}\n`);
 
 function safeCode(error) {
   const value = error && typeof error === "object" && typeof error.code === "string"

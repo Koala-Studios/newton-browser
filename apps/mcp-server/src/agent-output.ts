@@ -3,21 +3,26 @@ import {
   redactBrowserResult,
   redactJson,
   redactText,
+  BROWSER_ACTION_RESULT_STATUSES,
+  BROWSER_COMMIT_BOUNDARIES,
+  BROWSER_RISK_CLASSES,
+  type BrowserActionResultStatus,
+  type BrowserCommitBoundary,
+  type BrowserRiskClass,
   type NewtonBrowserResult,
   type PageProvenance,
 } from "@newton-browser/core";
 
-export type ObservationOutputFormat = "compact" | "json";
+type ObservationOutputFormat = "compact" | "json";
 export type AgentObservationOptionsInput = { format?: unknown; includeGeometry?: unknown; includeInteractive?: unknown; query?: unknown; roles?: unknown; limit?: unknown };
 type ObservationOptions = { format: ObservationOutputFormat; includeGeometry: boolean; includeInteractive: boolean; query: string; roles: string[]; limit: number };
-type NodeTarget = { ref?: string; role?: string; name?: string; text?: string; label?: string; placeholder?: string; testId?: string; selector?: string };
 type ProjectedNode = {
   ref: string; role: string; name?: string; value?: string; disabled?: boolean;
   checked?: boolean | "mixed"; selected?: boolean; expanded?: boolean; required?: boolean; level?: number;
-  href?: string; elementType?: string; documentEpoch?: number; frameId?: string; frameOrigin?: string;
-  target?: NodeTarget; geometry?: { x: number; y: number; width: number; height: number };
+  href?: string; elementType?: string; frameOrigin?: string;
+  geometry?: { x: number; y: number; width: number; height: number };
 };
-type ProjectedExcludedFrame = { frameId: string; frameOrigin?: string; reason: string };
+type ProjectedExcludedFrame = { frameOrigin?: string; reason: string };
 
 const OBSERVATION_QUERY_LIMIT = 120;
 const OBSERVATION_ROLE_LIMIT = 12;
@@ -35,7 +40,6 @@ const OBS_CHANGED_KEY_CAP = 80;
 const OBS_CHANGED_VALUE_CAP = 120;
 const OBS_TEXT_CAP = 2_000;
 
-const ACTION_DECISION_CODE_CAP = 120;
 const ACTION_REASON_CAP = 240;
 const ACTION_DELTA_CAP = 10;
 const ACTION_DELTA_ITEM_CAP = 180;
@@ -43,43 +47,41 @@ const ACTION_ERROR_CODE_CAP = 80;
 const ACTION_ORIGIN_CAP = 140;
 const ACTION_STATUS_CAP = 80;
 
-export const PLAN_ACTION_OUTCOMES = ["completed", "prevented", "not_started", "outcome_unknown"] as const;
-export type AgentActionOutcome = (typeof PLAN_ACTION_OUTCOMES)[number];
-const PLAN_ACTION_OUTCOME_SET = new Set<AgentActionOutcome>(PLAN_ACTION_OUTCOMES);
+const AGENT_ACTION_OUTCOMES = ["completed", "prevented", "not_started", "outcome_unknown"] as const;
+type AgentActionOutcome = (typeof AGENT_ACTION_OUTCOMES)[number];
+const AGENT_ACTION_OUTCOME_SET = new Set<AgentActionOutcome>(AGENT_ACTION_OUTCOMES);
 
-type AgentActionDecision = { code: string; reason?: string };
-type AgentActionProvenance = Pick<PageProvenance, "trust" | "origin" | "sessionEpoch">;
-export type ObservationProjectionBase = {
+type AgentActionDecision = { class: BrowserRiskClass; commitBoundary: BrowserCommitBoundary; reason?: string };
+type AgentActionProvenance = Pick<PageProvenance, "trust" | "origin">;
+type ObservationProjectionBase = {
   trust: "untrusted_page_content";
   origin: string;
   mode: string;
   nodeCount: number;
   capturedAt: string;
-  actionStatus?: string;
-  verified?: boolean;
   reason?: string;
   changed?: Record<string, unknown>;
   title?: string;
   excludedFrames?: ProjectedExcludedFrame[];
 };
 type ObservationBudget = { nodesScanned: number; nodesReturned: number; nodesOmitted: number; truncated: boolean; continuation?: ObservationBudgetContinuation };
-export type ObservationBudgetContinuation = {
+type ObservationBudgetContinuation = {
   tool: "browser.observe";
   strategy: "raise_limit" | "refine_query_or_roles";
   reason: "node_limit" | "source_truncated";
   arguments: { format: ObservationOutputFormat; query?: string; roles?: string[]; limit?: number; includeGeometry?: true; includeInteractive?: true };
 };
-export type ObservationProjectionResult =
+type ObservationProjectionResult =
   | { ok: true; projection: ObservationProjectionBase & { kind: "observation" | "observation_delta" | "observation_text"; format: ObservationOutputFormat; nodes: ProjectedNode[]; text?: string; output?: string; budget: ObservationBudget } }
   | { ok: false; errorCode: "invalid_observation" | "unsupported_observation_kind"; reason: string };
-export type AgentActionStatus = string;
-export type AgentActionResultProjection = {
+type AgentActionStatus = BrowserActionResultStatus;
+type AgentActionResultProjection = {
   ok: boolean;
-  status?: AgentActionStatus;
+  status: AgentActionStatus;
   outcome: AgentActionOutcome;
   retrySafe: boolean;
   reason?: string;
-  decision?: { code: string; reason?: string };
+  decision: AgentActionDecision;
   delta?: string[];
   changed?: boolean;
   provenance?: AgentActionProvenance;
@@ -183,18 +185,18 @@ function normalizeExcludedFrames(value: unknown): ProjectedExcludedFrame[] | und
   if (!Array.isArray(value)) return undefined;
   const frames = value.flatMap((entry) => {
     if (!isObjectRecord(entry)) return [];
-    const frameId = asSafeBoundedText(entry.frameId, 120).trim();
     const reason = asSafeBoundedText(entry.reason, 80).trim();
-    if (!frameId || !reason) return [];
+    if (!reason) return [];
     const frameOrigin = asSafeString(redactBrowserOrigin(entry.frameOrigin), 160).trim();
-    return [{ frameId, ...(frameOrigin ? { frameOrigin } : {}), reason }];
+    return [{ ...(frameOrigin ? { frameOrigin } : {}), reason }];
   }).slice(0, 64);
-  return frames.length > 0 ? frames : undefined;
+  const unique = frames.filter((frame, index, list) => list.findIndex((candidate) => candidate.reason === frame.reason && candidate.frameOrigin === frame.frameOrigin) === index);
+  return unique.length > 0 ? unique : undefined;
 }
 
 function normalizeObservationBase(result: Record<string, unknown>): ObservationProjectionBase {
-  const actionStatus = asSafeBoundedText(result.actionStatus, 32);
   const reason = asSafeBoundedText(result.reason, OBS_REASON_CAP);
+  const changed = normalizeChanged(result.changed);
   const excludedFrames = normalizeExcludedFrames(result.excludedFrames);
   return {
     trust: "untrusted_page_content",
@@ -202,10 +204,8 @@ function normalizeObservationBase(result: Record<string, unknown>): ObservationP
     mode: asSafeBoundedText(result.mode, 16) || "cdp",
     nodeCount: asSafeNonNegativeInt(result.nodeCount, 0, OBSERVATION_SOURCE_NODE_CAP),
     capturedAt: toIso(result.capturedAt),
-    ...(actionStatus ? { actionStatus } : {}),
-    ...(asBoolean(result.verified) !== undefined ? { verified: asBoolean(result.verified) } : {}),
     ...(reason ? { reason } : {}),
-    ...(normalizeChanged(result.changed) ? { changed: normalizeChanged(result.changed) } : {}),
+    ...(changed ? { changed } : {}),
     ...(typeof result.title === "string" ? { title: asSafeBoundedText(result.title, OBS_NODE_TEXT_CAP) } : {}),
     ...(excludedFrames ? { excludedFrames } : {}),
   };
@@ -215,45 +215,29 @@ function isSupportedObservationKind(kind: string): kind is NewtonBrowserResult["
   return kind === "observation" || kind === "observation_delta" || kind === "observation_text";
 }
 
-function normalizeTarget(raw: unknown): NodeTarget | undefined {
-  if (!isObjectRecord(raw)) return undefined;
-  const output: NodeTarget = {};
-  const fields: Array<[string, keyof NodeTarget, number]> = [
-    ["ref", "ref", OBS_NODE_REF_CAP],
-    ["role", "role", OBS_NODE_NAME_CAP],
-    ["name", "name", OBS_NODE_NAME_CAP],
-    ["text", "text", OBS_NODE_NAME_CAP],
-    ["label", "label", OBS_NODE_NAME_CAP],
-    ["placeholder", "placeholder", OBS_NODE_NAME_CAP],
-    ["testId", "testId", OBS_NODE_NAME_CAP],
-    ["selector", "selector", OBS_NODE_NAME_CAP],
-  ];
-  for (const [key, field, cap] of fields) if (asSafeString(raw[key], cap)) output[field] = asSafeString(raw[key], cap);
-  return Object.keys(output).length > 0 ? output : undefined;
-}
-
 function normalizeObservationNode(raw: unknown, includeGeometry: boolean): ProjectedNode | undefined {
   if (!isObjectRecord(raw)) return undefined;
   const ref = asSafeString(raw.ref, OBS_NODE_REF_CAP);
   if (!ref) return undefined;
 
+  const disabled = asBoolean(raw.disabled);
+  const selected = asBoolean(raw.selected);
+  const expanded = asBoolean(raw.expanded);
+  const required = asBoolean(raw.required);
   const node: ProjectedNode = {
     ref,
     role: asSafeString(raw.role, OBS_NODE_ROLE_CAP) || "generic",
     ...(asSafeString(raw.name, OBS_NODE_NAME_CAP) ? { name: asSafeString(raw.name, OBS_NODE_NAME_CAP) } : {}),
     ...(asSafeString(raw.value, OBS_NODE_VALUE_CAP) ? { value: asSafeString(raw.value, OBS_NODE_VALUE_CAP) } : {}),
-    ...(asBoolean(raw.disabled) !== undefined ? { disabled: asBoolean(raw.disabled) } : {}),
+    ...(disabled !== undefined ? { disabled } : {}),
     ...(typeof raw.checked === "boolean" || raw.checked === "mixed" ? { checked: raw.checked } : {}),
-    ...(asBoolean(raw.selected) !== undefined ? { selected: asBoolean(raw.selected) } : {}),
-    ...(asBoolean(raw.expanded) !== undefined ? { expanded: asBoolean(raw.expanded) } : {}),
-    ...(asBoolean(raw.required) !== undefined ? { required: asBoolean(raw.required) } : {}),
+    ...(selected !== undefined ? { selected } : {}),
+    ...(expanded !== undefined ? { expanded } : {}),
+    ...(required !== undefined ? { required } : {}),
     ...(Number.isSafeInteger(raw.level) && Number(raw.level) > 0 && Number(raw.level) <= 9 ? { level: Number(raw.level) } : {}),
     ...(asSafeString(raw.href, OBS_NODE_TEXT_CAP) ? { href: asSafeString(raw.href, OBS_NODE_TEXT_CAP) } : {}),
     ...(asSafeString(raw.elementType, OBS_NODE_ROLE_CAP) ? { elementType: asSafeString(raw.elementType, OBS_NODE_ROLE_CAP) } : {}),
-    ...(Number.isSafeInteger(raw.documentEpoch) && Number(raw.documentEpoch) > 0 ? { documentEpoch: Number(raw.documentEpoch) } : {}),
-    ...(asSafeString(raw.frameId, OBS_NODE_REF_CAP) ? { frameId: asSafeString(raw.frameId, OBS_NODE_REF_CAP) } : {}),
     ...(asSafeString(raw.frameOrigin, OBS_NODE_TEXT_CAP) ? { frameOrigin: asSafeString(raw.frameOrigin, OBS_NODE_TEXT_CAP) } : {}),
-    ...(normalizeTarget(raw.target) ? { target: normalizeTarget(raw.target) } : {}),
   };
 
   if (includeGeometry) {
@@ -278,6 +262,12 @@ function retainSameOriginHref(node: ProjectedNode, origin: string): ProjectedNod
   return withoutHref;
 }
 
+function retainCrossOriginFrame(node: ProjectedNode, origin: string): ProjectedNode {
+  if (!node.frameOrigin || node.frameOrigin !== origin) return node;
+  const { frameOrigin: _frameOrigin, ...withoutFrameOrigin } = node;
+  return withoutFrameOrigin;
+}
+
 function nodeSignature(node: ProjectedNode): string {
   return JSON.stringify([
     node.ref,
@@ -292,10 +282,7 @@ function nodeSignature(node: ProjectedNode): string {
     node.level,
     node.href ?? "",
     node.elementType ?? "",
-    node.documentEpoch,
-    node.frameId ?? "",
     node.frameOrigin ?? "",
-    node.target ?? null,
     node.geometry ?? null,
   ]);
 }
@@ -317,8 +304,7 @@ function dedupeNodes(nodes: ProjectedNode[]): ProjectedNode[] {
 function matchesRoles(node: ProjectedNode, roles: string[]): boolean {
   if (roles.length === 0) return true;
   const nodeRole = node.role.toLowerCase();
-  const targetRole = node.target?.role?.toLowerCase();
-  return roles.includes(nodeRole) || (targetRole ? roles.includes(targetRole) : false);
+  return roles.includes(nodeRole);
 }
 
 function matchesQuery(node: ProjectedNode, query: string): boolean {
@@ -330,16 +316,7 @@ function matchesQuery(node: ProjectedNode, query: string): boolean {
     node.value,
     node.href,
     node.elementType,
-    node.frameId,
     node.frameOrigin,
-    node.target?.ref,
-    node.target?.role,
-    node.target?.name,
-    node.target?.text,
-    node.target?.label,
-    node.target?.placeholder,
-    node.target?.testId,
-    node.target?.selector,
   ]
     .filter((entry): entry is string => Boolean(entry))
     .join(" ")
@@ -391,7 +368,7 @@ export function enforceObservationBudget<T>(
   };
 }
 
-function renderCompactLine(node: ProjectedNode, includeGeometry: boolean): string {
+function renderCompactLine(node: ProjectedNode, includeGeometry: boolean, pageOrigin: string): string {
   const fields = [
     `ref=${JSON.stringify(node.ref)}`,
     ...(node.name ? [`name=${JSON.stringify(node.name)}`] : []),
@@ -404,8 +381,7 @@ function renderCompactLine(node: ProjectedNode, includeGeometry: boolean): strin
     ...(node.level !== undefined ? [`level=${node.level}`] : []),
     ...(node.href ? [`href=${JSON.stringify(node.href)}`] : []),
     ...(node.elementType ? [`type=${JSON.stringify(node.elementType)}`] : []),
-    ...(node.frameId ? [`frame=${JSON.stringify({ id: node.frameId, origin: node.frameOrigin, documentEpoch: node.documentEpoch })}`] : []),
-    ...(node.target ? [`target=${JSON.stringify(node.target)}`] : []),
+    ...(node.frameOrigin && node.frameOrigin !== pageOrigin ? [`frameOrigin=${JSON.stringify(node.frameOrigin)}`] : []),
     ...(includeGeometry && node.geometry ? [`geometry=${JSON.stringify(node.geometry)}`] : []),
   ];
 
@@ -422,7 +398,7 @@ function projectObservationLines(
   const title = base.title ? JSON.stringify(base.title) : JSON.stringify(base.mode || "page");
   const origin = JSON.stringify(base.origin);
   const header = `page trust=untrusted_page_content title=${title} origin=${origin} ${kind}`;
-  const body = nodes.map((node) => renderCompactLine(node, options.includeGeometry));
+  const body = nodes.map((node) => renderCompactLine(node, options.includeGeometry, base.origin));
 
   if (kind === "observation_text" && text) {
     return `${header}\n${JSON.stringify(text)}`;
@@ -481,7 +457,7 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
     ? sourceNodes
       .map((entry) => {
         const node = kind === "observation" ? normalizeObservationNode(entry, options.includeGeometry) : normalizeUpdatedNode(entry);
-        const safeNode = node ? retainSameOriginHref(node, base.origin) : undefined;
+        const safeNode = node ? retainCrossOriginFrame(retainSameOriginHref(node, base.origin), base.origin) : undefined;
         if (!safeNode || !matchesRoles(safeNode, options.roles) || !matchesQuery(safeNode, options.query)) return undefined;
         return safeNode;
       })
@@ -521,18 +497,19 @@ function normalizeObservationProjection(raw: Record<string, unknown>, options: O
 function parseActionOutcome(raw: unknown): AgentActionOutcome | undefined {
   if (typeof raw !== "string") return undefined;
   const candidate = raw.trim().toLowerCase();
-  return PLAN_ACTION_OUTCOME_SET.has(candidate as AgentActionOutcome) ? (candidate as AgentActionOutcome) : undefined;
+  return AGENT_ACTION_OUTCOME_SET.has(candidate as AgentActionOutcome) ? (candidate as AgentActionOutcome) : undefined;
 }
 
 function parseActionError(raw: unknown): string | undefined {
-  if (typeof raw === "string") return asSafeString(raw, ACTION_ERROR_CODE_CAP);
-  if (!isObjectRecord(raw)) return undefined;
-  return asSafeString(raw.code, ACTION_ERROR_CODE_CAP) || asSafeString(raw.errorCode, ACTION_ERROR_CODE_CAP);
+  return typeof raw === "string" ? asSafeString(raw, ACTION_ERROR_CODE_CAP) : undefined;
 }
 
-function parseActionStatus(raw: unknown): string | undefined {
+function parseActionStatus(raw: unknown): BrowserActionResultStatus | undefined {
   if (typeof raw !== "string") return undefined;
-  return asSafeString(raw, ACTION_STATUS_CAP).toLowerCase();
+  const candidate = asSafeString(raw, ACTION_STATUS_CAP).toLowerCase();
+  return BROWSER_ACTION_RESULT_STATUSES.includes(candidate as BrowserActionResultStatus)
+    ? candidate as BrowserActionResultStatus
+    : undefined;
 }
 
 function parseActionDecision(raw: unknown): AgentActionDecision | undefined {
@@ -540,11 +517,16 @@ function parseActionDecision(raw: unknown): AgentActionDecision | undefined {
   const redacted = redactJson(raw);
   if (!isObjectRecord(redacted)) return undefined;
 
-  const code = asSafeString(redacted.code, ACTION_DECISION_CODE_CAP) || asSafeString(redacted.errorCode, ACTION_DECISION_CODE_CAP);
-  if (!code) return undefined;
+  const riskClass = typeof redacted.class === "string" && BROWSER_RISK_CLASSES.includes(redacted.class as BrowserRiskClass)
+    ? redacted.class as BrowserRiskClass
+    : undefined;
+  const commitBoundary = typeof redacted.commitBoundary === "string" && BROWSER_COMMIT_BOUNDARIES.includes(redacted.commitBoundary as BrowserCommitBoundary)
+    ? redacted.commitBoundary as BrowserCommitBoundary
+    : undefined;
+  if (!riskClass || !commitBoundary) return undefined;
 
   const reason = asSafeString(redacted.reason, ACTION_REASON_CAP);
-  return reason ? { code, reason } : { code };
+  return reason ? { class: riskClass, commitBoundary, reason } : { class: riskClass, commitBoundary };
 }
 
 function parseActionDelta(raw: unknown): string[] | undefined {
@@ -561,53 +543,50 @@ function parseActionProvenance(raw: unknown): AgentActionProvenance | undefined 
   if (!isObjectRecord(raw)) return undefined;
 
   const origin = asSafeString(redactBrowserOrigin(raw.origin), ACTION_ORIGIN_CAP);
-  const sessionEpoch = asSafeNonNegativeInt(raw.sessionEpoch, 0, 1_000_000);
-
   return {
     trust: "untrusted_page_content",
     origin: origin || "unknown",
-    sessionEpoch,
   };
 }
 
 export function normalizeAgentActionResult(raw: unknown): AgentActionResultProjection {
   if (!isObjectRecord(raw)) {
-    return { ok: false, status: "outcome_unknown", outcome: "outcome_unknown", retrySafe: false, errorCode: "runner_contract_invalid" };
+    return { ok: false, status: "failed", outcome: "outcome_unknown", retrySafe: false, decision: { class: "blocked", commitBoundary: "none", reason: "runner_contract_invalid" }, errorCode: "runner_contract_invalid" };
   }
 
   const redacted = redactJson(raw);
   if (!isObjectRecord(redacted)) {
-    return { ok: false, status: "outcome_unknown", outcome: "outcome_unknown", retrySafe: false, errorCode: "runner_contract_invalid" };
+    return { ok: false, status: "failed", outcome: "outcome_unknown", retrySafe: false, decision: { class: "blocked", commitBoundary: "none", reason: "runner_contract_invalid" }, errorCode: "runner_contract_invalid" };
   }
 
   const diagnosticStatus = parseActionStatus(redacted.status);
+  const missingStatus = !("status" in redacted);
+  const statusInvalid = !missingStatus && diagnosticStatus === undefined;
   const outcome = parseActionOutcome(redacted.outcome);
   const hasOutcome = "outcome" in redacted;
   const outcomeInvalid = hasOutcome && outcome === undefined;
   const missingOutcome = !hasOutcome;
-  const errorCode = parseActionError(redacted.errorCode ?? redacted.error);
-  const invalidError = ("errorCode" in redacted || "error" in redacted) && errorCode === undefined;
-  const invalid = missingOutcome || outcomeInvalid || invalidError;
+  const errorCode = parseActionError(redacted.errorCode);
+  const invalidError = "errorCode" in redacted && errorCode === undefined;
+  const decision = parseActionDecision(redacted.decision);
+  const invalid = missingStatus || statusInvalid || missingOutcome || outcomeInvalid || invalidError || !decision || "error" in redacted;
   const normalizedOutcome: AgentActionOutcome = invalid || !outcome ? "outcome_unknown" : outcome;
   const provenance = parseActionProvenance(redacted.provenance);
-  const decision = parseActionDecision(redacted.decision);
   const delta = parseActionDelta(redacted.delta);
 
   return {
     ok: !invalid && normalizedOutcome === "completed" && !errorCode,
+    status: diagnosticStatus ?? "failed",
     outcome: normalizedOutcome,
     retrySafe: normalizedOutcome === "not_started" || normalizedOutcome === "prevented",
-    ...(diagnosticStatus ? { status: diagnosticStatus } : {}),
     ...(asSafeString(redacted.reason, ACTION_REASON_CAP) ? { reason: asSafeString(redacted.reason, ACTION_REASON_CAP) } : {}),
-    ...(decision ? { decision } : {}),
+    decision: decision ?? { class: "blocked", commitBoundary: "none", reason: "runner_contract_invalid" },
     ...(delta ? { delta } : {}),
     ...(typeof redacted.changed === "boolean" ? { changed: redacted.changed } : {}),
     ...(provenance ? { provenance } : {}),
-    ...(invalid || errorCode ? { errorCode: invalid ? "runner_contract_invalid" : errorCode } : {}),
+    ...(invalid ? { errorCode: "runner_contract_invalid" } : errorCode ? { errorCode } : {}),
   };
 }
-
-export const normalizeActionResult = normalizeAgentActionResult;
 
 export function projectObservation(raw: unknown, input: AgentObservationOptionsInput = {}): ObservationProjectionResult {
   const redacted = redactBrowserResult(raw);

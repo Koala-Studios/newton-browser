@@ -1,11 +1,13 @@
 /** Dependency-free per-session FIFO command pump with close barrier semantics. */
 
-const SESSION_FINALIZING_ERROR = "session_finalizing";
+const SESSION_STOPPING_ERROR = "session_stopping";
 const SESSION_QUEUE_FULL_ERROR = "session_queue_full";
 const INVALID_COMMAND_SIZE_ERROR = "invalid_command_size";
 const INVALID_EXECUTOR_ERROR = "invalid_executor";
 const COMMAND_TIMEOUT_NOT_STARTED = "command_timeout_not_started";
 const COMMAND_TIMEOUT_OUTCOME_UNKNOWN = "command_timeout_outcome_unknown";
+const COMMAND_CANCELLED_NOT_STARTED = "command_cancelled_not_started";
+const COMMAND_CANCELLED_OUTCOME_UNKNOWN = "command_cancelled_outcome_unknown";
 
 type PumpError = Error & { code: string };
 
@@ -18,6 +20,8 @@ type QueueEntry = {
   timer: NodeJS.Timeout | null;
   running: boolean;
   settled: boolean;
+  signal: AbortSignal | null;
+  abortListener: (() => void) | null;
 };
 
 export type SessionCommandPumpOptions = {
@@ -96,7 +100,7 @@ export class SessionCommandPump {
     }
 
     this.closed = true;
-    this._rejectQueued(createError(SESSION_FINALIZING_ERROR));
+    this._rejectQueued(createError(SESSION_STOPPING_ERROR));
 
     if (this.runningCount === 0) {
       this._closePromise = Promise.resolve();
@@ -114,9 +118,10 @@ export class SessionCommandPump {
     bytes: number,
     execute: (item: Item) => Output | PromiseLike<Output>,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<Awaited<Output>> {
     if (this.closed) {
-      return Promise.reject(createError(SESSION_FINALIZING_ERROR));
+      return Promise.reject(createError(SESSION_STOPPING_ERROR));
     }
     if (typeof execute !== "function") {
       return Promise.reject(createError(INVALID_EXECUTOR_ERROR));
@@ -127,6 +132,7 @@ export class SessionCommandPump {
     if (timeoutMs !== undefined && (!isSafePositiveInteger(timeoutMs) || timeoutMs > 300_000)) {
       return Promise.reject(createError(INVALID_COMMAND_SIZE_ERROR));
     }
+    if (signal?.aborted) return Promise.reject(createError(COMMAND_CANCELLED_NOT_STARTED));
 
     const totalItems = this.runningCount + this.queue.length;
     const totalBytes = this.runningBytes + this.queuedBytes;
@@ -145,10 +151,16 @@ export class SessionCommandPump {
         timer: null,
         running: false,
         settled: false,
+        signal: signal ?? null,
+        abortListener: null,
       };
       if (timeoutMs !== undefined) {
         entry.timer = setTimeout(() => this._timeout(entry), timeoutMs);
         entry.timer.unref();
+      }
+      if (signal) {
+        entry.abortListener = () => this._cancel(entry);
+        signal.addEventListener("abort", entry.abortListener, { once: true });
       }
       this.queue.push(entry);
       this.queuedBytes += bytes;
@@ -165,6 +177,7 @@ export class SessionCommandPump {
     this.queuedBytes = 0;
     for (const entry of queued) {
       if (entry.timer) clearTimeout(entry.timer);
+      this._removeAbortListener(entry);
       entry.settled = true;
       entry.reject(error);
     }
@@ -192,7 +205,7 @@ export class SessionCommandPump {
     try {
       while (this.queue.length > 0) {
         if (this.closed) {
-          this._rejectQueued(createError(SESSION_FINALIZING_ERROR));
+          this._rejectQueued(createError(SESSION_STOPPING_ERROR));
           break;
         }
 
@@ -216,6 +229,7 @@ export class SessionCommandPump {
           }
         } finally {
           if (entry.timer) clearTimeout(entry.timer);
+          this._removeAbortListener(entry);
           this.runningCount -= 1;
           this.runningBytes -= entry.bytes;
           this._resolveCloseIfNeeded();
@@ -230,6 +244,7 @@ export class SessionCommandPump {
   private _timeout(entry: QueueEntry): void {
     if (entry.settled) return;
     entry.settled = true;
+    this._removeAbortListener(entry);
     if (!entry.running) {
       const index = this.queue.indexOf(entry);
       if (index >= 0) {
@@ -240,5 +255,26 @@ export class SessionCommandPump {
       return;
     }
     entry.reject(createError(COMMAND_TIMEOUT_OUTCOME_UNKNOWN));
+  }
+
+  private _cancel(entry: QueueEntry): void {
+    if (entry.settled) return;
+    entry.settled = true;
+    this._removeAbortListener(entry);
+    if (!entry.running) {
+      const index = this.queue.indexOf(entry);
+      if (index >= 0) {
+        this.queue.splice(index, 1);
+        this.queuedBytes -= entry.bytes;
+      }
+      entry.reject(createError(COMMAND_CANCELLED_NOT_STARTED));
+      return;
+    }
+    entry.reject(createError(COMMAND_CANCELLED_OUTCOME_UNKNOWN));
+  }
+
+  private _removeAbortListener(entry: QueueEntry): void {
+    if (entry.signal && entry.abortListener) entry.signal.removeEventListener("abort", entry.abortListener);
+    entry.abortListener = null;
   }
 }

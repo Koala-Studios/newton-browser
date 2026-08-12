@@ -8,18 +8,18 @@
     {
       "tool": "browser.act",
       "expect": "dialog_blocked",
-      "action": { "kind": "click", "target": { "role": "button", "name": "Dialog on mousedown" } }
+      "action": { "kind": "click", "role": "button", "name": "Dialog on mousedown" }
     },
     { "tool": "browser.act", "expect": "completed", "action": { "kind": "dialog_dismiss" } },
     {
       "tool": "browser.act",
       "expect": "completed",
-      "action": { "kind": "click", "target": { "role": "button", "name": "Set asynchronous value" } }
+      "action": { "kind": "click", "role": "button", "name": "Set asynchronous value" }
     },
     {
-      "tool": "browser.wait_for",
+      "tool": "browser.act",
       "expect": "completed",
-      "waitFor": { "state": "visible", "text": "settled-without-delay" }
+      "action": { "kind": "wait_for", "waitFor": { "state": "visible", "text": "settled-without-delay" } }
     }
   ],
   "forbid": []

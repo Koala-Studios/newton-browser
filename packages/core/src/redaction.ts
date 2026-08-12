@@ -1,6 +1,13 @@
 import { BROWSER_ACTION_FIELDS, BROWSER_ACTION_FIELD_SPECS, parseBrowserAction } from "./action-schema.ts";
 import { redactJson, redactText } from "./text-redaction.ts";
-import type { BrowserAction, BrowserActionResultStatus, NewtonBrowserResult, BrowserTarget, BrowserWaitFor } from "./protocol.ts";
+import type {
+  BrowserAction,
+  BrowserConsoleEntry,
+  BrowserNetworkEntry,
+  BrowserNetworkLog,
+  NewtonBrowserResult,
+  BrowserWaitFor,
+} from "./protocol.ts";
 
 const TEXT_CAP = 240;
 const URL_CAP = 500;
@@ -8,11 +15,11 @@ const NODE_CAP = 80;
 // Hard ceiling for a `mode: "text"` observation after redaction. The driver applies
 // the caller's `maxChars`; this bounds the result regardless of what crossed the private transport.
 const TEXT_OBSERVE_CAP = 200_000;
-// Inline screenshot bytes (Proposal 29 / D5) ride result_json transiently (masked
+// Inline screenshot bytes ride result_json transiently (masked
 // pre-capture, pruned with the short-TTL command). Cap so a vision worker gets the
 // image without bloating Postgres; over the cap we drop bytes and flag truncated.
-const MAX_INLINE_IMAGE_CHARS = 23_000_000;
-const INLINE_IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+const MAX_IMAGE_DATA_URL_CHARS = 23_000_000;
+const IMAGE_DATA_URL = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/;
 
 // Field names that mark a sensitive value, and value shapes that look like a
 // card number / CVV / SSN. Such values are withheld from observations and
@@ -30,7 +37,7 @@ function redactObservationText(value: string): string {
     .replace(/\b(?:\d[ -]?){13,19}\b/g, (match) => (/\d{13,19}/.test(match.replace(/[ -]/g, "")) ? "[REDACTED_CARD]" : match));
 }
 
-// Redact a pending JS dialog (WS9.4) for inclusion in an observation. The message
+// Redact a pending JS dialog for inclusion in an observation. The message
 // and default prompt are page-authored text and pass the observation-text redaction
 // (card/SSN masking) so a dialog can never leak a secret the field passes miss.
 function redactPendingDialog(value: unknown): { pendingDialog: { dialogType: "alert" | "confirm" | "prompt" | "beforeunload"; message: string; defaultPrompt?: string } } | Record<string, never> {
@@ -63,10 +70,7 @@ export function redactBrowserAction(action: BrowserAction): BrowserAction {
     const value = parsed[key];
     if (value === undefined) continue;
     const spec = BROWSER_ACTION_FIELD_SPECS[key];
-    if (spec.kind === "target") {
-      const target = redactBrowserTarget(value);
-      if (target) writable[key] = target;
-    } else if (spec.kind === "waitFor") {
+    if (spec.kind === "waitFor") {
       const waitFor = redactBrowserWaitFor(value);
       if (waitFor) writable[key] = waitFor;
     } else if (spec.kind === "secret") {
@@ -95,75 +99,6 @@ export function redactBrowserAction(action: BrowserAction): BrowserAction {
   return output;
 }
 
-export function summarizeBrowserResult(result: NewtonBrowserResult | null): Record<string, unknown> {
-  if (!result) return { kind: null, hasContent: false };
-  if (result.kind === "observation") {
-    return {
-      kind: result.kind,
-      mode: result.mode,
-      origin: redactBrowserOrigin(result.origin),
-      nodeCount: result.nodeCount,
-      returnedNodes: result.nodes.length,
-      truncated: result.truncated,
-      capturedAt: result.capturedAt,
-      ...(result.actionStatus ? { actionStatus: result.actionStatus } : {}),
-      ...(typeof result.verified === "boolean" ? { verified: result.verified } : {}),
-      ...(result.reason ? { reason: redactText(result.reason).slice(0, TEXT_CAP) } : {}),
-      ...(result.changed ? { changed: redactBrowserChanged(result.changed) } : {}),
-    };
-  }
-  if (result.kind === "observation_delta") {
-    return {
-      kind: result.kind,
-      mode: result.mode,
-      origin: redactBrowserOrigin(result.origin),
-      nodeCount: result.nodeCount,
-      added: result.added.length,
-      removed: result.removed.length,
-      updated: result.updated.length,
-      capturedAt: result.capturedAt,
-      ...(result.actionStatus ? { actionStatus: result.actionStatus } : {}),
-      ...(typeof result.verified === "boolean" ? { verified: result.verified } : {}),
-      ...(result.reason ? { reason: redactText(result.reason).slice(0, TEXT_CAP) } : {}),
-      ...(result.changed ? { changed: redactBrowserChanged(result.changed) } : {}),
-    };
-  }
-  if (result.kind === "screenshot") {
-    return {
-      kind: result.kind,
-      mode: result.mode,
-      origin: redactBrowserOrigin(result.origin),
-      hasArtifact: Boolean(result.artifactId),
-      width: result.width ?? null,
-      height: result.height ?? null,
-      device: result.device ?? null,
-      fullPage: Boolean(result.fullPage),
-      truncated: Boolean(result.truncated),
-      capturedAt: result.capturedAt,
-    };
-  }
-  if (result.kind === "observation_text") {
-    return {
-      kind: result.kind,
-      mode: result.mode,
-      origin: redactBrowserOrigin(result.origin),
-      chars: result.chars,
-      truncated: result.truncated,
-      capturedAt: result.capturedAt,
-      ...(result.actionStatus ? { actionStatus: result.actionStatus } : {}),
-      ...(typeof result.verified === "boolean" ? { verified: result.verified } : {}),
-      ...(result.reason ? { reason: redactText(result.reason).slice(0, TEXT_CAP) } : {}),
-    };
-  }
-  if (result.kind === "console_log") {
-    return { kind: result.kind, origin: redactBrowserOrigin(result.origin), count: result.count, dropped: result.dropped, capturedAt: result.capturedAt };
-  }
-  if (result.kind === "network_log") {
-    return { kind: result.kind, origin: redactBrowserOrigin(result.origin), count: result.count, dropped: result.dropped, hasBody: Boolean(result.body), capturedAt: result.capturedAt };
-  }
-  return { kind: result.kind, message: redactText(result.message).slice(0, TEXT_CAP) };
-}
-
 export function redactBrowserResult(value: unknown): NewtonBrowserResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
@@ -172,29 +107,28 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
   const rawDataUrl = typeof raw.dataUrl === "string" ? raw.dataUrl : "";
   const input = redactJson(rawDataUrl ? { ...raw, dataUrl: "" } : raw) as Record<string, unknown>;
   if (input.kind === "screenshot") {
-    const device = ["mobile", "desktop", "viewport"].includes(String(input.device)) ? (input.device as "mobile" | "desktop" | "viewport") : undefined;
-    // Inline bytes are kept only when the caller asked (raw.inline) — otherwise the
-    // image is dropped from persistence and the caller fetches the artifact.
-    const inlineRequested = raw.inline === true;
-    const inlineOk = inlineRequested && INLINE_IMAGE_DATA_URL.test(rawDataUrl) && rawDataUrl.length <= MAX_INLINE_IMAGE_CHARS;
-    const overCap = inlineRequested && Boolean(rawDataUrl) && !inlineOk;
+    const maskDisposition = input.maskDisposition === "mask_applied"
+      || input.maskDisposition === "mask_not_configured"
+      || input.maskDisposition === "mask_not_applicable"
+      ? input.maskDisposition
+      : null;
+    if (!maskDisposition) return null;
+    // Screenshot bytes exist only in the active tool result and remain bounded.
+    const imageOk = validImageDataUrl(rawDataUrl);
+    const overCap = Boolean(rawDataUrl) && !imageOk;
     return {
       kind: "screenshot",
       mode: "cdp",
       origin: redactBrowserOrigin(input.origin),
       title: redactText(String(input.title ?? "")).slice(0, TEXT_CAP),
-      ...(typeof input.artifactId === "string" ? { artifactId: input.artifactId.slice(0, TEXT_CAP) } : {}),
       ...(typeof input.width === "number" ? { width: Math.max(0, Math.trunc(input.width)) } : {}),
       ...(typeof input.height === "number" ? { height: Math.max(0, Math.trunc(input.height)) } : {}),
       ...(input.format === "png" || input.format === "jpeg" ? { format: input.format } : {}),
       ...(input.requestedFormat === "png" || input.requestedFormat === "jpeg" ? { requestedFormat: input.requestedFormat } : {}),
-      ...(device ? { device } : {}),
       ...(typeof input.fullPage === "boolean" ? { fullPage: input.fullPage } : {}),
-      maskDisposition: input.maskDisposition === "mask_applied" || input.maskDisposition === "mask_not_applicable"
-        ? input.maskDisposition
-        : "mask_not_configured",
+      maskDisposition,
       ...(overCap || input.truncated === true ? { truncated: true } : {}),
-      ...(inlineOk ? { dataUrl: rawDataUrl } : {}),
+      ...(imageOk ? { dataUrl: rawDataUrl } : {}),
       capturedAt: isoOrNow(input.capturedAt),
     };
   }
@@ -205,7 +139,6 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       : [];
     const updated = Array.isArray(input.updated) ? input.updated.flatMap((node) => normalizeUpdated(node)).slice(0, NODE_CAP) : [];
     const excludedFrames = normalizeExcludedFrames(input.excludedFrames);
-    const frameRouting = normalizeFrameRouting(input.frameRouting);
     return {
       kind: "observation_delta",
       mode: "cdp",
@@ -215,11 +148,8 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       removed,
       updated,
       ...(excludedFrames.length ? { excludedFrames } : {}),
-      ...(frameRouting ? { frameRouting } : {}),
       nodeCount: typeof input.nodeCount === "number" ? Math.max(0, Math.trunc(input.nodeCount)) : added.length,
       capturedAt: isoOrNow(input.capturedAt),
-      ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
-      ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
       ...(input.changed && typeof input.changed === "object" && !Array.isArray(input.changed) ? { changed: redactBrowserChanged(input.changed as Record<string, unknown>) } : {}),
       ...redactPendingDialog(input.pendingDialog),
@@ -236,8 +166,6 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       chars: bounded.length,
       truncated: Boolean(input.truncated) || String(input.text ?? "").length > TEXT_OBSERVE_CAP,
       capturedAt: isoOrNow(input.capturedAt),
-      ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
-      ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
     };
   }
@@ -246,20 +174,16 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       ? input.nodes.flatMap((node, index) => normalizeNode(node, index)).slice(0, NODE_CAP)
       : [];
     const excludedFrames = normalizeExcludedFrames(input.excludedFrames);
-    const frameRouting = normalizeFrameRouting(input.frameRouting);
     return {
       kind: "observation",
-      mode: input.mode === "cdp" ? "cdp" : "passive",
+      mode: "cdp",
       origin: redactBrowserOrigin(input.origin),
       title: redactText(String(input.title ?? "")).slice(0, TEXT_CAP),
       nodes,
       nodeCount: typeof input.nodeCount === "number" ? Math.max(0, Math.trunc(input.nodeCount)) : nodes.length,
       truncated: Boolean(input.truncated),
       ...(excludedFrames.length ? { excludedFrames } : {}),
-      ...(frameRouting ? { frameRouting } : {}),
       capturedAt: isoOrNow(input.capturedAt),
-      ...(isBrowserActionStatus(input.actionStatus) ? { actionStatus: input.actionStatus } : {}),
-      ...(typeof input.verified === "boolean" ? { verified: input.verified } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
       ...(input.changed && typeof input.changed === "object" && !Array.isArray(input.changed) ? { changed: redactBrowserChanged(input.changed as Record<string, unknown>) } : {}),
       ...redactPendingDialog(input.pendingDialog),
@@ -274,7 +198,7 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
       count: entries.length,
       dropped: typeof input.dropped === "number" ? Math.max(0, Math.trunc(input.dropped)) : 0,
       capturedAt: isoOrNow(input.capturedAt),
-    } as unknown as NewtonBrowserResult;
+    };
   }
   if (input.kind === "network_log") {
     const entries = Array.isArray(input.entries) ? input.entries.flatMap((entry) => normalizeNetworkEntry(entry)).slice(0, 500) : [];
@@ -303,29 +227,41 @@ export function redactBrowserResult(value: unknown): NewtonBrowserResult | null 
         : {}),
       ...(normalizeOpaqueBodyMetadata(input.bodyMetadata) ? { bodyMetadata: normalizeOpaqueBodyMetadata(input.bodyMetadata)! } : {}),
       ...(typeof input.reason === "string" ? { reason: redactText(input.reason).slice(0, TEXT_CAP) } : {}),
-    } as unknown as NewtonBrowserResult;
+    };
   }
-  return {
-    kind: "ack",
-    message: redactText(String(input.message ?? "ok")).slice(0, TEXT_CAP),
-  };
+  return { kind: "ack" };
+}
+
+function validImageDataUrl(value: string): boolean {
+  if (!value || value.length > MAX_IMAGE_DATA_URL_CHARS) return false;
+  const match = IMAGE_DATA_URL.exec(value);
+  if (!match?.[2] || match[2].length % 4 !== 0) return false;
+  const bytes = Buffer.from(match[2], "base64");
+  if (bytes.toString("base64") !== match[2]) return false;
+  if (match[1] === "png") return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
 const CONSOLE_LEVELS = new Set(["log", "info", "warn", "error", "debug"]);
 
-function normalizeConsoleEntry(entry: unknown): Array<Record<string, unknown>> {
+function normalizeConsoleEntry(entry: unknown): BrowserConsoleEntry[] {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
   const raw = entry as Record<string, unknown>;
-  const level = CONSOLE_LEVELS.has(String(raw.level)) ? String(raw.level) : "log";
+  const level = CONSOLE_LEVELS.has(String(raw.level))
+    ? String(raw.level) as BrowserConsoleEntry["level"]
+    : "log";
+  const source = typeof raw.source === "string" && /^[a-z][a-z0-9_.-]{0,39}$/iu.test(raw.source)
+    ? raw.source.toLowerCase()
+    : undefined;
   return [{
     level,
     text: redactObservationText(String(raw.text ?? "")).slice(0, TEXT_CAP),
-    ...(typeof raw.source === "string" && raw.source.trim() ? { source: raw.source.slice(0, 80) } : {}),
+    ...(source ? { source } : {}),
     at: isoOrNow(raw.at),
   }];
 }
 
-function normalizeNetworkEntry(entry: unknown): Array<Record<string, unknown>> {
+function normalizeNetworkEntry(entry: unknown): BrowserNetworkEntry[] {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
   const raw = entry as Record<string, unknown>;
   if (typeof raw.url !== "string") return [];
@@ -342,7 +278,7 @@ function normalizeNetworkEntry(entry: unknown): Array<Record<string, unknown>> {
   }];
 }
 
-function redactNetworkBody(body: Record<string, unknown>): Record<string, unknown> {
+function redactNetworkBody(body: Record<string, unknown>): NonNullable<BrowserNetworkLog["body"]> {
   const data = String(body.data ?? "");
   return {
     requestId: String(body.requestId ?? "").slice(0, 120),
@@ -418,7 +354,6 @@ function normalizeNode(value: unknown, index: number) {
     ...(typeof input.href === "string" && input.href.trim() ? { href: redactBrowserUrl(input.href) } : {}),
     ...(typeof input.elementType === "string" && input.elementType.trim() ? { elementType: redactText(input.elementType).slice(0, 80) } : {}),
     ...(normalizeBbox(input.bbox) ? { bbox: normalizeBbox(input.bbox)! } : {}),
-    ...(redactBrowserTarget(input.target) ? { target: redactBrowserTarget(input.target)! } : {}),
     ...(Number.isSafeInteger(input.documentEpoch) && Number(input.documentEpoch) > 0 ? { documentEpoch: Number(input.documentEpoch) } : {}),
     ...(typeof input.frameId === "string" && input.frameId.trim() ? { frameId: redactText(input.frameId).slice(0, 128) } : {}),
     ...(typeof input.frameOrigin === "string" && redactBrowserOrigin(input.frameOrigin) ? { frameOrigin: redactBrowserOrigin(input.frameOrigin) } : {}),
@@ -434,18 +369,6 @@ function normalizeExcludedFrames(value: unknown) {
     const frameOrigin = redactBrowserOrigin(input.frameOrigin);
     return [{ frameId: redactText(input.frameId).slice(0, 128), frameOrigin: frameOrigin || null, reason: "origin_not_granted" as const }];
   }).slice(0, 64);
-}
-
-function normalizeFrameRouting(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const input = value as Record<string, unknown>;
-  const keys = ["attachedIframeTargetCount", "inProcessFrameCount", "maxAttachedIframeTargetDepth"] as const;
-  if (!keys.every((key) => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0 && Number(input[key]) <= 64)) return null;
-  return {
-    attachedIframeTargetCount: Number(input.attachedIframeTargetCount),
-    inProcessFrameCount: Number(input.inProcessFrameCount),
-    maxAttachedIframeTargetDepth: Number(input.maxAttachedIframeTargetDepth),
-  };
 }
 
 function normalizeUpdated(value: unknown) {
@@ -473,7 +396,10 @@ function normalizeUpdated(value: unknown) {
 
 function normalizeBbox(value: unknown): { x: number; y: number; width: number; height: number } | null {
   if (Array.isArray(value) && value.length >= 4) {
-    const [x, y, width, height] = value.map(finite);
+    const x = finite(value[0]);
+    const y = finite(value[1]);
+    const width = finite(value[2]);
+    const height = finite(value[3]);
     if (x === null || y === null || width === null || height === null) return null;
     return { x, y, width, height };
   }
@@ -485,29 +411,6 @@ function normalizeBbox(value: unknown): { x: number; y: number; width: number; h
   const height = finite(input.height);
   if (x === null || y === null || width === null || height === null) return null;
   return { x, y, width, height };
-}
-
-function redactBrowserTarget(value: unknown): BrowserTarget | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const input = value as Record<string, unknown>;
-  if (typeof input.ref === "string" && input.ref.trim()) return { ref: redactText(input.ref).slice(0, TEXT_CAP) };
-  if (typeof input.role === "string" && input.role.trim()) {
-    return {
-      role: redactText(input.role).slice(0, 80),
-      ...(typeof input.name === "string" ? { name: redactText(input.name).slice(0, TEXT_CAP) } : {}),
-      ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}),
-    };
-  }
-  if (typeof input.text === "string" && input.text.trim()) return { text: redactText(input.text).slice(0, TEXT_CAP), ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
-  if (typeof input.label === "string" && input.label.trim()) return { label: redactText(input.label).slice(0, TEXT_CAP), ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
-  if (typeof input.placeholder === "string" && input.placeholder.trim()) return { placeholder: redactText(input.placeholder).slice(0, TEXT_CAP), ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
-  if (typeof input.testId === "string" && input.testId.trim()) return { testId: redactText(input.testId).slice(0, TEXT_CAP) };
-  if (typeof input.selector === "string" && input.selector.trim()) return { selector: redactText(input.selector).slice(0, TEXT_CAP) };
-  const coordinates = input.coordinates as Record<string, unknown> | undefined;
-  const x = finite(coordinates?.x);
-  const y = finite(coordinates?.y);
-  if (x !== null && y !== null) return { coordinates: { x, y } };
-  return undefined;
 }
 
 function redactBrowserWaitFor(value: unknown): BrowserWaitFor | undefined {
@@ -522,8 +425,10 @@ function redactBrowserWaitFor(value: unknown): BrowserWaitFor | undefined {
   if (typeof input.name === "string" && input.name.trim()) output.name = redactText(input.name).slice(0, TEXT_CAP);
   if (typeof input.ref === "string" && input.ref.trim()) output.ref = redactText(input.ref).slice(0, TEXT_CAP);
   if (typeof input.value === "string" && input.value.trim()) output.value = redactText(input.value).slice(0, TEXT_CAP);
-  if (["attached", "detached", "visible", "hidden", "checked", "unchecked", "value"].includes(String(input.state))) {
-    output.state = input.state as BrowserWaitFor["state"];
+  const state = input.state;
+  if (state === "attached" || state === "detached" || state === "visible" || state === "hidden"
+    || state === "checked" || state === "unchecked" || state === "value") {
+    output.state = state;
   }
   if (typeof input.timeoutMs === "number") output.timeoutMs = Math.max(100, Math.min(Math.trunc(input.timeoutMs), 120_000));
   return Object.keys(output).length > 0 ? output : undefined;
@@ -553,20 +458,6 @@ function redactBrowserChanged(value: Record<string, unknown>): Record<string, un
     }
   }
   return output;
-}
-
-function isBrowserActionStatus(value: unknown): value is BrowserActionResultStatus {
-  return [
-    "verified",
-    "dispatched_unverified",
-    "needs_approval",
-    "blocked",
-    "not_found",
-    "ambiguous",
-    "stale_target",
-    "timed_out",
-    "failed",
-  ].includes(String(value));
 }
 
 function finite(value: unknown): number | null {

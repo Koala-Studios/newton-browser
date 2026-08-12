@@ -1,20 +1,26 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
-  BridgeDispatchOptions,
-  BridgeResultEvent,
-  BrowserSessionCleanupDisposition,
-  BridgeSessionInfo,
-  BridgeSessionInit,
+  BrowserDispatchOptions,
+  BrowserCommandResult,
+  BrowserSessionInfo,
+  BrowserSessionInit,
   BrowserAction,
+  BrowserFloorDecision,
+  BrowserHostPolicyManifest,
+  BrowserResolvedTarget,
+  BrowserSignals,
 } from "@newton-browser/core";
+import { parseBrowserAction } from "@newton-browser/core";
 import {
   startDirectDriverSession,
+  type DriverAction,
   type DirectDriverSessionSnapshot,
   type StartDirectDriverSessionOptions,
 } from "@newton-browser/driver/direct-session-runtime";
 
 import type { OwnedBrowserFamily, OwnedDriverBootstrap } from "./owned-browser-runtime.ts";
+import { evaluateHostFloor } from "../floor-gate.ts";
 
 const DEFAULT_MAX_SESSIONS = 8;
 const DEFAULT_MAX_QUEUE_ITEMS = 32;
@@ -38,15 +44,20 @@ export type DirectOwnedRuntime = Readonly<{
 }>;
 
 export type DirectHostSession = Readonly<{
-  initialObservation?: unknown;
-  execute(action: BrowserAction, context?: { commandId?: string }, timeoutMs?: number): Promise<Record<string, unknown>>;
+  execute(
+    action: DriverAction,
+    context?: { commandId?: string },
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    guard?: (evidence: Record<string, unknown>) => Promise<void> | void,
+  ): Promise<Record<string, unknown>>;
   stop(): Promise<void>;
   snapshot(): DirectDriverSessionSnapshot;
 }>;
 
 export type DirectOwnedRuntimeFactory = (input: Readonly<{
   sessionId: string;
-  init: BridgeSessionInit;
+  init: BrowserSessionInit;
 }>) => Promise<DirectOwnedRuntime>;
 
 export type DirectDriverSessionFactory = (
@@ -56,28 +67,22 @@ export type DirectDriverSessionFactory = (
 export type DirectBrowserHostOptions = Readonly<{
   launchOwnedRuntime: DirectOwnedRuntimeFactory;
   startDriverSession?: DirectDriverSessionFactory;
-  hostInstanceId?: string;
   maxSessions?: number;
   maxQueueItems?: number;
   maxQueueBytes?: number;
+  hostPolicies?: readonly BrowserHostPolicyManifest[];
 }>;
 
 export type DirectBrowserHost = ReturnType<typeof createDirectBrowserHost>;
 
-type DirectControlAction =
-  | { kind: "__stop" }
-  | { kind: "__finalize"; disposition?: BrowserSessionCleanupDisposition };
-type DirectHostAction = BrowserAction | DirectControlAction;
-
 type IdempotencyEntry = Readonly<{
   hash: string;
-  promise: Promise<BridgeResultEvent>;
+  promise: Promise<BrowserCommandResult>;
   createdAt: number;
 }>;
 
 type SessionRecord = {
-  info: BridgeSessionInfo;
-  epoch: number;
+  info: BrowserSessionInfo;
   sequence: number;
   runtime: DirectOwnedRuntime | null;
   driver: DirectHostSession | null;
@@ -89,6 +94,7 @@ type SessionRecord = {
   driverStopOperation: Promise<void> | null;
   driverStopped: boolean;
   idempotency: Map<string, IdempotencyEntry>;
+  provisioningAbort: AbortController;
 };
 
 export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
@@ -96,20 +102,14 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
   const maxSessions = bounded(options.maxSessions, DEFAULT_MAX_SESSIONS, 64);
   const maxQueueItems = bounded(options.maxQueueItems, DEFAULT_MAX_QUEUE_ITEMS, 256);
   const maxQueueBytes = bounded(options.maxQueueBytes, DEFAULT_MAX_QUEUE_BYTES, 16 * 1024 * 1024);
-  const hostInstanceId = validLabel(options.hostInstanceId) ?? `direct_${randomUUID()}`;
   const sessionFactory = options.startDriverSession ?? startDirectDriverSession;
+  const hostPolicies = immutableHostPolicies(options.hostPolicies ?? []);
   const sessions = new Map<string, SessionRecord>();
   let closed = false;
   let closeOperation: Promise<void> | null = null;
 
   const api = {
-    hostInstanceId,
-
-    listen(): Readonly<{ mode: "direct"; port: null }> {
-      return Object.freeze({ mode: "direct", port: null });
-    },
-
-    createSession(init: BridgeSessionInit): { sessionId: string } {
+    createSession(init: BrowserSessionInit): { sessionId: string } {
       if (closed) throw hostError("direct_host_closed");
       if (sessions.size >= maxSessions) throw hostError("session_limit");
       const configuration = validateSessionInit(init);
@@ -117,16 +117,10 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
       const record: SessionRecord = {
         info: {
           sessionId,
-          hostInstanceId,
           origin: configuration.origin,
           allowedOrigins: configuration.allowedOrigins,
-          attached: false,
-          liveOrigin: null,
-          lifecycleState: "creating_host",
-          goal: configuration.goal,
-          instanceLabel: configuration.instanceLabel,
+          lifecycleState: "starting_runtime",
         },
-        epoch: 1,
         sequence: 0,
         runtime: null,
         driver: null,
@@ -138,13 +132,14 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
         driverStopOperation: null,
         driverStopped: false,
         idempotency: new Map(),
+        provisioningAbort: new AbortController(),
       };
       sessions.set(sessionId, record);
       record.provisioning = provision(record, configuration.init);
       return { sessionId };
     },
 
-    async waitForSessionReady(sessionId: string, timeoutMs?: number): Promise<BridgeSessionInfo> {
+    async waitForSessionReady(sessionId: string, timeoutMs?: number): Promise<BrowserSessionInfo> {
       const record = sessions.get(sessionId);
       if (!record) throw hostError("unknown_session");
       await withOptionalDeadline(record.provisioning, timeoutMs, "session_setup_timeout");
@@ -153,11 +148,11 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
         if (!record.cleanupRetained) sessions.delete(sessionId);
         throw hostError(code);
       }
-      if (record.info.lifecycleState !== "active") throw hostError("session_finalizing");
+      if (record.info.lifecycleState !== "active") throw hostError("session_stopping");
       return cloneInfo(record.info);
     },
 
-    listSessions(): BridgeSessionInfo[] {
+    listSessions(): BrowserSessionInfo[] {
       return [...sessions.values()].map((record) => cloneInfo(record.info));
     },
 
@@ -165,7 +160,6 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
       const records = [...sessions.values()];
       const active = records.filter((record) => record.info.lifecycleState === "active" && record.runtime?.cleanupState() === "ready");
       return {
-        hostInstanceId,
         mode: "direct" as const,
         configured: !closed,
         runtimeReady: !closed && active.length > 0 && records.every((record) =>
@@ -173,13 +167,12 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
           && record.runtime?.cleanupState() === "ready"
           && record.setupError === null
           && !record.cleanupRetained),
-        browserFamilies: [...new Set(active.map((record) => record.runtime?.receipt.browserFamily).filter(isFamily))].sort(),
-        identityCount: new Set(active.map((record) => record.runtime?.receipt.identityId).filter(isString)).size,
         sessionCount: records.length,
         activeSessionCount: active.length,
         cleanupUncertainCount: records.filter((record) => record.cleanupRetained).length,
         limits: { maxSessions, maxQueueItems, maxQueueBytes },
         sessionDiagnostics: records.map((record) => ({
+          sessionId: record.info.sessionId,
           lifecycleState: record.info.lifecycleState,
           sequence: record.sequence,
           ...(record.driver ? record.driver.snapshot() : {}),
@@ -187,63 +180,64 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
       };
     },
 
-    beginSessionFinalization(sessionId: string, disposition: BrowserSessionCleanupDisposition): void {
-      const record = sessions.get(sessionId);
-      if (!record) throw hostError("unknown_session");
-      if (!validDisposition(disposition)) throw hostError("invalid_cleanup_disposition");
-      if (record.info.lifecycleState === "finalizing") {
-        if (record.info.cleanupDisposition !== disposition) throw hostError("finalization_conflict");
-        return;
-      }
-      if (record.info.lifecycleState !== "active") throw hostError("session_not_ready");
-      record.info = { ...record.info, lifecycleState: "finalizing", cleanupDisposition: disposition };
-      if (record.driver && !record.driverStopOperation) {
-        const stopping = startDriverStop(record);
-        record.driverStopOperation = stopping;
-      }
-    },
-
     dispatch(
       sessionId: string,
-      action: DirectHostAction,
-      dispatchOptions?: number | BridgeDispatchOptions,
-    ): Promise<BridgeResultEvent> {
+      action: BrowserAction,
+      dispatchOptions?: BrowserDispatchOptions,
+    ): Promise<BrowserCommandResult> {
       const record = sessions.get(sessionId);
-      if (!record) {
-        if (action?.kind === "__stop") {
-          return Promise.resolve(success(`direct_stop_${randomUUID()}`, 0, 0, { stopped: true }));
-        }
-        return Promise.resolve(failure("direct_unknown_0", 0, 0, "prevented", "unknown_session"));
-      }
+      if (!record) return Promise.resolve(failure("direct_unknown_0", 0, "prevented", "unknown_session"));
       const parsed = parseDispatchOptions(dispatchOptions);
       if (!parsed.valid) return Promise.resolve(nextFailure(record, "prevented", parsed.errorCode));
-      const normalized = action ?? ({ kind: "observe" } as BrowserAction);
+      let normalized: DriverAction;
+      try {
+        normalized = normalizeHostAction(action);
+      } catch {
+        return Promise.resolve(nextFailure(record, "prevented", "invalid_command"));
+      }
+      let idempotencyHash: string | null = null;
       if (parsed.idempotencyKey) {
         const now = Date.now();
         for (const [key, entry] of record.idempotency) {
           if (now - entry.createdAt >= IDEMPOTENCY_TTL_MS) record.idempotency.delete(key);
         }
-        const hash = commandHash(normalized);
-        if (!hash) return Promise.resolve(nextFailure(record, "prevented", "invalid_command"));
+        idempotencyHash = commandHash(normalized);
+        if (!idempotencyHash) return Promise.resolve(nextFailure(record, "prevented", "invalid_command"));
         const prior = record.idempotency.get(parsed.idempotencyKey);
-        if (prior) return prior.hash === hash
+        if (prior) return prior.hash === idempotencyHash
           ? prior.promise
           : Promise.resolve(nextFailure(record, "prevented", "idempotency_conflict"));
         if (record.idempotency.size >= MAX_IDEMPOTENCY_ENTRIES) {
           return Promise.resolve(nextFailure(record, "prevented", "idempotency_limit"));
         }
-        const promise = executeDispatch(record, normalized, parsed.timeoutMs);
-        record.idempotency.set(parsed.idempotencyKey, { hash, promise, createdAt: now });
-        return promise;
       }
-      return executeDispatch(record, normalized, parsed.timeoutMs);
+      let operation: Promise<BrowserCommandResult>;
+      try {
+        const initialVerdict = evaluateHostFloor({ session: record.info, action: normalized, manifests: hostPolicies });
+        normalized = initialVerdict.action as DriverAction;
+        operation = initialVerdict.dispatchAllowed
+          ? executeDispatch(record, normalized, initialVerdict.decision, parsed.timeoutMs, parsed.signal)
+          : Promise.resolve(nextFailure(record, "prevented", initialVerdict.errorCode, initialVerdict.decision));
+      } catch {
+        const decision = blockedFloorDecision("floor_configuration_invalid");
+        operation = Promise.resolve(nextFailure(record, "prevented", "floor_configuration_invalid", decision));
+      }
+      if (parsed.idempotencyKey && idempotencyHash) {
+        record.idempotency.set(parsed.idempotencyKey, {
+          hash: idempotencyHash,
+          promise: operation,
+          createdAt: Date.now(),
+        });
+      }
+      return operation;
     },
 
     stopSession(sessionId: string): Promise<void> {
       const record = sessions.get(sessionId);
       if (!record) return Promise.resolve();
       if (record.stopOperation) return record.stopOperation;
-      record.info = { ...record.info, lifecycleState: "finalizing", cleanupDisposition: record.info.cleanupDisposition ?? "close" };
+      record.info = { ...record.info, lifecycleState: "stopping" };
+      record.provisioningAbort.abort(hostError("session_stopping"));
       const operation = stopRecord(record);
       record.stopOperation = operation;
       void operation.finally(() => {
@@ -269,26 +263,27 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
     },
   };
 
-  async function provision(record: SessionRecord, init: BridgeSessionInit): Promise<void> {
+  async function provision(record: SessionRecord, init: BrowserSessionInit): Promise<void> {
     try {
-      record.info = { ...record.info, lifecycleState: "creating_tab" };
+      record.info = { ...record.info, lifecycleState: "starting_browser" };
       const runtime = await options.launchOwnedRuntime({ sessionId: record.info.sessionId, init: cloneInit(init) });
       record.runtime = runtime;
-      const bootstrap = runtime.claimDriverBootstrap(record.info.allowedOrigins ?? []);
-      record.info = { ...record.info, lifecycleState: "attaching_debugger" };
+      observeRuntimeAvailability(record, runtime);
+      throwIfProvisioningStopped(record);
+      const bootstrap = runtime.claimDriverBootstrap(record.info.allowedOrigins);
+      record.info = { ...record.info, lifecycleState: "attaching_cdp" };
       const driver = await sessionFactory({
         bootstrap,
         primaryOrigin: record.info.origin,
-        allowedOrigins: (record.info.allowedOrigins ?? []).filter((origin) => origin !== record.info.origin),
+        allowedOrigins: record.info.allowedOrigins.filter((origin) => origin !== record.info.origin),
         initialUrl: `${record.info.origin}/`,
+        signal: record.provisioningAbort.signal,
         pump: { maxItems: maxQueueItems, maxBytes: maxQueueBytes },
       });
       record.driver = driver;
-      if (record.info.lifecycleState === "finalizing") return;
+      if (record.info.lifecycleState === "stopping") return;
       record.info = {
         ...record.info,
-        attached: true,
-        liveOrigin: record.info.origin,
         lifecycleState: "active",
       };
     } catch (error) {
@@ -301,7 +296,10 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
         return;
       }
       if (record.runtime) {
-        try { await record.runtime.close(); } catch {
+        try {
+          await record.runtime.close();
+          record.runtime = null;
+        } catch {
           record.cleanupRetained = true;
           record.info = { ...record.info, lifecycleState: "degraded" };
           return;
@@ -311,59 +309,73 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
     }
   }
 
-  async function executeDispatch(record: SessionRecord, action: DirectHostAction, timeoutMs?: number): Promise<BridgeResultEvent> {
-    const sequence = ++record.sequence;
-    const commandId = `direct_command_${record.epoch}_${sequence}_${randomUUID()}`;
-    if (record.info.lifecycleState === "finalizing") {
-      if (action.kind === "__stop") return stopCommand(record, commandId, sequence, false);
-      if (action.kind === "__finalize") return finalizeCommand(record, action, commandId, sequence);
-      return failure(commandId, record.epoch, sequence, "not_started", "session_finalizing");
+  function throwIfProvisioningStopped(record: SessionRecord): void {
+    if (record.provisioningAbort.signal.aborted || record.info.lifecycleState === "stopping") {
+      throw hostError("session_stopping");
     }
+  }
+
+  async function executeDispatch(
+    record: SessionRecord,
+    action: DriverAction,
+    initialDecision: BrowserFloorDecision,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<BrowserCommandResult> {
+    const sequence = ++record.sequence;
+    const commandId = `direct_command_${sequence}_${randomUUID()}`;
+    if (record.info.lifecycleState === "stopping") return failure(commandId, sequence, "not_started", "session_stopping", initialDecision);
     await record.provisioning;
-    // Cleanup must remain callable after setup, driver, or runtime degradation. It
-    // is the recovery path for retained ownership and therefore cannot depend on
-    // the ordinary action-readiness gate it is meant to dismantle.
-    if (action.kind === "__stop") return stopCommand(record, commandId, sequence, false);
     if (record.setupError || !record.driver || record.info.lifecycleState !== "active") {
-      return failure(commandId, record.epoch, sequence, "prevented", record.setupError ?? "session_not_ready");
+      return failure(commandId, sequence, "prevented", record.setupError ?? "session_not_ready", initialDecision);
     }
     if (!record.runtime || record.runtime.cleanupState() !== "ready") {
       record.cleanupRetained = true;
-      record.info = { ...record.info, attached: false, lifecycleState: "degraded" };
-      return failure(commandId, record.epoch, sequence, "prevented", "direct_runtime_unavailable");
+      record.info = { ...record.info, lifecycleState: "degraded" };
+      return failure(commandId, sequence, "prevented", "direct_runtime_unavailable", initialDecision);
     }
-    if (action.kind === "__finalize") return finalizeCommand(record, action, commandId, sequence);
+    let decision = initialDecision;
     try {
-      const delta = await record.driver.execute(action, { commandId }, timeoutMs);
+      const guard = requiresResolvedFloor(action)
+        ? (evidence: Record<string, unknown>): void => {
+            const resolvedEvidence = normalizeResolvedFloorEvidence(evidence);
+            const verdict = evaluateHostFloor({
+              session: record.info,
+              action,
+              manifests: hostPolicies,
+              ...(resolvedEvidence.resolved ? { resolved: resolvedEvidence.resolved } : {}),
+              ...(resolvedEvidence.signals ? { signals: resolvedEvidence.signals } : {}),
+            });
+            decision = strongestFloorDecision(decision, verdict.decision);
+            if (!verdict.dispatchAllowed) throw new DirectFloorBlocked(verdict.errorCode, decision);
+          }
+        : undefined;
+      const delta = await record.driver.execute(action, { commandId }, timeoutMs, signal, guard);
       const prevention = containmentPrevention(delta);
-      if (prevention) return failure(commandId, record.epoch, sequence, "prevented", prevention);
+      if (prevention) return failure(commandId, sequence, "prevented", prevention, decision);
+      if (!record.runtime || record.runtime.cleanupState() !== "ready" || record.info.lifecycleState !== "active") {
+        record.cleanupRetained = true;
+        record.info = { ...record.info, lifecycleState: "degraded" };
+        return failure(commandId, sequence, "outcome_unknown", "direct_runtime_unavailable", decision);
+      }
       const incomplete = incompleteAction(delta, action.kind);
-      if (incomplete) return failure(commandId, record.epoch, sequence, incomplete.outcome, incomplete.errorCode);
-      return success(commandId, record.epoch, sequence, deltaToResult(delta));
+      if (incomplete) return failure(commandId, sequence, incomplete.outcome, incomplete.errorCode, decision);
+      const status = completedActionStatus(delta);
+      if (!status) return failure(commandId, sequence, "outcome_unknown", "runner_contract_invalid", decision);
+      return success(commandId, sequence, deltaToResult(delta), status, delta, decision);
     } catch (error) {
+      if (error instanceof DirectFloorBlocked) {
+        return failure(commandId, sequence, "prevented", error.code, error.decision);
+      }
       const code = boundedErrorCode(error, "driver_error");
-      const notStarted = code === "session_queue_full" || code === "session_finalizing" || code === "direct_session_invalid_command" || code === "command_timeout_not_started";
-      const normalizedCode = code === "command_timeout_not_started" || code === "command_timeout_outcome_unknown" ? "command_timeout" : code;
-      return failure(commandId, record.epoch, sequence, notStarted ? "not_started" : "outcome_unknown", normalizedCode);
+      const notStarted = code === "session_queue_full" || code === "session_stopping" || code === "command_cancelled_not_started" || code === "direct_session_invalid_command" || code === "command_timeout_not_started";
+      const normalizedCode = code === "command_timeout_not_started" || code === "command_timeout_outcome_unknown"
+        ? "command_timeout"
+        : code === "command_cancelled_not_started" || code === "command_cancelled_outcome_unknown"
+          ? "command_cancelled"
+          : code;
+      return failure(commandId, sequence, notStarted ? "not_started" : "outcome_unknown", normalizedCode, decision);
     }
-  }
-
-  async function stopCommand(record: SessionRecord, commandId: string, sequence: number, finalized: boolean): Promise<BridgeResultEvent> {
-    try {
-      await api.stopSession(record.info.sessionId);
-      return success(commandId, record.epoch, sequence, finalized ? { finalized: true } : { stopped: true });
-    } catch {
-      return failure(commandId, record.epoch, sequence, "outcome_unknown", "direct_cleanup_uncertain");
-    }
-  }
-
-  function finalizeCommand(record: SessionRecord, action: DirectControlAction, commandId: string, sequence: number): Promise<BridgeResultEvent> {
-    const disposition = "disposition" in action ? action.disposition : undefined;
-    if (!validDisposition(disposition)) return Promise.resolve(failure(commandId, record.epoch, sequence, "prevented", "invalid_finalize_disposition"));
-    try { api.beginSessionFinalization(record.info.sessionId, disposition); } catch (error) {
-      return Promise.resolve(failure(commandId, record.epoch, sequence, "prevented", boundedErrorCode(error, "finalization_failed")));
-    }
-    return stopCommand(record, commandId, sequence, true);
   }
 
   async function stopRecord(record: SessionRecord): Promise<void> {
@@ -398,7 +410,7 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
     }
     if (ownedRuntimeClosed) record.driverStopped = true;
     record.cleanupRetained = false;
-    record.info = { ...record.info, attached: false, lifecycleState: "stopped" };
+    record.info = { ...record.info, lifecycleState: "stopped" };
     sessions.delete(record.info.sessionId);
   }
 
@@ -413,15 +425,31 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
     return operation;
   }
 
+  function observeRuntimeAvailability(record: SessionRecord, runtime: DirectOwnedRuntime): void {
+    const unavailable = (): void => {
+      if (sessions.get(record.info.sessionId) !== record || record.runtime !== runtime
+        || record.info.lifecycleState === "stopping" || record.info.lifecycleState === "stopped") return;
+      record.cleanupRetained = true;
+      record.info = { ...record.info, lifecycleState: "degraded" };
+    };
+    void runtime.unavailable.then(unavailable, unavailable);
+  }
+
   return api;
 }
 
-function validateSessionInit(init: BridgeSessionInit): { origin: string; allowedOrigins: string[]; goal: string; instanceLabel: string; init: BridgeSessionInit } {
-  if (!init || typeof init !== "object") throw hostError("direct_session_invalid_configuration");
+function validateSessionInit(init: BrowserSessionInit): { origin: string; allowedOrigins: string[]; init: BrowserSessionInit } {
+  if (!init || typeof init !== "object" || Object.keys(init).some((key) =>
+    !["origin", "allowedOrigins", "identityId", "browserFamily"].includes(key))) {
+    throw hostError("direct_session_invalid_configuration");
+  }
   const origin = exactOrigin(init.origin);
-  if (!origin || !Array.isArray(init.allowedOrigins) || init.allowedOrigins.length > 31) throw hostError("invalid_origin");
-  const allowedOrigins = [...new Set([origin, ...init.allowedOrigins.map(exactOrigin)])];
-  if (allowedOrigins.some((value) => !value) || allowedOrigins.length > 32) throw hostError("invalid_origin");
+  if (!origin || !Array.isArray(init.allowedOrigins) || init.allowedOrigins.length === 0 || init.allowedOrigins.length > 32) {
+    throw hostError("invalid_origin");
+  }
+  const allowedOrigins = init.allowedOrigins.map(exactOrigin);
+  if (allowedOrigins.some((value) => !value) || allowedOrigins[0] !== origin
+    || new Set(allowedOrigins).size !== allowedOrigins.length) throw hostError("invalid_origin");
   if (init.identityId !== undefined && !/^nbi_[a-f0-9]{32}$/u.test(init.identityId)) throw hostError("invalid_identity_id");
   if (init.browserFamily !== undefined && init.browserFamily !== "chrome" && init.browserFamily !== "edge") {
     throw hostError("invalid_browser_family");
@@ -429,40 +457,38 @@ function validateSessionInit(init: BridgeSessionInit): { origin: string; allowed
   return {
     origin,
     allowedOrigins,
-    goal: boundedText(init.goal, 240),
-    instanceLabel: boundedText(init.instanceLabel, 120),
     init: { ...init, origin, allowedOrigins: [...allowedOrigins] },
   };
 }
 
 function exactOrigin(value: unknown): string {
-  if (typeof value !== "string" || value !== value.trim()) return "";
+  if (typeof value !== "string" || value.length > 512 || value !== value.trim()) return "";
   try {
     const url = new URL(value);
     return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value ? value : "";
   } catch { return ""; }
 }
 
-function cloneInit(init: BridgeSessionInit): BridgeSessionInit {
+function cloneInit(init: BrowserSessionInit): BrowserSessionInit {
   return { ...init, allowedOrigins: [...init.allowedOrigins] };
 }
 
-function cloneInfo(info: BridgeSessionInfo): BridgeSessionInfo {
-  return { ...info, ...(info.allowedOrigins ? { allowedOrigins: [...info.allowedOrigins] } : {}) };
+function cloneInfo(info: BrowserSessionInfo): BrowserSessionInfo {
+  return { ...info, allowedOrigins: [...info.allowedOrigins] };
 }
 
-function parseDispatchOptions(value: number | BridgeDispatchOptions | undefined):
-  { valid: true; idempotencyKey: string | null; timeoutMs?: number } | { valid: false; idempotencyKey: null; errorCode: string } {
+function parseDispatchOptions(value: BrowserDispatchOptions | undefined):
+  { valid: true; idempotencyKey: string | null; timeoutMs?: number; signal?: AbortSignal } | { valid: false; idempotencyKey: null; errorCode: string } {
   if (value === undefined) return { valid: true, idempotencyKey: null, timeoutMs: 60_000 };
-  if (typeof value === "number") return validTimeout(value) ? { valid: true, idempotencyKey: null, timeoutMs: value } : { valid: false, idempotencyKey: null, errorCode: "invalid_timeout" };
   if (!value || typeof value !== "object") return { valid: false, idempotencyKey: null, errorCode: "invalid_dispatch_options" };
-  if (Object.keys(value).some((key) => key !== "timeoutMs" && key !== "idempotencyKey")) {
+  if (Object.keys(value).some((key) => key !== "timeoutMs" && key !== "idempotencyKey" && key !== "signal")) {
     return { valid: false, idempotencyKey: null, errorCode: "invalid_dispatch_options" };
   }
+  if (value.signal !== undefined && !(value.signal instanceof AbortSignal)) return { valid: false, idempotencyKey: null, errorCode: "invalid_abort_signal" };
   if (value.timeoutMs !== undefined && !validTimeout(value.timeoutMs)) return { valid: false, idempotencyKey: null, errorCode: "invalid_timeout" };
-  if (value.idempotencyKey === undefined) return { valid: true, idempotencyKey: null, timeoutMs: value.timeoutMs ?? 60_000 };
-  return /^[A-Za-z0-9._:-]{1,128}$/u.test(value.idempotencyKey)
-    ? { valid: true, idempotencyKey: value.idempotencyKey, timeoutMs: value.timeoutMs ?? 60_000 }
+  if (value.idempotencyKey === undefined) return { valid: true, idempotencyKey: null, timeoutMs: value.timeoutMs ?? 60_000, ...(value.signal ? { signal: value.signal } : {}) };
+  return /^[A-Za-z0-9_-]{8,128}$/u.test(value.idempotencyKey)
+    ? { valid: true, idempotencyKey: value.idempotencyKey, timeoutMs: value.timeoutMs ?? 60_000, ...(value.signal ? { signal: value.signal } : {}) }
     : { valid: false, idempotencyKey: null, errorCode: "invalid_idempotency_key" };
 }
 
@@ -483,10 +509,14 @@ function withOptionalDeadline<T>(operation: Promise<T>, timeoutMs: number | unde
   });
 }
 
-function commandHash(action: DirectHostAction): string | null {
+function commandHash(action: DriverAction): string | null {
   try {
     return createHash("sha256").update(stableJson(action)).digest("hex");
   } catch { return null; }
+}
+
+function normalizeHostAction(action: BrowserAction): DriverAction {
+  return parseBrowserAction(action) as DriverAction;
 }
 
 function stableJson(value: unknown): string {
@@ -500,17 +530,60 @@ function stableJson(value: unknown): string {
   return serialized;
 }
 
-function nextFailure(record: SessionRecord, outcome: "prevented" | "not_started", code: string): BridgeResultEvent {
+function nextFailure(
+  record: SessionRecord,
+  outcome: "prevented" | "not_started",
+  code: string,
+  decision?: BrowserFloorDecision,
+): BrowserCommandResult {
   const sequence = ++record.sequence;
-  return failure(`direct_command_${record.epoch}_${sequence}_${randomUUID()}`, record.epoch, sequence, outcome, code);
+  return failure(`direct_command_${sequence}_${randomUUID()}`, sequence, outcome, code, decision);
 }
 
-function success(commandId: string, sessionEpoch: number, sequence: number, result: unknown): BridgeResultEvent {
-  return { commandId, ok: true, sessionEpoch, sequence, outcome: "completed", retrySafe: false, result };
+function success(
+  commandId: string,
+  sequence: number,
+  result: unknown,
+  status: Extract<BrowserCommandResult["status"], "verified" | "dispatched_unverified">,
+  delta: Record<string, unknown>,
+  decision: BrowserFloorDecision,
+): BrowserCommandResult {
+  const reason = typeof delta.reason === "string" && /^[a-z][a-z0-9_]{0,79}$/u.test(delta.reason)
+    ? delta.reason
+    : undefined;
+  const changed = isRecord(delta.changed) ? changedCategories(delta.changed) : undefined;
+  return {
+    commandId,
+    ok: true,
+    status,
+    sequence,
+    outcome: "completed",
+    retrySafe: false,
+    result,
+    decision,
+    ...(reason ? { reason } : {}),
+    ...(changed ? { changed } : {}),
+  };
 }
 
-function failure(commandId: string, sessionEpoch: number, sequence: number, outcome: "prevented" | "not_started" | "outcome_unknown", errorCode: string): BridgeResultEvent {
-  return { commandId, ok: false, sessionEpoch, sequence, outcome, retrySafe: outcome !== "outcome_unknown", errorCode };
+function failure(
+  commandId: string,
+  sequence: number,
+  outcome: "prevented" | "not_started" | "outcome_unknown",
+  errorCode: string,
+  decision: BrowserFloorDecision = blockedFloorDecision(errorCode),
+): BrowserCommandResult {
+  const status: BrowserCommandResult["status"] = outcome === "prevented" ? "blocked" : outcome === "not_started" ? "failed" : "dispatched_unverified";
+  return {
+    commandId,
+    ok: false,
+    status,
+    sequence,
+    outcome,
+    retrySafe: outcome !== "outcome_unknown",
+    errorCode,
+    decision,
+  };
 }
 
 function containmentPrevention(delta: Record<string, unknown>): string | null {
@@ -521,31 +594,128 @@ function containmentPrevention(delta: Record<string, unknown>): string | null {
 
 function incompleteAction(delta: Record<string, unknown>, kind: string): { outcome: "prevented" | "not_started" | "outcome_unknown"; errorCode: string } | null {
   const status = typeof delta.status === "string" ? delta.status : "";
+  if (status === "verified" || status === "dispatched_unverified") return null;
   const reason = typeof delta.reason === "string" && /^[a-z][a-z0-9_]{0,79}$/u.test(delta.reason) ? delta.reason : status;
   if (status === "not_found" || status === "ambiguous" || status === "stale_target") {
     return { outcome: "not_started", errorCode: status };
   }
-  if (status === "needs_approval" || status === "blocked") {
+  if (status === "blocked") {
     return { outcome: "prevented", errorCode: reason || status };
   }
   if (status === "timed_out") {
     return { outcome: kind === "wait_for" ? "not_started" : "outcome_unknown", errorCode: "timed_out" };
   }
   if (status === "failed") return { outcome: "outcome_unknown", errorCode: reason || "driver_error" };
-  return null;
+  return { outcome: "outcome_unknown", errorCode: "runner_contract_invalid" };
 }
 
 
 function deltaToResult(delta: Record<string, unknown>): unknown {
   if (isRecord(delta.screenshot)) return delta.screenshot;
-  if (isRecord(delta.observation)) return {
-    ...delta.observation,
-    ...(typeof delta.status === "string" ? { actionStatus: delta.status } : {}),
-    ...(typeof delta.verified === "boolean" ? { verified: delta.verified } : {}),
-    ...(typeof delta.reason === "string" ? { reason: delta.reason } : {}),
-    ...(isRecord(delta.changed) ? { changed: delta.changed } : {}),
+  if (isRecord(delta.observation)) return delta.observation;
+  return { kind: "ack" };
+}
+
+function completedActionStatus(delta: Record<string, unknown>): "verified" | "dispatched_unverified" | null {
+  const status = delta.status;
+  return status === "verified" || status === "dispatched_unverified" ? status : null;
+}
+
+class DirectFloorBlocked extends Error {
+  readonly code: string;
+  readonly decision: BrowserFloorDecision;
+
+  constructor(code: string, decision: BrowserFloorDecision) {
+    super(code);
+    this.name = "DirectFloorBlocked";
+    this.code = code;
+    this.decision = decision;
+  }
+}
+
+function requiresResolvedFloor(action: DriverAction): boolean {
+  if (!["click", "fill", "type", "select", "clear", "set_files", "press"].includes(action.kind)) return false;
+  return typeof action.ref === "string" || typeof action.selector === "string" || typeof action.role === "string"
+    || typeof action.name === "string" || typeof action.label === "string" || typeof action.placeholder === "string"
+    || typeof action.testId === "string" || typeof action.text === "string"
+    || (Number.isFinite(action.x) && Number.isFinite(action.y));
+}
+
+function normalizeResolvedFloorEvidence(evidence: Record<string, unknown>): {
+  resolved?: BrowserResolvedTarget;
+  signals?: BrowserSignals;
+} {
+  const rawResolved = isRecord(evidence.resolved) ? evidence.resolved : null;
+  const rawSignals = isRecord(evidence.signals) ? evidence.signals : null;
+  const boundedString = (value: unknown, cap = 240): string | undefined =>
+    typeof value === "string" && value.length <= cap ? value : undefined;
+  const resolved: BrowserResolvedTarget | undefined = rawResolved ? {} : undefined;
+  if (rawResolved && resolved) {
+    const role = boundedString(rawResolved.role, 80);
+    const accessibleName = boundedString(rawResolved.accessibleName);
+    const formOwner = boundedString(rawResolved.formOwner);
+    const inputType = boundedString(rawResolved.inputType, 80);
+    const autocomplete = boundedString(rawResolved.autocomplete, 120);
+    const origin = boundedString(rawResolved.origin, 500);
+    if (role !== undefined) resolved.role = role;
+    if (accessibleName !== undefined) resolved.accessibleName = accessibleName;
+    if (rawResolved.formOwner === null) resolved.formOwner = null;
+    else if (formOwner !== undefined) resolved.formOwner = formOwner;
+    if (inputType !== undefined) resolved.inputType = inputType;
+    if (autocomplete !== undefined) resolved.autocomplete = autocomplete;
+    if (origin !== undefined) resolved.origin = origin;
+  }
+  const booleanSignal = (key: keyof BrowserSignals): boolean => rawSignals?.[key] === true;
+  const containmentPrevention = boundedString(rawSignals?.containmentPrevention, 80);
+  const signals: BrowserSignals | undefined = rawSignals
+    ? {
+        ...(booleanSignal("formSubmit") ? { formSubmit: true } : {}),
+        ...(booleanSignal("navigation") ? { navigation: true } : {}),
+        ...(booleanSignal("networkWrite") ? { networkWrite: true } : {}),
+        ...(booleanSignal("dialog") ? { dialog: true } : {}),
+        ...(booleanSignal("download") ? { download: true } : {}),
+        ...(booleanSignal("crossOrigin") ? { crossOrigin: true } : {}),
+        ...(booleanSignal("newTarget") ? { newTarget: true } : {}),
+        ...(booleanSignal("secretField") ? { secretField: true } : {}),
+        ...(containmentPrevention ? { containmentPrevention } : {}),
+      }
+    : undefined;
+  return {
+    ...(resolved && Object.keys(resolved).length > 0 ? { resolved } : {}),
+    ...(signals && Object.keys(signals).length > 0 ? { signals } : {}),
   };
-  return { kind: "ack", message: typeof delta.status === "string" ? delta.status : "ok", ...(typeof delta.status === "string" ? { actionStatus: delta.status } : {}) };
+}
+
+function strongestFloorDecision(first: BrowserFloorDecision, second: BrowserFloorDecision): BrowserFloorDecision {
+  const classes = ["read_only", "agentic", "blocked"];
+  const boundaries = ["none", "draft", "commit", "external_effect"];
+  const firstBoundary = first.commitBoundary;
+  const secondBoundary = second.commitBoundary;
+  const secondClassIsStronger = classes.indexOf(second.class) > classes.indexOf(first.class);
+  const secondBoundaryIsStronger = boundaries.indexOf(secondBoundary) > boundaries.indexOf(firstBoundary);
+  const reasonSource = secondClassIsStronger || (second.class === first.class && secondBoundaryIsStronger) ? second : first;
+  const reason = reasonSource.reason ?? (reasonSource === first ? second.reason : first.reason);
+  return {
+    class: secondClassIsStronger ? second.class : first.class,
+    commitBoundary: secondBoundaryIsStronger ? secondBoundary : firstBoundary,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function blockedFloorDecision(reason: string): BrowserFloorDecision {
+  return {
+    class: "blocked",
+    reason,
+    commitBoundary: "none",
+  };
+}
+
+function changedCategories(value: Record<string, unknown>): Record<string, true> | undefined {
+  const output: Record<string, true> = {};
+  for (const key of Object.keys(value).slice(0, 12)) {
+    if (/^[a-z][A-Za-z0-9_]{0,79}$/u.test(key)) output[key] = true;
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
 }
 
 function cleanupRetry(error: unknown): (() => Promise<void>) | null {
@@ -561,34 +731,30 @@ function boundedErrorCode(error: unknown, fallback: string): string {
   return /^[a-z][a-z0-9_]{0,79}$/u.test(raw) ? raw : fallback;
 }
 
-function validDisposition(value: unknown): value is BrowserSessionCleanupDisposition {
-  return value === "close";
-}
-
 function bounded(value: number | undefined, fallback: number, maximum: number): number {
   return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= maximum ? Number(value) : fallback;
-}
-
-function boundedText(value: unknown, cap: number): string {
-  return typeof value === "string" ? value.slice(0, cap) : "";
-}
-
-function validLabel(value: unknown): string | null {
-  return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isFamily(value: unknown): value is OwnedBrowserFamily {
-  return value === "chrome" || value === "edge";
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
-
 function hostError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
+}
+
+function immutableHostPolicies(input: readonly BrowserHostPolicyManifest[]): readonly BrowserHostPolicyManifest[] {
+  return Object.freeze(input.map((policy) => Object.freeze({
+    origins: Object.freeze([...policy.origins]),
+    ...(policy.commitRules ? {
+      commitRules: Object.freeze(policy.commitRules.map((rule) => Object.freeze({
+        match: Object.freeze({ ...rule.match }),
+        effect: rule.effect,
+        ...(rule.reason === undefined ? {} : { reason: rule.reason }),
+      }))),
+    } : {}),
+    ...(policy.sensitiveZones ? {
+      sensitiveZones: Object.freeze(policy.sensitiveZones.map((zone) => Object.freeze({ ...zone }))),
+    } : {}),
+  })));
 }

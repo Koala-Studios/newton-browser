@@ -41,6 +41,7 @@ test("entrypoint runs only the direct owned-process gates", () => {
   assert.match(entrypoint, /pnpm eval:agent-cost/u);
   assert.match(entrypoint, /pnpm eval:direct-live/u);
   assert.match(entrypoint, /pnpm eval:real-sites/u);
+  assert.match(entrypoint, /pnpm smoke:packed-direct/u);
   assert.match(entrypoint, /newton-bounded-command\.mjs|\$BOUNDED_COMMAND/u);
   assert.doesNotMatch(entrypoint, />"\$RAW_LOG_ROOT\/[^"]+" 2>&1/u);
   assert.match(boundedCommand, /const CAP = 64 \* 1024/u);
@@ -75,8 +76,8 @@ test("receipts persist bounded hashes and exact direct gate status", (t) => {
   assert.doesNotMatch(fs.readFileSync(output, "utf8"), /DO_NOT_PERSIST/u);
   const runId = "linux-cft-0123456789abcdef"; const runDirectory = path.join(directory, runId); fs.mkdirSync(runDirectory);
   assert.equal(run(receipt, ["start", runDirectory, runId]).status, 0);
-  result = run(receipt, ["final", runDirectory, runId, "direct_live", "17", "0", "0", "17"]);
+  result = run(receipt, ["final", runDirectory, runId, "direct_live", "17", "0", "0", "17", "null"]);
   assert.equal(result.status, 0, result.stderr);
   const final = JSON.parse(fs.readFileSync(path.join(runDirectory, "gate-status.json"), "utf8"));
-  assert.equal(final.architecture, "owned_process_private_cdp"); assert.equal(final.liveStatus, 17); assert.equal(final.gateStatus, 17);
+  assert.equal(final.architecture, "owned_process_private_cdp"); assert.equal(final.liveStatus, 17); assert.equal(final.packedLiveStatus, null); assert.equal(final.gateStatus, 17);
 });

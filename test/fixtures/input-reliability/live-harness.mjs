@@ -8,51 +8,48 @@ import { fileURLToPath } from "node:url";
 import { createDefaultDirectBrowserHost } from "../../../apps/mcp-server/src/browser-runtime/default-direct-host.ts";
 import { discoverBrowserExecutable } from "../../../apps/mcp-server/src/browser-runtime/browser-discovery.ts";
 import { handleMcpMessage } from "../../../apps/mcp-server/src/mcp-server.ts";
-import { resolveLiveBrowserTarget } from "../../../scripts/smoke/live-config.mjs";
+import { resolveLiveBrowserFamily } from "../../../scripts/smoke/live-config.mjs";
 
 const fixtureRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export async function runInputReliabilityLive(name, execute, options = {}) {
   const mainPort = Number(options.mainPort);
   const crossPort = Number(options.crossPort);
-  const browserTarget = options.browserTarget ?? resolveLiveBrowserTarget();
+  const browserFamily = options.browserFamily ?? resolveLiveBrowserFamily();
   if (![mainPort, crossPort].every((value) => Number.isSafeInteger(value) && value > 0)) throw new Error("live smoke fixture ports must be positive integers");
   const main = await startStaticServer(mainPort);
   const cross = await startStaticServer(crossPort);
   const directRoot = createDirectRoot();
-  let bridge = null;
+  let host = null;
   let sessionId = "";
   let requestId = 1;
   const origin = `http://127.0.0.1:${mainPort}`;
   const crossOrigin = `http://127.0.0.1:${crossPort}`;
   const mcp = async (tool, args = {}) => {
-    if (!bridge) throw new Error("live browser host is unavailable");
-    const response = await handleMcpMessage(bridge, {
+    if (!host) throw new Error("live browser host is unavailable");
+    const response = await handleMcpMessage(host, {
       jsonrpc: "2.0",
       id: requestId++,
       method: "tools/call",
-      params: { name: tool, arguments: args },
+      params: { name: tool, arguments: args, _meta: modernMcpMeta() },
     });
     const text = response?.result?.content?.find((item) => item.type === "text")?.text;
     if (typeof text !== "string") throw new Error(`missing MCP result for ${tool}`);
     return JSON.parse(text);
   };
   try {
-    const directExecutable = discoverBrowserExecutable({ family: browserTarget, env: process.env });
+    const directExecutable = discoverBrowserExecutable({ family: browserFamily, env: process.env });
     if (!directExecutable) throw new Error("direct_browser_unavailable");
-    bridge = createDefaultDirectBrowserHost({
+    host = createDefaultDirectBrowserHost({
       ...process.env,
-      NEWTON_BROWSER_BROWSER: browserTarget,
+      NEWTON_BROWSER_BROWSER: browserFamily,
       NEWTON_BROWSER_BROWSER_EXECUTABLE: directExecutable.path,
       NEWTON_BROWSER_CONFIG_DIR: directRoot.root,
       NEWTON_BROWSER_PROFILE_STORE_DIR: path.join(directRoot.root, "identities"),
     });
-    const listener = await bridge.listen();
     const started = await mcp("browser.session.start", {
       origin,
-      allowedOrigins: [origin, crossOrigin],
-      goal: name,
-      instanceLabel: name,
+      allowedOrigins: [crossOrigin],
     });
     sessionId = started.sessionId;
     assert(typeof sessionId === "string" && sessionId.length > 0, "session did not start", started);
@@ -62,31 +59,34 @@ export async function runInputReliabilityLive(name, execute, options = {}) {
     });
     assert(navigated?.ok !== false, "input fixture navigation failed", navigated);
     const api = {
-      bridge,
+      host,
       mcp,
       sessionId,
       origin,
       crossOrigin,
-      browserTarget,
-      hostPort: listener.port,
+      browserFamily,
       resultOf(value) { return value?.result ?? value; },
-      statusOf(value) { return value?.errorCode ?? value?.result?.actionStatus ?? value?.result?.status ?? value?.status; },
+      statusOf(value) { return value?.errorCode ?? value?.result?.status ?? value?.status; },
       assert,
       log(step, detail = {}) { process.stdout.write(`${JSON.stringify({ smoke: name, step, ...detail })}\n`); },
     };
-    api.log("connected", { browserTarget });
+    api.log("connected", { browserFamily });
     await execute(api);
-    api.log("pass", { browserTarget });
+    api.log("pass", { browserFamily });
   } finally {
     try { if (sessionId) await mcp("browser.session.stop", { sessionId }); } catch {}
-    let directCleanupConfirmed = bridge === null;
+    let directCleanupConfirmed = host === null;
     try {
-      if (bridge) { await bridge.stopAll(); await bridge.close(); }
+      if (host) { await host.stopAll(); await host.close(); }
       directCleanupConfirmed = true;
     } catch {}
     await Promise.all([closeServer(main), closeServer(cross)]);
     if (directRoot && directCleanupConfirmed) removeDirectRoot(directRoot);
   }
+}
+
+function modernMcpMeta() {
+  return { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
 }
 
 function createDirectRoot() {

@@ -78,7 +78,7 @@ function executableFile(t: TestContext, platform: NodeJS.Platform = process.plat
 
 test("builds a private pipe launch with an exact blank profile and no debug port", () => {
   const userDataDir = path.resolve("C:/runtime/blank-profile");
-  const args = chromiumLaunchArgs({ userDataDir, headless: true, additionalArgs: ["--window-size=800,600"] });
+  const args = chromiumLaunchArgs({ userDataDir, headless: true });
   assert.ok(args.includes("--remote-debugging-pipe"));
   assert.ok(args.includes(`--user-data-dir=${userDataDir}`));
   assert.ok(args.includes("--headless=new"));
@@ -146,34 +146,6 @@ test("fails readiness and rolls back when Target.createTarget does not return on
     assert.deepEqual(current.transport.methods, ["Browser.getVersion", "Target.createTarget", "Browser.close"]);
     assert.equal(current.transport.methods.includes("Target.getTargets"), false);
     assert.equal(current.child.exitCode, 0);
-  }
-});
-
-test("rejects unsafe profile-changing arguments before spawn", async (t) => {
-  const current = fixture();
-  const error = await launchChromium({
-    executablePath: executableFile(t),
-    userDataDir: profileDirectory(t),
-    additionalArgs: ["--user-data-dir=C:/other"],
-    spawn: current.spawn,
-  }).catch((value: unknown) => value);
-  assert.ok(error instanceof ChromiumLaunchError);
-  assert.equal(error.phase, "profile_validation");
-  assert.equal(current.spawnCalls.length, 0);
-});
-
-test("rejects restore, app, extension, and alternate debugging switches", () => {
-  for (const argument of [
-    "--restore-last-session", "--app-id=hostile", "--load-extension=C:/tmp/x", "--remote-debugging-port=0",
-    "--profile-directory=Profile 2",
-    "--proxy-server=http://127.0.0.1:1", "--proxy-bypass-list=*", "--proxy-pac-url=http://127.0.0.1/pac",
-    "--no-proxy-server", "--proxy-auto-detect", "--disable-quic", "--disable-extensions", "--enable-extensions",
-    "--proxy-fallback-to-direct", "--use-system-proxy-resolver", "--winhttp-proxy-resolver",
-  ]) {
-    assert.throws(
-      () => chromiumLaunchArgs({ userDataDir: path.resolve("C:/runtime/profile"), additionalArgs: [argument] }),
-      (error: unknown) => error instanceof ChromiumLaunchError && error.phase === "profile_validation",
-    );
   }
 });
 

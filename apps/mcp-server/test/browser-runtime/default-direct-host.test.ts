@@ -5,8 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createDefaultDirectBrowserHost } from "../../src/browser-runtime/default-direct-host.ts";
-import { createNewtonIdentity, openProfileStore } from "../../src/browser-runtime/profile-store.ts";
-import { writeDirectBrowserConfig } from "../../src/config.ts";
+import { writeBrowserPreference } from "../../src/config.ts";
 
 function fixtureExecutable(root: string): string {
   const file = path.join(root, process.platform === "win32" ? "browser.exe" : "browser");
@@ -15,14 +14,12 @@ function fixtureExecutable(root: string): string {
   return file;
 }
 
-test("default host is always direct and uses the configured opaque identity", async () => {
+test("default host is direct and a browser preference never implies an identity", async () => {
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "newton-default-direct-"));
   try {
     const directory = path.join(root, "config");
     fs.mkdirSync(directory, { recursive: true });
-    const store = openProfileStore(path.join(directory, "identities"));
-    const identity = createNewtonIdentity(store, { browserFamily: "chrome" });
-    writeDirectBrowserConfig({ directory, browserTarget: "chrome", identityId: identity.id });
+    writeBrowserPreference({ directory, browser: "chrome" });
     const host = createDefaultDirectBrowserHost({
       NEWTON_BROWSER_CONFIG_DIR: directory,
       NEWTON_BROWSER_BROWSER_EXECUTABLE: fixtureExecutable(root),
@@ -31,7 +28,7 @@ test("default host is always direct and uses the configured opaque identity", as
     assert.equal(host.getStatus().configured, true);
     assert.equal("extensionConnected" in host.getStatus(), false);
     await host.close();
-    assert.equal(fs.existsSync(path.join(store.root, identity.id)), true);
+    assert.deepEqual(fs.readdirSync(path.join(directory, "identities")).filter((name) => name.startsWith("nbi_")), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

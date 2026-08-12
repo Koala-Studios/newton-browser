@@ -13,7 +13,7 @@
 This document preserves the source-code audit and the proposal that preceded the approved
 migration. The owner subsequently authorized extension removal and the narrow opaque-copy
 identity design. It is historical rationale, not the current operating contract; current
-requirements live in `AGENTS.md`, `README.md`, and Plans 10-15.
+requirements live in `AGENTS.md`, `README.md`, and `PROGRESS_LEDGER.md`.
 
 ## Decision summary
 
@@ -24,7 +24,7 @@ Removing Newton's MV3 extension is technically viable and is probably the better
 
 The recommended architecture is:
 
-> One TypeScript MCP host, one directly owned Chromium process per concurrent Newton session, one private CDP transport per process, one deny-by-default policy proxy per session, and one compact 11-tool agent surface.
+> One TypeScript MCP host, one directly owned Chromium process per concurrent Newton session, one private CDP transport per process, one deny-by-default policy proxy per session, and one compact agent surface.
 
 Newton should borrow agent-browser's browser ownership and compact accessibility rendering, but not its per-session daemon, unauthenticated local ports, broad profile copier, 152-tool MCP surface, generic `Done` results, or hostname-only containment.
 
@@ -61,7 +61,7 @@ Every distinct named session normally gets a distinct daemon, Chrome process, an
 
 agent-browser needs its daemon because ordinary CLI commands are short-lived processes. Its MCP implementation preserves CLI parity by spawning the current executable for each tool call, which then talks to the daemon. See [`mcp.rs`](https://github.com/vercel-labs/agent-browser/blob/acbc22bdc5d4f6c5a88d97d4a4745d3c5eb0591f/cli/src/mcp.rs#L3574-L3647).
 
-Newton already has a long-lived MCP host and an explicit continuity mode. Adding another daemon would duplicate ownership, IPC, versioning, cleanup, and recovery. The MCP host should own browser processes directly.
+The proposed Newton runtime already had one MCP host capable of owning browser processes directly. Adding another daemon would have duplicated ownership, IPC, versioning, cleanup, and recovery. The implemented product therefore uses direct stdio only and has no continuity daemon or socket.
 
 ### Local transport qualifications
 
@@ -331,9 +331,9 @@ The thin discovery stub is a good progressive-disclosure idea. The large MCP is 
 5. Exact token budgets for catalog, observation, action result, and verified workflow.
 6. Optional batch/flow execution for deterministic multi-step forms, with stop-on-first-uncertain behavior.
 
-### What Newton should retain
+### What the proposal recommended retaining
 
-- The 11-tool catalog.
+- A small catalog; the implemented modern-only surface contains ten tools.
 - One discriminated `browser.act` surface rather than dozens of tools.
 - Document/frame-qualified refs and explicit stale/ambiguous outcomes.
 - Compact JSON/text observations with hard node/character caps.
@@ -485,7 +485,7 @@ Exit: no extension artifact, reload, store update, or extension parity test rema
 - [x] No cookie, storage, credential, profile content, CDP identifier, or raw browser error reaches an agent result or diagnostic receipt.
 - [x] Chrome/Edge crashes and post-input transport loss return uncertainty without automatic mutation replay.
 - [x] Windows Job Object and Unix process-group tests prove no owned browser descendants remain.
-- [x] Current 11-tool catalog remains at or below its token budget.
+- [x] The compact catalog remains at or below its token budget; the implemented modern-only surface contains ten tools.
 - [x] Compact observations and verified workflows remain within release budgets.
 - [x] Windows Chrome, Windows Edge, and Linux Chrome live matrices pass from packed artifacts.
 - [ ] The exact final evidence-bearing tree passes the complete release gate three consecutive times. An earlier snapshot passed 3/3; the owner-approved unauthenticated QA scope and documentation/evidence changes require one final frozen rerun.

@@ -1,51 +1,48 @@
-import type { BrowserFloorDecision, BrowserCommandOutcome, BridgeCommandResultMetadata } from "./protocol.ts";
+import type { BrowserActionResultStatus, BrowserFloorDecision, BrowserCommandOutcome, BrowserCommandResultMetadata } from "./protocol.ts";
 
 export const BROWSER_SESSION_LIFECYCLE_STATES = [
-  "creating_host",
-  "creating_tab",
-  "attaching_debugger",
-  "verifying_origin",
-  "publishing_ready",
+  "starting_runtime",
+  "starting_browser",
+  "attaching_cdp",
   "active",
   "degraded",
-  "finalizing",
+  "stopping",
   "stopped",
 ] as const;
 
 export type BrowserSessionLifecycleState = (typeof BROWSER_SESSION_LIFECYCLE_STATES)[number];
-export type BrowserSessionCleanupDisposition = "close";
-
-type BridgeResultBase = BridgeCommandResultMetadata & {
+type BrowserResultBase = BrowserCommandResultMetadata & {
   commandId: string;
   ok: boolean;
+  status: BrowserActionResultStatus;
+  decision: BrowserFloorDecision;
 };
 
-type BridgeResultSuccess = BridgeResultBase & {
+type BrowserResultSuccess = BrowserResultBase & {
   ok: true;
   outcome: "completed";
   result: unknown;
-  decision?: BrowserFloorDecision;
+  reason?: string;
+  changed?: Record<string, unknown>;
 };
 
-type BridgeResultFailure = BridgeResultBase & {
+type BrowserResultFailure = BrowserResultBase & {
   ok: false;
-  outcome: BrowserCommandOutcome;
+  outcome: Exclude<BrowserCommandOutcome, "completed">;
   errorCode: string;
-  decision?: BrowserFloorDecision;
 };
 
-export type BridgeResultEvent = BridgeResultSuccess | BridgeResultFailure;
+export type BrowserCommandResult = BrowserResultSuccess | BrowserResultFailure;
 
-export type BridgeDispatchOptions = {
+export type BrowserDispatchOptions = {
   timeoutMs?: number;
   idempotencyKey?: string;
+  signal?: AbortSignal;
 };
 
-export type BridgeSessionInit = {
+export type BrowserSessionInit = {
   origin: string;
   allowedOrigins: string[];
-  goal?: string;
-  instanceLabel?: string;
   // This opaque operator-created identity selects one
   // exclusive Newton profile without exposing its filesystem path.
   identityId?: string;
@@ -54,15 +51,9 @@ export type BridgeSessionInit = {
   browserFamily?: "chrome" | "edge";
 };
 
-export type BridgeSessionInfo = {
+export type BrowserSessionInfo = {
   sessionId: string;
-  hostInstanceId?: string;
   origin: string;
-  allowedOrigins?: string[];
-  attached?: boolean;
-  liveOrigin?: string | null;
-  goal?: string;
-  instanceLabel?: string;
-  lifecycleState?: BrowserSessionLifecycleState;
-  cleanupDisposition?: BrowserSessionCleanupDisposition;
+  allowedOrigins: string[];
+  lifecycleState: BrowserSessionLifecycleState;
 };

@@ -2,7 +2,7 @@ import { runInputReliabilityLive } from "../../test/fixtures/input-reliability/l
 
 await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId, resultOf, statusOf, assert, log }) => {
   const act = (action) => mcp("browser.act", { sessionId, action });
-  const focus = await act({ kind: "click", name: "Keyboard target", exact: true });
+  const focus = await act({ kind: "click", role: "textbox", name: "Keyboard target", exact: true });
   assert(focus.ok !== false, "keyboard target did not receive focus", focus);
 
   const typed = await act({ kind: "type", label: "Keyboard target", value: "héllo 世界\n" });
@@ -12,7 +12,7 @@ await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId,
     ["Enter"], ["Tab"], ["ArrowLeft"], ["ArrowRight"], ["ArrowUp"], ["ArrowDown"],
     ["Escape"], ["Backspace"], ["Delete"], ["F2"], ["Control", "Shift", "P"],
   ]) {
-    const refocused = await act({ kind: "click", name: "Keyboard target", exact: true });
+  const refocused = await act({ kind: "click", role: "textbox", name: "Keyboard target", exact: true });
     assert(refocused.ok !== false, `keyboard target refocus failed: ${keys.join("+")}`, refocused);
     const pressed = await act({ kind: "press", keys });
     assert(pressed.ok !== false, `key dispatch failed: ${keys.join("+")}`, pressed);
@@ -24,9 +24,9 @@ await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId,
     assert(String(keyLog).includes(`\"${expected}\"`), `DOM key log missing ${expected}`, { keyLog });
   }
   assert(String(keyLog).includes('"keyup"'), "key lifecycle did not include keyup", { keyLog });
-  log("complete_key_descriptors", { actionStatus: statusOf(typed), keyLogBytes: String(keyLog).length });
+  log("complete_key_descriptors", { status: statusOf(typed), keyLogBytes: String(keyLog).length });
 
-  const dialog = await act({ kind: "click", name: "Dialog on mousedown", exact: true });
+  const dialog = await act({ kind: "click", role: "button", name: "Dialog on mousedown", exact: true });
   assert(statusOf(dialog) === "dialog_blocked", "mousedown dialog did not retain dialog_blocked", dialog);
   const dismissed = await act({ kind: "dialog_dismiss" });
   assert(dismissed.ok !== false, "dialog cleanup failed", dismissed);
@@ -35,7 +35,7 @@ await runInputReliabilityLive("input-reliability-live", async ({ mcp, sessionId,
   assert(String(pointerLog).includes("mousedown"), "pointer log missed the released effect boundary", { pointerLog });
   log("balanced_cleanup_after_dialog", { pointerLogBytes: String(pointerLog).length });
 
-  const asynchronous = await act({ kind: "click", name: "Set asynchronous value", exact: true });
+  const asynchronous = await act({ kind: "click", role: "button", name: "Set asynchronous value", exact: true });
   assert(asynchronous.ok !== false, "asynchronous value action failed", asynchronous);
   const settled = await act({ kind: "wait_for", waitFor: { text: "settled-without-delay" } });
   assert(settled.ok !== false, "state-driven text settlement failed", settled);

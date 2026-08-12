@@ -8,7 +8,7 @@ import { discoverBrowserExecutable } from "../../apps/mcp-server/src/browser-run
 import { createDefaultDirectBrowserHost } from "../../apps/mcp-server/src/browser-runtime/default-direct-host.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const browser = discoverBrowserExecutable({ family, env: process.env });
 if (!browser) {
   process.stdout.write(`${JSON.stringify({ ok: false, browserFamily: family, errorCode: "direct_browser_unavailable" })}\n`);
@@ -24,30 +24,35 @@ const denied = http.createServer((_request, response) => {
   deniedRequests += 1;
   response.end("denied");
 });
-await new Promise((resolve, reject) => {
-  denied.once("error", reject);
-  denied.listen(0, "127.0.0.1", resolve);
-});
-const deniedAddress = denied.address();
-if (!deniedAddress || typeof deniedAddress === "string") fail("direct_denied_fixture_unavailable");
-const deniedUrl = `http://127.0.0.1:${deniedAddress.port}/must-not-arrive`;
+let deniedUrl = "";
 const fixture = http.createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.end(`<!doctype html><title>Newton Direct Live</title>
     <button onclick="this.textContent='Verified'">Direct action</button>
     <button onclick="location.href='${deniedUrl}'">Blocked navigation</button>`);
 });
-await new Promise((resolve, reject) => {
-  fixture.once("error", reject);
-  fixture.listen(0, "127.0.0.1", resolve);
-});
-const address = fixture.address();
-if (!address || typeof address === "string") fail("direct_fixture_unavailable");
-const origin = `http://127.0.0.1:${address.port}`;
+let origin = "";
 let host = null;
 let requestId = 0;
+let receipt = null;
+let terminalFailure = null;
+let cleanupConfirmed = false;
 
 try {
+  await new Promise((resolve, reject) => {
+    denied.once("error", reject);
+    denied.listen(0, "127.0.0.1", resolve);
+  });
+  const deniedAddress = denied.address();
+  if (!deniedAddress || typeof deniedAddress === "string") fail("direct_denied_fixture_unavailable");
+  deniedUrl = `http://127.0.0.1:${deniedAddress.port}/must-not-arrive`;
+  await new Promise((resolve, reject) => {
+    fixture.once("error", reject);
+    fixture.listen(0, "127.0.0.1", resolve);
+  });
+  const address = fixture.address();
+  if (!address || typeof address === "string") fail("direct_fixture_unavailable");
+  origin = `http://127.0.0.1:${address.port}`;
   host = createDefaultDirectBrowserHost({
     ...process.env,
     NEWTON_BROWSER_BROWSER: family,
@@ -56,7 +61,7 @@ try {
   });
   const status = await tool("browser.status", {});
   requireSuccess(status, "direct_idle_status_failed");
-  if (status.value.configured !== true || status.value.ready !== false || status.value.runtimeState !== "idle") {
+  if (status.value.configured !== true || status.value.ready !== true || status.value.runtimeState !== "idle") {
     fail("direct_idle_status_invalid");
   }
   logStep("direct_runtime_idle_verified");
@@ -95,41 +100,64 @@ try {
   const blockedButton = observationNodes(verified.value).find((node) => node.role === "button" && node.name === "Blocked navigation");
   if (typeof blockedButton?.ref !== "string") fail("direct_blocked_ref_missing");
   const contained = await tool("browser.act", { sessionId, action: { kind: "click", ref: blockedButton.ref } });
-  const containmentOutcome = contained.envelope?.isError === true ? contained.value.outcome : "completed";
-  if (containmentOutcome !== "completed" && containmentOutcome !== "prevented") fail("direct_containment_outcome_invalid");
+  const containmentOutcome = contained.value?.outcome;
+  if (contained.envelope?.isError === true || containmentOutcome !== "completed"
+    || contained.value?.retrySafe !== false || contained.value?.status !== "verified") {
+    logStep(`direct_runtime_containment_${closedContainmentResult(contained)}`);
+    fail("direct_containment_outcome_invalid");
+  }
   if (deniedRequests !== 0) fail("direct_containment_request_leaked");
   logStep("direct_runtime_containment_verified");
 
   const stopped = await tool("browser.session.stop", { sessionId });
   requireSuccess(stopped, "direct_stop_failed");
   if (stopped.value.stopped !== true || host.listSessions().length !== 0) fail("direct_cleanup_failed");
-  process.stdout.write(`${JSON.stringify({
+  receipt = {
     ok: true,
     browserFamily: family,
     mode: status.value.mode,
     configuredIdle: true,
     runtimeReadyAfterStart: true,
     observedRef: true,
-    actionStatus: acted.value.status,
+    actionResultStatus: acted.value.status,
     effectVerified,
     containmentOutcome,
     containmentBoundaryEnforced: true,
     deniedDestinationRequests: 0,
     stopped: true,
     remainingSessions: 0,
-  })}\n`);
+  };
 } catch (error) {
   const errorCode = safeCode(error);
   logStep(`direct_runtime_failure_${safeDirectRuntimeFailure(errorCode)}`);
-  process.stdout.write(`${JSON.stringify({ ok: false, browserFamily: family, errorCode })}\n`);
+  terminalFailure = error;
   process.exitCode = 1;
 } finally {
-  let cleanupConfirmed = false;
-  try { if (host) await host.close(); cleanupConfirmed = true; } catch {}
+  try { if (host) await host.close(); cleanupConfirmed = true; } catch {
+    terminalFailure = Object.assign(new Error("direct_cleanup_uncertain"), { code: "direct_cleanup_uncertain" });
+    process.exitCode = 1;
+  }
   await new Promise((resolve) => fixture.close(resolve));
   await new Promise((resolve) => denied.close(resolve));
-  if (cleanupConfirmed) removeRunRoot(runOwnership);
+  if (cleanupConfirmed) {
+    try { removeRunRoot(runOwnership); } catch {
+      terminalFailure = Object.assign(new Error("direct_runtime_temp_cleanup_refused"), { code: "direct_runtime_temp_cleanup_refused" });
+      process.exitCode = 1;
+    }
+  }
 }
+
+process.stdout.write(`${JSON.stringify(terminalFailure ? {
+  ok: false,
+  browserFamily: family,
+  errorCode: safeCode(terminalFailure),
+  cleanupConfirmed,
+  temporaryRootRemoved: !fs.existsSync(runRoot),
+} : {
+  ...receipt,
+  cleanupConfirmed: true,
+  temporaryRootRemoved: true,
+})}\n`);
 
 async function tool(name, args) {
   if (!host) fail("direct_host_unavailable");
@@ -137,12 +165,16 @@ async function tool(name, args) {
     jsonrpc: "2.0",
     id: ++requestId,
     method: "tools/call",
-    params: { name, arguments: args },
+    params: { name, arguments: args, _meta: modernMcpMeta() },
   });
   const payload = response?.result;
   const text = payload?.content?.[0]?.text;
   if (typeof text !== "string") fail("direct_mcp_result_invalid");
   return { envelope: payload, value: JSON.parse(text) };
+}
+
+function modernMcpMeta() {
+  return { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
 }
 
 function requireSuccess(result, code) {
@@ -202,6 +234,15 @@ function safeDirectRuntimeFailure(candidate) {
     "direct_stop_failed",
     "direct_verify_failed",
   ]).has(candidate) ? candidate : safeDirectStartFailure({ errorCode: candidate });
+}
+
+function closedContainmentResult(result) {
+  const value = result?.value;
+  if (result?.envelope?.isError === true) return "unexpected_error";
+  if (value?.outcome !== "completed") return "outcome_other";
+  if (value?.retrySafe !== false) return "retry_other";
+  if (value?.status !== "verified") return `status_${["blocked", "dispatched_unverified", "failed"].includes(value?.status) ? value.status : "other"}`;
+  return "valid";
 }
 
 function createRunRoot(parent) {

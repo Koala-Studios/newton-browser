@@ -5,7 +5,6 @@ import test from "node:test";
 
 import {
   enforceObservationBudget,
-  normalizeActionResult,
   normalizeObservationOptions,
   projectCompactObservation,
   projectLeanObservation,
@@ -21,6 +20,7 @@ import {
   measureDeferredCase,
   runMeasurement,
   readFixtures,
+  createPinnedTokenCounter,
 } from "../../../scripts/measure-agent-cost.mjs";
 
 const fixtureDir = path.join(process.cwd(), "test", "evals", "agent-output-fixtures");
@@ -42,8 +42,6 @@ const sample = {
   capturedAt: "2024-01-01T00:00:00.000Z",
   nodeCount: 4,
   truncated: false,
-  actionStatus: "completed",
-  verified: true,
   reason: "ready",
   nodes: [
     { ref: "n-01", role: "textbox", name: "Email", value: "alice@example.org" },
@@ -124,12 +122,12 @@ test("measurement observation case reads root format and limit", () => {
   };
 
   const parsed = parseFixtureCase(raw);
-  const measured = measureObservationCase(parsed);
+  const measured = measureObservationCase(parsed, createPinnedTokenCounter());
   assert.equal(measured.format, "json");
   assert.equal(measured.type, "observation");
-  assert.equal(measured.status, "deferred");
-  assert.equal("tokens" in measured, false);
-  assert.equal(typeof measured.bytes, "number");
+  assert.equal(measured.status, "pass");
+  assert.equal(typeof measured.tokens, "number");
+  assert.equal("bytes" in measured, false);
 });
 
 test("measurement parser rejects malformed case fields instead of defaulting", () => {
@@ -228,25 +226,26 @@ test("compact and JSON observations preserve bounded excluded-frame provenance",
     ...sample,
     excludedFrames: [
       { frameId: "frame-cross", frameOrigin: "https://cross.example", reason: "origin_not_granted" },
-      { frameId: "", frameOrigin: "https://ignored.example", reason: "origin_not_granted" },
+      { frameId: "another-internal-id", frameOrigin: "https://cross.example", reason: "origin_not_granted" },
+      { frameId: "ignored", frameOrigin: "https://ignored.example", reason: "" },
     ],
   };
   const compact = projectCompactObservation(input);
   const json = projectLeanObservation(input);
   assert.equal(compact.ok, true);
   assert.equal(json.ok, true);
-  const expected = [{ frameId: "frame-cross", frameOrigin: "https://cross.example", reason: "origin_not_granted" }];
+  const expected = [{ frameOrigin: "https://cross.example", reason: "origin_not_granted" }];
   assert.deepEqual(compact.projection.excludedFrames, expected);
   assert.deepEqual(json.projection.excludedFrames, expected);
 });
 
-test("compact and lean projections preserve rich state and target provenance", () => {
+test("compact and lean projections preserve rich state and cross-origin frame provenance without internal IDs", () => {
   const rich = {
     ...sample,
     nodes: [{
       ref: "d4:fchild:e9", role: "checkbox", name: "Terms", checked: "mixed", selected: false,
       expanded: true, disabled: false, required: true, level: 2, href: "https://shop.example/terms",
-      elementType: "input:checkbox", documentEpoch: 4, frameId: "child", frameOrigin: "https://shop.example",
+      elementType: "input:checkbox", documentEpoch: 4, frameId: "child", frameOrigin: "https://checkout.example",
     }],
     nodeCount: 1,
   };
@@ -256,9 +255,11 @@ test("compact and lean projections preserve rich state and target provenance", (
   assert.equal(lean.ok, true);
   if (!compact.ok || !lean.ok) assert.fail("rich observations must project");
   assert.match(compact.projection.output ?? "", /checked="mixed"/);
-  assert.match(compact.projection.output ?? "", /frame=/);
+  assert.match(compact.projection.output ?? "", /frameOrigin="https:\/\/checkout\.example"/);
   assert.equal((lean.projection.nodes[0] as any).required, true);
-  assert.equal((lean.projection.nodes[0] as any).documentEpoch, 4);
+  assert.equal("documentEpoch" in (lean.projection.nodes[0] as any), false);
+  assert.equal("frameId" in (lean.projection.nodes[0] as any), false);
+  assert.equal((lean.projection.nodes[0] as any).frameOrigin, "https://checkout.example");
   assert.equal((lean.projection.nodes[0] as any).elementType, "input:checkbox");
 });
 
@@ -406,7 +407,7 @@ test("observation_text json keeps plain string and compact serializes safely", (
 });
 
 test("invalid kind is rejected", () => {
-  const projection = projectCompactObservation({ kind: "ack", message: "ok" });
+  const projection = projectCompactObservation({ kind: "ack" });
   assert.equal(projection.ok, false);
   assert.equal(projection.errorCode, "unsupported_observation_kind");
 });
@@ -417,16 +418,18 @@ test("non-object observation input is rejected", () => {
   assert.equal(projection.errorCode, "invalid_observation");
 });
 
-test("normalizeAgentActionResult accepts explicit Plan-01 completed", () => {
-  const projected = normalizeAgentActionResult({ status: "completed", outcome: "completed", reason: "done" });
+const canonicalDecision = { class: "agentic", commitBoundary: "none" } as const;
+
+test("normalizeAgentActionResult accepts the canonical completed shape", () => {
+  const projected = normalizeAgentActionResult({ status: "verified", outcome: "completed", reason: "done", decision: canonicalDecision });
   assert.equal(projected.ok, true);
-  assert.equal(projected.status, "completed");
+  assert.equal(projected.status, "verified");
   assert.equal(projected.outcome, "completed");
   assert.equal(projected.retrySafe, false);
 });
 
 test("status is diagnostic and can diverge from outcome", () => {
-  const projected = normalizeAgentActionResult({ status: "blocked", outcome: "prevented", reason: "policy" });
+  const projected = normalizeAgentActionResult({ status: "blocked", outcome: "prevented", reason: "policy", decision: { class: "blocked", commitBoundary: "none" } });
   assert.equal(projected.ok, false);
   assert.equal(projected.outcome, "prevented");
   assert.equal(projected.status, "blocked");
@@ -434,7 +437,7 @@ test("status is diagnostic and can diverge from outcome", () => {
 });
 
 test("completed result with explicit errorCode is allowed but fails", () => {
-  const projected = normalizeAgentActionResult({ outcome: "completed", errorCode: "runner_internal_failure" });
+  const projected = normalizeAgentActionResult({ status: "failed", outcome: "completed", errorCode: "runner_internal_failure", decision: canonicalDecision });
   assert.equal(projected.outcome, "completed");
   assert.equal(projected.ok, false);
   assert.equal(projected.errorCode, "runner_internal_failure");
@@ -442,39 +445,43 @@ test("completed result with explicit errorCode is allowed but fails", () => {
 });
 
 test("retrySafe is true only for not_started and prevented when valid", () => {
-  assert.equal(normalizeAgentActionResult({ outcome: "not_started" }).retrySafe, true);
-  assert.equal(normalizeAgentActionResult({ outcome: "prevented" }).retrySafe, true);
-  assert.equal(normalizeAgentActionResult({ outcome: "completed" }).retrySafe, false);
-  assert.equal(normalizeAgentActionResult({ outcome: "outcome_unknown" }).retrySafe, false);
+  assert.equal(normalizeAgentActionResult({ status: "timed_out", outcome: "not_started", decision: canonicalDecision }).retrySafe, true);
+  assert.equal(normalizeAgentActionResult({ status: "blocked", outcome: "prevented", decision: { class: "blocked", commitBoundary: "none" } }).retrySafe, true);
+  assert.equal(normalizeAgentActionResult({ status: "verified", outcome: "completed", decision: canonicalDecision }).retrySafe, false);
+  assert.equal(normalizeAgentActionResult({ status: "dispatched_unverified", outcome: "outcome_unknown", decision: canonicalDecision }).retrySafe, false);
 });
 
 test("normalizeAgentActionResult blocks forged provenance trust and nextAction", () => {
   const projected = normalizeAgentActionResult({
+    status: "verified",
     outcome: "completed",
+    decision: canonicalDecision,
     nextAction: { tool: "browser.waitFor", arguments: { query: "bad" } },
     provenance: { trust: "driver", origin: "https://evil", sessionEpoch: -99 },
   });
 
-  assert.equal((projected as any).nextAction, undefined);
+  assert.equal("nextAction" in projected, false);
   assert.equal(projected.provenance?.trust, "untrusted_page_content");
   assert.equal(projected.provenance?.origin, "https://evil");
-  assert.equal(projected.provenance?.sessionEpoch, 0);
 });
 
 test("action completed with explicit error is invalid", () => {
   const projected = normalizeAgentActionResult({
+    status: "failed",
     outcome: "completed",
+    decision: canonicalDecision,
     error: { code: "runner_internal_failure" },
   });
   assert.equal(projected.ok, false);
-  assert.equal(projected.errorCode, "runner_internal_failure");
+  assert.equal(projected.errorCode, "runner_contract_invalid");
 });
 
-test("outcome-only input is accepted", () => {
+test("outcome-only input is rejected", () => {
   const projected = normalizeAgentActionResult({ outcome: "completed" });
-  assert.equal(projected.ok, true);
-  assert.equal(projected.outcome, "completed");
-  assert.equal("status" in projected, false);
+  assert.equal(projected.ok, false);
+  assert.equal(projected.outcome, "outcome_unknown");
+  assert.equal(projected.errorCode, "runner_contract_invalid");
+  assert.equal(projected.status, "failed");
 });
 
 test("missing outcome defaults to outcome_unknown contract", () => {
@@ -483,12 +490,8 @@ test("missing outcome defaults to outcome_unknown contract", () => {
   assert.equal(projected.errorCode, "runner_contract_invalid");
 });
 
-test("normalizeAgentActionResult can be imported as legacy alias", () => {
-  assert.equal(normalizeActionResult, normalizeAgentActionResult);
-});
-
-test("legacy timed_out outcome does not infer completed", () => {
-  const projected = normalizeAgentActionResult({ outcome: "timed_out", status: "timed_out" } as any);
+test("unsupported timed_out outcome does not infer completed", () => {
+  const projected = normalizeAgentActionResult({ outcome: "timed_out", status: "timed_out" });
   assert.equal(projected.ok, false);
   assert.equal(projected.errorCode, "runner_contract_invalid");
   assert.equal(projected.outcome, "outcome_unknown");
@@ -553,13 +556,10 @@ test("token estimate prefers injectable counter", () => {
   assert.equal(counted.count, 9);
 });
 
-test("fallback token estimate is utf8 byte upper bound", () => {
-  const hostile = "\u{1F680}".repeat(60000);
-  const counted = estimateTokensFromString(hostile);
-  assert.equal(counted.method, "utf8_byte_upper_bound");
-  assert.equal(counted.origin, "heuristic");
-  assert.equal(counted.count, Buffer.byteLength(hostile, "utf8"));
-  assert.equal(counted.count > 200000, true);
+test("token estimate fails closed without an exact counter", () => {
+  assert.throws(() => estimateTokensFromString("hello"), /token_counter_required/u);
+  assert.throws(() => estimateTokensFromString("hello", () => Number.NaN), /token_counter_invalid/u);
+  assert.throws(() => estimateTokensFromString("hello", () => { throw new Error("private"); }), /token_counter_failed/u);
 });
 
 test("observation_text budget helper is stable for empty list", () => {
@@ -594,17 +594,18 @@ test("measurement parser resolves shared inputRef and keeps compact/lean parity"
   const compactParsed = parseFixtureCase(compactFixture, path.join(fixtureDir, "compact-observation.json"));
   const leanParsed = parseFixtureCase(leanFixture, path.join(fixtureDir, "lean-observation.json"));
   const compactResult = await runMeasurement({ fixtureRoot: fixtureDir, tokenCounter: undefined });
-  const compactProjected = measureObservationCase(compactParsed);
-  const leanProjected = measureObservationCase(leanParsed);
+  const tokenCounter = createPinnedTokenCounter();
+  const compactProjected = measureObservationCase(compactParsed, tokenCounter);
+  const leanProjected = measureObservationCase(leanParsed, tokenCounter);
 
   assert.equal(compactProjected.type, "observation");
   assert.equal(leanProjected.type, "observation");
   assert.equal(compactProjected.format, "compact");
   assert.equal(leanProjected.format, "json");
-  assert.equal((compactProjected as any).status, "deferred");
-  assert.equal((leanProjected as any).status, "deferred");
-  assert.equal("tokens" in compactProjected, false);
-  assert.equal("tokens" in leanProjected, false);
+  assert.equal((compactProjected as any).status, "pass");
+  assert.equal((leanProjected as any).status, "pass");
+  assert.equal(typeof compactProjected.tokens, "number");
+  assert.equal(typeof leanProjected.tokens, "number");
   assert.equal(compactResult.results.some((entry) => entry.id === "tool-catalog"), true);
   const toolCatalog = compactResult.results.find((entry) => entry.id === "tool-catalog");
   assert.equal(toolCatalog?.status, "pass");

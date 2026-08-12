@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const env = {
   ...process.env,
-  NEWTON_BROWSER_QA_OWNER: family,
+  NEWTON_BROWSER_QA_BROWSER: family,
 };
 const stages = [
   ["direct_runtime", "scripts/smoke/direct-runtime-live.mjs"],
@@ -15,7 +15,6 @@ const stages = [
   ["direct_origin_containment", "scripts/smoke/origin-containment-live.mjs"],
   ["direct_input", "scripts/smoke/input-reliability-live.mjs"],
   ["direct_dialog_renderer", "scripts/smoke/dialog-renderer-live.mjs"],
-  ["packed_direct_runtime", "scripts/smoke/packed-direct-runtime.mjs"],
 ];
 
 const failures = [];
@@ -74,7 +73,13 @@ function safeChildDiagnostic(stderr, stdout, signal) {
       const value = JSON.parse(line);
       const code = value?.errorCode;
       if (typeof code === "string" && (/^packed_(?:direct|install)_[a-z0-9_]{1,60}$/u.test(code)
-        || code === "direct_browser_unavailable")) return code;
+        || [
+          "direct_browser_unavailable",
+          "direct_cleanup_uncertain",
+          "direct_runtime_temp_cleanup_refused",
+          "direct_setup_cleanup_refused",
+          "direct_hard_crash_temp_cleanup_failed",
+        ].includes(code))) return code;
     } catch {}
   }
   if (stderr.includes("OwnedBrowserRuntimeError")) return "owned_browser_runtime_failed";
@@ -87,6 +92,9 @@ function safeChildDiagnostic(stderr, stdout, signal) {
     "configured_runtime_start_uncertain",
     "direct_cleanup_uncertain",
     "direct_driver_start_failed",
+    "direct_runtime_temp_cleanup_refused",
+    "direct_setup_cleanup_refused",
+    "direct_hard_crash_temp_cleanup_failed",
     "owned_browser_runtime_failed",
   ]) {
     if (stderr.includes(code)) return code;

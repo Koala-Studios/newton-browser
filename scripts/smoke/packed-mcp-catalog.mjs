@@ -13,7 +13,7 @@ const child = spawn(process.execPath, [entry], {
 });
 let stdout = "";
 let stderrTail = "";
-let initialized = false;
+let discovered = false;
 let catalogVerified = false;
 let terminalError = null;
 
@@ -35,16 +35,19 @@ child.stdout.on("data", (chunk) => {
     let message;
     try { message = JSON.parse(line); } catch { terminalError ??= new Error("packed_catalog_invalid_json"); child.kill(); return; }
     if (message.id === 1) {
-      if (message.result?.serverInfo?.name !== "newton-browser") {
-        terminalError ??= new Error("packed_catalog_initialize_invalid");
+      if (!Array.isArray(message.result?.supportedVersions)
+        || message.result.supportedVersions.length !== 1
+        || message.result.supportedVersions[0] !== "2026-07-28"
+        || message.result?._meta?.["io.modelcontextprotocol/serverInfo"]?.name !== "newton-browser") {
+        terminalError ??= new Error("packed_catalog_discovery_invalid");
         child.kill();
         return;
       }
-      initialized = true;
-      send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+      discovered = true;
+      send(request(2, "tools/list", {}));
     } else if (message.id === 2) {
       const tools = message.result?.tools;
-      if (!Array.isArray(tools) || tools.length !== 11 || tools.some((tool) => typeof tool?.name !== "string" || !tool.name.startsWith("browser."))) {
+      if (!Array.isArray(tools) || tools.length !== 10 || tools.some((tool) => typeof tool?.name !== "string" || !tool.name.startsWith("browser."))) {
         terminalError ??= new Error("packed_catalog_tools_invalid");
         child.kill();
         return;
@@ -56,20 +59,31 @@ child.stdout.on("data", (chunk) => {
 });
 child.once("error", (error) => { terminalError ??= error; });
 
-send({
-  jsonrpc: "2.0",
-  id: 1,
-  method: "initialize",
-  params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "packed-catalog", version: "1" } },
-});
+send(request(1, "server/discover", {}));
 
 const exit = await new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
 clearTimeout(deadline);
 if (terminalError) throw terminalError;
-if (!initialized || !catalogVerified || exit.code !== 0 || exit.signal) {
+if (!discovered || !catalogVerified || exit.code !== 0 || exit.signal) {
   throw new Error(`packed_catalog_failed:${safeCategory(stderrTail)}`);
 }
-process.stdout.write(`${JSON.stringify({ ok: true, protocols: 1, tools: 11, browserStarted: false })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, protocols: 1, tools: 10, browserStarted: false })}\n`);
+
+function request(id, method, params) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method,
+    params: {
+      ...params,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": { name: "packed-catalog", version: "1" },
+      },
+    },
+  };
+}
 
 function send(message) {
   if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(message)}\n`);

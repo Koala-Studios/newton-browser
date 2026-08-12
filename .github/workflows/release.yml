@@ -1,25 +1,25 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to verify and reconcile (for example, v0.4.1)
+        description: Existing release tag to verify and publish after explicit maintainer approval
         required: true
         type: string
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  release:
-    name: Verify and publish release
-    runs-on: ubuntu-latest
-    environment: release
-    timeout-minutes: 25
+  verify:
+    name: Verify ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Select release tag
@@ -27,18 +27,13 @@ jobs:
           INPUT_RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            release_tag="$INPUT_RELEASE_TAG"
-          else
-            release_tag="$GITHUB_REF_NAME"
-          fi
+          release_tag="$INPUT_RELEASE_TAG"
           if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release tag: $release_tag" >&2
             exit 1
           fi
           git fetch --force origin "refs/tags/$release_tag:refs/tags/$release_tag"
           git checkout --detach "$release_tag"
-          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v4
         with:
           version: 10.8.0
@@ -46,10 +41,87 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      - run: pnpm release:check
-      - run: pnpm pack:check
+      - name: Verify pinned Linux Chrome for Testing matrix
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          results_root="$RUNNER_TEMP/newton-linux-live-results"
+          mkdir --mode=0700 "$results_root"
+          docker build --platform linux/amd64 --file scripts/smoke/linux-chrome-live/Dockerfile --tag newton-linux-chrome-live:release .
+          image_id="$(docker image inspect --format '{{.Id}}' newton-linux-chrome-live:release)"
+          docker run --rm --init --platform linux/amd64 --shm-size 1g \
+            --security-opt seccomp=unconfined \
+            --env "NEWTON_IMAGE_ID=$image_id" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace-source,readonly" \
+            --mount "type=bind,source=$results_root,target=/results" \
+            newton-linux-chrome-live:release
+      - name: Verify unchanged candidate three consecutive times
+        if: runner.os == 'Linux'
+        shell: bash
+        run: xvfb-run --auto-servernum node scripts/release-three-pass.mjs
+      - name: Verify unchanged candidate three consecutive times
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/release-three-pass.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-verification-${{ matrix.os }}
+          path: release-verification-*.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: release-package
+          path: artifacts/newton-browser-*.tgz
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: linux-live-receipts
+          path: ${{ runner.temp }}/newton-linux-live-results
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish verified release
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select release tag
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          release_tag="$INPUT_RELEASE_TAG"
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then exit 1; fi
+          git fetch --force origin "refs/tags/$release_tag:refs/tags/$release_tag"
+          git checkout --detach "$release_tag"
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-verification-*
+          path: verification
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: artifacts
+      - name: Require matching Windows and Linux package receipts
+        shell: bash
+        run: |
+          node -e 'const fs=require("node:fs"),cp=require("node:child_process"); const linux=JSON.parse(fs.readFileSync("verification/release-verification-linux.json")); const windows=JSON.parse(fs.readFileSync("verification/release-verification-win32.json")); if(linux.consecutivePasses!==3||windows.consecutivePasses!==3||linux.sourceUnchanged!==true||windows.sourceUnchanged!==true||linux.packageVersion!==windows.packageVersion||linux.sha256!==windows.sha256||linux.commit!==windows.commit||linux.tree!==windows.tree) throw new Error("cross-platform release verification mismatch"); const p=require("./apps/mcp-server/package.json"); const head=cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(); const tree=cp.execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim(); if(p.version!==linux.packageVersion||`v${p.version}`!==process.env.RELEASE_TAG||head!==linux.commit||tree!==linux.tree) throw new Error("release package version mismatch");'
       - run: node scripts/extract-changelog-section.mjs "$RELEASE_TAG" > release-notes.md
       - name: Create or reconcile GitHub Release
         env:
@@ -57,17 +129,10 @@ jobs:
         shell: bash
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "Newton Browser ${RELEASE_TAG#v}" \
-              --notes-file release-notes.md
-            gh release upload "$RELEASE_TAG" \
-              artifacts/newton-browser-*.tgz \
-              --clobber
+            gh release edit "$RELEASE_TAG" --title "Newton Browser ${RELEASE_TAG#v}" --notes-file release-notes.md
+            gh release upload "$RELEASE_TAG" artifacts/newton-browser-*.tgz --clobber
           else
-            gh release create "$RELEASE_TAG" \
-              artifacts/newton-browser-*.tgz \
-              --title "Newton Browser ${RELEASE_TAG#v}" \
-              --notes-file release-notes.md
+            gh release create "$RELEASE_TAG" artifacts/newton-browser-*.tgz --title "Newton Browser ${RELEASE_TAG#v}" --notes-file release-notes.md
           fi
       - name: Publish npm package
         shell: bash

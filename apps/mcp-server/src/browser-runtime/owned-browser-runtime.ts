@@ -1,5 +1,4 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
-import { randomBytes } from "node:crypto";
 
 import {
   ChromiumLaunchError,
@@ -62,7 +61,6 @@ export type OwnedBrowserRuntimeReceipt = Readonly<{
 export type OwnedDriverBootstrap = Readonly<{
   transport: ChromiumProcess["transport"];
   rootTargetId: string;
-  syntheticTabId: number;
 }>;
 
 const OWNED_RUNTIME_CAPABILITY = Object.freeze({ kind: "owned_browser_runtime" });
@@ -75,7 +73,6 @@ export type LaunchOwnedBrowserRuntimeOptions = Readonly<{
   profileStore: ProfileStore;
   identityId: string;
   allowedOrigins: readonly string[];
-  additionalArgs?: readonly string[];
   headless?: boolean;
   readyDeadlineMs?: number;
   stderrDiagnosticBytes?: number;
@@ -84,6 +81,7 @@ export type LaunchOwnedBrowserRuntimeOptions = Readonly<{
   killTree?: ChromiumLaunchOptions["killTree"];
   platform?: NodeJS.Platform;
   ephemeralIdentity?: boolean;
+  startProxy?: typeof startPolicyProxy;
 }>;
 
 export class OwnedBrowserRuntime {
@@ -121,7 +119,6 @@ export class OwnedBrowserRuntime {
     this.bootstrap = Object.freeze({
       transport: input.process.transport,
       rootTargetId: input.process.rootTargetId,
-      syntheticTabId: randomBytes(6).readUIntBE(0, 6),
     });
     this.unavailable = Promise.race([input.process.exited, input.proxy.closed]).then(() => undefined);
     void input.proxy.closed.then(() => this.handleUnexpectedProxyLoss());
@@ -212,7 +209,7 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
     throw new OwnedBrowserRuntimeError("proxy_start");
   }
   let proxy: PolicyProxy;
-  try { proxy = await startPolicyProxy({ allowedOrigins: options.allowedOrigins }); } catch {
+  try { proxy = await (options.startProxy ?? startPolicyProxy)({ allowedOrigins: options.allowedOrigins }); } catch {
     throw new OwnedBrowserRuntimeError("proxy_start");
   }
 
@@ -232,18 +229,17 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
     process = await launchChromium({
       executablePath: options.executablePath,
       userDataDir: lease.path,
-      headless: options.headless,
-      readyDeadlineMs: options.readyDeadlineMs,
-      stderrDiagnosticBytes: options.stderrDiagnosticBytes,
-      spawn: options.spawn,
-      transportFactory: options.transportFactory,
+      ...(options.headless === undefined ? {} : { headless: options.headless }),
+      ...(options.readyDeadlineMs === undefined ? {} : { readyDeadlineMs: options.readyDeadlineMs }),
+      ...(options.stderrDiagnosticBytes === undefined ? {} : { stderrDiagnosticBytes: options.stderrDiagnosticBytes }),
+      ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
+      ...(options.transportFactory === undefined ? {} : { transportFactory: options.transportFactory }),
       profileLease: lease,
       validateOwnedProfileLease: (directory, candidate) => candidate === lease && validateNewtonIdentityLease(lease, directory),
-      killTree: options.killTree,
-      platform: options.platform,
+      ...(options.killTree === undefined ? {} : { killTree: options.killTree }),
+      ...(options.platform === undefined ? {} : { platform: options.platform }),
       policyProxy: proxy,
       guardianProfileCleanup: guardianProfileCleanupPlan(lease, options.ephemeralIdentity === true),
-      ...(options.additionalArgs === undefined ? {} : { additionalArgs: options.additionalArgs }),
     });
   } catch (error) {
     if (error instanceof ChromiumLaunchError && error.cleanupUncertain) {
@@ -264,7 +260,7 @@ function normalizedOriginFingerprint(origins: readonly string[]): string {
   if (!Array.isArray(origins) || origins.length < 1 || origins.length > 32) throw new Error("invalid_origin_grant");
   const normalized = new Set<string>();
   for (const value of origins) {
-    if (typeof value !== "string" || value.length < 1 || value.length > 2_048) throw new Error("invalid_origin_grant");
+    if (typeof value !== "string" || value.length < 1 || value.length > 512) throw new Error("invalid_origin_grant");
     let parsed: URL;
     try { parsed = new URL(value); } catch { throw new Error("invalid_origin_grant"); }
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password
@@ -283,17 +279,17 @@ async function rollbackLeaseAndProxy(
   let proxyClosed = false;
   const retry = async (): Promise<void> => {
     let failedPhase: OwnedBrowserRuntimePhase | null = null;
-    if (!leaseReleased) {
+    if (!proxyClosed) {
+      try { await proxy.close(); proxyClosed = true; }
+      catch { failedPhase ??= "proxy_cleanup"; }
+    }
+    if (proxyClosed && !leaseReleased) {
       try {
         if (guardianManaged) acknowledgeGuardianProfileCleanup(lease);
         else releaseNewtonIdentityLease(lease);
         leaseReleased = true;
       }
-      catch { failedPhase = "lease_release"; }
-    }
-    if (!proxyClosed) {
-      try { await proxy.close(); proxyClosed = true; }
-      catch { failedPhase ??= "proxy_cleanup"; }
+      catch { failedPhase ??= "lease_release"; }
     }
     if (failedPhase) throw new OwnedBrowserRuntimeError(failedPhase, true, retry);
   };

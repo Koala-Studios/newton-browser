@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version or commit
       description: The Newton Browser version or Git commit you tested.
-      placeholder: 0.4.0 or commit SHA
+      placeholder: 0.5.0 or commit SHA
     validations:
       required: true
   - type: input
@@ -31,7 +31,7 @@ body:
       description: List the smallest exact sequence that reproduces the issue.
       placeholder: |
         1. Build with ...
-        2. Run `newton-browser --doctor` and confirm the owned-browser runtime is configured.
+        2. Run `newton-browser doctor` and confirm the owned-browser runtime is configured.
         3. Call browser.status ...
     validations:
       required: true

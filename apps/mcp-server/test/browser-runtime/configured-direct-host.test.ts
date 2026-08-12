@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { BridgeSessionInit, BrowserAction } from "@newton-browser/core";
+import type { BrowserSessionInit, BrowserAction } from "@newton-browser/core";
 
 import { createConfiguredDirectBrowserHost } from "../../src/browser-runtime/configured-direct-host.ts";
 import type { DirectHostSession, DirectOwnedRuntime } from "../../src/browser-runtime/direct-browser-host.ts";
@@ -63,14 +63,13 @@ test("blank sessions provision concurrent distinct ephemeral identities and dele
   }
 });
 
-test("a configured identity is the sequential default while concurrent unspecified work remains ephemeral", async () => {
+test("persistent identities are used only when explicitly requested", async () => {
   const fixture = configuredFixture();
   try {
     const persistent = createNewtonIdentity(fixture.store, { browserFamily: "edge" });
     const runtimes: FakeOwnedRuntime[] = [];
     const host = configuredHost(fixture, {
-      identityId: persistent.id,
-      browserFamily: undefined,
+      discoverBrowser: (input: { family: "chrome" | "edge" }) => ({ family: input.family, path: `${fixture.executablePath}-${input.family}`, source: "system" }),
       async launchRuntime(options) {
         const runtime = new FakeOwnedRuntime(options.identityId, options.browserFamily);
         runtimes.push(runtime);
@@ -79,11 +78,12 @@ test("a configured identity is the sequential default while concurrent unspecifi
     });
     const first = host.createSession(validInit()).sessionId;
     await host.waitForSessionReady(first);
-    assert.equal(runtimes[0]?.receipt.browserFamily, "edge");
-    const second = host.createSession(validInit("https://second.test")).sessionId;
+    assert.equal(runtimes[0]?.receipt.browserFamily, "chrome");
+    assert.notEqual(runtimes[0]?.receipt.identityId, persistent.id);
+    const second = host.createSession({ ...validInit("https://second.test"), identityId: persistent.id }).sessionId;
     await host.waitForSessionReady(second);
-    assert.equal(runtimes.length, 2);
-    assert.notEqual(runtimes[1]?.receipt.identityId, persistent.id);
+    assert.equal(runtimes[1]?.receipt.identityId, persistent.id);
+    assert.equal(runtimes[1]?.receipt.browserFamily, "edge");
     assert.equal(listNewtonIdentities(fixture.store).length, 2);
 
     const explicitBusy = host.createSession({
@@ -94,24 +94,15 @@ test("a configured identity is the sequential default while concurrent unspecifi
 
     await Promise.all([host.stopSession(first), host.stopSession(second)]);
     assert.deepEqual(listNewtonIdentities(fixture.store).map((identity) => identity.id), [persistent.id]);
-    const third = host.createSession(validInit("https://third.test")).sessionId;
-    await host.waitForSessionReady(third);
-    assert.equal(runtimes.length, 3);
-    assert.equal(runtimes[2]?.receipt.identityId, persistent.id);
-    await host.stopSession(third);
   } finally {
     fixture.cleanup();
   }
 });
 
-test("identity/browser mismatch and discovery failure are bounded and create no ephemeral identity", () => {
+test("browser discovery failure is bounded and creates no ephemeral identity", () => {
   const fixture = configuredFixture();
   try {
     const persistent = createNewtonIdentity(fixture.store, { browserFamily: "edge" });
-    assert.throws(() => configuredHost(fixture, {
-      identityId: persistent.id,
-      browserFamily: "chrome",
-    }), bounded("configured_browser_identity_mismatch", fixture));
     assert.throws(() => configuredHost(fixture, {
       discoverBrowser: () => null,
     }), bounded("configured_browser_unavailable", fixture));
@@ -189,14 +180,13 @@ test("session browser selection applies to ephemeral identities and cannot overr
   }
 });
 
-test("an externally leased configured identity falls back to ephemeral only when selection was implicit", async () => {
+test("an externally leased identity never affects an unspecified ephemeral session", async () => {
   const fixture = configuredFixture();
   const persistent = createNewtonIdentity(fixture.store, { browserFamily: "chrome" });
   const externalLease = acquireNewtonIdentityLease(fixture.store, persistent.id);
   try {
     const launches: FakeOwnedRuntime[] = [];
     const host = configuredHost(fixture, {
-      identityId: persistent.id,
       async launchRuntime(options: { identityId: string; browserFamily: "chrome" | "edge" }) {
         if (options.identityId === persistent.id) throw new Error("identity lease is active");
         const runtime = new FakeOwnedRuntime(options.identityId, options.browserFamily);
@@ -220,13 +210,12 @@ test("an externally leased configured identity falls back to ephemeral only when
   }
 });
 
-test("an explicit browser family bypasses a different-family configured default and uses an ephemeral identity", async () => {
+test("an explicit browser family selects an ephemeral identity without using stored identities", async () => {
   const fixture = configuredFixture();
   try {
     const chromeIdentity = createNewtonIdentity(fixture.store, { browserFamily: "chrome" });
     const launches: FakeOwnedRuntime[] = [];
     const host = configuredHost(fixture, {
-      identityId: chromeIdentity.id,
       discoverBrowser: (input: { family: "chrome" | "edge" }) => ({
         family: input.family,
         path: `${fixture.executablePath}-${input.family}`,
@@ -430,7 +419,7 @@ class FakeOwnedRuntime implements DirectOwnedRuntime {
   claimDriverBootstrap() {
     if (this.claimed) throw new Error("already_claimed");
     this.claimed = true;
-    return { transport: inertTransport(), rootTargetId: "root-target", syntheticTabId: 91 };
+    return { transport: inertTransport(), rootTargetId: "root-target" };
   }
   cleanupState() { return this.state; }
   markCleanupUncertain() { this.state = "cleanup_uncertain"; }
@@ -447,7 +436,6 @@ class FakeOwnedRuntime implements DirectOwnedRuntime {
 }
 
 const fakeDriverFactory = async (): Promise<DirectHostSession> => ({
-  initialObservation: undefined,
   async execute(_action: BrowserAction) { return { status: "verified" }; },
   async stop() {},
   snapshot() {
@@ -499,12 +487,10 @@ function releaseSafeIdentity(store: ReturnType<typeof openProfileStore>, id: str
   removeNewtonIdentity(store, id);
 }
 
-function validInit(origin = "https://example.com"): BridgeSessionInit {
+function validInit(origin = "https://example.com"): BrowserSessionInit {
   return {
     origin,
     allowedOrigins: [origin, "https://assets.example.com"],
-    goal: "configured test",
-    instanceLabel: "configured-direct",
   };
 }
 

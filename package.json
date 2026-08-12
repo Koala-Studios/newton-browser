@@ -1,6 +1,6 @@
 {
   "name": "newton-browser-workspace",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "license": "MIT",
   "private": true,
   "description": "Local-only MCP browser control using isolated owned Chrome or Edge processes over private CDP.",
@@ -22,7 +22,7 @@
     "build:core": "pnpm --filter @newton-browser/core build",
     "build:driver": "pnpm --filter @newton-browser/driver build",
     "build:mcp": "pnpm --filter newton-browser build",
-    "build": "pnpm build:core && pnpm build:driver && pnpm build:mcp",
+    "build": "pnpm build:driver && pnpm build:mcp",
     "pack:check": "node scripts/pack-check.mjs",
     "smoke:quick": "node --test --test-isolation=none test/fixtures/fixture.test.ts apps/mcp-server/test/file-validation.test.ts",
     "smoke:direct-runtime": "node scripts/smoke/direct-runtime-live.mjs",
@@ -33,15 +33,13 @@
     "smoke:origin-containment": "node scripts/smoke/origin-containment-live.mjs",
     "smoke:input-reliability": "node scripts/smoke/input-reliability-live.mjs",
     "smoke:dialog-renderer": "node scripts/smoke/dialog-renderer-live.mjs",
-    "eval": "pnpm build:driver && node --test test/evals/replay.test.mjs test/aip03-frame-churn-fixture.test.mjs test/aip04-origin-containment-fixture.test.mjs test/fixtures/input-reliability/contract.test.mjs",
-    "eval:live": "pnpm eval:direct-live",
+    "eval": "pnpm build:driver && node --test test/evals/replay.test.mjs test/frame-churn-fixture.test.mjs test/origin-containment-fixture.test.mjs test/fixtures/input-reliability/contract.test.mjs",
     "eval:direct-live": "node scripts/smoke/direct-live-suite.mjs",
     "eval:real-sites": "node --experimental-strip-types scripts/smoke/direct-real-sites-live.mjs",
     "eval:profile-import-live": "node --experimental-strip-types scripts/smoke/direct-profile-import-live.mjs",
     "eval:agent-cost": "node scripts/measure-agent-cost.mjs --json",
     "release:deterministic": "node scripts/release-check.mjs",
     "release:check": "node scripts/release-complete-local.mjs",
-    "release:complete-local": "node scripts/release-complete-local.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p packages/driver/tsconfig.json --noEmit",
     "test": "pnpm build:driver && node scripts/run-tests.mjs",
     "lint": "pnpm boundary:check"
@@ -50,7 +48,6 @@
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.1",
     "js-tiktoken": "1.0.21",
-    "sharp": "^0.35.3",
     "typescript": "^5.9.0"
   }
 }

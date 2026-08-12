@@ -98,54 +98,46 @@ function expectCode(error: unknown, code: DirectDebuggerPortError["code"]): bool
 test("validates ownership and attaches the exact target with flattening", async () => {
   const fake = createTransport();
   assert.throws(
-    () => createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "bad target", tabId: 7 }),
+    () => createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "bad target" }),
     /direct_debugger_invalid_root_target/u,
   );
-  assert.throws(
-    () => createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-1", tabId: -1 }),
-    /direct_debugger_invalid_tab_id/u,
-  );
 
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-1", tabId: 7 });
-  await assert.rejects(port.sendCommand({ tabId: 7 }, "Page.enable", {}), (error) =>
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-1" });
+  await assert.rejects(port.sendCommand({}, "Page.enable", {}), (error) =>
     expectCode(error, "direct_debugger_not_attached"));
   const stopPreattachListener = port.onDebuggerEvent(() => undefined);
   stopPreattachListener();
-  await assert.rejects(port.attach({ tabId: 8 }, "1.3"), (error) =>
-    expectCode(error, "direct_debugger_wrong_tab"));
-  await assert.rejects(port.attach({ tabId: 7 }, "1.2"), (error) =>
-    expectCode(error, "direct_debugger_wrong_version"));
   assert.equal(fake.calls.length, 0);
 
-  await port.attach({ tabId: 7 }, "1.3");
+  await port.attach();
   assert.deepEqual(fake.calls, [{
     method: "Target.attachToTarget",
     params: { targetId: "target-1", flatten: true },
     sessionId: null,
   }]);
   assert.equal(fake.listeners.size, 1);
-  await assert.rejects(port.attach({ tabId: 7 }, "1.3"), (error) =>
+  await assert.rejects(port.attach(), (error) =>
     expectCode(error, "direct_debugger_already_attached"));
 });
 
-test("maps root, child, and synthetic browser commands without exposing a real browser session", async () => {
+test("maps root, child, and private browser commands without exposing a real browser session", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-2", tabId: 9 });
-  await port.attach({ tabId: 9 }, "1.3");
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-2" });
+  await port.attach();
   fake.calls.length = 0;
 
-  await port.sendCommand({ tabId: 9 }, "Page.enable", {});
-  await port.sendCommand({ tabId: 9, sessionId: "child-session" }, "Runtime.enable", {});
-  const attached = await port.sendCommand({ tabId: 9 }, "Target.attachToBrowserTarget", {});
+  await port.sendCommand({}, "Page.enable", {});
+  await port.sendCommand({ sessionId: "child-session" }, "Runtime.enable", {});
+  const attached = await port.sendCommand({}, "Target.attachToBrowserTarget", {});
   const token = attached.sessionId;
   assert.equal(typeof token, "string");
   assert.match(token as string, /^newton-direct-browser:/u);
   await port.sendCommand(
-    { tabId: 9, sessionId: token as string },
+    { sessionId: token as string },
     "Target.autoAttachRelated",
     { targetId: "target-2", waitForDebuggerOnStart: true },
   );
-  await port.sendCommand({ tabId: 9 }, "Target.detachFromTarget", { sessionId: token });
+  await port.sendCommand({}, "Target.detachFromTarget", { sessionId: token });
 
   assert.deepEqual(fake.calls, [
     { method: "Page.enable", params: {}, sessionId: "root-session-1" },
@@ -158,28 +150,28 @@ test("maps root, child, and synthetic browser commands without exposing a real b
   ]);
 
   await assert.rejects(
-    port.sendCommand({ tabId: 9, sessionId: token as string }, "Runtime.enable", {}),
+    port.sendCommand({ sessionId: token as string }, "Runtime.enable", {}),
     (error) => expectCode(error, "direct_debugger_forged_session"),
   );
   await assert.rejects(
-    port.sendCommand({ tabId: 9, sessionId: "newton-direct-browser:forged" }, "Target.setAutoAttach", {}),
+    port.sendCommand({ sessionId: "newton-direct-browser:forged" }, "Target.setAutoAttach", {}),
     (error) => expectCode(error, "direct_debugger_forged_session"),
   );
   await assert.rejects(
-    port.sendCommand({ tabId: 9, sessionId: token as string }, "Target.attachToBrowserTarget", {}),
+    port.sendCommand({ sessionId: token as string }, "Target.attachToBrowserTarget", {}),
     (error) => expectCode(error, "direct_debugger_already_attached"),
   );
   await assert.rejects(
-    port.sendCommand({ tabId: 9 }, "Target.attachToBrowserTarget", { unexpected: true }),
+    port.sendCommand({}, "Target.attachToBrowserTarget", { unexpected: true }),
     (error) => expectCode(error, "direct_debugger_invalid_params"),
   );
 });
 
 test("maps ordered events and suppresses malformed, forged, unsubscribed, and stale events", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-3", tabId: 11 });
-  await port.attach({ tabId: 11 }, "1.3");
-  const token = (await port.sendCommand({ tabId: 11 }, "Target.attachToBrowserTarget", {})).sessionId as string;
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-3" });
+  await port.attach();
+  const token = (await port.sendCommand({}, "Target.attachToBrowserTarget", {})).sessionId as string;
   const deliveries: Array<Readonly<{ listener: string; source: unknown; method: string }>> = [];
   const stopFirst = port.onDebuggerEvent((source, method) => {
     deliveries.push({ listener: "first", source, method });
@@ -202,28 +194,28 @@ test("maps ordered events and suppresses malformed, forged, unsubscribed, and st
   await deliveryFinished;
 
   assert.deepEqual(deliveries, [
-    { listener: "first", source: { tabId: 11, sessionId: token }, method: "Target.created" },
-    { listener: "second", source: { tabId: 11, sessionId: token }, method: "Target.created" },
-    { listener: "first", source: { tabId: 11 }, method: "Page.first" },
-    { listener: "second", source: { tabId: 11 }, method: "Page.first" },
-    { listener: "first", source: { tabId: 11, sessionId: "child-1" }, method: "Runtime.consoleAPICalled" },
-    { listener: "second", source: { tabId: 11, sessionId: "child-1" }, method: "Runtime.consoleAPICalled" },
-    { listener: "second", source: { tabId: 11 }, method: "Page.second" },
+    { listener: "first", source: { sessionId: token }, method: "Target.created" },
+    { listener: "second", source: { sessionId: token }, method: "Target.created" },
+    { listener: "first", source: {}, method: "Page.first" },
+    { listener: "second", source: {}, method: "Page.first" },
+    { listener: "first", source: { sessionId: "child-1" }, method: "Runtime.consoleAPICalled" },
+    { listener: "second", source: { sessionId: "child-1" }, method: "Runtime.consoleAPICalled" },
+    { listener: "second", source: {}, method: "Page.second" },
   ]);
 
   const staleListener = fake.staleListeners[0];
   assert.ok(staleListener);
-  await port.detach({ tabId: 11 });
+  await port.detach();
   assert.equal(fake.listeners.size, 0);
   await staleListener({ method: "Page.stale", params: {}, sessionId: "root-session-1" });
   assert.equal(deliveries.length, 7);
-  await assert.rejects(port.sendCommand({ tabId: 11 }, "Page.enable", {}), (error) =>
+  await assert.rejects(port.sendCommand({}, "Page.enable", {}), (error) =>
     expectCode(error, "direct_debugger_not_attached"));
 });
 
 test("retains preattach listeners and awaits asynchronous listeners in event order", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-async", tabId: 12 });
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-async" });
   const order: string[] = [];
   let releaseFirst: () => void = () => assert.fail("first gate was not initialized");
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -241,7 +233,7 @@ test("retains preattach listeners and awaits asynchronous listeners in event ord
     order.push(`${method}:end`);
     if (method === "Page.second") secondFinished?.();
   });
-  await port.attach({ tabId: 12 }, "1.3");
+  await port.attach();
   let firstTransportDeliveryFinished = false;
   const firstTransportDelivery = fake.emitAndWait("Page.first", {}, "root-session-1")
     .then(() => { firstTransportDeliveryFinished = true; });
@@ -262,7 +254,7 @@ test("retains preattach listeners and awaits asynchronous listeners in event ord
 
 test("uses the real event-object shape and preserves an event received while attach is pending", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-during-attach", tabId: 14 });
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-during-attach" });
   let delivered: (() => void) | null = null;
   const deliveredSignal = new Promise<void>((resolve) => { delivered = resolve; });
   const observed: Array<Readonly<{ source: unknown; method: string; params: RecordValue }>> = [];
@@ -276,10 +268,10 @@ test("uses the real event-object shape and preserves an event received while att
     sessionId: "root-session-1",
   });
 
-  await port.attach({ tabId: 14 }, "1.3");
+  await port.attach();
   await deliveredSignal;
   assert.deepEqual(observed, [{
-    source: { tabId: 14 },
+    source: {},
     method: "Page.frameAttached",
     params: { frameId: "bounded-frame" },
   }]);
@@ -287,20 +279,20 @@ test("uses the real event-object shape and preserves an event received while att
 
 test("retains attachment after uncertain detach and retries the exact root detach", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-4", tabId: 13 });
-  await port.attach({ tabId: 13 }, "1.3");
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-4" });
+  await port.attach();
   fake.calls.length = 0;
   fake.failNext(new Error("ambiguous transport failure"));
 
-  await assert.rejects(port.detach({ tabId: 13 }), (error) => {
+  await assert.rejects(port.detach(), (error) => {
     const typed = error as DirectDebuggerPortError;
     assert.equal(typed.code, "direct_debugger_detach_uncertain");
     assert.equal(typed.retryable, true);
     assert.equal(typed.uncertain, true);
     return true;
   });
-  await port.sendCommand({ tabId: 13 }, "Page.enable", {});
-  await port.detach({ tabId: 13 });
+  await port.sendCommand({}, "Page.enable", {});
+  await port.detach();
   assert.deepEqual(fake.calls.map(({ method, sessionId }) => ({ method, sessionId })), [
     { method: "Target.detachFromTarget", sessionId: null },
     { method: "Page.enable", sessionId: "root-session-1" },
@@ -308,14 +300,14 @@ test("retains attachment after uncertain detach and retries the exact root detac
   ]);
 
   fake.setRootSession("root-session-2");
-  await port.attach({ tabId: 13 }, "1.3");
-  await port.sendCommand({ tabId: 13 }, "Page.enable", {});
+  await port.attach();
+  await port.sendCommand({}, "Page.enable", {});
   assert.equal(fake.calls.at(-1)?.sessionId, "root-session-2");
 });
 
 test("detach waits for active delivery and invalidates queued events before cleanup", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-drain", tabId: 16 });
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-drain" });
   let releaseDelivery: () => void = () => assert.fail("delivery gate was not initialized");
   const deliveryGate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
   let deliveryStarted: (() => void) | null = null;
@@ -332,7 +324,7 @@ test("detach waits for active delivery and invalidates queued events before clea
       await deliveryGate;
     }
   });
-  await port.attach({ tabId: 16 }, "1.3");
+  await port.attach();
   fake.observeCalls((call) => {
     if (call.method === "Target.detachFromTarget") detachSent?.();
   });
@@ -340,7 +332,7 @@ test("detach waits for active delivery and invalidates queued events before clea
   fake.emit("Page.queued", {}, "root-session-1");
   await deliveryStartedSignal;
 
-  const detaching = port.detach({ tabId: 16 }).then(() => { detachFinished = true; });
+  const detaching = port.detach().then(() => { detachFinished = true; });
   await detachSentSignal;
   assert.equal(detachFinished, false);
   releaseDelivery();
@@ -352,7 +344,7 @@ test("detach waits for active delivery and invalidates queued events before clea
 
 test("event overflow permanently fails commands closed while retaining detach cleanup", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-overflow", tabId: 18 });
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-overflow" });
   let releaseDelivery: () => void = () => assert.fail("overflow gate was not initialized");
   const deliveryGate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
   let deliveryStarted: (() => void) | null = null;
@@ -364,7 +356,7 @@ test("event overflow permanently fails commands closed while retaining detach cl
       await deliveryGate;
     }
   });
-  await port.attach({ tabId: 18 }, "1.3");
+  await port.attach();
   const pendingDeliveries: Promise<void>[] = [];
   pendingDeliveries.push(...fake.emitCaptured("Page.blocked", {}, "root-session-1"));
   for (let index = 1; index < 256; index += 1) {
@@ -375,16 +367,16 @@ test("event overflow permanently fails commands closed while retaining detach cl
   const overflowDelivery = overflow[0];
   assert.ok(overflowDelivery);
   await assert.rejects(overflowDelivery, (error: unknown) => expectCode(error, "direct_debugger_event_overflow"));
-  await assert.rejects(port.sendCommand({ tabId: 18 }, "Page.enable", {}), (error) =>
+  await assert.rejects(port.sendCommand({}, "Page.enable", {}), (error) =>
     expectCode(error, "direct_debugger_event_overflow"));
   await deliveryStartedSignal;
 
-  const detaching = port.detach({ tabId: 18 });
+  const detaching = port.detach();
   releaseDelivery();
   await detaching;
   await Promise.all(pendingDeliveries);
   assert.equal(fake.listeners.size, 0);
-  await assert.rejects(port.attach({ tabId: 18 }, "1.3"), (error) =>
+  await assert.rejects(port.attach(), (error) =>
     expectCode(error, "direct_debugger_event_overflow"));
   assert.equal(fake.calls.some((call) => call.method === "Page.enable"), false);
   assert.equal(fake.calls.filter((call) => call.method === "Target.detachFromTarget").length, 1);
@@ -392,37 +384,37 @@ test("event overflow permanently fails commands closed while retaining detach cl
 
 test("provisional event overflow fails attach and detaches the confirmed root", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-attach-overflow", tabId: 19 });
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-attach-overflow" });
   fake.setAttachEvents(Array.from({ length: 257 }, (_value, index) => ({
     method: "Page.frameAttached",
     params: { index },
     sessionId: "root-session-1",
   })));
 
-  await assert.rejects(port.attach({ tabId: 19 }, "1.3"), (error) =>
+  await assert.rejects(port.attach(), (error) =>
     expectCode(error, "direct_debugger_event_overflow"));
   assert.equal(fake.listeners.size, 0);
   assert.deepEqual(fake.calls.map((call) => call.method), [
     "Target.attachToTarget",
     "Target.detachFromTarget",
   ]);
-  await assert.rejects(port.attach({ tabId: 19 }, "1.3"), (error) =>
+  await assert.rejects(port.attach(), (error) =>
     expectCode(error, "direct_debugger_event_overflow"));
   assert.equal(fake.calls.length, 2);
 });
 
 test("does not attach when event subscription fails and classifies transport closure", async () => {
   const fake = createTransport();
-  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-5", tabId: 15 });
+  const port = createDirectDebuggerPort({ transport: fake.transport, rootTargetId: "target-5" });
   fake.failSubscription(new Error("subscription failed"));
-  await assert.rejects(port.attach({ tabId: 15 }, "1.3"), (error) =>
+  await assert.rejects(port.attach(), (error) =>
     expectCode(error, "direct_debugger_attach_failed"));
   assert.deepEqual(fake.calls, []);
 
-  await port.attach({ tabId: 15 }, "1.3");
+  await port.attach();
   const closed = Object.assign(new Error("closed"), { code: "transport_closed" });
   fake.failNext(closed);
-  await assert.rejects(port.sendCommand({ tabId: 15 }, "Page.enable", {}), (error) => {
+  await assert.rejects(port.sendCommand({}, "Page.enable", {}), (error) => {
     const typed = error as DirectDebuggerPortError;
     assert.equal(typed.code, "direct_debugger_transport_closed");
     assert.equal(typed.retryable, true);

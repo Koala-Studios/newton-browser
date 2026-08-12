@@ -4,6 +4,9 @@
 > named below. Newton's current working tree has since moved to an owned-browser direct
 > CDP architecture. Use `README.md`, `ROADMAP.md`, and `docs/PROGRESS_LEDGER.md` for the
 > current product boundary; retain this document only as source-attributed design history.
+> `ROADMAP.md` references below are historical; current status is `docs/PROGRESS_LEDGER.md`.
+> Every present-tense implementation claim below describes the pinned 2026-08-08 revision,
+> not the modern direct-runtime working tree.
 
 - Date: 2026-08-08
 - Newton Browser revision: `a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a` (`0.4.5`)
@@ -357,7 +360,9 @@ Newton evaluates risk first from host-known action structure and again from driv
 
 agent-browser's [`policy.rs`](https://github.com/vercel-labs/agent-browser/blob/acbc22bdc5d4f6c5a88d97d4a4745d3c5eb0591f/cli/src/native/policy.rs#L83) is a useful user-configurable overlay, but command-name allow/deny/confirm cannot replace element-aware classification. If adopted, deny must take precedence and the structural floor must remain the non-bypassable lower layer.
 
-Newton also correctly describes `approval_required` as classification metadata, not as proof that a human approved an action. Preserve that meaning unless a real approval protocol is implemented end to end.
+> Superseded by the modern direct-runtime collapse: Newton has no approval protocol, so
+> the unused `approval_required` compatibility class was removed. Commit risk is now
+> expressed only by `decision.commitBoundary`; blocked actions remain explicitly blocked.
 
 ### 3. Stable references, ambiguity rejection, and actionability
 

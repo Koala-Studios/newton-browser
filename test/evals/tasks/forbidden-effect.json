@@ -12,10 +12,8 @@
       "expect": "completed",
       "action": {
         "kind": "click",
-        "target": {
-          "role": "button",
-          "name": "Delete record"
-        }
+        "role": "button",
+        "name": "Delete record"
       }
     }
   ],

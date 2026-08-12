@@ -77,7 +77,7 @@ export function packCheck() {
   try {
     const isolatedEnv = isolatedPackCheckEnvironment(temp);
     fs.writeFileSync(path.join(temp, "package.json"), '{"name":"packed-check","private":true}');
-    run("npm", ["install", "--ignore-scripts", tarball], { cwd: temp, env: isolatedEnv });
+    run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--offline", tarball], { cwd: temp, env: isolatedEnv });
     const entry = path.join(temp, "node_modules", "newton-browser", "dist", "index.js");
     const versionResult = run(process.execPath, [entry, "--version"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();
     if (versionResult !== version) throw new Error(`packed version mismatch: ${versionResult}`);
@@ -89,14 +89,17 @@ export function packCheck() {
     if (!help.includes("setup --browser") || !help.includes("identity login <identity-id>") || !help.includes("doctor --live")) {
       throw new Error("packed direct setup help is incomplete");
     }
-    const doctorResult = run(process.execPath, [entry, "--doctor"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();
+    const doctorResult = run(process.execPath, [entry, "doctor"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();
     const doctor = JSON.parse(doctorResult);
     if (doctor?.checks?.node?.ok !== true || doctor?.version !== version
       || doctor?.architecture !== "owned_process_private_cdp") {
       throw new Error("packed doctor report is invalid");
     }
-    const config = run(process.execPath, [entry, "--print-config", "codex"], { cwd: temp, capture: true, env: isolatedEnv }).stdout;
-    if (!config.includes("[mcp_servers.newton-browser]") || !config.includes(`newton-browser@${version}`)) throw new Error("packed Codex config is not version-pinned");
+    const config = run(process.execPath, [entry, "install", "generic"], { cwd: temp, capture: true, env: isolatedEnv }).stdout;
+    if (!config.includes(JSON.stringify(fs.realpathSync(process.execPath)))
+      || !config.includes(JSON.stringify(fs.realpathSync(entry))) || config.includes("npx")) {
+      throw new Error("packed generic installer does not pin the exact local runtime and entrypoint");
+    }
     run(process.execPath, [path.join(root, "scripts", "smoke", "packed-mcp-catalog.mjs"), "--entry", entry], { cwd: root, env: isolatedEnv });
   } finally {
     cleanupPackCheckTempRoot(temp);
@@ -150,7 +153,7 @@ function packageManagerCommand(command, args) {
   return { command, args };
 }
 
-// Resolve node's bundled npm/npx CLI cross-platform. On Windows npm sits beside
+// Resolve Node's bundled npm CLI cross-platform. On Windows npm sits beside
 // node.exe (node_modules/npm); on Linux/macOS node is in bin/ and npm is in
 // ../lib/node_modules/npm. Check both and fall back to the first candidate.
 function nodeCli(name) {

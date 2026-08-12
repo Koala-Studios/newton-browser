@@ -3,183 +3,147 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
-import { BROWSER_ACT_JSON_SCHEMA, parseBrowserAction, redactBrowserResult, type BridgeResultEvent, type BrowserFloorDecision, type PageProvenance } from "@newton-browser/core";
+import { BROWSER_ACT_JSON_SCHEMA, BROWSER_COMPOSITE_REF_PATTERN_SOURCE, parseBrowserAction, redactBrowserResult, type BrowserAction, type BrowserCommandResult, type BrowserFloorDecision, type BrowserSessionInfo, type PageProvenance } from "@newton-browser/core";
 
-import { NEWTON_BROWSER_VERSION, SUPPORTED_MCP_PROTOCOLS } from "./cli.ts";
+import { NEWTON_BROWSER_VERSION } from "./cli.ts";
 import type { DirectBrowserHost } from "./browser-runtime/direct-browser-host.ts";
 import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
-import { McpFrameParser, McpFrameParseError, type McpMessageMode } from "./mcp-frame-parser.ts";
-import { evaluateHostFloor } from "./floor-gate.ts";
+import {
+  MODERN_MCP_PROTOCOL_VERSION,
+  serveModernMcpStdio,
+  type JsonRpcId,
+  type ModernMcpRequest,
+  type ModernMcpRequestContext,
+  type ModernMcpResponse,
+} from "./modern-mcp-stdio.ts";
 import { normalizeAgentActionResult, projectObservation, type AgentObservationOptionsInput } from "./agent-output.ts";
-import { annotationsForTool, MCP_SERVER_INSTRUCTIONS, NEWTON_BROWSER_CONTRACT_VERSION } from "./mcp-contract.ts";
+import { annotationsForTool, MCP_SERVER_INSTRUCTIONS } from "./mcp-contract.ts";
 
-export type BrowserHost = DirectBrowserHost;
-type JsonRpcId = string | number | null;
-type JsonRpcRequest = { jsonrpc: "2.0"; id?: JsonRpcId; method?: string; params?: Record<string, unknown> };
-type JsonRpcResponse = { jsonrpc: "2.0"; id: JsonRpcId; result?: unknown; error?: { code: number; message: string; data?: unknown } };
-type MessageMode = McpMessageMode;
+type BrowserHost = DirectBrowserHost;
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
-type ToolCallResult = { content: ToolContent[]; isError?: boolean };
+type ToolCallResult = { resultType: "complete"; content: ToolContent[]; isError?: boolean };
 
-const CURRENT_PROTOCOL = SUPPORTED_MCP_PROTOCOLS.at(-1)!;
-const INLINE_SCREENSHOT_CAP = 1_000_000;
 const SCREENSHOT_BYTES_CAP = 16 * 1024 * 1024;
-const FINALIZATION_LEDGER_CAP = 256;
-const FINALIZATION_LEDGER_TTL_MS = 10 * 60_000;
-type FinalizationDisposition = "close";
-type FinalizationRecord = {
-  disposition: FinalizationDisposition;
-  event: Extract<BridgeResultEvent, { ok: true }>;
-  createdAt: number;
-};
-const finalizationLedgers = new WeakMap<BrowserHost, Map<string, FinalizationRecord>>();
+const TOOL_CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_ID_CAP = 120;
+const ORIGIN_CAP = 512;
+const TOOL_NAMES = new Set([
+  "browser.status", "browser.session.start", "browser.observe", "browser.act",
+  "browser.screenshot", "browser.console", "browser.network", "browser.sessions.list",
+  "browser.session.stop", "browser.stop_all",
+]);
+const SCREENSHOT_MASK_DISPOSITIONS = new Set(["mask_applied", "mask_not_configured", "mask_not_applicable"]);
+const DIRECT_SESSION_ID_PATTERN = "^direct_session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+const DIRECT_SESSION_ID = new RegExp(DIRECT_SESSION_ID_PATTERN, "u");
+let cachedToolCatalog: Array<Record<string, unknown>> | null = null;
 
-export async function startNewtonBrowserMcpServer(input: { bridge?: BrowserHost } = {}): Promise<void> {
-  const bridge = input.bridge ?? createDefaultDirectBrowserHost();
-  await bridge.listen();
+export async function startNewtonBrowserMcpServer(input: { host?: BrowserHost } = {}): Promise<void> {
+  const host = input.host ?? createDefaultDirectBrowserHost();
   try {
-    await serveNewtonBrowserMcpConnection({ bridge, readable: process.stdin, writable: process.stdout });
+    await serveNewtonBrowserMcpConnection({ host, readable: process.stdin, writable: process.stdout });
   } finally {
-    await shutdownBrowserHost(bridge);
+    await shutdownBrowserHost(host);
   }
 }
 
-export async function shutdownBrowserHost(bridge: BrowserHost): Promise<void> {
-  try { await bridge.stopAll(); } catch { /* close is the authoritative retry/terminal cleanup path */ }
-  await bridge.close();
+async function shutdownBrowserHost(host: BrowserHost): Promise<void> {
+  try { await host.stopAll(); } catch { /* close is the authoritative retry/terminal cleanup path */ }
+  await host.close();
 }
 
-export async function serveNewtonBrowserMcpConnection(input: {
-  bridge: BrowserHost;
+async function serveNewtonBrowserMcpConnection(input: {
+  host: BrowserHost;
   readable: Readable;
   writable: Writable;
 }): Promise<void> {
-  let complete = false;
-  let errorResponded = false;
-  let resolveServe: () => void = () => {};
-  let rejectServe: (error: unknown) => void = () => {};
-  const serveDone = new Promise<void>((resolve, reject) => {
-    resolveServe = resolve;
-    rejectServe = reject;
+  await serveModernMcpStdio({
+    readable: input.readable,
+    writable: input.writable,
+    handleRequest: (request, context) => handleMcpMessage(input.host, request, context),
   });
-
-  const typedParserErrorResponse = (error: McpFrameParseError, mode: MessageMode): JsonRpcResponse => {
-    return errorResponse(null, -32700, `Malformed MCP frame (${mode} mode).`, { errorCode: error.code });
-  };
-
-  const writeErrorResponse = (error: McpFrameParseError, mode: MessageMode): void => {
-    if (errorResponded) return;
-    errorResponded = true;
-    writeMessage(input.writable, typedParserErrorResponse(error, mode), mode);
-  };
-
-  const parser = new McpFrameParser(
-    async (message, mode) => {
-      const response = await handleMcpMessage(input.bridge, message as JsonRpcRequest);
-      if (response) writeMessage(input.writable, response, mode);
-    },
-    async (error, mode) => writeErrorResponse(error, mode),
-  );
-
-  const cleanup = () => {
-    input.readable.off("data", onData);
-    input.readable.off("end", onEnd);
-    input.readable.off("close", onEnd);
-    input.readable.off("error", onReadableError);
-  };
-
-  const finalize = async (): Promise<void> => {
-    if (complete) return;
-    complete = true;
-    try {
-      parser.end();
-      await parser.flush();
-      resolveServe();
-    } catch (error) {
-      rejectServe(error);
-    } finally {
-      cleanup();
-    }
-  };
-
-  const onEnd = () => {
-    void finalize();
-  };
-
-  const onReadableError = () => {
-    void finalize();
-  };
-
-  const onData = (chunk: Buffer | string) => {
-    parser.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  };
-
-  input.readable.on("data", onData);
-  input.readable.on("end", onEnd);
-  input.readable.on("close", onEnd);
-  input.readable.on("error", onReadableError);
-  input.readable.resume();
-
-  await serveDone;
-  return;
 }
 
-export async function handleMcpMessage(bridge: BrowserHost, message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
-  if (message.id === undefined && message.method?.startsWith("notifications/")) return null;
-  const id = message.id ?? null;
-  if (message.method === "initialize") {
-    const params = isObject(message.params) ? message.params : {};
-    const selected = negotiateProtocol(params);
-    if (!selected) {
-      return errorResponse(id, -32001, "No supported MCP protocol version.", {
-        errorCode: "protocol_mismatch",
-        supportedProtocolVersions: SUPPORTED_MCP_PROTOCOLS,
-      });
+export async function handleMcpMessage(
+  host: BrowserHost,
+  message: ModernMcpRequest,
+  context: ModernMcpRequestContext = { signal: new AbortController().signal },
+): Promise<ModernMcpResponse | null> {
+  const id = message.id;
+  const metadataError = validateRequestMetadata(message.params);
+  if (metadataError) return errorResponse(id, metadataError.code, metadataError.message, metadataError.data);
+  if (message.method === "server/discover") {
+    if (!hasExactParameterKeys(message.params, ["_meta"])) {
+      return errorResponse(id, -32602, "Invalid server/discover parameters.", { errorCode: "invalid_discover_parameters" });
     }
     return response(id, {
-      protocolVersion: selected,
-      capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "newton-browser", version: NEWTON_BROWSER_VERSION, contractVersion: NEWTON_BROWSER_CONTRACT_VERSION },
+      supportedVersions: [MODERN_MCP_PROTOCOL_VERSION],
+      capabilities: { tools: {} },
       instructions: MCP_SERVER_INSTRUCTIONS,
-      contractVersion: NEWTON_BROWSER_CONTRACT_VERSION,
+      ttlMs: TOOL_CATALOG_TTL_MS,
+      cacheScope: "public",
     });
   }
-  if (message.method === "ping") return response(id, {});
-  if (message.method === "tools/list") return response(id, { tools: toolList() });
+  if (message.method === "tools/list") {
+    if (!hasExactParameterKeys(message.params, ["_meta", "cursor"])) {
+      return errorResponse(id, -32602, "Invalid tools/list parameters.", { errorCode: "invalid_tools_list_parameters" });
+    }
+    if (message.params?.cursor !== undefined) {
+      return errorResponse(id, -32602, "Newton Browser publishes one complete tool page.", { errorCode: "invalid_cursor" });
+    }
+    return response(id, { tools: toolList(), ttlMs: TOOL_CATALOG_TTL_MS, cacheScope: "public" });
+  }
   if (message.method === "tools/call") {
+    const params = message.params;
+    if (!isObject(params) || !hasExactParameterKeys(params, ["_meta", "name", "arguments"])
+      || typeof params.name !== "string" || params.name.length === 0 || params.name.length > 240
+      || (params.arguments !== undefined && !isObject(params.arguments))) {
+      return errorResponse(id, -32602, "Invalid tools/call parameters.", { errorCode: "invalid_tool_call" });
+    }
+    const name = params.name;
+    if (!TOOL_NAMES.has(name)) {
+      return errorResponse(id, -32602, "Unknown tool name.", { errorCode: "unknown_tool" });
+    }
+    const args = isObject(params.arguments) ? params.arguments : {};
     try {
-      const params = asObject(message.params ?? {}, "params");
-      const name = requiredString(params.name, "name");
-      const args = isObject(params.arguments) ? params.arguments : {};
-      return response(id, await callTool(bridge, name, args));
+      validateToolArguments(name, args);
+    } catch {
+      return errorResponse(id, -32602, "Invalid tool arguments.", { errorCode: "invalid_arguments", tool: name });
+    }
+    try {
+      context.signal.throwIfAborted();
+      const result = await callTool(host, name, args, context.signal);
+      context.signal.throwIfAborted();
+      return response(id, result);
     } catch (error) {
-      return response(id, toolError(errorCode(error), error instanceof Error ? error.message : String(error)));
+      if (context.signal.aborted) return null;
+      const code = errorCode(error);
+      return response(id, toolError(code, publicErrorMessage(code)));
     }
   }
-  return errorResponse(id, -32601, `Unsupported MCP method: ${message.method ?? "unknown"}.`);
+  return errorResponse(id, -32601, "Unsupported MCP method.");
 }
 
-async function callTool(bridge: BrowserHost, name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+async function callTool(host: BrowserHost, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ToolCallResult> {
+  signal.throwIfAborted();
   if (name === "browser.status") {
-    const status = bridge.getStatus();
+    const status = host.getStatus();
     const runtimeState = status.runtimeReady
       ? "ready"
       : status.cleanupUncertainCount > 0
         ? "cleanup_uncertain"
         : status.sessionCount === 0 ? "idle" : "starting";
     const directStatus = {
-      ready: status.runtimeReady,
+      ready: status.configured && status.cleanupUncertainCount === 0,
       configured: status.configured,
       runtimeState,
       mode: "direct",
       version: NEWTON_BROWSER_VERSION,
-      browserFamilies: status.browserFamilies,
       sessionCount: status.sessionCount,
       activeSessionCount: status.activeSessionCount,
       cleanupUncertainCount: status.cleanupUncertainCount,
     };
     return toolJson(args.detail === "full"
-      ? { ...directStatus, contractVersion: NEWTON_BROWSER_CONTRACT_VERSION, limits: status.limits, sessionDiagnostics: status.sessionDiagnostics }
+      ? { ...directStatus, limits: status.limits, sessionDiagnostics: status.sessionDiagnostics }
       : directStatus,
     !status.configured || status.cleanupUncertainCount > 0,
     !status.configured || status.cleanupUncertainCount > 0 ? "direct_runtime_unavailable" : undefined);
@@ -190,181 +154,148 @@ async function callTool(bridge: BrowserHost, name: string, args: Record<string, 
     const allowedOrigins = normalizeAllowedOrigins(args.allowedOrigins, origin);
     const identityId = args.identityId === undefined ? undefined : requiredIdentityId(args.identityId);
     const browserFamily = args.browser === undefined ? undefined : requiredBrowserFamily(args.browser);
-    const created = bridge.createSession({
+    const created = host.createSession({
       origin,
       allowedOrigins,
-      goal: typeof args.goal === "string" ? args.goal.slice(0, 240) : "",
-      instanceLabel: process.env.NEWTON_BROWSER_INSTANCE_LABEL?.trim().slice(0, 120)
-        || (typeof args.instanceLabel === "string" ? args.instanceLabel.slice(0, 120) : "mcp"),
       ...(identityId ? { identityId } : {}),
       ...(browserFamily ? { browserFamily } : {}),
     });
     try {
-      const session = await bridge.waitForSessionReady(created.sessionId);
-      if (!session.liveOrigin || !allowedOrigins.includes(session.liveOrigin)) {
-        if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
-          return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
-        }
-        return toolError("origin_not_granted", "The attached tab is outside the session origin grant.");
-      }
+      const session = await withAbort(host.waitForSessionReady(created.sessionId), signal, () => host.stopSession(created.sessionId));
       if (isObject(args.observe)) {
-        const event = await bridge.dispatch(created.sessionId, prepareActionForDispatch(actionForTool("browser.observe", args.observe)) as never);
+        const event = await host.dispatch(created.sessionId, prepareActionForDispatch(actionForTool("browser.observe", args.observe)), { signal });
         if (!event.ok) {
-          if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+          if (!await cleanupFailedSessionStart(host, created.sessionId)) {
             return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
           }
           return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
         }
         const observation = observationEnvelope(event, args.observe);
         if (!observation.ok) {
-          if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+          if (!await cleanupFailedSessionStart(host, created.sessionId)) {
             return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
           }
           return toolJson(observation, true);
         }
-        return toolJson({ sessionId: created.sessionId, session, observation });
+        return toolJson({ sessionId: created.sessionId, origin: session.origin, observation });
       }
-      return toolJson({ sessionId: created.sessionId, session });
+      return toolJson({ sessionId: created.sessionId, origin: session.origin });
     } catch (error) {
-      if (!await cleanupFailedSessionStart(bridge, created.sessionId)) {
+      if (signal.aborted) throw error;
+      if (!await cleanupFailedSessionStart(host, created.sessionId)) {
         return toolError("direct_cleanup_uncertain", "The failed session start could not be cleaned up conclusively.");
       }
-      return toolError(errorCode(error), error instanceof Error ? error.message : String(error));
+      const code = errorCode(error);
+      return toolError(code, publicErrorMessage(code));
     }
   }
 
-  if (name === "browser.sessions.list") return toolJson({ sessions: bridge.listSessions() });
+  if (name === "browser.sessions.list") return toolJson({ sessions: host.listSessions() });
   if (name === "browser.session.stop") {
-    const event = await bridge.dispatch(requiredString(args.sessionId, "sessionId"), { kind: "__stop" } as any);
-    if (!event.ok) return toolJson({ stopped: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
-    return toolJson({ stopped: true, ...publicCommandMetadata(event) });
-  }
-  if (name === "browser.session.finalize") {
     const sessionId = requiredString(args.sessionId, "sessionId");
-    const disposition: FinalizationDisposition | null = args.disposition === "close" ? "close" : null;
-    if (!disposition) return toolError("invalid_finalize_disposition", "Disposition must be close.");
-    const finalized = finalizationRecord(bridge, sessionId);
-    if (finalized) {
-      if (finalized.disposition !== disposition) {
-        return toolJson({
-          ok: false,
-          errorCode: "finalize_conflict",
-          sessionEpoch: finalized.event.sessionEpoch,
-          sequence: finalized.event.sequence,
-          outcome: "prevented",
-          retrySafe: true,
-        }, true);
+    try {
+      await host.stopSession(sessionId);
+      return toolJson({ stopped: true });
+    } catch {
+      if (!host.listSessions().some((session) => session.sessionId === sessionId)) {
+        return toolJson({ stopped: true, alreadyStopped: true });
       }
-      return toolJson({
-        ok: true,
-        ...(isObject(finalized.event.result) ? finalized.event.result : {}),
-        ...publicCommandMetadata(finalized.event),
-      });
+      return toolError("direct_cleanup_uncertain", "The session could not be cleaned up conclusively.");
     }
-    const event = await bridge.dispatch(sessionId, { kind: "__finalize", disposition } as any);
-    if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
-    storeFinalizationRecord(bridge, sessionId, disposition, event);
-    return toolJson({ ok: true, ...(isObject(event.result) ? event.result : {}), ...publicCommandMetadata(event) });
   }
   if (name === "browser.stop_all") {
-    const sessionIds = bridge.listSessions().map((session) => session.sessionId);
-    const results = await Promise.all(sessionIds.map((sessionId) => bridge.dispatch(sessionId, { kind: "__stop" } as any)));
-    const failed = results.find((event) => !event.ok);
-    if (failed && !failed.ok) {
-      return toolJson({ stopped: false, errorCode: failed.errorCode, ...publicCommandMetadata(failed) }, true);
+    const stoppedCount = host.listSessions().length;
+    try {
+      await host.stopAll();
+      return toolJson({ stopped: true, stoppedCount });
+    } catch {
+      if (host.listSessions().length === 0) return toolJson({ stopped: true, stoppedCount });
+      return toolError("direct_cleanup_uncertain", "One or more sessions could not be cleaned up conclusively.");
     }
-    return toolJson({ stopped: true, stoppedCount: results.length });
   }
 
   if (name === "browser.console" || name === "browser.network") {
     const sessionId = requiredString(args.sessionId, "sessionId");
-    const session = bridge.listSessions().find((candidate) => candidate.sessionId === sessionId);
+    const session = host.listSessions().find((candidate) => candidate.sessionId === sessionId);
     if (!session) return toolError("unknown_session", "The session does not exist.");
     const action = name === "browser.console"
-      ? { kind: "console", level: args.level, pattern: args.pattern, limit: clampNumber(args.limit, 100, 1, 500), clear: args.clear === true }
-      : { kind: "network", urlPattern: args.urlPattern, requestId: args.requestId, limit: clampNumber(args.limit, 100, 1, 500) };
-    const event = await bridge.dispatch(sessionId, action as never);
+      ? {
+          kind: "console",
+          ...(args.level !== undefined ? { level: args.level } : {}),
+          ...(args.pattern !== undefined ? { pattern: args.pattern } : {}),
+          limit: clampNumber(args.limit, 100, 1, 500),
+        }
+      : {
+          kind: "network",
+          ...(args.urlPattern !== undefined ? { urlPattern: args.urlPattern } : {}),
+          ...(args.requestId !== undefined ? { requestId: args.requestId } : {}),
+          limit: clampNumber(args.limit, 100, 1, 500),
+        };
+    const event = await host.dispatch(sessionId, parseBrowserAction(action), { signal });
     if (!event.ok) return toolJson({ ok: false, errorCode: event.errorCode, ...publicCommandMetadata(event) }, true);
     const result = redactObservationResult(event.result);
-    const resultOrigin = isObject(result) && typeof result.origin === "string" ? result.origin : session.liveOrigin ?? session.origin;
+    const resultOrigin = isObject(result) && typeof result.origin === "string" ? result.origin : session.origin;
     const capturedAt = isObject(result) && typeof result.capturedAt === "string" ? result.capturedAt : undefined;
-    return toolJson({ ok: true, result, provenance: publicPageProvenance(event, resultOrigin, capturedAt), ...publicCommandMetadata(event) });
+    return toolJson({ ok: true, result, provenance: publicPageProvenance(resultOrigin, capturedAt), ...publicCommandMetadata(event) });
   }
 
   if (["browser.observe", "browser.screenshot", "browser.act"].includes(name)) {
     const sessionId = requiredString(args.sessionId, "sessionId");
-    const session = bridge.listSessions().find((candidate) => candidate.sessionId === sessionId);
+    const session = host.listSessions().find((candidate) => candidate.sessionId === sessionId);
     if (!session) return toolError("unknown_session", "The session does not exist.");
     const action = prepareActionForDispatch(actionForTool(name, args));
-    if (name === "browser.act" && isObject(action) && action.kind === "handle_dialog") {
-      return toolJson({
-        ok: false,
-        errorCode: "use_dialog_accept_or_dismiss",
-        message: "Use action kind \"dialog_accept\" (optionally with promptText) or \"dialog_dismiss\" to respond to a JavaScript dialog.",
-        decision: { class: "blocked", commitBoundary: "none", reasons: ["use_dialog_accept_or_dismiss"] },
-      }, true);
-    }
     if (name === "browser.act" && isObject(action) && action.kind === "fill_form") {
       return await runFillForm(
-        bridge,
+        host,
         sessionId,
         session,
         action,
         typeof args.idempotencyKey === "string" ? args.idempotencyKey : undefined,
         typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+        signal,
       );
     }
-    const verdict = evaluateHostFloor({ session, action });
-    if (!verdict.dispatchAllowed) {
-      if (name === "browser.act") return toolJson(preventedActionEnvelope(verdict.errorCode ?? "blocked_by_floor", verdict.decision), true);
-      return toolJson({ ok: false, errorCode: verdict.errorCode, decision: publicDecision(verdict.decision) }, true);
-    }
-    if (name === "browser.act" && isObject(action) && ["observe", "screenshot", "console", "network"].includes(String(action.kind))) {
-      return toolJson({
-        ok: false,
-        errorCode: "use_dedicated_tool",
-        message: "Use browser.observe, browser.screenshot, browser.console, or browser.network for this operation.",
-        decision: { class: "blocked", commitBoundary: "none", reasons: ["use_dedicated_tool"] },
-      }, true);
-    }
-    const dispatchOptions = name === "browser.act" && (args.idempotencyKey !== undefined || args.timeoutMs !== undefined)
+    const dispatchOptions = name === "browser.act"
       ? {
           ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey as string } : {}),
           ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs as number } : {}),
+          signal,
         }
-      : undefined;
-    const event = await bridge.dispatch(sessionId, verdict.action, dispatchOptions);
+      : { signal };
+    const event = await host.dispatch(sessionId, action, dispatchOptions);
     if (!event.ok) {
-      if (name === "browser.act") return toolJson(agentActionEnvelope(event, event.decision ?? verdict.decision, session), true);
-      return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(event.decision ?? verdict.decision), ...publicCommandMetadata(event) }, true);
+      const decision = event.decision;
+      if (name === "browser.act") return toolJson(agentActionEnvelope(event, decision, session), true);
+      return toolJson({ ok: false, errorCode: event.errorCode, decision: publicDecision(decision), ...publicCommandMetadata(event) }, true);
     }
-    const decision = strongestDecision(verdict.decision, event.decision);
-    if (name === "browser.screenshot") return screenshotToolResult(event, decision, args);
+    const decision = event.decision;
+    if (name === "browser.screenshot") return screenshotToolResult(event);
     if (name === "browser.act") {
-      return toolJson(agentActionEnvelope(event, decision, session));
+      const actionResult = agentActionEnvelope(event, decision, session);
+      return toolJson(actionResult, actionResult.ok !== true);
     }
     const observation = observationEnvelope(event, args);
     return toolJson(observation, !observation.ok);
   }
-  return toolError("unknown_tool", `Unknown tool: ${name}`);
+  return toolError("unknown_tool", "Newton Browser does not expose that tool.");
 }
 
-async function cleanupFailedSessionStart(bridge: BrowserHost, sessionId: string): Promise<boolean> {
+async function cleanupFailedSessionStart(host: BrowserHost, sessionId: string): Promise<boolean> {
   try {
-    await bridge.stopSession(sessionId);
+    await host.stopSession(sessionId);
     return true;
   } catch {
-    return !bridge.listSessions().some((session) => session.sessionId === sessionId);
+    return !host.listSessions().some((session) => session.sessionId === sessionId);
   }
 }
 
-function observationEnvelope(event: Extract<BridgeResultEvent, { ok: true }>, args: AgentObservationOptionsInput) {
+function observationEnvelope(event: Extract<BrowserCommandResult, { ok: true }>, args: AgentObservationOptionsInput) {
   const projected = projectObservation(event.result, args);
   if (!projected.ok) {
     return { ok: false, errorCode: projected.errorCode, reason: projected.reason, ...publicCommandMetadata(event) };
   }
   const { projection } = projected;
-  const provenance = publicPageProvenance(event, projection.origin, projection.capturedAt);
+  const provenance = publicPageProvenance(projection.origin, projection.capturedAt);
   if (projection.format === "compact") {
     return {
       ok: true,
@@ -377,107 +308,88 @@ function observationEnvelope(event: Extract<BridgeResultEvent, { ok: true }>, ar
   return { ok: true, result: projection, provenance, ...publicCommandMetadata(event) };
 }
 
-function publicPageProvenance(event: BridgeResultEvent, origin: string, capturedAt?: string): PageProvenance {
+function publicPageProvenance(origin: string, capturedAt?: string): PageProvenance {
   return {
     trust: "untrusted_page_content" as const,
     origin,
-    sessionEpoch: event.sessionEpoch,
     ...(capturedAt ? { capturedAt } : {}),
   };
 }
 
-function agentActionEnvelope(event: BridgeResultEvent, decision: BrowserFloorDecision, session: unknown) {
+function agentActionEnvelope(event: BrowserCommandResult, decision: BrowserFloorDecision, session: unknown) {
   const result = event.ok && isObject(event.result) ? redactObservationResult(event.result) : {};
-  const changedRecord = isObject(result.changed) ? result.changed : {};
-  const origin = isObject(session) && typeof session.liveOrigin === "string"
-    ? session.liveOrigin
-    : isObject(session) && typeof session.origin === "string" ? session.origin : "unknown";
+  const resultRecord = isObject(result) ? result : {};
+  const changedRecord = event.ok && isObject(event.changed) ? event.changed : isObject(resultRecord.changed) ? resultRecord.changed : {};
+  const origin = isObject(session) && typeof session.origin === "string" ? session.origin : "unknown";
   const reason = event.ok
-    ? typeof result.reason === "string" ? result.reason : undefined
+    ? event.reason ?? (typeof resultRecord.reason === "string" ? resultRecord.reason : undefined)
     : event.errorCode;
   const projection = normalizeAgentActionResult({
-    status: event.ok
-      ? typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified"
-      : "failed",
+    status: event.status,
     outcome: event.outcome,
     ...(reason ? { reason } : {}),
     ...(!event.ok ? { errorCode: event.errorCode } : {}),
     decision: {
-      code: decision.class,
-      ...(decision.reasons.at(-1) ? { reason: decision.reasons.at(-1) } : {}),
+      class: decision.class,
+      commitBoundary: decision.commitBoundary,
+      ...(decision.reason ? { reason: decision.reason } : {}),
     },
     changed: Object.keys(changedRecord).length > 0,
     ...(Object.keys(changedRecord).length > 0
-      ? { delta: Object.entries(changedRecord).slice(0, 10).map(([key, value]) => `${key}=${JSON.stringify(value)}`) }
+      ? { delta: Object.keys(changedRecord).slice(0, 10) }
       : {}),
-    ...(event.ok && typeof result.kind === "string" && result.kind.startsWith("observation")
-      ? { provenance: { origin, sessionEpoch: event.sessionEpoch } }
+    ...(event.ok && typeof resultRecord.kind === "string" && resultRecord.kind.startsWith("observation")
+      ? { provenance: { origin } }
       : {}),
   });
-  return { ...projection, sessionEpoch: event.sessionEpoch, sequence: event.sequence };
+  return { ...projection, sequence: event.sequence };
 }
 
-function preventedActionEnvelope(errorCode: string, decision: BrowserFloorDecision) {
-  return normalizeAgentActionResult({
-    status: "blocked",
-    outcome: "prevented",
-    errorCode,
-    reason: decision.reasons.at(-1) ?? errorCode,
-    decision: { code: decision.class, ...(decision.reasons.at(-1) ? { reason: decision.reasons.at(-1) } : {}) },
-    changed: false,
-  });
-}
-
-// fill_form (WS9.8): one MCP call fills an ordered set of fields. The batch is
+// One fill_form call fills an ordered set of fields. The batch is
 // expanded host-side into sequential single fills, each getting the full per-field
 // floor (host hints + driver resolved facts) and redaction. It stops at the first
 // blocked or failed field and reports a per-field summary, so a sensitive field in
 // the middle of a form halts the batch exactly like a standalone fill would.
 async function runFillForm(
-  bridge: BrowserHost,
+  host: BrowserHost,
   sessionId: string,
-  session: unknown,
-  action: Record<string, unknown>,
+  session: BrowserSessionInfo,
+  action: BrowserAction,
   idempotencyKey?: string,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<ToolCallResult> {
   const parsed = parseBrowserAction(action);
   const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
   if (fields.length === 0) return toolError("fill_form_requires_fields", "fill_form needs a non-empty fields array, each with a target and value.");
   const results: Array<{ index: number; status: string; reason?: string }> = [];
   let strongest: BrowserFloorDecision | undefined;
-  let lastEvent: Extract<BridgeResultEvent, { ok: true }> | undefined;
+  let lastEvent: Extract<BrowserCommandResult, { ok: true }> | undefined;
   for (let index = 0; index < fields.length; index += 1) {
-    const fillAction = { kind: "fill", ...fields[index] };
-    const verdict = evaluateHostFloor({ session: session as never, action: fillAction });
-    strongest = strongest ? strongestDecision(strongest, verdict.decision) : verdict.decision;
-    if (!verdict.dispatchAllowed) {
-      results.push({ index, status: "blocked", reason: verdict.decision.reasons.at(-1) ?? "blocked_by_floor" });
-      return toolJson({ ...preventedActionEnvelope("blocked_by_floor", strongest), stoppedAt: index, fields: results }, true);
-    }
+    const fillAction = parseBrowserAction({ kind: "fill", ...fields[index] });
     const fieldIdempotencyKey = idempotencyKey
       ? createHash("sha256").update(`${idempotencyKey}:${index}`).digest("base64url")
       : undefined;
-    const event = await bridge.dispatch(sessionId, verdict.action, {
+    const event = await host.dispatch(sessionId, fillAction, {
       ...(fieldIdempotencyKey ? { idempotencyKey: fieldIdempotencyKey } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(signal ? { signal } : {}),
     });
+    const eventDecision = event.decision;
+    strongest = strongest ? strongestDecision(strongest, eventDecision) : eventDecision;
     if (!event.ok) {
       results.push({ index, status: "failed", reason: event.errorCode });
-      return toolJson({ ...agentActionEnvelope(event, event.decision ?? strongest, session), stoppedAt: index, fields: results }, true);
+      return toolJson({ ...agentActionEnvelope(event, strongest, session), stoppedAt: index, fields: results }, true);
     }
     lastEvent = event;
-    strongest = event.decision ? strongestDecision(strongest, event.decision) : strongest;
-    const result = isObject(event.result) ? event.result : {};
-    const status = typeof result.actionStatus === "string" ? result.actionStatus : typeof result.status === "string" ? result.status : "verified";
-    results.push({ index, status, ...(typeof result.reason === "string" ? { reason: result.reason } : {}) });
+    const status = event.status;
+    results.push({ index, status, ...(event.reason ? { reason: event.reason } : {}) });
     if (status !== "verified" && status !== "dispatched_unverified") {
       return toolJson({ ...agentActionEnvelope(event, strongest, session), ok: false, errorCode: "fill_form_field_incomplete", stoppedAt: index, fields: results }, true);
     }
   }
-  const normalized = lastEvent
-    ? agentActionEnvelope(lastEvent, strongest!, session)
-    : normalizeAgentActionResult({ status: "verified", outcome: "completed" });
+  if (!lastEvent || !strongest) return toolError("runner_contract_invalid", "The form batch produced no authoritative result.");
+  const normalized = agentActionEnvelope(lastEvent, strongest, session);
   return toolJson({ ...normalized, filled: results.length, fields: results });
 }
 
@@ -496,30 +408,24 @@ function actionForTool(name: string, args: Record<string, unknown>): unknown {
     };
   }
   if (name === "browser.screenshot") {
-    const region = isObject(args.region) ? args.region : null;
-    const clip = region && ["x", "y", "width", "height"].every((key) => Number.isFinite(Number(region[key])))
-      ? { x: Number(region.x), y: Number(region.y), width: Number(region.width), height: Number(region.height) }
-      : undefined;
     return {
       kind: "screenshot",
       fullPage: Boolean(args.fullPage),
-      inline: true,
-      ...(args.device === "mobile" || args.device === "desktop" ? { device: args.device } : {}),
-      waitMs: clampNumber(args.waitMs, 0, 0, 10_000),
-      ...(clip ? { clip } : {}),
-      ...(Array.isArray(args.sensitiveZones) ? { sensitiveZones: args.sensitiveZones } : {}),
+      ...(args.region !== undefined ? { clip: args.region } : {}),
+      ...(args.sensitiveZones !== undefined ? { sensitiveZones: args.sensitiveZones } : {}),
       ...(args.format === "jpeg" ? { format: "jpeg", quality: clampNumber(args.quality, 70, 1, 100) } : {}),
     };
   }
   return isObject(args.action) ? args.action : {};
 }
 
-export function prepareActionForDispatch(raw: unknown): unknown {
-  if (!isObject(raw) || raw.kind !== "set_files") return raw;
-  if (!Array.isArray(raw.files)) throw new Error("files_required");
-  if (raw.files.length > 8) throw new Error("file_count_exceeded");
+export function prepareActionForDispatch(raw: unknown): BrowserAction {
+  const parsed = parseBrowserAction(raw);
+  if (parsed.kind !== "set_files") return parsed;
+  if (!Array.isArray(parsed.files)) throw new Error("files_required");
+  if (parsed.files.length > 8) throw new Error("file_count_exceeded");
   let total = 0;
-  const files = raw.files.map((value) => {
+  const files = parsed.files.map((value) => {
     if (typeof value !== "string" || !value || !path.isAbsolute(value) || /[*?]/.test(value)) throw new Error("invalid_file_path");
     const stat = fs.lstatSync(value, { throwIfNoEntry: false });
     if (!stat) throw new Error("file_not_found");
@@ -533,7 +439,7 @@ export function prepareActionForDispatch(raw: unknown): unknown {
     if (!hasAllowedFileSignature(value, extension)) throw new Error("file_type_not_allowed");
     return value;
   });
-  return { ...raw, files };
+  return { ...parsed, files };
 }
 
 function hasAllowedFileSignature(file: string, extension: string): boolean {
@@ -554,78 +460,75 @@ function hasAllowedFileSignature(file: string, extension: string): boolean {
   }
 }
 
-function screenshotToolResult(event: Extract<BridgeResultEvent, { ok: true }>, decision: BrowserFloorDecision, args: Record<string, unknown>): ToolCallResult {
+function screenshotToolResult(event: Extract<BrowserCommandResult, { ok: true }>): ToolCallResult {
   const raw = event.result;
   const commandMetadata = publicCommandMetadata(event);
   if (!isObject(raw) || typeof raw.dataUrl !== "string") return toolError("screenshot_unavailable", "The browser runtime returned no screenshot bytes.", commandMetadata);
+  if (!SCREENSHOT_MASK_DISPOSITIONS.has(String(raw.maskDisposition))) {
+    return toolError("runner_contract_invalid", "The browser runtime returned invalid screenshot safety metadata.", commandMetadata);
+  }
   const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(raw.dataUrl);
-  if (!match?.[2]) return toolError("invalid_screenshot", "The browser runtime returned malformed screenshot bytes.", commandMetadata);
-  const imageMime = `image/${match[1]}`;
-  const buffer = Buffer.from(match[2], "base64");
-  if (buffer.length > SCREENSHOT_BYTES_CAP) return toolError("result_too_large", "Screenshot exceeds the 16 MiB result bound.", { recommendedDelivery: "file", ...commandMetadata });
-  const metadata = { ...raw } as Record<string, unknown>;
+  const format = match?.[1];
+  const encoded = match?.[2];
+  if ((format !== "png" && format !== "jpeg") || !encoded) {
+    return toolError("invalid_screenshot", "The browser runtime returned malformed screenshot bytes.", commandMetadata);
+  }
+  const buffer = Buffer.from(encoded, "base64");
+  if (encoded.length % 4 !== 0 || buffer.toString("base64") !== encoded) {
+    return toolError("invalid_screenshot", "The browser runtime returned malformed screenshot bytes.", commandMetadata);
+  }
+  if (!hasScreenshotSignature(buffer, format)) {
+    return toolError("invalid_screenshot", "The browser runtime returned malformed screenshot bytes.", commandMetadata);
+  }
+  if (buffer.length > SCREENSHOT_BYTES_CAP) return toolError("result_too_large", "Screenshot exceeds the 16 MiB result bound; use JPEG, a region, or a smaller viewport.", commandMetadata);
+  const redacted = redactBrowserResult(raw);
+  if (!redacted || redacted.kind !== "screenshot" || typeof redacted.dataUrl !== "string") {
+    return toolError("invalid_screenshot", "The browser runtime returned invalid screenshot data.", commandMetadata);
+  }
+  const imageMime = `image/${format}`;
+  const metadata = { ...redacted } as Record<string, unknown>;
   delete metadata.dataUrl;
-  delete metadata.inline;
-  if (!new Set(["mask_applied", "mask_not_configured", "mask_not_applicable"]).has(String(metadata.maskDisposition))) {
-    metadata.maskDisposition = "mask_not_configured";
-  }
-  const delivery = args.delivery === "file" || args.delivery === "inline" ? args.delivery : "image";
-  const common = { ok: true, delivery, decision: publicDecision(decision), ...metadata, ...commandMetadata };
-  if (delivery === "image") {
-    return { content: [{ type: "text", text: JSON.stringify(common) }, { type: "image", data: match[2], mimeType: imageMime }] };
-  }
-  if (delivery === "inline") {
-    if (raw.dataUrl.length > INLINE_SCREENSHOT_CAP) return toolError("result_too_large", "Inline screenshot exceeds the 1,000,000 character bound.", { recommendedDelivery: "image", ...commandMetadata });
-    return toolJson({ ...common, dataUrl: raw.dataUrl });
-  }
-  try {
-    return toolJson(writeScreenshotFile(buffer, common, args, match[1] === "jpeg" ? "jpg" : "png"));
-  } catch (error) {
-    return toolError(errorCode(error), error instanceof Error ? error.message : String(error), commandMetadata);
-  }
+  delete metadata.title;
+  const screenshotOrigin = typeof metadata.origin === "string" ? metadata.origin : "unknown";
+  const capturedAt = typeof metadata.capturedAt === "string" ? metadata.capturedAt : undefined;
+  const common = {
+    ok: true,
+    ...metadata,
+    provenance: publicPageProvenance(screenshotOrigin, capturedAt),
+    ...commandMetadata,
+  };
+  return { resultType: "complete", content: [{ type: "text", text: JSON.stringify(common) }, { type: "image", data: encoded, mimeType: imageMime }] };
 }
 
-function writeScreenshotFile(buffer: Buffer, metadata: Record<string, unknown>, args: Record<string, unknown>, ext = "png") {
-  const rawDirectory = requiredString(args.outputDirectory, "outputDirectory");
-  if (!path.isAbsolute(rawDirectory)) throw new Error("output_directory_must_be_absolute");
-  const directory = path.resolve(rawDirectory);
-  fs.mkdirSync(directory, { recursive: true });
-  const requested = typeof args.filename === "string" ? path.basename(args.filename.trim()) : "";
-  const base = requested && new RegExp(`^[A-Za-z0-9._-]+\\.${ext}$`, "i").test(requested)
-    ? requested
-    : `newton-browser-${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
-  let output = path.join(directory, base);
-  if (path.dirname(output) !== directory) throw new Error("invalid_output_filename");
-  if (fs.existsSync(output)) output = path.join(directory, `${path.parse(base).name}-${Date.now()}.${ext}`);
-  fs.writeFileSync(output, buffer, { flag: "wx", mode: 0o600 });
-  return {
-    ...metadata,
-    path: output,
-    filename: path.basename(output),
-    bytes: buffer.length,
-    sha256: createHash("sha256").update(buffer).digest("hex"),
-  };
+function hasScreenshotSignature(buffer: Buffer, format: string): boolean {
+  if (format === "png") return buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return format === "jpeg" && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
 }
 
 export function toolList(): Array<Record<string, unknown>> {
+  if (cachedToolCatalog) return cachedToolCatalog;
   const observationOutput = {
     format: { type: "string", enum: ["compact", "json"] },
     includeGeometry: { type: "boolean" },
     includeInteractive: { type: "boolean" },
     query: { type: "string", maxLength: 120 },
-    roles: { type: "array", maxItems: 12, items: { type: "string", maxLength: 80 } },
-    limit: { type: "number", minimum: 1, maximum: 200 },
+    roles: { type: "array", minItems: 1, maxItems: 12, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 80 } },
+    limit: { type: "integer", minimum: 1, maximum: 200 },
     mode: { type: "string", enum: ["full", "diff", "text"] },
-    maxNodes: { type: "number", minimum: 1, maximum: 250 },
-    maxChars: { type: "number", minimum: 200, maximum: 200_000 },
+    maxNodes: { type: "integer", minimum: 1, maximum: 250 },
+    maxChars: { type: "integer", minimum: 200, maximum: 200_000 },
   };
-  return [
+  cachedToolCatalog = [
     tool("browser.status", "Report readiness; detail defaults to compact.", { detail: { type: "string", enum: ["compact", "full"] } }),
     tool("browser.session.start", "Start an isolated origin-scoped browser session; optionally select a browser and opaque identity.", {
-      origin: { type: "string" },
-      allowedOrigins: { type: "array", items: { type: "string" } },
-      goal: { type: "string" },
-      instanceLabel: { type: "string" },
+      origin: { type: "string", minLength: 8, maxLength: ORIGIN_CAP },
+      allowedOrigins: {
+        type: "array",
+        maxItems: 31,
+        uniqueItems: true,
+        description: "Additional exact HTTP(S) origins; do not repeat the primary origin.",
+        items: { type: "string", minLength: 8, maxLength: ORIGIN_CAP },
+      },
       identityId: { type: "string", pattern: "^nbi_[a-f0-9]{32}$" },
       browser: { type: "string", enum: ["chrome", "edge"] },
       observe: {
@@ -635,31 +538,26 @@ export function toolList(): Array<Record<string, unknown>> {
         ],
       },
     }, ["origin"]),
-    tool("browser.observe", "Observe a session tab; compact geometry-free output is default.", { sessionId: { type: "string" }, ...observationOutput }, ["sessionId"]),
+    tool("browser.observe", "Observe a session page; compact geometry-free output is default.", { sessionId: sessionIdSchema(), ...observationOutput }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", {
-      sessionId: { type: "string" },
+      sessionId: sessionIdSchema(),
       action: BROWSER_ACT_JSON_SCHEMA,
       idempotencyKey: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" },
       timeoutMs: { type: "integer", minimum: 1, maximum: 300000 },
     }, ["sessionId", "action"]),
     tool("browser.screenshot", "Capture and deliver a screenshot.", {
-      sessionId: { type: "string" },
-      delivery: { type: "string", enum: ["image", "file", "inline"] },
-      outputDirectory: { type: "string" },
-      filename: { type: "string" },
+      sessionId: sessionIdSchema(),
       fullPage: { type: "boolean" },
-      device: { type: "string", enum: ["mobile", "desktop"] },
-      waitMs: { type: "number" },
-      region: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" } } },
+      region: { type: "object", additionalProperties: false, required: ["x", "y", "width", "height"], properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 } } },
       format: { type: "string", enum: ["png", "jpeg"] },
-      quality: { type: "number" },
+      quality: { type: "integer", minimum: 1, maximum: 100 },
       sensitiveZones: {
         type: "array", minItems: 1, maxItems: 32,
         items: {
           type: "object", additionalProperties: false, minProperties: 1, maxProperties: 1,
           oneOf: [{ required: ["ref"] }, { required: ["selector"] }, { required: ["name"] }, { required: ["label"] }],
           properties: {
-            ref: { type: "string", minLength: 1, maxLength: 240 },
+            ref: { type: "string", pattern: BROWSER_COMPOSITE_REF_PATTERN_SOURCE },
             selector: { type: "string", minLength: 1, maxLength: 240 },
             name: { type: "string", minLength: 1, maxLength: 240 },
             label: { type: "string", minLength: 1, maxLength: 240 },
@@ -667,24 +565,157 @@ export function toolList(): Array<Record<string, unknown>> {
         },
       },
     }, ["sessionId"]),
-    tool("browser.console", "Read or filter buffered console text; clear:true empties it.", {
-      sessionId: { type: "string" }, level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string" }, limit: { type: "number" }, clear: { type: "boolean" },
+    tool("browser.console", "Read or filter buffered console text.", {
+      sessionId: sessionIdSchema(), level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string", minLength: 1, maxLength: 240 }, limit: { type: "integer", minimum: 1, maximum: 500 },
     }, ["sessionId"]),
     tool("browser.network", "List request metadata or fetch one granted-origin text body; never returns headers or opaque bodies.", {
-      sessionId: { type: "string" }, urlPattern: { type: "string" }, requestId: { type: "string" }, limit: { type: "number" },
+      sessionId: sessionIdSchema(), urlPattern: { type: "string", minLength: 1, maxLength: 500 }, requestId: { type: "string", minLength: 1, maxLength: 240 }, limit: { type: "integer", minimum: 1, maximum: 500 },
     }, ["sessionId"]),
     tool("browser.sessions.list", "List this host's local sessions.", {}),
-    tool("browser.session.finalize", "Finalize and close a session after confirmed cleanup.", {
-      sessionId: { type: "string" },
-      disposition: { type: "string", enum: ["close"] },
-    }, ["sessionId", "disposition"]),
-    tool("browser.session.stop", "Stop one local session.", { sessionId: { type: "string" } }, ["sessionId"]),
+    tool("browser.session.stop", "Stop one local session.", { sessionId: sessionIdSchema() }, ["sessionId"]),
     tool("browser.stop_all", "Stop all local sessions.", {}),
-  ];
+  ].map((entry) => deepFreeze(entry));
+  if (cachedToolCatalog.length !== TOOL_NAMES.size
+    || cachedToolCatalog.some((entry) => typeof entry.name !== "string" || !TOOL_NAMES.has(entry.name))) {
+    throw new Error("tool_catalog_invalid");
+  }
+  Object.freeze(cachedToolCatalog);
+  return cachedToolCatalog;
 }
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []): Record<string, unknown> {
   return { name, description, annotations: annotationsForTool(name), inputSchema: { type: "object", properties, ...(required.length ? { required } : {}), additionalProperties: false } };
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object") return value;
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function sessionIdSchema(): Record<string, unknown> {
+  return { type: "string", minLength: 1, maxLength: SESSION_ID_CAP, pattern: DIRECT_SESSION_ID_PATTERN };
+}
+
+const OBSERVATION_ARGUMENTS = Object.freeze([
+  "format", "includeGeometry", "includeInteractive", "query", "roles", "limit",
+  "mode", "maxNodes", "maxChars",
+] as const);
+
+function validateToolArguments(name: string, args: Record<string, unknown>): void {
+  const exact = (allowed: readonly string[]): void => {
+    if (Object.keys(args).some((key) => !allowed.includes(key))) throw new Error("invalid_arguments");
+  };
+  if (name === "browser.status") {
+    exact(["detail"]);
+    optionalEnum(args.detail, ["compact", "full"]);
+    return;
+  }
+  if (name === "browser.session.start") {
+    exact(["origin", "allowedOrigins", "identityId", "browser", "observe"]);
+    requiredHttpOrigin(args.origin);
+    normalizeAllowedOrigins(args.allowedOrigins, requiredHttpOrigin(args.origin));
+    if (args.identityId !== undefined) requiredIdentityId(args.identityId);
+    if (args.browser !== undefined) requiredBrowserFamily(args.browser);
+    if (args.observe !== undefined && args.observe !== false) {
+      if (!isObject(args.observe)) throw new Error("invalid_arguments");
+      validateObservationArguments(args.observe);
+    }
+    return;
+  }
+  if (name === "browser.observe") {
+    exact(["sessionId", ...OBSERVATION_ARGUMENTS]);
+    requiredString(args.sessionId, "sessionId");
+    validateObservationArguments(args);
+    return;
+  }
+  if (name === "browser.act") {
+    exact(["sessionId", "action", "idempotencyKey", "timeoutMs"]);
+    requiredString(args.sessionId, "sessionId");
+    const action = parseBrowserAction(args.action);
+    if (["observe", "screenshot", "console", "network"].includes(action.kind)) throw new Error("invalid_arguments");
+    if (args.idempotencyKey !== undefined
+      && (typeof args.idempotencyKey !== "string" || !/^[A-Za-z0-9_-]{8,128}$/u.test(args.idempotencyKey))) {
+      throw new Error("invalid_arguments");
+    }
+    optionalInteger(args.timeoutMs, 1, 300_000);
+    return;
+  }
+  if (name === "browser.screenshot") {
+    exact(["sessionId", "fullPage", "region", "format", "quality", "sensitiveZones"]);
+    requiredString(args.sessionId, "sessionId");
+    optionalBoolean(args.fullPage);
+    optionalEnum(args.format, ["png", "jpeg"]);
+    optionalInteger(args.quality, 1, 100);
+    if (args.quality !== undefined && args.format !== "jpeg") throw new Error("invalid_arguments");
+    parseBrowserAction(actionForTool(name, args));
+    return;
+  }
+  if (name === "browser.console") {
+    exact(["sessionId", "level", "pattern", "limit"]);
+    requiredString(args.sessionId, "sessionId");
+    optionalEnum(args.level, ["log", "info", "warn", "error", "debug"]);
+    optionalString(args.pattern, 240);
+    optionalInteger(args.limit, 1, 500);
+    return;
+  }
+  if (name === "browser.network") {
+    exact(["sessionId", "urlPattern", "requestId", "limit"]);
+    requiredString(args.sessionId, "sessionId");
+    optionalString(args.urlPattern, 500);
+    optionalString(args.requestId, 240);
+    optionalInteger(args.limit, 1, 500);
+    return;
+  }
+  if (name === "browser.session.stop") {
+    exact(["sessionId"]);
+    requiredString(args.sessionId, "sessionId");
+    return;
+  }
+  if (name === "browser.sessions.list" || name === "browser.stop_all") {
+    exact([]);
+    return;
+  }
+  throw new Error("unknown_tool");
+}
+
+function validateObservationArguments(args: Record<string, unknown>): void {
+  if (Object.keys(args).some((key) => key !== "sessionId" && !OBSERVATION_ARGUMENTS.includes(key as typeof OBSERVATION_ARGUMENTS[number]))) {
+    throw new Error("invalid_arguments");
+  }
+  optionalEnum(args.format, ["compact", "json"]);
+  optionalBoolean(args.includeGeometry);
+  optionalBoolean(args.includeInteractive);
+  optionalString(args.query, 120, true);
+  if (args.roles !== undefined && (!Array.isArray(args.roles) || args.roles.length === 0 || args.roles.length > 12
+    || args.roles.some((role) => typeof role !== "string" || !role.trim() || role.length > 80 || /[\u0000-\u001f\u007f]/u.test(role))
+    || new Set(args.roles).size !== args.roles.length)) {
+    throw new Error("invalid_arguments");
+  }
+  optionalInteger(args.limit, 1, 200);
+  optionalEnum(args.mode, ["full", "diff", "text"]);
+  optionalInteger(args.maxNodes, 1, 250);
+  optionalInteger(args.maxChars, 200, 200_000);
+}
+
+function optionalEnum(value: unknown, allowed: readonly string[]): void {
+  if (value !== undefined && (typeof value !== "string" || !allowed.includes(value))) throw new Error("invalid_arguments");
+}
+
+function optionalBoolean(value: unknown): void {
+  if (value !== undefined && typeof value !== "boolean") throw new Error("invalid_arguments");
+}
+
+function optionalInteger(value: unknown, minimum: number, maximum: number): void {
+  if (value !== undefined && (!Number.isInteger(value) || Number(value) < minimum || Number(value) > maximum)) {
+    throw new Error("invalid_arguments");
+  }
+}
+
+function optionalString(value: unknown, maximum: number, allowEmpty = false): void {
+  if (value !== undefined && (typeof value !== "string" || value.length > maximum || (!allowEmpty && value.length === 0))) {
+    throw new Error("invalid_arguments");
+  }
 }
 
 function requiredIdentityId(value: unknown): string {
@@ -697,61 +728,18 @@ function requiredBrowserFamily(value: unknown): "chrome" | "edge" {
   return value;
 }
 
-function publicCommandMetadata(event: BridgeResultEvent) {
+function publicCommandMetadata(event: BrowserCommandResult) {
   return {
-    sessionEpoch: event.sessionEpoch,
     sequence: event.sequence,
     outcome: event.outcome,
     retrySafe: event.retrySafe,
-    ...(event.lateResultDiscarded ? { lateResultDiscarded: true } : {}),
+    status: event.status,
   };
-}
-
-function finalizationRecord(bridge: BrowserHost, sessionId: string): FinalizationRecord | null {
-  const ledger = finalizationLedgers.get(bridge);
-  if (!ledger) return null;
-  const now = Date.now();
-  for (const [key, record] of ledger) {
-    if (now - record.createdAt > FINALIZATION_LEDGER_TTL_MS) ledger.delete(key);
-  }
-  return ledger.get(sessionId) ?? null;
-}
-
-function storeFinalizationRecord(
-  bridge: BrowserHost,
-  sessionId: string,
-  disposition: FinalizationDisposition,
-  event: Extract<BridgeResultEvent, { ok: true }>,
-): void {
-  const ledger = finalizationLedgers.get(bridge) ?? new Map<string, FinalizationRecord>();
-  const rawResult = isObject(event.result) ? event.result : {};
-  const storedEvent: Extract<BridgeResultEvent, { ok: true }> = {
-    commandId: event.commandId,
-    sessionEpoch: event.sessionEpoch,
-    sequence: event.sequence,
-    ok: true,
-    outcome: "completed",
-    retrySafe: false,
-    result: {
-      finalized: rawResult.finalized === true,
-      disposition,
-      ...(Number.isSafeInteger(rawResult.tabId) ? { tabId: rawResult.tabId } : {}),
-      ...(typeof rawResult.tabKept === "boolean" ? { tabKept: rawResult.tabKept } : {}),
-    },
-  };
-  ledger.delete(sessionId);
-  ledger.set(sessionId, { disposition, event: storedEvent, createdAt: Date.now() });
-  while (ledger.size > FINALIZATION_LEDGER_CAP) {
-    const oldest = ledger.keys().next().value;
-    if (oldest === undefined) break;
-    ledger.delete(oldest);
-  }
-  finalizationLedgers.set(bridge, ledger);
 }
 
 function toolJson(value: unknown, isError = false, errorCodeValue?: string): ToolCallResult {
   const normalized = errorCodeValue && isObject(value) ? { ...value, errorCode: errorCodeValue } : value;
-  return { content: [{ type: "text", text: JSON.stringify(normalized) }], ...(isError ? { isError: true } : {}) };
+  return { resultType: "complete", content: [{ type: "text", text: JSON.stringify(normalized) }], ...(isError ? { isError: true } : {}) };
 }
 
 function toolError(code: string, message: string, detail: Record<string, unknown> = {}): ToolCallResult {
@@ -762,66 +750,159 @@ function toolError(code: string, message: string, detail: Record<string, unknown
 // (the model). The driver produces raw accessible names, values, and page text on
 // the private driver transport; the host is the exfiltration boundary, so redaction runs here
 // (as the driver's own comment documents). Only real observation kinds are touched —
-// finalize acks and other control results pass through unchanged.
-function redactObservationResult(result: unknown): any {
+// control acknowledgements and other non-observation results pass through unchanged.
+function redactObservationResult(result: unknown): unknown {
   if (result && typeof result === "object" && !Array.isArray(result)) {
     const kind = (result as Record<string, unknown>).kind;
     if (kind === "observation" || kind === "observation_delta" || kind === "observation_text" || kind === "console_log" || kind === "network_log") {
-      return redactBrowserResult(result) ?? result;
+      return redactBrowserResult(result);
     }
   }
   return result;
 }
 
-function publicDecision(decision: BrowserFloorDecision | undefined) {
+function publicDecision(decision: BrowserFloorDecision) {
+  const rawReason = decision.reason;
+  const reason = typeof rawReason === "string" ? rawReason.slice(0, 120) : undefined;
   return {
-    class: decision?.class ?? "blocked",
-    commitBoundary: decision?.commitBoundary ?? "none",
-    reasons: Array.isArray(decision?.reasons) ? decision.reasons : [],
+    class: decision.class,
+    commitBoundary: decision.commitBoundary,
+    ...(reason ? { reason } : {}),
   };
 }
 
 function strongestDecision(first: BrowserFloorDecision, second?: BrowserFloorDecision): BrowserFloorDecision {
   if (!second) return first;
-  const classes = ["read_only", "agentic", "approval_required", "blocked"];
+  const classes = ["read_only", "agentic", "blocked"];
   const boundaries = ["none", "draft", "commit", "external_effect"];
-  const strongestClass = classes.indexOf(second.class) > classes.indexOf(first.class) ? second.class : first.class;
-  const firstBoundary = first.commitBoundary ?? "none";
-  const secondBoundary = second.commitBoundary ?? "none";
-  const strongestBoundary = boundaries.indexOf(secondBoundary) > boundaries.indexOf(firstBoundary) ? secondBoundary : firstBoundary;
-  return { ...first, ...second, class: strongestClass, commitBoundary: strongestBoundary, reasons: [...new Set([...first.reasons, ...second.reasons])] };
+  const secondClassIsStronger = classes.indexOf(second.class) > classes.indexOf(first.class);
+  const strongestClass = secondClassIsStronger ? second.class : first.class;
+  const firstBoundary = first.commitBoundary;
+  const secondBoundary = second.commitBoundary;
+  const secondBoundaryIsStronger = boundaries.indexOf(secondBoundary) > boundaries.indexOf(firstBoundary);
+  const strongestBoundary = secondBoundaryIsStronger ? secondBoundary : firstBoundary;
+  const reasonSource = secondClassIsStronger || (second.class === first.class && secondBoundaryIsStronger) ? second : first;
+  const reason = reasonSource.reason ?? (reasonSource === first ? second.reason : first.reason);
+  return {
+    class: strongestClass,
+    commitBoundary: strongestBoundary,
+    ...(reason ? { reason } : {}),
+  };
 }
 
-function negotiateProtocol(params: Record<string, unknown>): string | null {
-  const requested = typeof params.protocolVersion === "string" ? params.protocolVersion : null;
-  if (requested && SUPPORTED_MCP_PROTOCOLS.includes(requested as never)) return requested;
-  const offered = Array.isArray(params.protocolVersions) ? params.protocolVersions.filter((value): value is string => typeof value === "string") : [];
-  for (const candidate of [...SUPPORTED_MCP_PROTOCOLS].reverse()) if (offered.includes(candidate)) return candidate;
-  return requested || offered.length > 0 ? null : CURRENT_PROTOCOL;
+function response(id: JsonRpcId, result: unknown): ModernMcpResponse {
+  const complete = isObject(result)
+    ? {
+        ...result,
+        resultType: "complete",
+        _meta: {
+          ...(isObject(result._meta) ? result._meta : {}),
+          "io.modelcontextprotocol/serverInfo": { name: "newton-browser", version: NEWTON_BROWSER_VERSION },
+        },
+      }
+    : {
+        value: result,
+        resultType: "complete",
+        _meta: { "io.modelcontextprotocol/serverInfo": { name: "newton-browser", version: NEWTON_BROWSER_VERSION } },
+      };
+  return { jsonrpc: "2.0", id, result: complete };
 }
 
-function response(id: JsonRpcId, result: unknown): JsonRpcResponse {
-  return { jsonrpc: "2.0", id, result };
-}
-
-function errorResponse(id: JsonRpcId, code: number, message: string, data?: unknown): JsonRpcResponse {
+function errorResponse(id: JsonRpcId, code: number, message: string, data?: unknown): ModernMcpResponse {
   return { jsonrpc: "2.0", id, error: { code, message, ...(data === undefined ? {} : { data }) } };
 }
 
-function writeMessage(writable: Writable, message: JsonRpcResponse, mode: MessageMode): void {
-  const body = JSON.stringify(message);
-  writable.write(mode === "json-line" ? `${body}\n` : `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+function validateRequestMetadata(params: Record<string, unknown> | undefined):
+  | { code: number; message: string; data: Record<string, unknown> }
+  | null {
+  const metadata = isObject(params?._meta) ? params._meta : {};
+  const requested = metadata["io.modelcontextprotocol/protocolVersion"];
+  if (typeof requested !== "string" || requested.length === 0 || requested.length > 80) {
+    return {
+      code: -32602,
+      message: "Missing MCP protocol version metadata.",
+      data: { errorCode: "protocol_version_required" },
+    };
+  }
+  if (requested !== MODERN_MCP_PROTOCOL_VERSION) {
+    return {
+      code: -32022,
+      message: "Unsupported MCP protocol version.",
+      data: {
+        supported: [MODERN_MCP_PROTOCOL_VERSION],
+        requested,
+      },
+    };
+  }
+  if (!isObject(metadata["io.modelcontextprotocol/clientCapabilities"])) {
+    return {
+      code: -32602,
+      message: "Missing MCP client capabilities metadata.",
+      data: { errorCode: "client_capabilities_required" },
+    };
+  }
+  const clientInfo = metadata["io.modelcontextprotocol/clientInfo"];
+  if (clientInfo !== undefined && (!isObject(clientInfo)
+    || typeof clientInfo.name !== "string" || clientInfo.name.length === 0 || clientInfo.name.length > 240
+    || typeof clientInfo.version !== "string" || clientInfo.version.length === 0 || clientInfo.version.length > 120)) {
+    return {
+      code: -32602,
+      message: "Invalid MCP client info metadata.",
+      data: { errorCode: "invalid_client_info" },
+    };
+  }
+  return null;
+}
+
+function hasExactParameterKeys(params: Record<string, unknown> | undefined, allowed: readonly string[]): boolean {
+  return Boolean(params && Object.keys(params).every((key) => allowed.includes(key)));
+}
+
+async function withAbort<T>(operation: Promise<T>, signal: AbortSignal, cleanup: () => Promise<void>): Promise<T> {
+  if (signal.aborted) {
+    await cleanup();
+    throw new DOMException("The MCP request was cancelled.", "AbortError");
+  }
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      void (async () => {
+        try { await cleanup(); } catch { /* retained session remains visible for explicit cleanup */ }
+        reject(new DOMException("The MCP request was cancelled.", "AbortError"));
+      })();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function normalizeAllowedOrigins(value: unknown, origin: string): string[] {
   if (value === undefined) return [origin];
-  if (!Array.isArray(value) || value.length === 0) throw new Error("invalid_origin");
+  if (!Array.isArray(value)) throw new Error("invalid_origin");
   if (value.length + 1 > 32) throw new Error("invalid_origin");
-  return [...new Set([origin, ...value.map(requiredHttpOrigin)])];
+  const secondary = value.map(requiredHttpOrigin);
+  if (secondary.includes(origin) || new Set(secondary).size !== secondary.length) throw new Error("invalid_origin");
+  return [origin, ...secondary];
 }
 
 function requiredHttpOrigin(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("origin_required");
+  if (value.length > ORIGIN_CAP || /[\u0000-\u001f\u007f]/u.test(value)) throw new Error("invalid_origin");
   const trimmed = value.trim();
   const url = new URL(trimmed);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("invalid_origin");
@@ -830,18 +911,16 @@ function requiredHttpOrigin(value: unknown): string {
   return url.origin;
 }
 
-function asObject(value: unknown, name: string): Record<string, unknown> {
-  if (!isObject(value)) throw new Error(`${name}_must_be_an_object`);
-  return value;
-}
-
-function isObject(value: unknown): value is Record<string, any> {
+function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function requiredString(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name}_required`);
-  return value.trim();
+  if (typeof value !== "string" || value !== value.trim() || value.length > SESSION_ID_CAP
+    || !DIRECT_SESSION_ID.test(value)) {
+    throw new Error(`${name}_required`);
+  }
+  return value;
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -853,6 +932,16 @@ function errorCode(error: unknown): string {
   const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
     ? (error as { code: string }).code
     : "";
-  if (/^[a-z0-9_]{1,120}$/iu.test(code)) return code.toLowerCase();
-  return String((error as Error)?.message ?? error ?? "tool_error").split(":")[0]!.replace(/[^a-z0-9_]+/gi, "_").toLowerCase();
+  if (/^[a-z][a-z0-9_]{0,79}$/u.test(code)) return code;
+  const message = error instanceof Error ? error.message : "";
+  return /^[a-z][a-z0-9_]{0,79}$/u.test(message) ? message : "tool_error";
+}
+
+function publicErrorMessage(code: string): string {
+  if (code === "unknown_session") return "The session does not exist.";
+  if (code === "invalid_origin" || code === "origin_required") return "The request requires one exact HTTP(S) origin.";
+  if (code === "invalid_identity_id") return "The identity ID is invalid.";
+  if (code === "invalid_browser_family") return "The browser must be Chrome or Edge.";
+  if (code === "direct_cleanup_uncertain") return "Browser cleanup could not be confirmed.";
+  return "Newton Browser rejected the request.";
 }

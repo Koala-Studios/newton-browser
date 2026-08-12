@@ -7,17 +7,18 @@ import test from "node:test";
 import { startFixtureServers } from "./fixtures/server.mjs";
 import { classifyCompletedContainmentAttempt, classifyContainmentAttempt, classifyDestinationRequest, classifyFixtureObserveFailure, classifyFixturePrimaryCounter, classifyInitialNavigationFailure, classifySessionStartFailure, containmentFixtureDocumentChecks } from "../scripts/smoke/origin-containment-diagnostics.mjs";
 
-test("containment acceptance requires an honest prevented outcome", () => {
+test("containment acceptance requires an authoritative prevented outcome", () => {
   assert.equal(classifyContainmentAttempt({ outcome: "prevented", errorCode: "ungranted_mutation" }), "prevented");
-  assert.equal(classifyContainmentAttempt({ result: { outcome: "prevented", errorCode: "ungranted_target" } }), "prevented");
+  assert.equal(classifyContainmentAttempt({ outcome: "prevented", errorCode: "ungranted_target" }), "prevented");
   assert.equal(classifyContainmentAttempt({ outcome: "prevented", errorCode: "unsupported_ungranted_request" }), "prevented");
   assert.equal(classifyContainmentAttempt({ outcome: "prevented", errorCode: "post_action_network_write" }), "prevented");
   assert.equal(classifyContainmentAttempt({ outcome: "completed", errorCode: "ungranted_mutation" }), "completed");
-  assert.equal(classifyContainmentAttempt({ result: { outcome: "completed", status: "blocked" } }), "completed");
-  assert.equal(classifyContainmentAttempt({ result: { outcome: "outcome_unknown", status: "blocked" } }), "outcome_unknown");
+  assert.equal(classifyContainmentAttempt({ outcome: "completed", status: "blocked" }), "completed");
+  assert.equal(classifyContainmentAttempt({ outcome: "outcome_unknown", status: "blocked" }), "outcome_unknown");
+  assert.equal(classifyContainmentAttempt({ result: { outcome: "prevented", errorCode: "ungranted_target" } }), "other");
   assert.equal(classifyContainmentAttempt({ outcome: "prevented", errorCode: "secret_page_value" }), "other");
   assert.equal(classifyCompletedContainmentAttempt({ ok: true, outcome: "completed", retrySafe: false, status: "verified" }), "completed");
-  assert.equal(classifyCompletedContainmentAttempt({ result: { ok: true, outcome: "completed", retrySafe: false, status: "dispatched_unverified" } }), "completed");
+  assert.equal(classifyCompletedContainmentAttempt({ outcome: "completed", retrySafe: false, status: "dispatched_unverified" }), "other");
   assert.equal(classifyCompletedContainmentAttempt({ result: { ok: false, outcome: "completed", retrySafe: false, status: "verified" } }), "other");
   assert.equal(classifyCompletedContainmentAttempt({ ok: true, outcome: "completed", retrySafe: true, status: "verified" }), "other");
   assert.equal(classifyCompletedContainmentAttempt({ ok: true, outcome: "completed", retrySafe: false, status: "blocked" }), "other");
@@ -25,7 +26,7 @@ test("containment acceptance requires an honest prevented outcome", () => {
 
 test("containment session start diagnostics retain only exact closed setup codes", () => {
   assert.equal(classifySessionStartFailure({ errorCode: "browser_version_unsupported" }), "browser_version_unsupported");
-  assert.equal(classifySessionStartFailure({ result: { error: { code: "root_autoattach_failed" } } }), "root_autoattach_failed");
+  assert.equal(classifySessionStartFailure({ error: { code: "root_autoattach_failed" } }), "root_autoattach_failed");
   assert.equal(classifySessionStartFailure({ message: "root_autoattach_failed" }), "root_autoattach_failed");
   assert.equal(classifySessionStartFailure({ error: { message: "secret root_autoattach_failed" } }), "unknown");
   assert.equal(classifySessionStartFailure({ result: { errorCode: "hostile_page_secret" } }), "unknown");
@@ -33,7 +34,7 @@ test("containment session start diagnostics retain only exact closed setup codes
 
 test("containment initial navigation diagnostics retain closed codes and collapse CDP methods", () => {
   for (const code of ["origin_containment_unavailable", "containment_fence_failed", "debugger_conflict", "renderer_unresponsive"]) {
-    assert.equal(classifyInitialNavigationFailure({ result: { errorCode: code } }), code);
+    assert.equal(classifyInitialNavigationFailure({ errorCode: code }), code);
   }
   assert.equal(classifyInitialNavigationFailure({ error: { code: "cdp_timeout_Page.navigate" } }), "cdp_timeout");
   assert.equal(classifyInitialNavigationFailure({ message: "failed: cdp_timeout_Page.navigate" }), "unknown");
@@ -42,17 +43,16 @@ test("containment initial navigation diagnostics retain closed codes and collaps
   for (const [field, code] of [
     ["reason", "initial_navigation_uncommitted"],
     ["status", "initial_navigation_conflict"],
-    ["actionStatus", "initial_navigation_download"],
-  ]) assert.equal(classifyInitialNavigationFailure({ result: { [field]: code } }), code);
+  ]) assert.equal(classifyInitialNavigationFailure({ [field]: code }), code);
+  assert.equal(classifyInitialNavigationFailure({ status: "initial_navigation_download" }), "initial_navigation_download");
   assert.equal(classifyInitialNavigationFailure({ error: { reason: "initial_navigation_event_overflow" } }), "initial_navigation_event_overflow");
-  assert.equal(classifyInitialNavigationFailure({ result: { error: { status: "runner_contract_invalid" } } }), "runner_contract_invalid");
+  assert.equal(classifyInitialNavigationFailure({ error: { status: "runner_contract_invalid" } }), "runner_contract_invalid");
   assert.equal(classifyInitialNavigationFailure({ reason: "secret initial_navigation_uncommitted" }), "unknown");
-  assert.equal(classifyInitialNavigationFailure({ result: { actionStatus: "runner_contract_invalid secret" } }), "unknown");
 });
 
 test("containment fixture observation diagnostics use a closed failure classifier", () => {
   assert.equal(classifyFixtureObserveFailure({ error: { errorCode: "renderer_unresponsive" } }), "renderer_unresponsive");
-  assert.equal(classifyFixtureObserveFailure({ result: { code: "containment_fence_failed" } }), "containment_fence_failed");
+  assert.equal(classifyFixtureObserveFailure({ code: "containment_fence_failed" }), "containment_fence_failed");
   assert.equal(classifyFixtureObserveFailure({ message: "cdp_timeout_DOM.getDocument" }), "cdp_timeout");
   assert.equal(classifyFixtureObserveFailure({ message: "secret renderer_unresponsive" }), "unknown");
 });
@@ -114,7 +114,7 @@ test("live containment logs closed action and counter stages before asserting", 
   const helperEnd = source.indexOf("async function mcp", helperStart);
   const helper = source.slice(helperStart, helperEnd);
   assert.ok(helperStart > 0 && helperEnd > helperStart);
-  assert.ok(helper.indexOf("log(`${attemptId}_action_${classification}`)") < helper.indexOf('assert(classification === "prevented"'));
+  assert.ok(helper.indexOf("log(`${attemptId}_action_${classification}`)") < helper.indexOf("assert(validOutcome"));
   assert.ok(helper.indexOf("log(`${attemptId}_counter_${counterStatus}`)") < helper.indexOf("assert(snapshot.destinationApplicationRequests === 0"));
   assert.match(helper, /counterStatus = snapshot\.destinationApplicationRequests === 0 \? "zero" : "nonzero"/);
   assert.match(helper, /counterStatus === "nonzero".*classifyDestinationRequest\(snapshot\)/);

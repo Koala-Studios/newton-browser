@@ -2,8 +2,8 @@
 
 Newton Browser is local, agent-agnostic browser control for MCP clients. This roadmap is
 directional, not a public commitment. Current execution state lives in
-[`docs/PROGRESS_LEDGER.md`](docs/PROGRESS_LEDGER.md) and detailed plans in
-[`docs/implementation-plans/`](docs/implementation-plans/README.md).
+[`docs/PROGRESS_LEDGER.md`](docs/PROGRESS_LEDGER.md). Completed transition plans were
+removed from the active tree and remain available in Git history.
 
 ## Implemented direct-runtime foundation
 
@@ -17,18 +17,18 @@ directional, not a public commitment. Current execution state lives in
   renderer lifecycle classification, and trusted input dispatch.
 - Same-session FIFO plus independent cross-session concurrency.
 - Compact observations, exact schemas, provenance/redaction, token budgets, provider-free
-  regression corpus, packed installation, and cross-platform live harnesses. Windows
-  Chrome/Edge and pinned Linux Chrome receipts passed.
-- Direct stdio as the ordinary path and optional private Unix-socket continuity for
-  orchestrators that intentionally need sequential-client persistence.
+  regression corpus, packed installation, and cross-platform live harnesses. Earlier
+  Windows Chrome/Edge and pinned Linux Chrome receipts proved the direct-runtime
+  foundation but predate the modern MCP/contract collapse and are historical only.
+- Stateless MCP `2026-07-28` over newline-delimited stdio JSON as the sole control plane.
 
-## Completed release gates
+## Current release gate
 
-1. Final-tree unauthenticated read-only production-site evidence is recorded on RFC Editor, Wikipedia,
-   the Mercato di Bellina commerce storefront, and the public W3C Web Accessibility
-   Initiative site. No third-party account is a release dependency.
-2. The exact tree passed `pnpm release:check` three consecutive times with one
-   byte-identical package; the evidence-bearing confirmation follows receipt materialization.
+The modern-only deterministic, packed, live Chrome/Edge, pinned Linux Chrome,
+real-public-site, cleanup, and authorized opaque-import matrices passed on 2026-08-12.
+Three local unchanged-tree release executions follow the documentation freeze. A public
+release remains a separately approved clean-tag workflow with matching Windows/Linux
+three-pass receipts; local implementation completion is not publication authorization.
 
 ## After the usable core is proven
 

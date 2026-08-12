@@ -10,7 +10,7 @@ import {
   type StartDirectDriverSessionOptions,
 } from "@newton-browser/driver/direct-session-runtime";
 
-import { configDirectory, loadDirectBrowserConfig, writeDirectBrowserConfig } from "../config.ts";
+import { configDirectory, ensureConfigDirectory, loadBrowserPreference, profileStoreDirectory, resolveConfigDirectory, writeBrowserPreference } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { createConfiguredDirectBrowserHost } from "./configured-direct-host.ts";
 import {
@@ -19,11 +19,8 @@ import {
   type OwnedBrowserRuntime,
 } from "./owned-browser-runtime.ts";
 import {
-  createNewtonIdentity,
-  inspectNewtonIdentityLease,
   listNewtonIdentities,
   openProfileStore,
-  removeNewtonIdentity,
 } from "./profile-store.ts";
 
 const IDENTITY_PATTERN = /^nbi_[a-f0-9]{32}$/u;
@@ -40,10 +37,8 @@ type SetupSessionStarter = (options: StartDirectDriverSessionOptions) => Promise
 export type DirectBrowserSetupReceipt = Readonly<{
   configured: true;
   browserFamily: BrowserFamily;
-  identityId: string;
-  identityCreated: boolean;
   transport: "stdio";
-  nextAction: "identity_login";
+  nextAction: "start_session";
 }>;
 
 export type DirectIdentityLoginReceipt = Readonly<{
@@ -65,69 +60,23 @@ export type DirectLiveDoctorReceipt = Readonly<{
 
 export function setupDirectBrowser(input: {
   browserFamily: BrowserFamily;
-  identityId?: string;
   directory?: string;
   env?: NodeJS.ProcessEnv;
   discoverBrowser?: typeof discoverBrowserExecutable;
 }): DirectBrowserSetupReceipt {
   const env = input.env ?? process.env;
-  const directory = path.resolve(input.directory ?? configDirectory(env));
+  const directory = resolveConfigDirectory(input.directory ?? configDirectory(env));
   const browserFamily = exactFamily(input.browserFamily);
-  ensureDirectory(directory);
+  try { ensureConfigDirectory(directory); } catch { fail("direct_setup_failed"); }
   discoverConfiguredBrowser(input.discoverBrowser, browserFamily, env, "direct_browser_unavailable");
-  const store = openProfileStore(path.join(directory, "identities"));
-  const existing = loadDirectBrowserConfig({ directory, env: withoutDirectConfigOverrides(env) });
-  if (input.identityId !== undefined) {
-    if (!IDENTITY_PATTERN.test(input.identityId)) fail("direct_identity_unavailable");
-    const selected = listNewtonIdentities(store).find((candidate) => candidate.id === input.identityId);
-    if (!selected || selected.browserFamily !== browserFamily) fail("direct_identity_unavailable");
-    try { writeDirectBrowserConfig({ directory, browserTarget: browserFamily, identityId: selected.id }); }
-    catch { fail("direct_setup_failed"); }
-    return Object.freeze({
-      configured: true,
-      browserFamily,
-      identityId: selected.id,
-      identityCreated: false,
-      transport: "stdio",
-      nextAction: "identity_login",
-    });
-  }
-  if (existing) {
-    if (existing.browserTarget !== browserFamily) fail("direct_setup_conflict");
-    const identity = listNewtonIdentities(store).find((candidate) => candidate.id === existing.identityId);
-    if (!identity) return createConfiguredIdentity(store, directory, browserFamily);
-    if (identity.browserFamily !== browserFamily) fail("direct_identity_unavailable");
-    return Object.freeze({
-      configured: true,
-      browserFamily,
-      identityId: identity.id,
-      identityCreated: false,
-      transport: "stdio",
-      nextAction: "identity_login",
-    });
-  }
-  return createConfiguredIdentity(store, directory, browserFamily);
-}
-
-function createConfiguredIdentity(
-  store: ReturnType<typeof openProfileStore>,
-  directory: string,
-  browserFamily: BrowserFamily,
-): DirectBrowserSetupReceipt {
-  const identity = createNewtonIdentity(store, { browserFamily });
   try {
-    writeDirectBrowserConfig({ directory, browserTarget: browserFamily, identityId: identity.id });
-  } catch {
-    try { removeNewtonIdentity(store, identity.id); } catch { fail("direct_setup_cleanup_uncertain"); }
-    fail("direct_setup_failed");
-  }
+    writeBrowserPreference({ directory, browser: browserFamily });
+  } catch { fail("direct_setup_failed"); }
   return Object.freeze({
     configured: true,
     browserFamily,
-    identityId: identity.id,
-    identityCreated: true,
     transport: "stdio",
-    nextAction: "identity_login",
+    nextAction: "start_session",
   });
 }
 
@@ -141,13 +90,14 @@ export async function runDirectIdentityLogin(input: {
   discoverBrowser?: typeof discoverBrowserExecutable;
   launchRuntime?: SetupRuntimeLauncher;
   startDriverSession?: SetupSessionStarter;
+  createTerminationSignal?: typeof terminationSignal;
 }): Promise<DirectIdentityLoginReceipt> {
   const env = input.env ?? process.env;
-  const directory = path.resolve(input.directory ?? configDirectory(env));
+  const directory = resolveConfigDirectory(input.directory ?? configDirectory(env));
   if (!IDENTITY_PATTERN.test(input.identityId)) fail("identity_login_invalid_arguments");
   const origin = exactOrigin(input.origin);
   const allowedOrigins = exactOrigins(origin, input.allowedOrigins ?? []);
-  const store = openProfileStore(path.join(directory, "identities"));
+  const store = openProfileStore(profileStoreDirectory(env, directory));
   const identity = listNewtonIdentities(store).find((candidate) => candidate.id === input.identityId);
   if (!identity) fail("identity_login_unavailable");
   const executable = discoverConfiguredBrowser(input.discoverBrowser, identity.browserFamily, env, "identity_login_browser_unavailable");
@@ -170,7 +120,7 @@ export async function runDirectIdentityLogin(input: {
     fail("identity_login_start_failed");
   }
   let session: DirectDriverSession | null = null;
-  const termination = terminationSignal();
+  const termination = (input.createTerminationSignal ?? terminationSignal)();
   try {
     const bootstrap = runtime.claimDriverBootstrap(allowedOrigins);
     session = await (input.startDriverSession ?? startDirectDriverSession)({
@@ -185,7 +135,11 @@ export async function runDirectIdentityLogin(input: {
       identityId: identity.id,
       grantedOriginCount: allowedOrigins.length,
     }));
-    await Promise.race([runtime.unavailable, termination.promise]);
+    const completion = await Promise.race([
+      runtime.unavailable.then(() => "runtime_unavailable" as const),
+      termination.promise.then(() => "operator_close" as const),
+    ]);
+    if (completion === "runtime_unavailable") fail("identity_login_runtime_unavailable");
   } catch (error) {
     if (!await cleanupLoginRuntime(session, runtime)) fail("identity_login_cleanup_uncertain");
     throw bounded(error, "identity_login_failed");
@@ -219,19 +173,12 @@ export async function runDirectLiveDoctor(input: {
   createHost?: typeof createConfiguredDirectBrowserHost;
 } = {}): Promise<DirectLiveDoctorReceipt> {
   const env = input.env ?? process.env;
-  const directory = path.resolve(input.directory ?? configDirectory(env));
-  const configured = loadDirectBrowserConfig({ directory, env: withoutDirectConfigOverrides(env) });
-  if (!configured) fail("direct_not_configured");
-  const configuredStore = openProfileStore(path.join(directory, "identities"));
-  const configuredIdentity = listNewtonIdentities(configuredStore)
-    .find((candidate) => candidate.id === configured.identityId);
-  if (!configuredIdentity || configuredIdentity.browserFamily !== configured.browserTarget) {
-    fail("direct_identity_unavailable");
-  }
-  if (inspectNewtonIdentityLease(configuredStore, configured.identityId) !== "available") {
-    fail("direct_identity_busy");
-  }
-  const executable = discoverConfiguredBrowser(input.discoverBrowser, configured.browserTarget, env, "direct_browser_unavailable");
+  const directory = resolveConfigDirectory(input.directory ?? configDirectory(env));
+  const configuredTarget = loadBrowserPreference({ directory, env: withoutDirectConfigOverrides(env) });
+  const browserFamily = configuredTarget === "auto"
+    ? discoverDefaultBrowserFamily(input.discoverBrowser, env)
+    : configuredTarget;
+  const executable = discoverConfiguredBrowser(input.discoverBrowser, browserFamily, env, "direct_browser_unavailable");
   const ownedTemp = createOwnedDoctorRoot();
   const server = http.createServer((_request, response) => {
     response.writeHead(200, { "cache-control": "no-store", "content-type": "text/html; charset=utf-8" });
@@ -244,15 +191,13 @@ export async function runDirectLiveDoctor(input: {
     host = (input.createHost ?? createConfiguredDirectBrowserHost)({
       env: withoutDirectConfigOverrides(env),
       profileStoreRoot: path.join(ownedTemp.root, "identities"),
-      browserFamily: configured.browserTarget,
+      browserFamily,
       executablePath: executable.path,
       headless: true,
     });
     const created = host.createSession({
       origin,
       allowedOrigins: [origin],
-      goal: "live_doctor",
-      instanceLabel: "live_doctor",
     });
     await host.waitForSessionReady(created.sessionId);
     const observed = await host.dispatch(created.sessionId, { kind: "observe" });
@@ -275,7 +220,7 @@ export async function runDirectLiveDoctor(input: {
     configured: true,
     runtimeVerified: true,
     cleanupConfirmed: true,
-    browserFamily: configured.browserTarget,
+    browserFamily,
     transport: "private_cdp_pipe",
     containment: "enabled_before_navigation",
   });
@@ -313,13 +258,13 @@ function terminationSignal(): Readonly<{ promise: Promise<void>; dispose(): void
 
 function exactOrigins(primary: string, secondary: readonly string[]): string[] {
   if (!Array.isArray(secondary) || secondary.length > 31) fail("identity_login_invalid_arguments");
-  const origins = [...new Set([primary, ...secondary.map(exactOrigin)])];
-  if (origins.length > 32) fail("identity_login_invalid_arguments");
-  return origins;
+  const normalized = secondary.map(exactOrigin);
+  if (normalized.includes(primary) || new Set(normalized).size !== normalized.length) fail("identity_login_invalid_arguments");
+  return [primary, ...normalized];
 }
 
 function exactOrigin(value: string): string {
-  if (typeof value !== "string" || value !== value.trim() || value.length > 2_048) fail("identity_login_invalid_arguments");
+  if (typeof value !== "string" || value !== value.trim() || value.length > 512) fail("identity_login_invalid_arguments");
   try {
     const parsed = new URL(value);
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.origin !== value) {
@@ -347,17 +292,6 @@ function discoverConfiguredBrowser(
     if (!executable || executable.family !== family || typeof executable.path !== "string" || executable.path.length === 0) fail(errorCode);
     return executable;
   } catch { fail(errorCode); }
-}
-
-function ensureDirectory(directory: string): void {
-  try {
-    if (!fs.existsSync(directory)) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error();
-    fs.chmodSync(directory, 0o700);
-  } catch {
-    fail("direct_config_directory_invalid");
-  }
 }
 
 function listenLoopback(server: http.Server): Promise<string> {
@@ -408,8 +342,17 @@ function removeOwnedDoctorRoot(owned: OwnedDoctorRoot): void {
 function withoutDirectConfigOverrides(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const output = { ...env };
   delete output.NEWTON_BROWSER_BROWSER;
-  delete output.NEWTON_BROWSER_IDENTITY_ID;
   return output;
+}
+
+function discoverDefaultBrowserFamily(
+  provider: typeof discoverBrowserExecutable | undefined,
+  env: NodeJS.ProcessEnv,
+): BrowserFamily {
+  const discover = provider ?? discoverBrowserExecutable;
+  if (discover({ family: "chrome", env })) return "chrome";
+  if (discover({ family: "edge", env })) return "edge";
+  fail("direct_browser_unavailable");
 }
 
 function bounded(error: unknown, fallback: string): Error & { code: string } {

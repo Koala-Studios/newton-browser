@@ -1,0 +1,51 @@
+{
+  "evidenceType": "modern_direct_preflight",
+  "date": "2026-08-12",
+  "packageVersion": "0.5.0",
+  "architecture": "owned_process_private_cdp",
+  "protocol": "2026-07-28",
+  "publicTools": 10,
+  "windows": {
+    "chrome": {
+      "directLive": "pass",
+      "realSites": 7,
+      "packedDirect": "pass"
+    },
+    "edge": {
+      "directLive": "pass",
+      "realSites": 7,
+      "packedDirect": "pass"
+    },
+    "opaqueChromeDefaultImport": {
+      "authorized": true,
+      "sourceClosed": true,
+      "opaqueByteCopy": true,
+      "publicReadOnlyQa": "pass",
+      "authenticationPreservationClaimed": false,
+      "sourceMutationAttempted": false,
+      "profileContentsParsedOrLogged": false,
+      "identityRemoved": true
+    }
+  },
+  "linuxCft": {
+    "runId": "linux-cft-2e9d6db681b562fc1420",
+    "sourceTreeSha256": "6823961fc48aa1b5ba414263fc28f2f619b71e526c43c4107d666287c12e0ce9",
+    "imageIdentifier": "sha256:dccc1283d5c1fd7a9ddc2a5448575a9d17e30cf1cf7ab213e49d6ac674b6cceb",
+    "chrome": "151.0.7922.108",
+    "node": "24.6.0",
+    "pnpm": "10.8.0",
+    "directRuntimeSelectionStatus": 0,
+    "agentCostStatus": 0,
+    "liveStatus": 0,
+    "packedLiveStatus": 0,
+    "realSites": 7,
+    "status": "pass"
+  },
+  "packedArtifact": {
+    "basename": "newton-browser-0.5.0.tgz",
+    "bytes": 126807,
+    "sha256": "4197a6cf83ea3a0f62958139795e6d090b5bc6b6602bf8bf2831157ef5bb1cb3"
+  },
+  "finalUnchangedTreePassesRecordedHere": false,
+  "note": "This bounded receipt records the pre-freeze matrix. Final unchanged-tree pass receipts are emitted after this evidence freeze and do not rewrite the candidate."
+}

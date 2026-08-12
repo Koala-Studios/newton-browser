@@ -15,13 +15,13 @@ import {
 } from "./owned-browser-runtime.ts";
 import {
   createNewtonIdentity,
-  inspectNewtonIdentityLease,
   listNewtonIdentities,
   openProfileStore,
   removeNewtonIdentity,
   type NewtonProfileIdentity,
   type ProfileStore,
 } from "./profile-store.ts";
+import type { BrowserHostPolicyManifest } from "@newton-browser/core";
 
 type DiscoverBrowser = (input: BrowserDiscoveryInput) => BrowserExecutable | null;
 type LaunchRuntime = (options: LaunchOwnedBrowserRuntimeOptions) => Promise<DirectOwnedRuntime>;
@@ -29,24 +29,22 @@ type LaunchRuntime = (options: LaunchOwnedBrowserRuntimeOptions) => Promise<Dire
 export type ConfiguredDirectBrowserHostOptions = Readonly<{
   profileStore?: ProfileStore;
   profileStoreRoot?: string;
-  identityId?: string;
   browserFamily?: BrowserFamily;
   executablePath?: string;
   env?: NodeJS.ProcessEnv;
   platform?: "win32" | "darwin" | "linux";
   homeDirectory?: string;
   headless?: boolean;
-  chromiumAdditionalArgs?: readonly string[];
   discoverBrowser?: DiscoverBrowser;
   launchRuntime?: LaunchRuntime;
   createIdentity?: typeof createNewtonIdentity;
   listIdentities?: typeof listNewtonIdentities;
   removeIdentity?: typeof removeNewtonIdentity;
   startDriverSession?: DirectBrowserHostOptions["startDriverSession"];
-  hostInstanceId?: string;
   maxSessions?: number;
   maxQueueItems?: number;
   maxQueueBytes?: number;
+  hostPolicies?: readonly BrowserHostPolicyManifest[];
 }>;
 
 export class ConfiguredDirectHostError extends Error {
@@ -76,32 +74,15 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
   const listIdentities = options.listIdentities ?? listNewtonIdentities;
   const removeIdentity = options.removeIdentity ?? removeNewtonIdentity;
   const launchRuntime = options.launchRuntime ?? launchOwnedBrowserRuntime;
-  const defaultIdentityId = configuredOptional("identity", options.identityId, env.NEWTON_BROWSER_IDENTITY_ID);
   const configuredFamily = configuredOptional("family", options.browserFamily, env.NEWTON_BROWSER_BROWSER);
-  const defaultPersistentIdentity = defaultIdentityId === undefined
-    ? null
-    : findPersistentIdentity(store, defaultIdentityId, listIdentities);
-  const defaultFamily = defaultPersistentIdentity?.browserFamily ?? exactFamily(configuredFamily);
-  if (defaultPersistentIdentity && configuredFamily !== undefined && exactFamily(configuredFamily) !== defaultPersistentIdentity.browserFamily) {
-    throw configuredError("configured_browser_identity_mismatch");
-  }
+  const defaultFamily = exactFamily(configuredFamily);
   const explicitPath = configuredOptional("path", options.executablePath, env.NEWTON_BROWSER_BROWSER_EXECUTABLE);
   const executables = new Map<BrowserFamily, BrowserExecutable>();
   executables.set(defaultFamily, discoverExactBrowser(options, defaultFamily, explicitPath));
   const persistentReservations = new Set<string>();
 
   const launchOwnedRuntime: DirectBrowserHostOptions["launchOwnedRuntime"] = async ({ init }) => {
-    // The configured identity is a convenient sequential default, not a global
-    // serialization point. A concurrent session without an explicit identity gets a
-    // fresh ephemeral identity; an explicit request for the busy persistent identity
-    // remains fail-closed.
-    const requestedIdentityId = init.identityId
-      ?? (defaultPersistentIdentity
-        && (init.browserFamily === undefined || init.browserFamily === defaultPersistentIdentity.browserFamily)
-        && !persistentReservations.has(defaultPersistentIdentity.id)
-        && defaultIdentityAvailable(store, defaultPersistentIdentity.id)
-        ? defaultPersistentIdentity.id
-        : undefined);
+    const requestedIdentityId = init.identityId;
     const persistentIdentity = requestedIdentityId === undefined
       ? null
       : findPersistentIdentity(store, requestedIdentityId, listIdentities);
@@ -137,7 +118,6 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
         identityId: identity.id,
         allowedOrigins: init.allowedOrigins,
         ephemeralIdentity: ephemeral,
-        ...(options.chromiumAdditionalArgs === undefined ? {} : { additionalArgs: options.chromiumAdditionalArgs }),
         ...(options.headless === undefined ? {} : { headless: options.headless }),
         ...(options.platform === undefined ? {} : { platform: options.platform }),
       });
@@ -164,16 +144,11 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
   return createDirectBrowserHost({
     launchOwnedRuntime,
     ...(options.startDriverSession === undefined ? {} : { startDriverSession: options.startDriverSession }),
-    ...(options.hostInstanceId === undefined ? {} : { hostInstanceId: options.hostInstanceId }),
     ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
     ...(options.maxQueueItems === undefined ? {} : { maxQueueItems: options.maxQueueItems }),
     ...(options.maxQueueBytes === undefined ? {} : { maxQueueBytes: options.maxQueueBytes }),
+    ...(options.hostPolicies === undefined ? {} : { hostPolicies: options.hostPolicies }),
   });
-}
-
-function defaultIdentityAvailable(store: ProfileStore, id: string): boolean {
-  try { return inspectNewtonIdentityLease(store, id) === "available"; }
-  catch { return false; }
 }
 
 function reservePersistentIdentity(reservations: Set<string>, id: string): void {
@@ -330,7 +305,7 @@ function discoverExactBrowser(
 }
 
 function configuredOptional(
-  kind: "identity" | "family" | "path" | "store",
+  kind: "family" | "path" | "store",
   explicit: string | undefined,
   environment: string | undefined,
 ): string | undefined {

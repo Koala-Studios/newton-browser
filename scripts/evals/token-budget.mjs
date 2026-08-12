@@ -29,7 +29,7 @@ export function serializeForBudget(value) {
 }
 
 export function extractCounterMeta(counter) {
-  if (typeof counter !== "function") return { origin: "fallback", algorithm: "utf8-byte-upper-bound" };
+  if (typeof counter !== "function") throw new Error("token_counter_required");
   return {
     origin: "injected",
     algorithm: "token-counter",
@@ -38,35 +38,26 @@ export function extractCounterMeta(counter) {
 }
 
 function estimateWithCounter(text, counter) {
-  if (typeof counter !== "function") return null;
+  if (typeof counter !== "function") throw new Error("token_counter_required");
   try {
     const estimated = counter(text);
     const count = Number(estimated);
-    if (!Number.isFinite(count) || count < 0) return null;
+    if (!Number.isFinite(count) || count < 0) throw new Error("token_counter_invalid");
     return Number.isInteger(count) ? count : Math.round(count);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof Error && error.message === "token_counter_invalid") throw error;
+    throw new Error("token_counter_failed");
   }
 }
 
 export function estimateTokensFromString(text, counter) {
   const safeText = typeof text === "string" ? text : "";
   const counted = estimateWithCounter(safeText, counter);
-  if (counted !== null) {
-    return {
-      count: counted,
-      method: "token_counter",
-      origin: "injected",
-      ...extractCounterMeta(counter),
-    };
-  }
-
-  const bytes = Buffer.byteLength(safeText, "utf8");
   return {
-    count: bytes,
-    method: "utf8_byte_upper_bound",
-    origin: "heuristic",
-    algorithm: "utf8-byte-length",
+    count: counted,
+    method: "token_counter",
+    origin: "injected",
+    ...extractCounterMeta(counter),
   };
 }
 

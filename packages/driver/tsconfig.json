@@ -11,6 +11,5 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/overlay.js"]
+  "include": ["src/**/*.ts"]
 }

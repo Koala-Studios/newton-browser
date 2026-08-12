@@ -12,7 +12,7 @@ import {
 } from "../../apps/mcp-server/src/browser-runtime/profile-store.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 
-const family = process.env.NEWTON_BROWSER_QA_OWNER === "edge" ? "edge" : "chrome";
+const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
 const browser = discoverBrowserExecutable({ family, env: process.env });
 if (!browser) fail("real_site_browser_unavailable");
 
@@ -34,6 +34,7 @@ let host = null;
 let requestId = 0;
 let cleanupConfirmed = false;
 let cleanupRetryCount = 0;
+let terminalFailure = null;
 
 try {
   host = createDefaultDirectBrowserHost({
@@ -48,7 +49,7 @@ try {
     id: "rfc_editor",
     origin: "https://www.rfc-editor.org",
     readySelector: "body",
-    allowedOrigins: ["https://www.rfc-editor.org"],
+    allowedOrigins: [],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("wikipedia", () => runReadSite({
@@ -56,14 +57,32 @@ try {
     origin: "https://en.wikipedia.org",
     url: "https://en.wikipedia.org/wiki/Web_browser",
     readySelector: "main, #firstHeading",
-    allowedOrigins: ["https://en.wikipedia.org", "https://upload.wikimedia.org"],
+    allowedOrigins: ["https://upload.wikimedia.org"],
+    ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
+  })));
+  receipts.push(await recordSite("youtube_public", () => runReadSite({
+    id: "youtube_public",
+    origin: "https://www.youtube.com",
+    url: "https://www.youtube.com/robots.txt",
+    readySelector: "body",
+    titleOptional: true,
+    allowedOrigins: ["https://i.ytimg.com", "https://fonts.googleapis.com", "https://fonts.gstatic.com"],
+    ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
+  })));
+  receipts.push(await recordSite("reddit_public", () => runReadSite({
+    id: "reddit_public",
+    origin: "https://www.reddit.com",
+    url: "https://www.reddit.com/robots.txt",
+    readySelector: "body",
+    titleOptional: true,
+    allowedOrigins: ["https://www.redditstatic.com"],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("mercato_storefront", () => runSearchSite({
     id: "mercato_storefront",
     origin: "https://mercatodibellina.com",
     url: "https://mercatodibellina.com/search",
-    allowedOrigins: ["https://mercatodibellina.com", "https://cdn.shopify.com", "https://shop.app"],
+    allowedOrigins: ["https://cdn.shopify.com", "https://shop.app"],
     documentReadySelector: "main, #MainContent",
     readySelector: 'form[action*="/search"] input[name="q"]',
     searchPattern: /search|cerca/i,
@@ -75,7 +94,16 @@ try {
     origin: "https://www.w3.org",
     url: "https://www.w3.org/WAI/",
     readySelector: "main, body",
-    allowedOrigins: ["https://www.w3.org"],
+    allowedOrigins: [],
+    ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
+  })));
+  receipts.push(await recordSite("meta_ads_public", () => runReadSite({
+    id: "meta_ads_public",
+    origin: "https://www.facebook.com",
+    url: "https://www.facebook.com/business/ads",
+    readySelector: "body",
+    titleOptional: true,
+    allowedOrigins: ["https://static.xx.fbcdn.net"],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
 
@@ -96,7 +124,8 @@ try {
     browserFamily: family,
     sites: receipts,
     persistentIdentityRequested: Boolean(persistentIdentityId),
-    authenticatedSiteQaAttempted: false,
+    persistentIdentityQa: Boolean(persistentIdentityId),
+    authenticationPreservationClaimed: false,
     remainingSessions: 0,
     identitySetUnchanged: true,
     identityLeaseReleased: true,
@@ -106,13 +135,34 @@ try {
   })}\n`);
   if (!ok) process.exitCode = 1;
 } catch (error) {
-  process.stdout.write(`${JSON.stringify({ ok: false, browserFamily: family, errorCode: safeCode(error), completedSiteCount: receipts.length, sites: receipts })}\n`);
+  terminalFailure = error;
   process.exitCode = 1;
 } finally {
   if (host) {
-    try { await host.close(); cleanupConfirmed = true; } catch {}
+    try { await host.close(); cleanupConfirmed = true; } catch {
+      terminalFailure = Object.assign(new Error("real_site_cleanup_uncertain"), { code: "real_site_cleanup_uncertain" });
+      process.exitCode = 1;
+    }
   }
-  if (cleanupConfirmed && fs.existsSync(owned.root)) removeOwnedRoot(owned);
+  if (!host && !cleanupConfirmed) cleanupConfirmed = true;
+  if (cleanupConfirmed && fs.existsSync(owned.root)) {
+    try { removeOwnedRoot(owned); } catch {
+      terminalFailure = Object.assign(new Error("real_site_cleanup_refused"), { code: "real_site_cleanup_refused" });
+      process.exitCode = 1;
+    }
+  }
+}
+
+if (terminalFailure) {
+  process.stdout.write(`${JSON.stringify({
+    ok: false,
+    browserFamily: family,
+    errorCode: safeCode(terminalFailure),
+    completedSiteCount: receipts.length,
+    sites: receipts,
+    cleanupConfirmed,
+    temporaryRootRemoved: !fs.existsSync(owned.root),
+  })}\n`);
 }
 
 async function recordSite(id, task) {
@@ -161,9 +211,9 @@ async function runSearchSite(site) {
         : null;
     if (!searchTarget) fail(`real_site_${site.id}_search_missing`);
     const maskedScreenshot = site.id === "mercato_storefront"
-      ? await screenshotInMemory(sessionId, site.id, [{ ref: search.ref }])
+      ? await screenshotInMemory(sessionId, site.id, [search?.ref ? { ref: search.ref } : { selector: 'form[action*="/search"] input[name="q"]' }])
       : null;
-    requireCompleted(await call("browser.act", { sessionId, action: { kind: "fill", target: searchTarget, value: site.value } }), `real_site_${site.id}_fill_failed`);
+    requireCompleted(await call("browser.act", { sessionId, action: { kind: "fill", ...searchTarget, value: site.value } }), `real_site_${site.id}_fill_failed`);
     const afterFill = await observe(sessionId);
     const submitButtons = afterFill.nodes.filter((node) => typeof node.ref === "string" && node.role === "button" && /search|cerca/i.test(String(node.name ?? "")));
     const submissionMode = submitButtons.length === 1 ? "observed_submit_button" : "same_origin_query_navigation";
@@ -175,7 +225,7 @@ async function runSearchSite(site) {
     const afterSearch = await observe(sessionId);
     const postActionMode = await requireUsefulOrText(sessionId, afterSearch, `${site.id}_post_search`);
     const screenshot = maskedScreenshot ?? await screenshotInMemory(sessionId, site.id);
-    return Object.freeze({ id: site.id, mode: "public_ephemeral", initialUseful: true, initialObservationMode: initialMode, typedSearch: true, submittedSearch: true, submissionMode, postActionUseful: true, postActionObservationMode: postActionMode, screenshot, trustedMaskVerified: site.id === "mercato_storefront", networkCategory: countCategory(await boundedNetworkCount(sessionId, site.id)) });
+    return Object.freeze({ id: site.id, mode: site.identityId ? "operator_identity_read_only" : "public_ephemeral", initialUseful: true, initialObservationMode: initialMode, typedSearch: true, submittedSearch: true, submissionMode, postActionUseful: true, postActionObservationMode: postActionMode, screenshot, trustedMaskVerified: site.id === "mercato_storefront", networkCategory: countCategory(await boundedNetworkCount(sessionId, site.id)) });
   });
 }
 
@@ -203,7 +253,7 @@ async function withSession(site, task) {
   try {
     const ready = await call("browser.act", {
       sessionId,
-      action: { kind: "wait_for", waitFor: { selector: site.documentReadySelector ?? "body", state: "visible", timeoutMs: 30_000 } },
+      action: { kind: "wait_for", waitFor: { selector: site.documentReadySelector ?? "body", state: "attached", timeoutMs: 30_000 } },
     });
     if (ready.envelope?.isError === true || ready.value?.ok === false) {
       const detail = closedResultCode(ready.value);
@@ -230,7 +280,7 @@ async function stopSession(sessionId, id) {
 async function waitForSiteSelector(sessionId, id, selector) {
   requireVerifiedAction(await call("browser.act", {
     sessionId,
-    action: { kind: "wait_for", waitFor: { selector, state: "visible", timeoutMs: 30_000 } },
+    action: { kind: "wait_for", waitFor: { selector, state: "attached", timeoutMs: 30_000 } },
   }), `real_site_${id}_readiness_failed`);
 }
 
@@ -263,7 +313,7 @@ async function requireUsefulOrText(sessionId, observation, id, titleOptional = f
 }
 
 async function screenshotInMemory(sessionId, id, sensitiveZones) {
-  const response = await rawCall("browser.screenshot", { sessionId, delivery: "image", format: "jpeg", quality: 50, region: { x: 0, y: 0, width: 1024, height: 768 }, ...(sensitiveZones ? { sensitiveZones } : {}) });
+  const response = await rawCall("browser.screenshot", { sessionId, format: "jpeg", quality: 50, region: { x: 0, y: 0, width: 1024, height: 768 }, ...(sensitiveZones ? { sensitiveZones } : {}) });
   if (response?.result?.isError === true) {
     const text = response.result.content?.find((entry) => entry?.type === "text")?.text;
     let value;
@@ -288,7 +338,7 @@ async function screenshotInMemory(sessionId, id, sensitiveZones) {
 async function boundedNetworkCount(sessionId, id) {
   const result = await call("browser.network", { sessionId, limit: 80 });
   requireCompleted(result, `real_site_${id}_network_failed`);
-  const records = Array.isArray(result.value?.result?.requests) ? result.value.result.requests : Array.isArray(result.value?.requests) ? result.value.requests : [];
+  const records = Array.isArray(result.value?.result?.entries) ? result.value.result.entries : [];
   return records.length;
 }
 
@@ -306,7 +356,11 @@ async function call(name, args) {
 
 async function rawCall(name, args) {
   if (!host) fail("real_site_host_unavailable");
-  return handleMcpMessage(host, { jsonrpc: "2.0", id: ++requestId, method: "tools/call", params: { name, arguments: args } });
+  return handleMcpMessage(host, { jsonrpc: "2.0", id: ++requestId, method: "tools/call", params: { name, arguments: args, _meta: modernMcpMeta() } });
+}
+
+function modernMcpMeta() {
+  return { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
 }
 
 function requireCompleted(result, code) {

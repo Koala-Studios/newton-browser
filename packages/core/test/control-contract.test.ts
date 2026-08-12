@@ -22,11 +22,13 @@ test("core session-origin normalization rejects paths, credentials, and wildcard
 test("per-kind target descriptors are preserved without leaking fill values", () => {
   const action: BrowserAction = {
     kind: "fill",
-    target: { role: "textbox", name: "Email token=secret" },
+    role: "textbox",
+    name: "Email token=secret",
     value: "user@example.invalid",
   };
   const redacted = redactBrowserAction(action);
-  assert.deepEqual(redacted.target, { role: "textbox", name: "Email token=[REDACTED]" });
+  assert.equal(redacted.role, "textbox");
+  assert.equal(redacted.name, "Email token=[REDACTED]");
   assert.equal(redacted.value, "[REDACTED]");
   assert.deepEqual(redactBrowserAction({ kind: "wait_for", waitFor: { text: "Saved", timeoutMs: 2500 } }).waitFor, { text: "Saved", timeoutMs: 2500 });
   assert.throws(() => redactBrowserAction({ ...action, waitFor: { text: "Saved" } } as BrowserAction), /unsupported field/);
@@ -34,13 +36,13 @@ test("per-kind target descriptors are preserved without leaking fill values", ()
 
 test("new target descriptors feed the safety floor", () => {
   const decision = evaluateBrowserFloor({
-    action: { kind: "click", target: { role: "button", name: "Like" } },
-    origin: "https://www.youtube.com/watch?v=test",
+    action: { kind: "click", role: "button", name: "Like" },
+    origin: "https://www.youtube.com",
     policy: youtubePolicy,
   });
-  assert.equal(decision.class, "approval_required");
+  assert.equal(decision.class, "agentic");
   assert.equal(decision.commitBoundary, "external_effect");
-  assert.equal(decision.reasons.includes("social_engagement_action"), true);
+  assert.equal(decision.reason, "social_engagement_action");
 });
 
 test("compact observations accept driver bbox arrays but do not expose raw DOM", () => {
@@ -110,7 +112,6 @@ test("a set_files delta keeps sanitized filenames through result redaction", () 
   const result = redactBrowserResult({
     kind: "observation", mode: "cdp", origin: "https://example.com", title: "Upload",
     nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-06-26T00:00:00.000Z",
-    actionStatus: "verified", verified: true,
     changed: { files: [{ filename: "asset.png", path: "C:/secret/asset.png" }] },
   }) as Record<string, unknown>;
   const changed = (result as { changed?: Record<string, unknown> }).changed ?? {};
@@ -126,4 +127,22 @@ test("an unknown pendingDialog shape is dropped rather than passed through", () 
     pendingDialog: { dialogType: "evil", message: "x" },
   }) as Record<string, unknown>;
   assert.equal("pendingDialog" in result, false);
+});
+
+test("console source is a closed diagnostic token rather than a raw page string", () => {
+  const result = redactBrowserResult({
+    kind: "console_log",
+    origin: "https://example.test",
+    entries: [
+      { level: "warn", text: "safe", source: "JavaScript", at: "2026-08-12T00:00:00.000Z" },
+      { level: "error", text: "safe", source: "https://example.test/app.js?token=secret", at: "2026-08-12T00:00:00.000Z" },
+    ],
+    dropped: 0,
+    capturedAt: "2026-08-12T00:00:00.000Z",
+  });
+  assert.equal(result.kind, "console_log");
+  if (result.kind !== "console_log") return;
+  assert.equal(result.entries[0]?.source, "javascript");
+  assert.equal(result.entries[1]?.source, undefined);
+  assert.equal(JSON.stringify(result).includes("token=secret"), false);
 });

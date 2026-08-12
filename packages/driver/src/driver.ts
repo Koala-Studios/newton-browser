@@ -7,8 +7,7 @@
 //
 // Trusted input only: CDP Input dispatches real events that land on SPAs that
 // check isTrusted in event-driven applications. The model never gets raw CDP or raw JS;
-// every action is funneled through the typed contract. The cursor overlay is
-// fire-and-forget and NEVER gates execution (§5.1).
+// every action is funneled through the typed contract.
 
 import { TargetRegistry, TARGET_REGISTRY_ERROR_CODES } from "./target-registry.js";
 import { compileOriginGrant, decidePausedRequest, decidePausedTarget } from "./origin-containment.js";
@@ -46,7 +45,6 @@ import type {
   InputDispatchScope,
   InteractiveFilters,
   PageSignature,
-  PageEffectsPort,
   ScreenshotOptions,
   TargetRoute,
   TargetResolution,
@@ -55,7 +53,6 @@ import type {
   WaitResult,
 } from "./types.js";
 
-const CDP_VERSION = "1.3";
 const CDP_DOMAINS = ["DOM", "Accessibility", "Page", "Runtime", "Network", "Log"];
 const CONSOLE_BUFFER_MAX = 500;
 const NETWORK_BUFFER_MAX = 500;
@@ -69,23 +66,20 @@ const AUTO_WAIT_TIMEOUT_MS = 8000;
 const AUTO_WAIT_POLL_MS = 120;
 const SETTLE_TIMEOUT_MS = 4000;
 const NODE_CAP = 80;
-// WS9.1 readable-text observation defaults. The DOM expression prefers main/article
+// Readable-text observation defaults. The DOM expression prefers main/article
 // content and falls back to body innerText; it reads nothing outside the live document.
 const TEXT_OBSERVE_CHAR_CAP = 20_000;
 const TEXT_OBSERVE_EXPRESSION =
   "(function(){var m=document.querySelector('main,article,[role=\"main\"]');var el=m||document.body;return (el&&el.innerText)||(document.body&&document.body.innerText)||'';})()";
-const MAX_SCREENSHOT_WAIT_MS = 10000; // bound the pre-capture wait (D5)
 const MAX_SHOT_PX = 20000;            // bound an explicit-clip capture (D5)
 const CDP_TIMEOUT_MS = 20000;         // bound each CDP call so a hang can't wedge the pump
 const SCROLL_DISPATCH_TIMEOUT_MS = 2000; // scroll verifies page state even if Chrome drops the wheel acknowledgement
 const OWNED_ROOT_INPUT_TIMEOUT_MS = 2000; // Chromium can omit release ACK when a click synchronously creates a target.
 const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays practical
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
-const INLINE_IMAGE_MAX_CHARS = 23_000_000; // supports up to the 16 MiB decoded MCP bound
 const MASK_REGION_PADDING_CSS = 3;
 const INITIAL_NAVIGATION_COMMIT_CAP = 32;
 const RELATED_LAUNCH_TICKET_CAP = 64;
-const RELATED_PAGE_FILTER = [{ type: "page", exclude: false }, { exclude: true }];
 const CHILD_TARGET_FILTER = [
   { type: "iframe", exclude: false },
   { type: "worker", exclude: false },
@@ -106,22 +100,6 @@ const PRESERVED_ATTACH_FAILURE_CODES = new Set<string>([
   "renderer_unresponsive",
 ]);
 
-function unavailableDebuggerPort(): DebuggerPort {
-  const unavailable = async (): Promise<never> => { throw new Error("direct_debugger_port_required"); };
-  return {
-    attach: unavailable,
-    detach: unavailable,
-    sendCommand: unavailable,
-  };
-}
-
-function noOpPageEffectsPort(): PageEffectsPort {
-  const noop = async (): Promise<void> => {};
-  return {
-    begin: noop, end: noop, scroll: noop, move: noop, click: noop, field: noop,
-  };
-}
-
 type IframeOwnerRoute = Readonly<{ targetId: string; sessionId: string | null; frameId: string }>;
 type IframeOwnerGeometry = Readonly<{
   x: number;
@@ -140,7 +118,7 @@ type FramedPointProof = Readonly<{
   point: Point;
   frames: PreparedEmbeddingFrames;
 }>;
-type DriverObserveOptions = ObserveOptions & Pick<BrowserAction, "includeFrameRouting">;
+type DriverObserveOptions = ObserveOptions;
 type InitialNavigationCommit = Readonly<{ frameId: string; loaderId: string; url: string; origin: string }>;
 type InitialNavigationState = {
   generation: number;
@@ -172,24 +150,19 @@ type RelatedLaunchTicket = {
   timer: ReturnType<typeof setTimeout> | null;
 };
 
-export function createNewtonBrowserDriver(options: BrowserDriverOptions = {}) {
+export function createNewtonBrowserDriver(options: BrowserDriverOptions) {
   return new NewtonBrowserDriver(options);
 }
 
 class NewtonBrowserDriver {
-  tabId: number | null;
   attached: boolean;
   refIndex: Map<string, TargetRoute>;
   devicePixelRatio: number;
   zoom: number;
-  accent: string | null;
-  ownerLabel: string;
-  ownsTab: boolean;
-  ownsBrowser: boolean;
   lastNodes: Map<string, ObservationNodeSnapshot>;
   lastObserveUrl: string | null;
   lastScrollY: number;
-  ownedNodeCache: Map<string, boolean | CdpRecord>;
+  nodeFactsCache: Map<string, CdpRecord>;
   activeActionSignals: ActiveActionSignals | null;
   pendingDialog: CdpRecord | null;
   pendingDialogRoute: PendingDialogRoute | null;
@@ -217,6 +190,7 @@ class NewtonBrowserDriver {
   activeCommandId: string | null;
   browserControlSessionId: string | null;
   browserRootSessionId: string | null;
+  browserPageAutoAttachActive: boolean;
   protocolEventTail: Promise<void>;
   protocolGeneration: number;
   protocolEventFailure: unknown | null;
@@ -236,37 +210,33 @@ class NewtonBrowserDriver {
   unresolvedRelatedCloseOverflow: boolean;
   relationshipCleanupComplete: boolean;
   debuggerPort: DebuggerPort;
-  pageEffectsPort: PageEffectsPort;
   debuggerEventUnsubscribe: (() => void) | null;
-  attachingTabId: number | null;
 
-  constructor(options: BrowserDriverOptions = {}) {
-    this.tabId = null;
+  constructor(options: BrowserDriverOptions) {
+    if (!Array.isArray(options.allowedOrigins) || options.allowedOrigins.length === 0) {
+      throw typedDriverError("origin_grant_required");
+    }
     this.attached = false;
     this.refIndex = new Map(); // ref -> immutable target route
     this.devicePixelRatio = 1;
     this.zoom = 1;
-    this.accent = typeof options.accent === "string" ? options.accent : null;
-    this.ownerLabel = typeof options.ownerLabel === "string" && options.ownerLabel.trim() ? options.ownerLabel.trim().slice(0, 40) : "Newton";
-    this.ownsTab = Boolean(options.ownsTab);
-    this.ownsBrowser = Boolean(options.ownsBrowser);
-    // Diff-delta state (Proposal 29 / D6): baseline of the last full observation
+    // Diff-delta state: baseline of the last full observation
     // and caches that cut per-action CDP round-trips.
     this.lastNodes = new Map(); // ref -> { role, name, value, bbox }
     this.lastObserveUrl = null;
     this.lastScrollY = 0;
-    this.ownedNodeCache = new Map(); // backendNodeId -> isOwnedOverlayNode (per document)
+    this.nodeFactsCache = new Map();
     this.activeActionSignals = null;
-    // A page-initiated JS dialog blocking the renderer (WS9.4), or null. Set on
+    // A page-initiated JS dialog blocking the renderer, or null. Set on
     // Page.javascriptDialogOpening and cleared when handled/closed.
     this.pendingDialog = null;
     this.pendingDialogRoute = null;
     this.pendingDialogs = new Map();
-    // Owned-tab viewport override requested via `resize` (WS9.6), or null. Re-applied
+    // Viewport override requested via `resize`, or null. Re-applied
     // after a debugger re-attach so a cross-process navigation does not silently
     // revert the caller's chosen size.
     this.sessionViewport = null;
-    // Read-only console (WS9.2) and network (WS9.3) ring buffers. Populated from CDP
+    // Read-only console and network ring buffers. Populated from CDP
     // events; bounded so a chatty page cannot grow them without bound. `dropped`
     // counts entries evicted since the last read. Network HEADERS are never buffered.
     this.consoleBuffer = [];
@@ -275,16 +245,14 @@ class NewtonBrowserDriver {
     this.networkDropped = 0;
     this.networkInFlight = new Set();
     // Session origin grant, set by the controller. Gates network-body fetches.
-    this.allowedOrigins = Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [];
+    this.allowedOrigins = [...options.allowedOrigins];
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
     this.mainFrameId = null;
     this.mainLoaderId = null;
     this.actionabilityFailure = null;
     this.framedPointProof = null;
-    this.containment = this.allowedOrigins.length
-      ? compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1))
-      : null;
+    this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
     this.containmentReady = false;
     this.heldTargets = new Map();
     this.inputDispatcher = new InputDispatcher((method: string, params: CdpRecord, route: CdpRoute) => this.cdp(method, params, route));
@@ -295,6 +263,7 @@ class NewtonBrowserDriver {
     this.activeCommandId = null;
     this.browserControlSessionId = null;
     this.browserRootSessionId = null;
+    this.browserPageAutoAttachActive = false;
     this.protocolEventTail = Promise.resolve();
     this.protocolGeneration = 0;
     this.protocolEventFailure = null;
@@ -313,37 +282,26 @@ class NewtonBrowserDriver {
     this.unresolvedRelatedClose = null;
     this.unresolvedRelatedCloseOverflow = false;
     this.relationshipCleanupComplete = false;
-    this.debuggerPort = options.debuggerPort ?? unavailableDebuggerPort();
-    this.pageEffectsPort = options.pageEffectsPort ?? noOpPageEffectsPort();
+    this.debuggerPort = options.debuggerPort;
     this.debuggerEventUnsubscribe = null;
-    this.attachingTabId = null;
   }
 
-  isAttachedTo(tabId: number): boolean {
-    return this.attached && this.tabId === tabId;
-  }
-
-  async attach(tabId: number): Promise<void> {
-    if (this.attached && this.tabId === tabId) return;
-    if (this.attached) await this.detach();
+  async attach(): Promise<void> {
+    if (this.attached) return;
     this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
     this.protocolGeneration += 1;
-    this.attachingTabId = tabId;
     try {
       await attachStage("root_debugger_attach_failed", async () => {
         this.subscribeDebuggerEvents();
-        await this.debuggerPort.attach({ tabId }, CDP_VERSION);
+        await this.debuggerPort.attach();
       });
     } catch (error) {
-      this.attachingTabId = null;
       this.protocolGeneration += 1;
       this.unsubscribeDebuggerEvents();
       this.protocolEventTail = Promise.resolve();
       this.protocolEventFailure = null;
       throw error;
     }
-    this.tabId = tabId;
-    this.attachingTabId = null;
     this.attached = true;
     this.relationshipCleanupComplete = false;
     this.protocolEventFailure = null;
@@ -354,44 +312,36 @@ class NewtonBrowserDriver {
           await this.cdp(`${domain}.enable`, {});
         }
         await this.installContainment({});
-    // Owned tabs stay inactive so they never steal the user's focus. Chrome
-    // otherwise accepts pointer/key CDP commands for a background tab while
-    // dropping their press/release events. Focus emulation makes only this
-    // debugger target behave as active without activating the visible tab.
+        // The isolated process may remain in the background. Focus emulation
+        // keeps trusted input delivery deterministic without activating it.
         await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
       });
     // Child frames / popups attach to the same session (§7.5).
-      const browserTarget = await attachStage("browser_control_attach_failed", () => this.cdp("Target.attachToBrowserTarget", {}));
-      const browserSessionId = typeof browserTarget.sessionId === "string" && browserTarget.sessionId
-        ? browserTarget.sessionId
+      const browserAttachResult = await attachStage("browser_control_attach_failed", () => this.cdp("Target.attachToBrowserTarget", {}));
+      const browserSessionId = typeof browserAttachResult.sessionId === "string" && browserAttachResult.sessionId
+        ? browserAttachResult.sessionId
         : null;
       if (!browserSessionId || !this.mainTargetId) throw typedDriverError("origin_containment_unavailable");
       this.browserControlSessionId = browserSessionId;
-      await attachStage("related_autoattach_failed", () => this.ownsBrowser
-        ? this.cdp("Target.setAutoAttach", {
+      await attachStage("browser_page_autoattach_failed", () => this.cdp("Target.setAutoAttach", {
           autoAttach: true,
           flatten: true,
           waitForDebuggerOnStart: false,
           filter: OWNED_BROWSER_TARGET_FILTER,
-        }, { sessionId: browserSessionId })
-        : this.cdp("Target.autoAttachRelated", {
-          targetId: this.mainTargetId,
-          waitForDebuggerOnStart: true,
-          filter: RELATED_PAGE_FILTER,
         }, { sessionId: browserSessionId }));
+      this.browserPageAutoAttachActive = true;
       await this.fenceBrowserProtocolEvents("browser_control_fence_failed");
       await attachStage("root_autoattach_failed", () => this.cdp("Target.setAutoAttach", {
         autoAttach: true,
         flatten: true,
-        waitForDebuggerOnStart: !this.ownsBrowser,
+        waitForDebuggerOnStart: false,
         filter: CHILD_TARGET_FILTER,
       }));
       await attachStage("calibration_failed", () => this.calibrate());
-    // Re-apply a caller-chosen viewport (WS9.6) that a re-attach would otherwise drop.
+    // Re-apply a caller-chosen viewport that a re-attach would otherwise drop.
       if (this.sessionViewport) {
         await this.cdp("Emulation.setDeviceMetricsOverride", { width: this.sessionViewport.width, height: this.sessionViewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
       }
-      await attachStage("overlay_readiness_failed", () => this.reassertOverlay());
       this.containmentReady = true;
       this.reconcileRenderer("root");
     } catch (error) {
@@ -400,20 +350,8 @@ class NewtonBrowserDriver {
     }
   }
 
-  // (Re)inject the overlay and re-announce the driving indicator. Called on attach
-  // and again on every main-frame navigation (Proposal 28 §3) — the injected
-  // overlay world is destroyed on navigation, so without this the cursor/outline
-  // disappears on the first nav and never returns. Fire-and-forget; never gates.
-  async reassertOverlay(): Promise<void> {
-    if (!this.attached || this.tabId == null) return;
-    await this.pageEffectsPort.begin(this.tabId, {
-      ...(this.accent === null ? {} : { accent: this.accent }),
-      ownerLabel: this.ownerLabel,
-    }).catch(() => {});
-  }
-
   async detach(): Promise<void> {
-    if (!this.attached || this.tabId == null) return;
+    if (!this.attached) return;
     this.closing = true;
     this.containmentReady = false;
     this.rejectInitialNavigation(typedDriverError("debugger_conflict"));
@@ -426,11 +364,13 @@ class NewtonBrowserDriver {
           await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId }, { sessionId: browserControlSessionId });
           await this.drainProtocolEventQueue();
           await this.closeOutstandingRelatedLaunches();
-          await this.cdp("Target.setAutoAttach", {
-            autoAttach: false,
-            flatten: true,
-            waitForDebuggerOnStart: false,
-          }, { sessionId: browserControlSessionId });
+          if (this.browserPageAutoAttachActive) {
+            await this.cdp("Target.setAutoAttach", {
+              autoAttach: false,
+              flatten: true,
+              waitForDebuggerOnStart: false,
+            }, { sessionId: browserControlSessionId });
+          }
           await this.drainProtocolEventQueue();
           await this.closeOutstandingRelatedLaunches();
           await this.cdp("Target.detachFromTarget", { sessionId: browserControlSessionId });
@@ -442,11 +382,11 @@ class NewtonBrowserDriver {
       this.protocolGeneration += 1;
       this.browserControlSessionId = null;
       this.browserRootSessionId = null;
+      this.browserPageAutoAttachActive = false;
     }
-    await this.pageEffectsPort.end(this.tabId).catch(() => {});
     await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
     try {
-      await this.debuggerPort.detach({ tabId: this.tabId });
+      await this.debuggerPort.detach();
     } catch {
       throw typedDriverError("shutdown_detach_failed");
     }
@@ -456,7 +396,6 @@ class NewtonBrowserDriver {
     this.activeCommandKind = null;
     this.activeCommandToken = null;
     this.attached = false;
-    this.tabId = null;
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
@@ -482,6 +421,7 @@ class NewtonBrowserDriver {
     this.unresolvedRelatedClose = null;
     this.unresolvedRelatedCloseOverflow = false;
     this.relationshipCleanupComplete = false;
+    this.browserPageAutoAttachActive = false;
     this.rendererLiveness.remove("root", "driver_detached");
   }
 
@@ -491,12 +431,12 @@ class NewtonBrowserDriver {
   // Do not call the injected detach transport here: Chromium already detached it.
   markDetached(reason = "debugger_detached"): void {
     this.unsubscribeDebuggerEvents();
-    this.attachingTabId = null;
     this.failRenderer("root", "debugger_detached", reason);
     this.attached = false;
     this.protocolGeneration += 1;
     this.browserControlSessionId = null;
     this.browserRootSessionId = null;
+    this.browserPageAutoAttachActive = false;
     this.commandContainmentPrevention = null;
     this.commandContainmentActive = false;
     this.activeCommandKind = null;
@@ -620,7 +560,6 @@ class NewtonBrowserDriver {
   }
 
   isAuthenticatedEventSource(source: CdpRecord): boolean {
-    if (typeof source?.tabId === "number" && source.tabId !== this.tabId && source.tabId !== this.attachingTabId) return false;
     const sessionId = typeof source?.sessionId === "string" && source.sessionId ? source.sessionId : null;
     if (!sessionId) return true;
     return sessionId === this.browserControlSessionId
@@ -631,7 +570,7 @@ class NewtonBrowserDriver {
   recordDebuggerSideEffects(source: CdpRecord, method: string, params: CdpRecord): void {
     this.noteInitialNavigationEvent(source, method, params);
     // Dialog open/close is tracked persistently (not just inside an action window)
-    // because a JS dialog blocks the renderer until it is handled (WS9.4).
+    // because a JS dialog blocks the renderer until it is handled.
     if (method === "Page.javascriptDialogOpening") {
       const targetKey = inputTargetKey(source);
       const dialog = this.dialogTracker.open(targetKey, params);
@@ -647,7 +586,7 @@ class NewtonBrowserDriver {
       this.refreshPendingDialog();
       this.reconcileRenderer(targetKey);
     }
-    // Console ring buffer (WS9.2).
+    // Console ring buffer.
     if (method === "Runtime.consoleAPICalled") {
       this.pushConsole({ level: consoleLevelFor(params?.type), text: consoleArgsText(params?.args), at: new Date().toISOString() });
     }
@@ -658,7 +597,7 @@ class NewtonBrowserDriver {
     if (method === "Log.entryAdded" && params?.entry) {
       this.pushConsole({ level: consoleLevelFor(params.entry.level), text: String(params.entry.text ?? ""), source: params.entry.source, at: new Date().toISOString() });
     }
-    // Network ring buffer (WS9.3) — metadata only, never headers.
+    // Network ring buffer — metadata only, never headers.
     if (method === "Network.requestWillBeSent" && params?.requestId) {
       while (this.networkInFlight.size >= NETWORK_BUFFER_MAX) {
         const oldest = this.networkInFlight.values().next().value;
@@ -734,7 +673,7 @@ class NewtonBrowserDriver {
         error.detail = `cdp_timeout_${method}`;
         reject(error);
       }, timeoutMs);
-      const debuggee = sessionId ? { tabId: this.tabId, sessionId } : { tabId: this.tabId };
+      const debuggee = sessionId ? { sessionId } : {};
       this.debuggerPort.sendCommand(debuggee, method, params).then((result) => {
         if (settled) return;
         settled = true;
@@ -753,7 +692,8 @@ class NewtonBrowserDriver {
     this.targetRegistry = new TargetRegistry();
     const response = await this.cdp("Target.getTargetInfo", {}).catch(() => null);
     const info = response?.targetInfo;
-    const targetId = typeof info?.targetId === "string" && info.targetId ? info.targetId : `tab-${this.tabId}`;
+    const targetId = typeof info?.targetId === "string" && info.targetId ? info.targetId : null;
+    if (!targetId) throw typedDriverError("origin_containment_unavailable");
     this.mainTargetId = targetId;
     this.targetRegistry.registerTarget({
       targetId,
@@ -777,7 +717,6 @@ class NewtonBrowserDriver {
 
   async recordTargetEventNow(source: CdpRecord, method: string, params: CdpRecord, generation: number): Promise<void> {
     const sourceSessionId = typeof source?.sessionId === "string" ? source.sessionId : null;
-    if (typeof source?.tabId === "number" && source.tabId !== this.tabId) return;
     if (method !== "Target.attachedToTarget" && sourceSessionId && !this.isAuthenticatedEventSource(source)) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo && typeof params.sessionId === "string") {
       const info = params.targetInfo;
@@ -795,7 +734,7 @@ class NewtonBrowserDriver {
       }
       if (type === "page" && !fromBrowserControl) return;
       if (fromBrowserControl && type !== "page") return;
-      if (this.ownsBrowser && type === "worker" && params.waitingForDebugger !== true) {
+      if (type === "worker" && params.waitingForDebugger !== true) {
         // The owned runtime's launch-time proxy is already the pre-network
         // boundary. Workers are not exposed as actionable/observable targets,
         // and retrofitting domains after an unpaused worker starts races its
@@ -803,15 +742,10 @@ class NewtonBrowserDriver {
         return;
       }
       if (fromBrowserControl && params.waitingForDebugger !== true) {
-        if (this.ownsBrowser) {
-          await this.trackProxyGuardedRelatedPage(info, params.sessionId, sourceSessionId!, generation);
-          return;
-        }
-        await this.closeUntrackedRelatedTarget(targetId, sourceSessionId!, "related_page_not_paused_close_failed");
-        throw this.containmentFenceFailure("related_page_not_paused");
+        await this.trackProxyGuardedRelatedPage(info, params.sessionId, sourceSessionId!, generation);
+        return;
       }
-      if (this.ownsBrowser
-        && !fromBrowserControl
+      if (!fromBrowserControl
         && params.waitingForDebugger !== true
         && this.activeCommandToken !== null
         && !this.processingOwnedChildTargets) {
@@ -830,8 +764,7 @@ class NewtonBrowserDriver {
       const hostFrameId = type === "iframe"
         ? (typeof info.openerFrameId === "string" ? info.openerFrameId : targetId)
         : null;
-      const commandScopedWorker = this.ownsBrowser
-        && type === "worker"
+      const commandScopedWorker = type === "worker"
         && this.activeCommandToken !== null
         && this.browserControlSessionId !== null;
       const relatedTicket = fromBrowserControl || commandScopedWorker
@@ -924,7 +857,7 @@ class NewtonBrowserDriver {
           }
         }
       } catch (error) {
-        if (this.ownsBrowser && params.waitingForDebugger !== true && !relatedTicket && this.browserControlSessionId) {
+        if (params.waitingForDebugger !== true && !relatedTicket && this.browserControlSessionId) {
           // An unpaused OOPIF/worker can disappear while its recursive domains
           // are being installed (common on production pages with short-lived ad
           // and analytics frames). The launch-time proxy remains the preventive
@@ -992,10 +925,8 @@ class NewtonBrowserDriver {
       const targetDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment!);
       if (targetDecision.action === "resume") {
         this.heldTargets.delete(held.targetId);
-        if (!this.ownsBrowser) {
-          await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: held.sessionId });
-        }
         if (ticket) {
+          await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: ticket.sessionId });
           ticket.phase = "waiting_document";
           this.armRelatedLaunchDeadline(ticket);
         }
@@ -1038,10 +969,8 @@ class NewtonBrowserDriver {
           // A production page can cancel a paused request before CDP acknowledges
           // fail/continue. The owned runtime's launch-time proxy remains the
           // authoritative origin boundary, so a vanished request cannot escape
-          // the grant. Do not author a driver prevention without an ACK. Legacy
-          // A missing independent proxy is never treated as preventive evidence.
-          if (this.ownsBrowser) return;
-          throw error;
+          // the grant. Do not author a driver prevention without an ACK.
+          return;
         }
         this.noteInitialNavigationPrevention(sourceSessionId, params, decision.reason);
         if (relatedTicket && params.resourceType === "Document") {
@@ -1066,8 +995,7 @@ class NewtonBrowserDriver {
         try {
           await this.cdp("Fetch.continueRequest", { requestId: params.requestId }, route);
         } catch (error) {
-          if (this.ownsBrowser) return;
-          throw error;
+          return;
         }
         if (relatedTicket && params.resourceType === "Document") relatedTicket.documentContinued = true;
       }
@@ -1077,6 +1005,7 @@ class NewtonBrowserDriver {
       if (typeof params?.sessionId === "string" && params.sessionId === this.browserControlSessionId) {
         this.browserControlSessionId = null;
         this.browserRootSessionId = null;
+        this.browserPageAutoAttachActive = false;
         this.containmentReady = false;
         this.protocolEventFailure = typedDriverError("containment_fence_failed");
         return;
@@ -1183,7 +1112,7 @@ class NewtonBrowserDriver {
     generation: number,
   ): Promise<void> {
     const targetId = typeof info.targetId === "string" ? info.targetId : "";
-    if (!targetId || !this.ownsBrowser) return;
+    if (!targetId) return;
     if (!this.proxyGuardedRelatedPages.has(targetId) && this.proxyGuardedRelatedPages.size >= RELATED_LAUNCH_TICKET_CAP) {
       await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "proxy_guarded_page_capacity_close_failed");
       throw this.containmentFenceFailure("proxy_guarded_page_capacity_exceeded");
@@ -1430,7 +1359,7 @@ class NewtonBrowserDriver {
   }
 
   async navigateInitialGranted(url: string): Promise<InitialNavigationCommit> {
-    if (!this.ownsTab || !this.attached || !this.containmentReady || !this.containment) {
+    if (!this.attached || !this.containmentReady || !this.containment) {
       throw typedDriverError("origin_containment_unavailable");
     }
     if (!this.containment.contains(url)) throw typedDriverError("ungranted_navigation");
@@ -1582,9 +1511,8 @@ class NewtonBrowserDriver {
     throw typedDriverError("target_resolution_failed");
   }
 
-  // CSS-pixel calibration (§5.2 note): CDP Input coordinates are layout-viewport
-  // CSS pixels; the overlay uses position:fixed in the same space. Measure DPR /
-  // zoom once so the cursor lands on the clicked element at non-100% zoom.
+  // CDP Input coordinates are layout-viewport CSS pixels. Measure DPR and zoom
+  // so trusted input lands on the intended element at non-default scale.
   async calibrate(): Promise<void> {
     const metrics = await this.cdp("Page.getLayoutMetrics", {}).catch(() => null);
     const scale = metrics?.visualViewport?.scale;
@@ -1594,21 +1522,20 @@ class NewtonBrowserDriver {
   }
 
   // ── Observation (the read half) ───────────────────────────────────────────
-  // Compact AX observation with backendNodeId-keyed refs (§7.5). Excludes
-  // any Newton-owned UI marker so the agent never targets product chrome.
+  // Compact AX observation with backendNodeId-keyed refs. The direct runtime
+  // injects no page UI, so every actionable node belongs to the page.
   async observe(options?: DriverObserveOptions & { mode?: "full" }): Promise<FullObservation>;
   async observe(options: DriverObserveOptions & { mode: "text" }): Promise<TextObservation>;
   async observe(options: DriverObserveOptions & { mode: "diff" }): Promise<FullObservation | DeltaObservation>;
   async observe(options?: DriverObserveOptions): Promise<DriverObservation>;
-  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, includeFrameRouting = false, mode = "full", maxChars }: DriverObserveOptions = {}): Promise<DriverObservation> {
+  async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars }: DriverObserveOptions = {}): Promise<DriverObservation> {
     if (mode === "text") return this.observeText(maxChars === undefined ? {} : { maxChars });
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
     const url = await this.evalString("location.href");
-    // A navigation invalidates the diff baseline and the per-document owned-node
-    // cache (backendNodeIds are document-scoped). Reset both on URL change.
+    // A navigation invalidates the diff baseline and document-scoped node facts.
     if (url !== this.lastObserveUrl) {
       this.lastNodes.clear();
-      this.ownedNodeCache.clear();
+      this.nodeFactsCache.clear();
       this.lastObserveUrl = url;
     }
     // Only reuse cached bboxes when the page has not scrolled since the last
@@ -1632,7 +1559,6 @@ class NewtonBrowserDriver {
       const backendNodeId = axNode.backendDOMNodeId;
       if (typeof backendNodeId !== "number") continue;
       const route = tree.route ?? { targetId: this.mainTargetId, sessionId: null, frameId: null, origin: safeOrigin(url) };
-      if (await this.isOwnedOverlayNodeCached(backendNodeId, route)) continue;
       const nodeFacts = await this.describedNodeFactsCached(backendNodeId, route);
       const name = String(axNode.name?.value ?? "").slice(0, 240);
       if (filterText && !name.toLowerCase().includes(filterText)) continue;
@@ -1655,7 +1581,7 @@ class NewtonBrowserDriver {
       const resolvedRoute = this.targetRegistry.resolveRef(ref);
       this.refIndex.set(ref, resolvedRoute);
       nodes.push({
-        ref, role, name, ...(value ? { value } : {}), ...states, ...publicNodeFacts(nodeFacts, route.origin), bbox, target: { ref },
+        ref, role, name, ...(value ? { value } : {}), ...states, ...publicNodeFacts(nodeFacts, route.origin), bbox,
         documentEpoch: resolvedRoute.documentEpoch,
         ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
       });
@@ -1681,8 +1607,7 @@ class NewtonBrowserDriver {
     const title = await this.evalString("document.title");
     const origin = safeOrigin(url);
     const capturedAt = new Date().toISOString();
-    const frameRouting = includeFrameRouting ? this.targetRegistry.frameRoutingSummary() : undefined;
-    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, ...(excludedFrames.length ? { excludedFrames } : {}), ...(frameRouting ? { frameRouting } : {}), capturedAt };
+    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
     // D6: emit a compact diff when asked (and a baseline exists, and the read is
     // not query-filtered). If the page churned heavily, fall back to a full snapshot.
     const canDiff = mode === "diff" && !filterText && this.lastNodes.size > 0;
@@ -1692,13 +1617,13 @@ class NewtonBrowserDriver {
       const delta = computeObservationDelta(baseline, nodes);
       const churn = delta.added.length + delta.removed.length + delta.updated.length;
       if (churn <= Math.max(8, Math.round(nodes.length * 0.6))) {
-        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, ...(excludedFrames.length ? { excludedFrames } : {}), ...(frameRouting ? { frameRouting } : {}), capturedAt };
+        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
       }
     }
     return full;
   }
 
-  // WS9.1: readable-text observation. Prefer main/article content, fall back to body
+  // Readable-text observation. Prefer main/article content, fall back to body
   // innerText. Raw text crosses the private driver boundary and is secret-redacted host-side by
   // redactBrowserResult before it reaches the client, exactly like accessible names.
   async observeText({ maxChars = TEXT_OBSERVE_CHAR_CAP }: Pick<ObserveOptions, "maxChars"> = {}): Promise<TextObservation> {
@@ -1739,20 +1664,11 @@ class NewtonBrowserDriver {
   }
 
   reconcileFrameTree(frameTree: CdpRecord | undefined, origin: string): void {
-    let initialized = false;
     if (!this.mainTargetId) {
-      this.mainTargetId = `tab-${this.tabId ?? "unattached"}`;
-      this.targetRegistry.registerTarget({ targetId: this.mainTargetId, type: "page", origin });
-      this.targetRegistry.commitTopLevelDocument(this.mainTargetId);
-      initialized = true;
+      throw typedDriverError("origin_containment_unavailable");
     }
     const topFrame = frameTree?.frame;
-    if (initialized) {
-      if (typeof topFrame?.id === "string") this.mainFrameId = topFrame.id;
-      this.mainLoaderId = safeLoaderId(topFrame?.loaderId);
-    } else if (topFrame) {
-      this.reconcileTopLevelDocument(topFrame, origin, false);
-    }
+    if (topFrame) this.reconcileTopLevelDocument(topFrame, origin, false);
     const known = new Set(this.targetRegistry.listObservationRoutes().map((route) => route.frameId).filter(Boolean));
     const blocked = new Set<string>();
     for (const frame of childFrameRecords(frameTree)) {
@@ -1803,21 +1719,10 @@ class NewtonBrowserDriver {
     return this.observe({ mode: "diff" });
   }
 
-  // describeNode is one CDP round-trip per node; owned-ness never changes for a
-  // backendNodeId within a document, so cache it (cleared on navigation). (J45)
-  async isOwnedOverlayNodeCached(backendNodeId: number, route: TargetRoute = {}): Promise<boolean> {
-    const key = `${route.sessionId ?? "root"}:${backendNodeId}`;
-    const cached = this.ownedNodeCache.get(key);
-    if (typeof cached === "boolean") return cached;
-    const owned = await this.isOwnedOverlayNode(backendNodeId, route);
-    this.ownedNodeCache.set(key, owned);
-    return owned;
-  }
-
   async describedNodeFactsCached(backendNodeId: number, route: TargetRoute = {}): Promise<CdpRecord> {
     const key = `${route.sessionId ?? "root"}:${backendNodeId}:facts`;
-    const cached = this.ownedNodeCache.get(key);
-    if (cached && typeof cached === "object") return cached;
+    const cached = this.nodeFactsCache.get(key);
+    if (cached) return cached;
     const described = await this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null);
     const node = described?.node ?? {};
     const attributes: CdpRecord = {};
@@ -1825,17 +1730,12 @@ class NewtonBrowserDriver {
       attributes[String(node.attributes[index]).toLowerCase()] = String(node.attributes[index + 1] ?? "");
     }
     const facts = { localName: String(node.localName || node.nodeName || "").toLowerCase(), attributes };
-    this.ownedNodeCache.set(key, facts);
+    this.nodeFactsCache.set(key, facts);
     return facts;
   }
 
-  // Vision capture (Proposal 29 / D5): viewport (default), full scroll-down page,
-  // an optional pre-capture wait, and mobile/desktop device renders. Masks
-  // sensitive zones before capture; returns an inline base64 image only when the
-  // caller asked (bounded + stripped from persistence by redaction).
-  async screenshot({ sensitiveZones = [], fullPage = false, waitMs, device, clip, inline = false, format = "png", quality }: ScreenshotOptions = {}): Promise<DriverRecord> {
-    const emulation = await this.applyDeviceEmulation(device);
-    const restoreDevice = emulation.restore;
+  // Bounded viewport/full-page capture with fail-closed sensitive-zone masking.
+  async screenshot({ sensitiveZones = [], fullPage = false, clip, format = "png", quality }: ScreenshotOptions = {}): Promise<DriverRecord> {
     const masksConfigured = Array.isArray(sensitiveZones) && sensitiveZones.length > 0;
     // Trusted post-capture masking operates on Chromium's bounded lossless PNG.
     // A masked JPEG request is safely upgraded to PNG rather than returning pixels
@@ -1847,8 +1747,6 @@ class NewtonBrowserDriver {
       : "mask_not_configured";
     let resumeRasterMask: (() => Promise<void>) | null = null;
     try {
-      const wait = Math.max(0, Math.min(Number(waitMs) || 0, MAX_SCREENSHOT_WAIT_MS));
-      if (wait > 0) { await this.waitForSettle().catch(() => {}); await delay(wait); }
       let targets: TargetResolution[] = [];
       if (masksConfigured) {
         targets = await this.resolveMaskTargets(sensitiveZones);
@@ -1862,7 +1760,6 @@ class NewtonBrowserDriver {
         quality,
         fullPage,
         clip,
-        emulationClip: emulation.clip,
       });
       const captureClip = params.clip as (Box & { scale: number }) | undefined;
       if (!captureClip) throw new Error("screenshot_clip_unavailable");
@@ -1896,35 +1793,24 @@ class NewtonBrowserDriver {
       const scale = captureClip?.scale || 1;
       const width = rasterWidth ?? (captureClip ? Math.round(captureClip.width * scale) : undefined);
       const height = rasterHeight ?? (captureClip ? Math.round(captureClip.height * scale) : undefined);
-      // Carry the image ONLY when the caller asked for it inline — otherwise a
-      // multi-MB base64 would be POSTed across the network just to be stripped by
-      // redaction. Drop an over-cap inline image here too (before the POST) so it
-      // never wastes a slow round-trip; the caller sees truncated.
       const dataUrl = screenshotData ? `data:image/${imageFormat};base64,${screenshotData}` : null;
-      const inlineTooBig = Boolean(inline && dataUrl && dataUrl.length > INLINE_IMAGE_MAX_CHARS);
-      const includeInline = Boolean(inline && dataUrl && !inlineTooBig);
       return {
         kind: "screenshot",
         mode: "cdp",
         origin: safeOrigin(url),
         title,
-        device: device === "mobile" || device === "desktop" ? device : "viewport",
         fullPage: Boolean(fullPage),
-        truncated: truncated || inlineTooBig,
+        truncated,
         maskDisposition,
         format: imageFormat,
         ...(requestedFormat !== imageFormat ? { requestedFormat } : {}),
         ...(width ? { width } : {}),
         ...(height ? { height } : {}),
-        ...(includeInline ? { dataUrl, inline: true } : {}),
+        ...(dataUrl ? { dataUrl } : {}),
         capturedAt: new Date().toISOString(),
       };
     } finally {
-      try {
-        if (resumeRasterMask) await resumeRasterMask();
-      } finally {
-        await restoreDevice().catch(() => {});
-      }
+      if (resumeRasterMask) await resumeRasterMask();
     }
   }
 
@@ -1933,7 +1819,6 @@ class NewtonBrowserDriver {
     quality: number | undefined;
     fullPage: boolean;
     clip: Box | undefined;
-    emulationClip: Box | null;
   }): Promise<{ params: CdpRecord; truncated: boolean }> {
     const params: CdpRecord = { format: input.imageFormat };
     if (input.imageFormat === "jpeg") {
@@ -1949,9 +1834,6 @@ class NewtonBrowserDriver {
         height: Math.min(input.clip.height, MAX_SHOT_PX),
         scale: 1,
       };
-      params.captureBeyondViewport = true;
-    } else if (!input.fullPage && input.emulationClip) {
-      params.clip = { ...input.emulationClip, scale: 1 };
       params.captureBeyondViewport = true;
     } else if (input.fullPage) {
       const metrics = await this.cdp("Page.getLayoutMetrics", {}).catch(() => null);
@@ -1977,32 +1859,6 @@ class NewtonBrowserDriver {
     return { params, truncated };
   }
 
-  // Apply a mobile/desktop device render (D5). It visibly reflows only the
-  // session's isolated browser. Returns { restore, clip } — the clip is the device viewport so
-  // the capture can target an explicit region (see screenshot()).
-  async applyDeviceEmulation(device?: "mobile" | "desktop"): Promise<{ restore: () => Promise<void>; clip: Box | null }> {
-    if (device !== "mobile" && device !== "desktop") return { restore: async () => {}, clip: null };
-    if (!this.ownsTab) throw new Error("device_emulation_needs_owned_tab");
-    // Mobile render via viewport width + mobile:true (responsive sites switch on
-    // viewport, not UA). We deliberately do NOT spoof the user agent: a UA override
-    // makes UA-sniffing sites (e.g. Wikipedia) redirect to their mobile domain
-    // mid-capture, which leaves the granted origin and hangs the screenshot.
-    // deviceScaleFactor stays 2 (not 3) to keep the image light for the serial pump.
-    const preset = device === "mobile"
-      ? { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
-      : { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false };
-    await this.cdp("Emulation.setDeviceMetricsOverride", { width: preset.width, height: preset.height, deviceScaleFactor: preset.deviceScaleFactor, mobile: preset.mobile }).catch(() => {});
-    await this.cdp("Emulation.setTouchEmulationEnabled", { enabled: preset.mobile }).catch(() => {});
-    await this.waitForSettle(1_000);
-    return {
-      restore: async () => {
-        await this.cdp("Emulation.clearDeviceMetricsOverride", {}).catch(() => {});
-        await this.cdp("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
-      },
-      clip: { x: 0, y: 0, width: preset.width, height: preset.height },
-    };
-  }
-
   // ── Action execution (the write half) ──────────────────────────────────────
   async executeAction(action: DriverAction, context: DriverContext = {}): Promise<DriverRecord> {
     const kind = action.kind;
@@ -2026,7 +1882,7 @@ class NewtonBrowserDriver {
       const prevention = ticketPrevention ?? this.commandContainmentPrevention;
       if (!prevention) return result;
       const changed = isRecord(result.changed) ? result.changed : {};
-      return { ...result, status: "blocked", verified: false, reason: prevention, changed: { ...changed, containmentPrevention: prevention } };
+      return { ...result, status: "blocked", reason: prevention, changed: { ...changed, containmentPrevention: prevention } };
     } finally {
       this.relatedCommandFailures.delete(commandToken);
       this.commandContainmentPrevention = null;
@@ -2046,17 +1902,13 @@ class NewtonBrowserDriver {
             ...(action.query !== undefined ? { query: action.query } : {}),
             ...(action.roles !== undefined ? { roles: action.roles } : {}),
             ...(action.includeInteractive !== undefined ? { includeInteractive: action.includeInteractive } : {}),
-            ...(action.includeFrameRouting !== undefined ? { includeFrameRouting: action.includeFrameRouting } : {}),
             ...(action.mode !== undefined ? { mode: action.mode } : {}),
           }));
         case "screenshot":
-          return { status: "verified", verified: true, changed: {}, screenshot: await this.screenshot({
+          return { status: "verified", changed: {}, screenshot: await this.screenshot({
             ...(action.sensitiveZones !== undefined ? { sensitiveZones: action.sensitiveZones } : {}),
             ...(action.fullPage !== undefined ? { fullPage: action.fullPage } : {}),
-            ...(action.waitMs !== undefined ? { waitMs: action.waitMs } : {}),
-            ...(action.device !== undefined ? { device: action.device } : {}),
             ...(action.clip !== undefined ? { clip: action.clip } : {}),
-            ...(action.inline !== undefined ? { inline: action.inline } : {}),
             ...(action.format !== undefined ? { format: action.format } : {}),
             ...(action.quality !== undefined ? { quality: action.quality } : {}),
           }) };
@@ -2078,9 +1930,8 @@ class NewtonBrowserDriver {
         case "dialog_accept":
         case "dialog_dismiss": return this.handleDialog(kind, action);
         case "resize": return this.resizeViewport(action);
-        case "console": return { status: "verified", verified: true, changed: {}, observation: this.getConsole(action) };
-        case "network": return { status: "verified", verified: true, changed: {}, observation: await this.getNetwork(action) };
-        case "fill_form": return this.withObservationMeta("failed", {}, await this.observe({}), "unsupported_action");
+        case "console": return { status: "verified", changed: {}, observation: this.getConsole(action) };
+        case "network": return { status: "verified", changed: {}, observation: await this.getNetwork(action) };
         default: {
           const unhandled: never = kind;
           void unhandled;
@@ -2089,7 +1940,7 @@ class NewtonBrowserDriver {
       }
   }
 
-  // ── Console / network read-only buffers (WS9.2 / WS9.3) ─────────────────────
+  // Console / network read-only buffers.
   pushConsole(entry: ConsoleEntry): void {
     if (!entry.text) return;
     entry.text = String(entry.text).slice(0, 2000);
@@ -2120,9 +1971,7 @@ class NewtonBrowserDriver {
     let entries = this.consoleBuffer.filter((entry) =>
       (!level || entry.level === level) && (!pattern || String(entry.text).toLowerCase().includes(pattern)));
     entries = entries.slice(-limit);
-    const dropped = this.consoleDropped;
-    if (action.clear) { this.consoleBuffer = []; this.consoleDropped = 0; }
-    return { kind: "console_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped, capturedAt: new Date().toISOString() };
+    return { kind: "console_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped: this.consoleDropped, capturedAt: new Date().toISOString() };
   }
 
   async getNetwork(action: DriverAction = { kind: "network" }): Promise<DriverRecord> {
@@ -2172,11 +2021,10 @@ class NewtonBrowserDriver {
     };
   }
 
-  // Set the isolated session viewport (WS9.6). Resizing affects only the
+  // Set the isolated session viewport. Resizing affects only the
   // session's owned browser. The
   // override persists on the driver and is re-applied on re-attach.
   async resizeViewport(action: DriverAction): Promise<DriverRecord> {
-    if (!this.ownsTab) return this.withObservationMeta("failed", {}, await this.observe({}), "resize_needs_owned_tab");
     const viewport = action?.viewport;
     if (!viewport || typeof viewport.width !== "number" || typeof viewport.height !== "number") {
       return this.withObservationMeta("failed", {}, await this.observe({}), "invalid_viewport");
@@ -2188,7 +2036,7 @@ class NewtonBrowserDriver {
     return this.withObservationMeta("verified", { viewport: `${viewport.width}x${viewport.height}` }, observation);
   }
 
-  // Accept or dismiss a page-initiated JavaScript dialog (WS9.4). The renderer is
+  // Accept or dismiss a page-initiated JavaScript dialog. The renderer is
   // blocked while a dialog is open, so we resolve it via CDP FIRST and only then
   // observe. `promptText` is applied to prompt() dialogs on accept and ignored
   // otherwise. With no dialog open this is a typed no-op, not an error the agent
@@ -2257,7 +2105,6 @@ class NewtonBrowserDriver {
     if (!point) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
     const pointerRoute = this.pointerInputRoute(target, point);
     if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
-    this.paintCursorClick(point.x, point.y); // fire-and-forget (§5.1)
     const before = await this.pageSignature();
     const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId, target) : {};
       const signalWindow = this.beginActionSignals();
@@ -2266,7 +2113,7 @@ class NewtonBrowserDriver {
         let committingInputStarted = false;
         let releaseAcknowledgementUncertain = false;
         try {
-          const inputTarget = this.ownsBrowser && pointerRoute.mode === "root"
+          const inputTarget = pointerRoute.mode === "root"
             ? { ...target, timeoutMs: OWNED_ROOT_INPUT_TIMEOUT_MS }
             : target;
           dispatched = await this.dispatchInput(inputTarget, async (input) => {
@@ -2311,7 +2158,6 @@ class NewtonBrowserDriver {
         const signals = signalWindow.finish();
         return {
           status: "blocked",
-          verified: false,
           reason: relatedPrevention,
           changed: {
             ...reconciliationChanges(signals),
@@ -2352,7 +2198,6 @@ class NewtonBrowserDriver {
     const pointerRoute = this.pointerInputRoute(target, point);
     if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
     const beforeState = await this.elementState(backendNodeId, target);
-    this.paintCursorField(point);
     let dispatched: boolean;
     let committingInputStarted = false;
     try {
@@ -2463,7 +2308,7 @@ class NewtonBrowserDriver {
         if (output.length >= limit) break;
         const described = await this.cdp("DOM.describeNode", { nodeId }, route).catch(() => null);
         const backendNodeId = described?.node?.backendNodeId;
-        if (!Number.isInteger(backendNodeId) || await this.isOwnedOverlayNodeCached(backendNodeId, route)) continue;
+        if (!Number.isInteger(backendNodeId)) continue;
         const ref = this.targetRegistry.createRef(route.targetId, backendNodeId, route.frameId ? { frameId: route.frameId } : {});
         if (existingRefs.has(ref)) continue;
         const [facts, name, bbox, nodeFacts] = await Promise.all([
@@ -2487,7 +2332,6 @@ class NewtonBrowserDriver {
           ...(typeof facts.checked === "boolean" ? { checked: facts.checked } : {}),
           ...publicNodeFacts(nodeFacts, route.origin),
           bbox: [Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.width), Math.round(bbox.height)],
-          target: { ref },
           documentEpoch: resolvedRoute.documentEpoch,
           ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
           route: resolvedRoute,
@@ -2521,7 +2365,6 @@ class NewtonBrowserDriver {
         name: facts.name || "File input",
         documentEpoch: resolvedRoute.documentEpoch,
         ...(facts.bbox ? { bbox: facts.bbox } : {}),
-        target: { ref },
       });
     }
     return output;
@@ -2551,7 +2394,7 @@ class NewtonBrowserDriver {
     if (!target?.backendNodeId) return this.targetMoved("not_found");
     const facts = await this.fileInputFacts(target.backendNodeId, target);
     if (!facts.isFileInput) throw new Error("target_not_file_input");
-    const explicitRef = Boolean((action.target && "ref" in action.target && action.target.ref) || action.ref);
+    const explicitRef = Boolean(action.ref);
     if (!facts.visible && !explicitRef) throw new Error("hidden_file_input_requires_ref");
     const files = Array.isArray(action.files) ? action.files : [];
     if (files.length > 1 && !facts.multiple) throw new Error("file_input_not_multiple");
@@ -2610,7 +2453,6 @@ class NewtonBrowserDriver {
       { timeoutMs: SCROLL_DISPATCH_TIMEOUT_MS },
       (input) => input.wheel({ x: 10, y: 10 }, { x: 0, y: dy }),
     ).then(() => true).catch(() => false);
-    await this.pageEffectsPort.scroll(this.tabId, dy).catch(() => {});
     const afterY = await this.waitForScrollPositionChange(beforeY);
     const observation = await this.observeDelta();
     const changed = Math.abs(afterY - beforeY) > 1;
@@ -2636,7 +2478,8 @@ class NewtonBrowserDriver {
   // First-class wait_for: ref-appears / text-appears / networkIdle. Never
   // caller-supplied JS (§7.5).
   async waitFor(action: DriverAction): Promise<DriverRecord> {
-    const waitResult = await this.waitForCondition(action.waitFor ?? action, action.timeoutMs);
+    if (!action.waitFor) throw typedDriverError("invalid_arguments");
+    const waitResult = await this.waitForCondition(action.waitFor, action.waitFor.timeoutMs);
     const observation = await this.observeDelta();
     return this.withObservationMeta(waitResult.matched ? "verified" : "timed_out", waitResult.matched ? { waitedFor: true } : {}, observation, waitResult.reason);
   }
@@ -2644,7 +2487,8 @@ class NewtonBrowserDriver {
   async press(action: DriverAction): Promise<DriverRecord> {
     const target = await this.resolveTarget(action);
     if (target?.backendNodeId) await this.cdp("DOM.focus", { backendNodeId: target.backendNodeId }, target).catch(() => {});
-    const keys = Array.isArray(action.keys) && action.keys.length > 0 ? action.keys : [String(action.value ?? "Enter")];
+    if (!Array.isArray(action.keys) || action.keys.length === 0) throw typedDriverError("invalid_arguments");
+    const keys = action.keys;
     const inputMode = this.targetInputMode(target ?? {});
     const signalWindow = this.beginActionSignals();
     try {
@@ -2690,7 +2534,6 @@ class NewtonBrowserDriver {
       throw error;
     }
     if (!dispatched) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
-    await this.pageEffectsPort.move(this.tabId, point).catch(() => {});
     await this.settleShort();
     const observation = await this.observeDelta();
     return this.withObservationMeta("verified", { hovered: true }, observation);
@@ -3494,15 +3337,6 @@ class NewtonBrowserDriver {
     return typeof resolved?.object?.objectId === "string" ? resolved.object.objectId : null;
   }
 
-  async isOwnedOverlayNode(backendNodeId: number, route: TargetRoute = {}): Promise<boolean> {
-    const described = await this.cdp("DOM.describeNode", { backendNodeId }, route).catch(() => null);
-    const attrs = described?.node?.attributes ?? [];
-    for (let i = 0; i < attrs.length; i += 2) {
-      if (attrs[i] === "data-newton-browser-ui") return true;
-    }
-    return false;
-  }
-
   async resolveMaskTargets(zones: NonNullable<BrowserAction["sensitiveZones"]>): Promise<TargetResolution[]> {
     if (!Array.isArray(zones) || zones.length === 0 || zones.length > 32) throw new Error("mask_application_failed");
     const targets: TargetResolution[] = [];
@@ -3671,17 +3505,6 @@ class NewtonBrowserDriver {
     await this.waitForSettle(750);
   }
 
-  paintCursorClick(x: number, y: number): void {
-    // fire-and-forget, never awaited, errors swallowed (§5.1).
-    this.pageEffectsPort.move(this.tabId, { x, y }).catch(() => {});
-    this.pageEffectsPort.click(this.tabId, { x, y }).catch(() => {});
-  }
-
-  paintCursorField(point: Point): void {
-    this.pageEffectsPort.move(this.tabId, point).catch(() => {});
-    this.pageEffectsPort.field(this.tabId, { x: point.x - 12, y: point.y - 12, width: 24, height: 24 }).catch(() => {});
-  }
-
   async evalString(expression: string, route: TargetRoute = {}): Promise<string> {
     const result = await this.cdp("Runtime.evaluate", { expression, returnByValue: true }, route).catch(() => null);
     return typeof result?.result?.value === "string" ? result.result.value : "";
@@ -3733,7 +3556,7 @@ class NewtonBrowserDriver {
     if (wait.ref || wait.role || wait.name) {
       const target = await this.resolveTarget({
         kind: "wait_for",
-        target: wait.ref ? { ref: wait.ref } : { role: wait.role ?? "", ...(wait.name !== undefined ? { name: wait.name } : {}) },
+        ...(wait.ref ? { ref: wait.ref } : { role: wait.role ?? "", ...(wait.name !== undefined ? { name: wait.name } : {}) }),
       });
       if (target) return true;
     }
@@ -3742,7 +3565,7 @@ class NewtonBrowserDriver {
         : wait.ref ? { ref: wait.ref }
           : wait.role ? { role: wait.role, ...(wait.name !== undefined ? { name: wait.name } : {}) }
             : undefined;
-      const target = await this.resolveTarget({ kind: "wait_for", ...(waitTarget ? { target: waitTarget } : {}) });
+      const target = await this.resolveTarget({ kind: "wait_for", ...waitTarget });
       if (target?.backendNodeId) {
         const state = await this.elementState(target.backendNodeId, target);
         if (String(state.value ?? "").includes(wait.value)) return true;
@@ -3797,20 +3620,16 @@ class NewtonBrowserDriver {
   }
 
   withObservationMeta(status: string, changed: ChangeRecord, observation: DriverObservation, reason?: string): DriverRecord {
-    const verified = status === "verified";
     return {
       status,
-      verified,
       changed: changed ?? {},
       ...(reason ? { reason } : {}),
       observation: {
         ...observation,
-        actionStatus: status,
-        verified,
         ...(reason ? { reason } : {}),
         ...(changed && Object.keys(changed).length > 0 ? { changed } : {}),
         // Surface a still-open dialog so the agent knows it must accept/dismiss
-        // before the renderer will respond again (WS9.4).
+        // before the renderer will respond again.
         ...(this.pendingDialog ? { pendingDialog: this.pendingDialog } : {}),
       },
     };
@@ -3937,7 +3756,7 @@ function isRecord(value: unknown): value is CdpRecord {
 }
 
 function isMutatingAction(kind: DriverAction["kind"]): boolean {
-  return !["observe", "screenshot", "wait_for", "console", "network", "fill_form"].includes(kind);
+  return !["observe", "screenshot", "wait_for", "console", "network"].includes(kind);
 }
 
 function isContainmentAttributableAction(action: DriverAction): boolean {
@@ -3945,7 +3764,6 @@ function isContainmentAttributableAction(action: DriverAction): boolean {
   if (["scroll", "hover", "move", "resize"].includes(action.kind)) return false;
   if (action.kind === "press") {
     const targeted = typeof action.ref === "string"
-      || action.target !== undefined
       || typeof action.role === "string"
       || typeof action.name === "string"
       || typeof action.label === "string"
@@ -3997,7 +3815,6 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 
 function normalizedTarget(action: DriverAction | undefined | null): NormalizedTarget | null {
   if (!action || typeof action !== "object") return null;
-  if (action.target && typeof action.target === "object") return action.target;
   if (action.ref) return { ref: String(action.ref) };
   if (action.role) return { role: String(action.role), ...(action.name ? { name: String(action.name) } : {}), ...(action.exact ? { exact: true } : {}) };
   if (action.name) return { name: String(action.name), ...(action.exact ? { exact: true } : {}) };
@@ -4138,7 +3955,7 @@ function isNetworkWrite(request: CdpRecord | undefined): boolean {
   return Boolean(method && !["GET", "HEAD", "OPTIONS"].includes(method));
 }
 
-// Map a CDP console/log type to a bounded level enum (WS9.2).
+// Map a CDP console/log type to a bounded level enum.
 function consoleLevelFor(type: unknown): string {
   const t = String(type ?? "log");
   if (t === "warning" || t === "warn") return "warn";

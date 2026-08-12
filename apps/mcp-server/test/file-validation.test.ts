@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { prepareActionForDispatch } from "../src/mcp-server.ts";
 
-test("set_files validates image/video signatures, exact paths, and cancellation", () => {
+test("set_files validates image/video signatures, exact paths, and strict action shape", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-files-"));
   try {
     const fixtures = [
@@ -18,20 +18,20 @@ test("set_files validates image/video signatures, exact paths, and cancellation"
       write(root, "asset.mp4", Buffer.from([0, 0, 0, 16, ...Buffer.from("ftyp", "ascii")])),
       write(root, "asset.webm", [0x1a, 0x45, 0xdf, 0xa3]),
     ];
-    const prepared = prepareActionForDispatch({ kind: "set_files", target: { ref: "e7" }, files: fixtures }) as any;
+    const prepared = prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: fixtures });
     assert.deepEqual(prepared.files, fixtures);
-    assert.deepEqual((prepareActionForDispatch({ kind: "set_files", target: { ref: "e7" }, files: [] }) as any).files, []);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: [] }), /files/u);
 
-    assert.throws(() => prepareActionForDispatch({ kind: "set_files", files: [path.join(root, "missing.png")] }), /file_not_found/);
-    assert.throws(() => prepareActionForDispatch({ kind: "set_files", files: [write(root, "asset.txt", Buffer.from("text"))] }), /file_type_not_allowed/);
-    assert.throws(() => prepareActionForDispatch({ kind: "set_files", files: [write(root, "fake.png", Buffer.from("not png"))] }), /file_type_not_allowed/);
-    assert.throws(() => prepareActionForDispatch({ kind: "set_files", files: Array.from({ length: 9 }, () => fixtures[0]) }), /file_count_exceeded/);
-    assert.throws(() => prepareActionForDispatch({ kind: "set_files", files: ["relative.png"] }), /invalid_file_path/);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: [path.join(root, "missing.png")] }), /file_not_found/);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: [write(root, "asset.txt", Buffer.from("text"))] }), /file_type_not_allowed/);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: [write(root, "fake.png", Buffer.from("not png"))] }), /file_type_not_allowed/);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: Array.from({ length: 9 }, () => fixtures[0]) }), /files/u);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: ["relative.png"] }), /invalid_file_path/);
 
     const oversized = path.join(root, "oversized.png");
     fs.writeFileSync(oversized, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
     fs.truncateSync(oversized, 50 * 1024 * 1024 + 1);
-    assert.throws(() => prepareActionForDispatch({ kind: "set_files", files: [oversized] }), /file_too_large/);
+    assert.throws(() => prepareActionForDispatch({ kind: "set_files", ref: "d1:e7", files: [oversized] }), /file_too_large/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

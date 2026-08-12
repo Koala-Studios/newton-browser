@@ -8,7 +8,7 @@
     {
       "tool": "browser.act",
       "expect": "completed",
-      "action": { "kind": "click", "target": { "role": "textbox", "name": "Keyboard target" } }
+      "action": { "kind": "click", "role": "textbox", "name": "Keyboard target" }
     },
     {
       "tool": "browser.act",

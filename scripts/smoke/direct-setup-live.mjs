@@ -20,20 +20,25 @@ const fixture = http.createServer((_request, response) => {
 });
 
 let cleanupConfirmed = false;
+let receipt = null;
+let terminalFailure = null;
 try {
   const origin = await listen(fixture);
   const setup = await runJson(args.entry, ["setup", "--browser", args.browser], env);
   if (setup?.configured !== true
-    || setup?.browserFamily !== args.browser || setup?.identityCreated !== true
-    || typeof setup?.identityId !== "string") throw new Error("direct_setup_failed");
+    || setup?.browserFamily !== args.browser || setup?.nextAction !== "start_session") throw new Error("direct_setup_failed");
+  const identity = await runJson(args.entry, ["identity", "create", "--browser", args.browser], env);
+  if (typeof identity?.id !== "string" || identity?.browserFamily !== args.browser || identity?.source !== "new") {
+    throw new Error("direct_identity_create_failed");
+  }
 
-  const login = spawn(process.execPath, [args.entry, "identity", "login", setup.identityId, "--origin", origin], {
+  const login = spawn(process.execPath, [args.entry, "identity", "login", identity.id, "--origin", origin], {
     cwd: process.cwd(),
     env,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  const loginResult = await awaitLogin(login, setup.identityId, args.browser);
+  const loginResult = await awaitLogin(login, identity.id, args.browser);
   if (loginResult?.status !== "closed" || loginResult?.cleanupConfirmed !== true) {
     throw new Error("direct_setup_login_cleanup_failed");
   }
@@ -46,7 +51,7 @@ try {
     throw new Error("direct_setup_doctor_failed");
   }
   cleanupConfirmed = true;
-  process.stdout.write(`${JSON.stringify({
+  receipt = {
     ok: true,
     browserFamily: args.browser,
     setupConfigured: true,
@@ -54,11 +59,31 @@ try {
     loginCleanupConfirmed: true,
     liveDoctorVerified: true,
     residue: 0,
-  })}\n`);
+  };
+} catch (error) {
+  terminalFailure = error;
+  process.exitCode = 1;
 } finally {
   await close(fixture);
-  if (cleanupConfirmed) removeOwnedRoot(owned);
+  if (cleanupConfirmed) {
+    try { removeOwnedRoot(owned); } catch {
+      terminalFailure = Object.assign(new Error("direct_setup_cleanup_refused"), { code: "direct_setup_cleanup_refused" });
+      process.exitCode = 1;
+    }
+  }
 }
+
+process.stdout.write(`${JSON.stringify(terminalFailure ? {
+  ok: false,
+  browserFamily: args.browser,
+  errorCode: safeCode(terminalFailure),
+  cleanupConfirmed,
+  temporaryRootRemoved: !fs.existsSync(owned.root),
+} : {
+  ...receipt,
+  cleanupConfirmed: true,
+  temporaryRootRemoved: true,
+})}\n`);
 
 function parseArgs(values) {
   let entry = path.resolve("apps/mcp-server/dist/index.js");
@@ -149,6 +174,13 @@ function listen(server) {
 function close(server) {
   if (!server.listening) return Promise.resolve();
   return new Promise((resolve) => server.close(() => resolve()));
+}
+
+function safeCode(error) {
+  const value = error && typeof error === "object" && typeof error.code === "string"
+    ? error.code
+    : error instanceof Error ? error.message : "direct_setup_smoke_failed";
+  return /^[a-z][a-z0-9_]{0,79}$/u.test(value) ? value : "direct_setup_smoke_failed";
 }
 
 function createOwnedRoot() {

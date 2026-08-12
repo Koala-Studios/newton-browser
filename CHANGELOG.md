@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased reviewer hardening
+## [Unreleased]
+
+### Fixed
 
 - Added a crash-surviving browser guardian with exact process-tree and identity/lease
   cleanup ownership, plus explicit stale-lease inspection/recovery.
@@ -12,16 +14,141 @@
   Chrome/Edge direct-live and read-only production-site QA.
 - Added real-site and forced-host-crash live stages. Final integrated results remain to
   be recorded; this entry is not a release claim.
+- Collapsed safety decisions to one class, one commit boundary, and one bounded reason;
+  removed duplicate blocked/evidence/reason-array fields and the console clear mutation.
+- Made cancellation phase truthful: queued cancellation is retry-safe and not started,
+  while running cancellation remains FIFO-fenced and returns outcome unknown.
+- Made screenshot publication fail closed on missing mask disposition, malformed or
+  noncanonical image data, signature mismatch, oversized data, or unredactable metadata.
+- Tightened modern MCP request shapes, cursor handling, unknown-method/tool errors, and
+  client-supplied fields without adding initialization or framing compatibility.
+- Modern parse and invalid-request errors now omit an unavailable request ID exactly as
+  required by the 2026-07-28 MCP response schema; they never emit a legacy `id:null`.
+- Unsupported-version errors now expose only the specification-defined `supported` and
+  `requested` data fields instead of adding a product compatibility label.
+- Bounded stdio output queues, made fragmented input assembly linear, and made output
+  failure terminate admission instead of accumulating unwritable responses.
+- Removed private frame-routing test fields, nested response-shape fallbacks, and the
+  duplicate session attachment/live-origin mirrors.
+- Enabled workspace-wide unused-local and unused-parameter errors so compatibility debris
+  cannot remain hidden after contract removal.
+- Narrowed redacted bounding-box tuples and wait states explicitly under the workspace's
+  exact optional and unchecked-index compiler contract.
+- Removed the last two inert cursor-paint compatibility calls/methods and corrected the
+  constructor's stale typed-error helper name.
+- Made host/runtime option construction exact, exported the observation input contract,
+  narrowed redacted result access, and deleted the impossible driver-level `fill_form`
+  compatibility guard surfaced by the final workspace typecheck.
+- Removed the standalone eval-only `browser.wait_for` and nested-target compatibility
+  shapes; the checked-in corpus and replay engine now use the exact public action grammar.
+- Resumed an exact paused related target when its authoritative URL becomes granted,
+  instead of advancing Newton's ticket while leaving Chromium permanently paused.
+- Removed untrusted page titles from screenshot metadata alongside the encoded image.
+- Made browser-page auto-attach rollback stateful so a failed enable retains its precise
+  setup error while an acknowledged enable is still disabled before debugger teardown.
+- Marked unsuccessful `browser.act` tool results as MCP errors while preserving their
+  canonical prevented/not-started/unknown action envelope for agent inspection.
+- Omitted absent console/network options at the exact optional-property boundary instead
+  of constructing invalid explicit `undefined` fields.
+- Migrated every connected frame/input/containment harness to the strict public target,
+  observation-cap, provenance, and result contracts; removed test-only legacy assumptions.
+- Made containment QA distinguish causal driver prevention from independent proxy
+  enforcement and stopped claiming that intentionally commit-floored popup actions were
+  allowed successes.
+- Replaced unreliable consent/challenge-dependent YouTube and Reddit pages in public QA
+  with their public text endpoints while retaining AX/action/screenshot coverage on the
+  five interactive reference and commerce sites.
+- Removed arbitrary Chromium argument injection from the runtime composition. Browser
+  launch switches are now a fixed product policy rather than a caller-controlled blacklist.
+- Removed the empty/active-session-derived browser-family list from public status; browser
+  selection remains an explicit bounded session-start argument.
+- Removed the host's active-session-derived identity count. Concurrency QA now inventories
+  the owned identity store directly after cleanup instead of treating missing sessions as
+  proof that ephemeral identities were removed.
+- Removed fixed-success config and zero-buffer placeholders from doctor output; the next
+  action now points directly to `doctor --live` when static configuration is usable.
+- Made session provisioning abortable so stop or request cancellation cannot publish a
+  browser that completed startup after cleanup began; malformed driver deltas now return
+  non-retryable outcome uncertainty instead of being treated as verified.
+- Removed the stale browser-store website path and old Node compatibility matrix; active
+  CI, release, docs, and install surfaces are direct-runtime and Node 24 only.
+- Removed the orphan GitHub Pages deployment and marketing site. The private MCP package
+  no longer has an automatic public-deployment side channel.
+- Bound the complete release gate to the exact source candidate, including explicit
+  records for intentionally deleted tracked files, before and after every verification run.
+- Unified MCP and identity utilities on one strict profile-store resolver, rejected
+  relative/root config overrides, and made first-use identity creation initialize its
+  owned config directory without requiring setup first.
+- Keyed full queue/lifecycle diagnostics by the already-public session ID so concurrent
+  sessions can be diagnosed without exposing process, target, profile, or lease identity.
+- Removed duplicate eval/quick-test executions and the duplicate core build from the
+  deterministic pipeline; focused commands remain available, while each release fact is
+  proved once per pass. The publication workflow now enforces three consecutive passes.
+- Removed transition-era AIP test filenames and the obsolete add-on discovery plan, and
+  documented the strict operator-only host-policy configuration that remained intentional.
+- Made direct-runtime, setup, crash, and seven-site QA emit their final receipt only after
+  authoritative host and owned-temp cleanup; cleanup uncertainty now supersedes a
+  green-looking workflow result instead of being swallowed.
+- Made the seven-site QA remove its identity-bound temporary root when host construction
+  fails before a host exists, instead of retaining a pre-host setup artifact.
+- Aligned the exact allowed-origin caps across MCP admission and direct-runtime startup,
+  and bounded every canonical HTTP(S) origin.
+- Reversed owned-runtime startup rollback correctly: proxy closure is confirmed before
+  releasing the identity lease.
+- Reconciled lost stop acknowledgements against authoritative session inventory without
+  hiding retained cleanup uncertainty.
+- Enforced the canonical composite-ref grammar for every sensitive screenshot zone and
+  rejected blank stdio lines as invalid JSON instead of accepting a compatibility no-op.
+- Made packed installs offline/no-audit/no-fund, removed the unused native `sharp`
+  dependency, and migrated the packed utility gate off the deleted `config print` alias.
+- Removed the live-QA browser-family environment fallback; QA has one canonical
+  `NEWTON_BROWSER_QA_BROWSER` selector, while production configuration remains separate.
+- Removed precursor release receipts and extension-era program matrices that could be
+  mistaken for evidence about the modern frozen tree. The retained defect and provenance
+  ledgers are historical records; fresh final receipts are generated only after freeze.
+- Bound host policy to one immutable snapshot loaded from the exact host config directory;
+  action evaluation no longer consults process-global configuration after construction.
+- Made public `allowedOrigins` unambiguously additional-only: zero to 31 exact grants,
+  with primary-origin repetition and duplicate grants rejected before session creation.
+- Extended the Linux Chrome matrix from package-shape checking to an exact-tarball
+  install and packed owned-browser run with its own bounded gate status.
+- Removed the external tokenizer override and UTF-8 heuristic fallback from the token
+  gate; release cost measurement now always uses the pinned `o200k_base` implementation.
+- Removed empty vendor-default host-policy merge scaffolding and reject overlapping
+  operator manifests instead of making file order an authorization decision.
+- Centralized runtime and packed-smoke version identity on the shipped MCP package
+  manifest, and marked the core/driver workspace packages private.
+- Made publication depend on three-pass Windows and Linux verification, Windows
+  Chrome/Edge, the pinned Linux CFT matrix, and matching cross-platform tarball hashes.
+- Made default config resolution honor the supplied isolated home on every platform,
+  preventing macOS/Windows fallback into the operator's real profile during clean runs.
+- Removed raw-TypeScript guardian execution from production browser launch; source and
+  packed workflows now require the exact compiled guardian artifact.
+- Read browser selection and host policy from one validated immutable configuration
+  snapshot; setup refuses to preserve malformed policy state.
+- Made core compilation replace its output directory before emit and made the boundary
+  gate reject retired compiled modules, eliminating stale compatibility artifacts.
+- Bound publication's three passes to one clean tagged candidate: per-platform receipts
+  now require identical pass digests and artifacts, record commit/tree identity, and must
+  match across Windows and Linux before publication.
+- Removed setup's duplicate config-directory validator; every MCP, setup, identity, and
+  doctor path now uses the same strict owned config resolver.
+- Aligned identity-login origin admission with the single 512-character grant bound used
+  by MCP, host, driver, proxy, registry, and documentation.
+- Derived CLI version and doctor Node requirements from one validated shipped package
+  manifest, removing both duplicated literals and an unresolved doctor constant.
+- Extended exact optional-property, checked index-access, and override enforcement from
+  the driver to the entire core/MCP TypeScript workspace.
 
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ### Added
 
+- Version `0.5.0` is the first direct-only/stateless candidate; the minor-version break
+  distinguishes it from the incompatible published extension-era `0.4.5` package.
 - Direct owned-browser runtime: one isolated Chrome/Edge process, private CDP pipe,
   exact-origin launch-time proxy, identity lease, and FIFO command pump per session.
 - Opaque Newton identities with operator login and fail-closed narrow import from a closed
@@ -29,18 +156,26 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Source and exact-packed direct live gates for Windows Chrome/Edge and Linux Chrome,
   including concurrency, nested OOPIF routing, containment, input, dialogs, lifecycle,
   and cleanup.
+- Stateless MCP `2026-07-28` newline-delimited stdio with per-request metadata,
+  discovery, cancellation, concurrent bounded request handling, and complete results.
 
 ### Changed
 
 - Removed the MV3 application, loopback relay, pairing/version-skew control plane,
   current-tab/tab-group/incognito compatibility contracts, browser-store packaging, and
-  all extension build and release paths. Direct stdio is the sole ordinary runtime;
-  explicit Unix-socket continuity remains local and optional.
+  all extension build and release paths. Stateless stdio is the sole runtime.
+- Removed initialization-era MCP, legacy framing, socket continuity, session finalize,
+  screenshot file/inline delivery, nested action targets, result aliases, synthetic tab
+  IDs, page-effects, and owned/unowned driver compatibility branches.
+- Removed redundant `eval:live`, `release:complete-local`, and `config print` aliases.
+  Direct live QA, release QA, and client installation now each have one canonical command.
+- Removed implicit configured identities. Setup records only a browser preference;
+  persistent identities are created separately and used only by explicit opaque ID.
 - Promoted the owned-browser workflow to stable `setup` and `doctor --live` commands;
   removed the migration-era `preview` command namespace and its aliases.
 - Documentation and every shipped/cached Newton Browser skill now describe only direct
-  configured-idle status, isolated owned processes, opaque identities, close-only
-  finalization, and typed cleanup failures.
+  configured-idle status, isolated owned processes, opaque identities, stop-only cleanup,
+  modern request metadata, image-only screenshots, and typed cleanup failures.
 
 ### Security
 

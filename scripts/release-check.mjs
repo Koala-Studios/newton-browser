@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
+const whitespace = spawnSync("git", ["diff", "--check"], { cwd: process.cwd(), stdio: "inherit", windowsHide: true });
+if (whitespace.error) throw whitespace.error;
+if (whitespace.status !== 0) throw new Error(`release whitespace check failed (${whitespace.status})`);
 // `build` runs before `typecheck`/`test`: @newton-browser/core resolves its types and
 // runtime entry from dist, so tsc and the by-name package imports in the test suite
 // need the workspace built first.
-const stages = ["build", "lint", "typecheck", "test", "eval", "eval:agent-cost", "pack:check", "smoke:quick"];
+const stages = ["build", "lint", "typecheck", "test", "eval:agent-cost", "pack:check"];
 for (const command of stages) {
   const executable = process.env.npm_execpath ? process.execPath : "pnpm";
   const args = process.env.npm_execpath ? [process.env.npm_execpath, command] : [command];

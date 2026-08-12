@@ -349,57 +349,8 @@ test("combined owner routes preserve same-process ancestry across nested OOPIF b
     { targetId: "child-host", sessionId: "child-session", frameId: "nested-host" },
     { targetId: "nested-host", sessionId: "nested-session", frameId: "nested-same" },
   ]);
-  assert.deepEqual(registry.frameRoutingSummary(), {
-    attachedIframeTargetCount: 2,
-    inProcessFrameCount: 3,
-    maxAttachedIframeTargetDepth: 2,
-  });
   registry.detachFrame("child-same");
   throwsCode(() => registry.embeddingOwnerRoutes("nested-host", "nested-same"), CODES.FRAME_CONFLICT);
-  assert.deepEqual(registry.frameRoutingSummary(), {
-    attachedIframeTargetCount: 1,
-    inProcessFrameCount: 1,
-    maxAttachedIframeTargetDepth: 1,
-  });
-});
-
-test("frame routing summary caps live actionable topology counts", () => {
-  const inProcess = mainRegistry({ maxFrames: 80 });
-  for (let index = 0; index < 70; index += 1) {
-    inProcess.registerFrame({ frameId: `same-${index}`, targetId: "main" });
-  }
-  assert.deepEqual(inProcess.frameRoutingSummary(), {
-    attachedIframeTargetCount: 0,
-    inProcessFrameCount: 64,
-    maxAttachedIframeTargetDepth: 0,
-  });
-
-  const attached = mainRegistry({ maxTargets: 80, maxFrames: 80 });
-  let parentTargetId = "main";
-  let parentFrameId = null;
-  for (let index = 1; index <= 70; index += 1) {
-    const frameId = `oopif-${index}`;
-    attached.registerFrame({
-      frameId,
-      targetId: parentTargetId,
-      ...(parentFrameId ? { parentFrameId } : {}),
-    });
-    attached.registerTarget({
-      targetId: frameId,
-      type: "iframe",
-      parentTargetId,
-      hostFrameId: frameId,
-      sessionId: `session-${index}`,
-    });
-    attached.reconcileOopifFrame({ frameId, targetId: frameId });
-    parentTargetId = frameId;
-    parentFrameId = frameId;
-  }
-  assert.deepEqual(attached.frameRoutingSummary(), {
-    attachedIframeTargetCount: 64,
-    inProcessFrameCount: 0,
-    maxAttachedIframeTargetDepth: 64,
-  });
 });
 
 test("OOPIF boundary reconciliation adopts a parent-first frame and fences its prior refs", () => {
