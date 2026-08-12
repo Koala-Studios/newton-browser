@@ -1737,3 +1737,19 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression/evidence: all seven public sites pass Windows Chrome, Windows Edge, and
   pinned Linux CFT with zero session/identity residue.
 - Status: implemented; pre-freeze matrix passed.
+
+## BB-150 - The clean-tree release verifier could not launch pnpm on Windows
+
+- Found: 2026-08-12 at the first immutable three-pass boundary.
+- Minimal repro: invoke `node scripts/release-three-pass.mjs` on Windows with no inherited
+  `npm_execpath`. The verifier directly spawned `pnpm.cmd`; Node 25 rejects that child
+  process with `spawn EINVAL` before pass one begins.
+- Root cause: the direct Node invocation path treated a Windows command shim as a native
+  executable. The pnpm-invoked path was unaffected because it already ran pnpm's JavaScript
+  entrypoint through `process.execPath`.
+- Fix: one strict resolver now launches an exact regular pnpm JavaScript entrypoint through
+  Node on Windows, retains the inherited exact entrypoint under pnpm, and uses the native
+  command only on Unix.
+- Regression/evidence: focused tests prove both launch paths and forbid a `.cmd` command;
+  the final three-pass verifier is restarted from zero on the refrozen tree.
+- Status: implemented; final immutable execution pending.

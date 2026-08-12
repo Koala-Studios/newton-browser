@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolvePnpmInvocation } from "./pnpm-invocation.mjs";
 
 const root = process.cwd();
 const platformReceipt = `release-verification-${process.platform}.json`;
@@ -52,8 +53,9 @@ fs.writeFileSync(path.join(root, platformReceipt), `${JSON.stringify(receipt)}\n
 process.stdout.write(`${JSON.stringify(receipt)}\n`);
 
 function runReleasePass() {
-  const command = process.env.npm_execpath ? process.execPath : process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const args = process.env.npm_execpath ? [process.env.npm_execpath, "release:check"] : ["release:check"];
+  const invocation = resolvePnpmInvocation();
+  const command = invocation.command;
+  const args = [...invocation.argsPrefix, "release:check"];
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: root, env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdoutTail = "";

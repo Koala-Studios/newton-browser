@@ -58,6 +58,8 @@
 - Replaced unreliable consent/challenge-dependent YouTube and Reddit pages in public QA
   with their public text endpoints while retaining AX/action/screenshot coverage on the
   five interactive reference and commerce sites.
+- Made the clean-tree three-pass verifier launch pnpm through Node on Windows instead of
+  directly spawning a command shim, which Node 25 rejects with `EINVAL`.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser
