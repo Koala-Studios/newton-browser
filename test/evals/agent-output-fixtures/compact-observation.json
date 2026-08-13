@@ -1,0 +1,8 @@
+{
+  "id": "compact-observation",
+  "caseType": "observation",
+  "format": "compact",
+  "limit": 12,
+  "maxTokens": 800,
+  "inputRef": "checkout-observation-shared.fixture"
+}

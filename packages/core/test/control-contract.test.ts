@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   evaluateBrowserFloor,
+  normalizeHttpOrigin,
   redactBrowserAction,
   redactBrowserResult,
   type BrowserAction,
@@ -10,31 +11,41 @@ import {
 
 const youtubePolicy = { allowedOrigins: ["https://www.youtube.com"] };
 
-test("generic target descriptors are preserved without leaking fill values", () => {
+test("core session-origin normalization rejects paths, credentials, and wildcard hosts", () => {
+  assert.equal(normalizeHttpOrigin("https://example.com:443"), "https://example.com");
+  assert.equal(normalizeHttpOrigin("https://api.example.com:8443/"), "https://api.example.com:8443");
+  for (const value of ["https://example.com/path", "https://user@example.com", "https://*.example.com", "file:///tmp/a"]) {
+    assert.equal(normalizeHttpOrigin(value), "");
+  }
+});
+
+test("per-kind target descriptors are preserved without leaking fill values", () => {
   const action: BrowserAction = {
     kind: "fill",
-    target: { role: "textbox", name: "Email token=secret" },
+    role: "textbox",
+    name: "Email token=secret",
     value: "user@example.invalid",
-    waitFor: { text: "Saved", timeoutMs: 2500 },
   };
   const redacted = redactBrowserAction(action);
-  assert.deepEqual(redacted.target, { role: "textbox", name: "Email token=[REDACTED]" });
+  assert.equal(redacted.role, "textbox");
+  assert.equal(redacted.name, "Email token=[REDACTED]");
   assert.equal(redacted.value, "[REDACTED]");
-  assert.deepEqual(redacted.waitFor, { text: "Saved", timeoutMs: 2500 });
+  assert.deepEqual(redactBrowserAction({ kind: "wait_for", waitFor: { text: "Saved", timeoutMs: 2500 } }).waitFor, { text: "Saved", timeoutMs: 2500 });
+  assert.throws(() => redactBrowserAction({ ...action, waitFor: { text: "Saved" } } as BrowserAction), /unsupported field/);
 });
 
 test("new target descriptors feed the safety floor", () => {
   const decision = evaluateBrowserFloor({
-    action: { kind: "click", target: { role: "button", name: "Like" } },
-    origin: "https://www.youtube.com/watch?v=test",
+    action: { kind: "click", role: "button", name: "Like" },
+    origin: "https://www.youtube.com",
     policy: youtubePolicy,
   });
-  assert.equal(decision.class, "approval_required");
+  assert.equal(decision.class, "agentic");
   assert.equal(decision.commitBoundary, "external_effect");
-  assert.equal(decision.reasons.includes("social_engagement_action"), true);
+  assert.equal(decision.reason, "social_engagement_action");
 });
 
-test("compact observations accept bbox arrays from the extension but do not expose raw DOM", () => {
+test("compact observations accept driver bbox arrays but do not expose raw DOM", () => {
   const result = redactBrowserResult({
     kind: "observation",
     mode: "cdp",
@@ -57,6 +68,24 @@ test("compact observations accept bbox arrays from the extension but do not expo
   if (result?.kind !== "observation") throw new Error("expected observation");
   assert.deepEqual(result.nodes[0]?.bbox, { x: 10, y: 21, width: 100, height: 31 });
   assert.equal("rawHtml" in (result.nodes[0] as Record<string, unknown>), false);
+});
+
+test("frame provenance and excluded frames survive redaction with strict bounds", () => {
+  const result = redactBrowserResult({
+    kind: "observation", mode: "cdp", origin: "https://example.com", title: "Frames",
+    nodes: [{ ref: "d2:f1:e7", role: "button", documentEpoch: 2, frameId: "child", frameOrigin: "https://child.test" }],
+    excludedFrames: [
+      { frameId: "denied", frameOrigin: "https://denied.test/path?secret=x", reason: "origin_not_granted" },
+      { frameId: "ignored", frameOrigin: "https://ignored.test", reason: "invented" },
+    ],
+    nodeCount: 1, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z",
+  });
+  assert.equal(result?.kind, "observation");
+  if (result?.kind !== "observation") throw new Error("expected observation");
+  assert.deepEqual(result.nodes[0], {
+    ref: "d2:f1:e7", role: "button", documentEpoch: 2, frameId: "child", frameOrigin: "https://child.test",
+  });
+  assert.deepEqual(result.excludedFrames, [{ frameId: "denied", frameOrigin: "https://denied.test", reason: "origin_not_granted" }]);
 });
 
 test("a pending dialog is surfaced on observations with its message secret-masked", () => {
@@ -83,7 +112,6 @@ test("a set_files delta keeps sanitized filenames through result redaction", () 
   const result = redactBrowserResult({
     kind: "observation", mode: "cdp", origin: "https://example.com", title: "Upload",
     nodes: [], nodeCount: 0, truncated: false, capturedAt: "2026-06-26T00:00:00.000Z",
-    actionStatus: "verified", verified: true,
     changed: { files: [{ filename: "asset.png", path: "C:/secret/asset.png" }] },
   }) as Record<string, unknown>;
   const changed = (result as { changed?: Record<string, unknown> }).changed ?? {};
@@ -99,4 +127,22 @@ test("an unknown pendingDialog shape is dropped rather than passed through", () 
     pendingDialog: { dialogType: "evil", message: "x" },
   }) as Record<string, unknown>;
   assert.equal("pendingDialog" in result, false);
+});
+
+test("console source is a closed diagnostic token rather than a raw page string", () => {
+  const result = redactBrowserResult({
+    kind: "console_log",
+    origin: "https://example.test",
+    entries: [
+      { level: "warn", text: "safe", source: "JavaScript", at: "2026-08-12T00:00:00.000Z" },
+      { level: "error", text: "safe", source: "https://example.test/app.js?token=secret", at: "2026-08-12T00:00:00.000Z" },
+    ],
+    dropped: 0,
+    capturedAt: "2026-08-12T00:00:00.000Z",
+  });
+  assert.equal(result.kind, "console_log");
+  if (result.kind !== "console_log") return;
+  assert.equal(result.entries[0]?.source, "javascript");
+  assert.equal(result.entries[1]?.source, undefined);
+  assert.equal(JSON.stringify(result).includes("token=secret"), false);
 });

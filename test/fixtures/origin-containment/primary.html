@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Newton origin containment fixture</title>
+</head>
+<body>
+  <h1>Origin containment fixture</h1>
+  <p id="containment-ready">containment-ready</p>
+  <output id="containment-status">containment-idle</output>
+
+  <section aria-label="Prevented destination effects">
+    <button id="cross-fetch" type="button">Cross-origin fetch mutation</button>
+    <button id="cross-beacon" type="button">Cross-origin beacon</button>
+    <button id="cross-popup" type="button">Cross-origin popup</button>
+    <button id="cross-frame" type="button">Cross-origin controlled frame</button>
+    <button id="cross-worker" type="button">Cross-origin worker</button>
+    <button id="cross-websocket" type="button">Cross-origin WebSocket</button>
+    <button id="cross-eventsource" type="button">Cross-origin EventSource</button>
+    <form id="cross-form" method="post" target="submission-sink">
+      <button id="cross-submit" type="submit">Cross-origin form mutation</button>
+    </form>
+    <iframe name="submission-sink" title="Containment submission sink"></iframe>
+    <div id="controlled-frame-slot"></div>
+  </section>
+
+  <section aria-label="Popup containment matrix">
+    <button id="popup-window" type="button">Popup via window open</button>
+    <a id="popup-anchor" target="_blank" rel="noopener">Popup via anchor target blank</a>
+    <form id="popup-form" method="get" target="_blank">
+      <button type="submit">Popup via form target blank</button>
+    </form>
+    <button id="popup-programmatic-anchor" type="button">Popup via programmatic anchor</button>
+    <button id="popup-redirect" type="button">Popup via denied redirect</button>
+    <a id="popup-same" target="_blank">Allowed same-origin popup</a>
+    <a id="popup-granted" target="_blank">Allowed granted-origin popup</a>
+  </section>
+
+  <section aria-label="Read-only destination resources">
+    <p id="containment-read-only">Read-only destination resources</p>
+    <img id="cross-image" alt="Cross-origin read-only pixel">
+  </section>
+
+  <script>
+    const destination = `http://127.0.0.1:${Number(location.port) + 1}`;
+    const application = `${destination}/origin-containment/application`;
+    const status = document.querySelector("#containment-status");
+    const mark = (value) => { status.textContent = value; };
+
+    document.querySelector("#cross-form").action = `${application}/mutation`;
+    document.querySelector("#cross-form").addEventListener("submit", () => mark("form-dispatched"));
+    document.querySelector("#cross-fetch").addEventListener("click", () => {
+      void fetch(`${application}/mutation`, { method: "POST", mode: "no-cors", body: "fetch=1" }).catch(() => {});
+      mark("fetch-dispatched");
+    });
+    document.querySelector("#cross-beacon").addEventListener("click", () => {
+      navigator.sendBeacon(`${application}/mutation`, "beacon=1");
+      mark("beacon-dispatched");
+    });
+    document.querySelector("#cross-popup").addEventListener("click", () => {
+      window.open(`${application}/popup.html`, "containment-popup", "noopener");
+      mark("popup-dispatched");
+    });
+    document.querySelector("#cross-frame").addEventListener("click", () => {
+      const frame = document.createElement("iframe");
+      frame.title = "Destination controlled frame";
+      frame.src = `${application}/frame.html`;
+      document.querySelector("#controlled-frame-slot").replaceChildren(frame);
+      mark("frame-dispatched");
+    });
+    document.querySelector("#cross-worker").addEventListener("click", () => {
+      try {
+        const worker = new Worker("/origin-containment/worker-launcher.js");
+        worker.addEventListener("message", (event) => mark(String(event.data)));
+      } catch {}
+      mark("worker-dispatched");
+    });
+    document.querySelector("#cross-websocket").addEventListener("click", () => {
+      try { new WebSocket(`ws://127.0.0.1:${Number(location.port) + 1}/origin-containment/application/connection`); } catch {}
+      mark("websocket-dispatched");
+    });
+    document.querySelector("#cross-eventsource").addEventListener("click", () => {
+      try { new EventSource(`${application}/connection`); } catch {}
+      mark("eventsource-dispatched");
+    });
+
+    document.querySelector("#popup-window").addEventListener("click", () => {
+      window.open(`${application}/popup-window.html`, "popup-window-target", "noopener");
+    });
+    document.querySelector("#popup-anchor").href = `${application}/popup-anchor.html`;
+    document.querySelector("#popup-form").action = `${application}/popup-form.html`;
+    document.querySelector("#popup-form").addEventListener("submit", () => mark("popup-form-dispatched"));
+    document.querySelector("#popup-programmatic-anchor").addEventListener("click", () => {
+      const anchor = document.createElement("a");
+      anchor.href = `${application}/popup-programmatic-anchor.html`;
+      anchor.target = "_blank";
+      anchor.rel = "noopener";
+      anchor.click();
+    });
+    document.querySelector("#popup-redirect").addEventListener("click", () => {
+      window.open(`${location.origin}/origin-containment/redirect-to-destination`, "popup-redirect-target", "noopener");
+    });
+    document.querySelector("#popup-same").href = `${location.origin}/origin-containment/application/popup-same.html`;
+    document.querySelector("#popup-granted").href = `${application}/popup-granted.html`;
+
+    document.querySelector("#cross-image").src = `${destination}/origin-containment/resource/pixel.svg`;
+    const style = document.createElement("link");
+    style.rel = "stylesheet";
+    style.href = `${destination}/origin-containment/resource/style.css`;
+    document.head.append(style);
+  </script>
+</body>
+</html>

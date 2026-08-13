@@ -1,4 +1,4 @@
 {
-  "command": "npx",
-  "args": ["--yes", "--package", "C:\\NewtonBrowser\\newton-browser-0.4.5.tgz", "newton-browser"]
+  "command": "C:\\Program Files\\nodejs\\node.exe",
+  "args": ["C:\\absolute\\path\\newton-browser\\apps\\mcp-server\\dist\\index.js"]
 }

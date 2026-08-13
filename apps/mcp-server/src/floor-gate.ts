@@ -2,35 +2,41 @@ import {
   evaluateBrowserFloor,
   parseBrowserAction,
   selectHostPolicyManifest,
-  type BridgeSessionInfo,
+  type BrowserHostPolicyManifest,
+  type BrowserSessionInfo,
   type BrowserAction,
   type BrowserFloorDecision,
+  type BrowserResolvedTarget,
+  type BrowserSignals,
 } from "@newton-browser/core";
 
-import { loadHostPolicies } from "./config.ts";
-
-export type HostFloorVerdict =
-  | { relay: true; action: BrowserAction; decision: BrowserFloorDecision }
-  | { relay: false; action: BrowserAction; decision: BrowserFloorDecision; errorCode: string };
+type HostFloorVerdict =
+  | { dispatchAllowed: true; action: BrowserAction; decision: BrowserFloorDecision }
+  | { dispatchAllowed: false; action: BrowserAction; decision: BrowserFloorDecision; errorCode: string };
 
 export function evaluateHostFloor(input: {
-  session: BridgeSessionInfo;
+  session: BrowserSessionInfo;
   action: unknown;
+  manifests: readonly BrowserHostPolicyManifest[];
+  resolved?: BrowserResolvedTarget | null;
+  signals?: BrowserSignals;
 }): HostFloorVerdict {
   const action = parseBrowserAction(input.action);
-  const origin = input.session.origin ?? undefined;
-  const manifest = origin ? selectHostPolicyManifest({ manifests: loadHostPolicies(), origin }) : null;
+  const origin = input.session.origin;
+  const manifest = selectHostPolicyManifest({ manifests: input.manifests, origin });
   const decision = evaluateBrowserFloor({
     action,
     origin,
-    policy: { allowedOrigins: input.session.allowedOrigins ?? (origin ? [origin] : []) },
+    policy: { allowedOrigins: input.session.allowedOrigins },
     manifest,
+    ...(input.resolved === undefined ? {} : { resolved: input.resolved }),
+    ...(input.signals === undefined ? {} : { signals: input.signals }),
   });
-  if (decision.blocked) return { relay: false, action, decision, errorCode: "blocked_by_floor" };
+  if (decision.class === "blocked") return { dispatchAllowed: false, action, decision, errorCode: "blocked_by_floor" };
   return {
-    relay: true,
+    dispatchAllowed: true,
     action: action.kind === "screenshot" && manifest?.sensitiveZones?.length
-      ? { ...action, sensitiveZones: manifest.sensitiveZones }
+      ? { ...action, sensitiveZones: manifest.sensitiveZones.map((zone) => ({ ...zone })) }
       : action,
     decision,
   };

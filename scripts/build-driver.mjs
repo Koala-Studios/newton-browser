@@ -1,15 +1,71 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { buildCore } from "./build-core.mjs";
+
+const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = path.join(root, "packages", "driver", "src");
-const destination = path.join(root, "packages", "driver", "dist");
+const driverRoot = path.join(root, "packages", "driver");
+const defaultDestination = path.join(driverRoot, "dist");
+const config = path.join(driverRoot, "tsconfig.json");
+const tsc = require.resolve("typescript/bin/tsc");
 
-fs.rmSync(destination, { recursive: true, force: true });
-fs.mkdirSync(destination, { recursive: true });
-for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-  if (!entry.isFile() || !/\.(?:js|css)$/.test(entry.name)) continue;
-  fs.copyFileSync(path.join(source, entry.name), path.join(destination, entry.name));
+export function buildDriver({ destination = defaultDestination, quiet = false } = {}) {
+  const resolvedDestination = path.resolve(destination);
+  prepareDestination(resolvedDestination);
+
+  // A normal package build owns and refreshes the shared core output first. Custom
+  // destinations are used for deterministic parity builds after that package build;
+  // rebuilding the shared core there would delete live modules while concurrent tests
+  // import them.
+  if (resolvedDestination === defaultDestination) buildCore({ quiet });
+
+  runTypeScript([
+    "-p",
+    config,
+    "--outDir",
+    resolvedDestination,
+    "--pretty",
+    "false",
+  ], quiet, "driver_typescript_build_failed");
+
+  // `types.ts` contains declarations only. TypeScript emits an empty `export {}`
+  // module for it, but no runtime imports reference that file after type erasure.
+  fs.rmSync(path.join(resolvedDestination, "types.js"), { force: true });
+
+  if (!quiet) console.log("newton browser driver build ok");
+  return resolvedDestination;
 }
-console.log("newton browser driver build ok");
+
+function runTypeScript(args, quiet, failureCode) {
+  const result = spawnSync(process.execPath, [tsc, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: quiet ? "pipe" : "inherit",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = quiet ? `${result.stdout || ""}${result.stderr || ""}`.trim() : "";
+    throw new Error(`${failureCode}${detail ? `\n${detail}` : ""}`);
+  }
+}
+
+function prepareDestination(destination) {
+  if (destination === defaultDestination) {
+    const relative = path.relative(driverRoot, destination);
+    if (relative !== "dist") throw new Error("invalid_default_driver_build_destination");
+    fs.rmSync(destination, { recursive: true, force: true });
+    fs.mkdirSync(destination, { recursive: true });
+    return;
+  }
+
+  if (fs.existsSync(destination) && fs.readdirSync(destination).length > 0) {
+    throw new Error("custom_driver_build_destination_must_be_empty");
+  }
+  fs.mkdirSync(destination, { recursive: true });
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) buildDriver();

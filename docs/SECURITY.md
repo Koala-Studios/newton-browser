@@ -1,47 +1,113 @@
 # Security
 
-The binding security and trust model is locked in [DECISIONS.md](DECISIONS.md). Newton Browser is loopback-only, origin-scoped, and local-user trusted, with optional hardened pairing. It does not inspect cookies, storage, profile files, saved passwords, or authentication tokens.
-
-## Reporting a vulnerability
-
-Do not disclose credentials, pairing secrets, sensitive page content, or exploitable vulnerability details in a public issue.
-
-If private vulnerability reporting is enabled for the GitHub repository, use **Security → Report a vulnerability**. Otherwise, open a minimal public issue asking the maintainers to establish a private contact channel; include no exploit details until that channel is confirmed.
-
-Please include the affected version or commit, operating system, browser and version, MCP client, deterministic reproduction steps, expected and actual behavior, and whether the issue crosses a documented trust boundary.
+Newton Browser is local-only, origin-scoped, and local-user trusted. Its primary runtime
+owns isolated Chrome or Edge processes, a private inherited CDP pipe, a per-session policy
+proxy, and a Newton identity lease. It exposes no default browser-debugging port and has no
+hosted relay, telemetry, database, or model-provider runtime call.
 
 ## Trust boundary
 
-Each stdio host binds one free address in `127.0.0.1:17321-17340`, and the host rejects ordinary webpage WebSocket origins. The default `local_trust` mode accepts the installed extension without a manual key. This is intentionally frictionless but allows another same-user local process to imitate an extension client if it can construct the accepted loopback request.
+Every session requires one normalized HTTP(S) origin and explicit additional exact origins.
+Grants compare scheme, ASCII host, and effective port; page text, redirects, same-site
+relationships, DNS results, and URL suffixes cannot widen them.
 
-Optional `paired` mode requires a challenge-response proof derived from a per-user 256-bit secret. It protects against ordinary local processes that do not have the secret, but not against same-user malware able to read user files or extension storage. Enable it with `{"transportAuth":"paired"}` in the per-user `config.json`; then run `--doctor` and enter the displayed secret in the extension popup.
+The policy proxy is ready before Chromium starts. It decides HTTP absolute-form requests,
+HTTPS CONNECT authorities, and WebSocket destinations before opening an upstream socket.
+No resource-type exception widens the grant: images, styles, fonts, media, manifests, and
+other subresources require the same explicit exact-origin grant as application requests.
+CONNECT exposes only an authority, so third-party HTTPS origins must be explicit grants;
+Newton does not infer passive image/font/style access through an opaque TLS tunnel.
+Denied navigation, popup, frame, worker, form, fetch, beacon, redirect, EventSource, and
+connection attempts therefore reach the destination application zero times in the tested
+scope. Browser-level Target/Fetch interception is a second boundary, not the only one.
+Proxy, browser, CDP, or cleanup uncertainty fences the session. Proxy counters are
+aggregate diagnostics only. They are never
+temporally assigned to an agent command; truthful `prevented` outcomes require causal
+Target/Fetch evidence tied to that command or controlled target.
 
-`--doctor` discovers incumbent hosts through a loopback-only `/doctor-status` endpoint authenticated by an internally derived diagnostic token in both modes. The endpoint has no permissive CORS header and never returns the secret. An unauthenticated request receives only `authentication_failed`.
+This does not claim operating-system firewalling, protection from same-user malware,
+control of another process, WebRTC/UDP filtering outside the documented proxy/CDP path,
+or containment of traffic Chromium does not send through the configured proxy.
 
-An optional deployment observer is disabled by default. When both
-`NEWTON_BROWSER_OBSERVER_REGISTRY_DIR` and a high-entropy
-`NEWTON_BROWSER_OBSERVER_TOKEN` are supplied, the host writes a mode-0600 local
-registry record containing only its process/port and bounded session metadata.
-Its loopback-only status and exact-session focus endpoints require the observer
-token. They do not expose page content, session grants, pairing material, or
-session ownership, and another machine cannot reach them directly.
-The same authenticated observer may submit one resolved secret to one exact
-fresh field reference. This private endpoint is absent from the MCP tool
-catalog, returns only `{filled:true}`, preserves exact session/origin checks,
-and does not change the ordinary action floor's credential/OTP blocking.
+## Browser and identity ownership
 
-Every session has a required exact HTTP(S) origin grant. The extension reconciles the attached tab's live origin before binding and before every command. Moving focus cannot retarget a session, and one host cannot address another host's session. Page text is untrusted data and never authorization.
+Each direct session owns one browser process and one identity lease. Startup is blank-first:
+the proxy and CDP controls are established before the initial granted navigation. Owned
+browsers run with browser extensions disabled, and imported extension data is excluded.
+The launch switch set is fixed by Newton; neither MCP callers nor internal host
+configuration can inject arbitrary Chromium arguments.
+Distinct sessions run concurrently, but the same persistent identity cannot be leased twice.
+The browser is spawned by a separate guardian that owns the exact process tree and an
+identity-bound cleanup plan. MCP-host loss triggers browser-tree termination and releases
+only the marker/dev/ino/nonce-matched lease or ephemeral identity. Stopping succeeds only
+after process, proxy, CDP, and lease cleanup is confirmed; uncertain
+cleanup remains typed and retryable rather than being discarded.
 
-When Chrome and Edge are both enabled, the host atomically grants each session to one eligible browser client. Only that owner can attach, subscribe, stop, or answer commands; standby browsers receive no session commands. Owner disconnect releases the claim, clears browser-local tab identifiers, and fails any in-flight command closed before a standby may bind a new tab. Optional `browserTarget` selection can restrict eligibility to Chrome or Edge without disabling the other extension.
+Newton never parses, inspects, logs, returns, modifies, merges back, or exports cookies,
+storage, profile contents, saved passwords, credentials, history, autofill, downloads, or
+restored tabs.
 
-## Action floor
+With explicit operator authorization, Newton may byte-copy a narrow documented allowlist
+of authentication-bearing files from a closed local profile into a new Newton-owned
+identity. Import treats every file as opaque. It excludes password, autofill, history,
+download, extension, session, service-worker, and cache data; rejects unproved browser
+closure, user-data ownership indicators, hardlinks, symlinks, path escapes, case
+collisions, family mismatch, instability, and partial copies;
+and publishes only an atomic verified staging tree. Failure is closed and the source is
+never modified. Imported identities are machine-local, not portable backups. Import is
+not an authentication-preservation guarantee: current Windows Chrome App-Bound Encryption
+may make protected standard-profile data undecryptable from Newton's isolated
+`--user-data-dir`, and Newton does not bypass that browser security boundary.
 
-The deterministic floor blocks credentials, OTPs, payment identifiers, government identifiers, disallowed origins, and cross-origin targets. It reports a decision class and commit boundary but is not an approval system. Callers remain responsible for authorization before save, send, publish, purchase, delete, budget, account, or other external-effect actions.
+## Page data and agent authority
 
-File input actions accept only exact local image/video paths, validate signatures and size/count caps before setting any file, expose only sanitized filenames, and never click submit. Screenshot sensitive zones are masked in the extension before bytes cross the relay. JavaScript dialog control is unsupported and returns a typed error.
+Page observations, deltas, console entries, network records, and accessibility names are
+untrusted data. They cannot authorize an effect, add an origin, select a local file, define
+configuration, or author retry/next-action instructions. Public results carry bounded
+host-authored provenance and outcome fields; callers must use those outer fields rather
+than page-derived prose.
 
-## Lifecycle
+The deterministic action floor blocks credentials, OTPs, payment identifiers, government
+identifiers, disallowed origins, and cross-origin targets. It is not an approval system.
+Callers remain responsible for authorization before save, send, publish, purchase, delete,
+launch, account, budget, or other external-effect actions.
 
-Owned tabs start inactive. Finalize `close` closes only an owned tab; `deliverable` retains a passive review tab; `handoff` ungroups and activates it. Current-tab sessions never close the user's tab. If a host disappears, only its unfinalized sessions are cleaned after the grace period; finalized tabs and other hosts remain unaffected.
+File input accepts only exact operator-authorized local image/video paths, validates type,
+signature, count, and size before setting any file, exposes only sanitized filenames, and
+never submits the form.
 
-While a debugger session is attached, Newton Browser enables CDP focus emulation for that target so trusted pointer and key events remain reliable without activating the visible tab or following the user's focus. The override is disabled before detach. It does not change which tab/session is authorized: the exact origin and bound tab are still reconciled for every command.
+Network bodies are eligible only when they are bounded granted-origin UTF-8 text. Binary,
+base64, compressed, malformed, unsupported, and ungranted bodies are omitted. Eligible text
+passes secret/card/identifier redaction. There is no generic raw-body escape hatch.
+
+## Screenshots
+
+Every screenshot reports an explicit masking disposition. Sensitive-zone capture resolves
+exact target/frame geometry, freezes page scripts and animations through CDP, captures a
+bounded lossless PNG, masks those pixels in the trusted Node process, and resumes the page.
+Any resolution, freeze, geometry, decode, masking, or resume uncertainty fails closed. A
+masked JPEG request is safely upgraded to PNG; no unmasked fallback is returned.
+
+## Dialogs and lifecycle
+
+JavaScript dialogs are target-scoped and handled only through typed accept/dismiss actions.
+Accepting a dialog that confirms an external effect still requires caller authorization.
+
+Direct mode closes sessions through `browser.session.stop`. It does not attach to the user's current tab,
+activate or hand off a user tab, or use incognito as a substitute for an isolated identity.
+Unexpected browser/proxy/CDP loss revokes readiness and initiates owned cleanup. Same-session
+commands are FIFO; independent sessions remain concurrent.
+
+## Local control transport
+
+The MCP control plane is newline-delimited stdio only and opens no listener. Browser CDP
+uses inherited private pipes. The per-session origin-policy proxy is the only production
+listener and binds to an ephemeral `127.0.0.1` port.
+
+## Reporting a vulnerability
+
+Do not disclose credentials, sensitive page content, profile data, or
+exploitable vulnerability details in a public issue. Use private GitHub vulnerability
+reporting when available; otherwise request a private contact channel without exploit
+details. Include the affected commit/version, OS, browser version, MCP client,
+deterministic reproduction, expected and actual result, and the trust boundary involved.

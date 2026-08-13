@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Renderer lifecycle fixture</title></head>
+<body>
+  <output id="renderer-state" aria-label="Renderer state">healthy</output>
+  <button data-state="dialog_blocked">Dialog blocked</button>
+  <button data-state="discarded">Discarded</button>
+  <button data-state="debugger_detached">Debugger detached</button>
+  <button data-state="target_gone">Target gone</button>
+  <button data-state="unresponsive">Unresponsive</button>
+  <button data-state="reconciling">Reconciling</button>
+  <button data-state="healthy">Healthy</button>
+  <button data-state="terminal">Terminal</button>
+  <script>
+    for (const button of document.querySelectorAll("button[data-state]")) {
+      button.addEventListener("click", () => {
+        const state = button.dataset.state;
+        document.querySelector("#renderer-state").textContent = state;
+        window.dispatchEvent(new CustomEvent("newton-renderer-state", { detail: { state } }));
+      });
+    }
+  </script>
+</body>
+</html>

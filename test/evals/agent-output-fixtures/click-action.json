@@ -1,0 +1,11 @@
+{
+  "id": "click-action",
+  "caseType": "action",
+  "maxTokens": 125,
+  "input": {
+    "outcome": "completed",
+    "status": "verified",
+    "decision": { "class": "agentic", "commitBoundary": "none" },
+    "reason": "clicked"
+  }
+}

@@ -1,10 +1,11 @@
 {
   "name": "@newton-browser/driver",
-  "version": "0.4.5",
+  "version": "0.5.0",
+  "private": true,
   "license": "MIT",
   "type": "module",
   "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Newton Browser.",
-  "engines": { "node": ">=20.0.0" },
+  "engines": { "node": ">=24.0.0" },
   "files": [
     "dist",
     "README.md",
@@ -13,10 +14,10 @@
   "scripts": {
     "build": "node ../../scripts/build-driver.mjs"
   },
+  "devDependencies": {
+    "@newton-browser/core": "workspace:*"
+  },
   "exports": {
-    ".": "./dist/driver.js",
-    "./chrome-tabs-port": "./dist/chrome-tabs-port.js",
-    "./controller": "./dist/controller.js",
-    "./driver": "./dist/driver.js"
+    "./direct-session-runtime": "./dist/direct-session-runtime.js"
   }
 }

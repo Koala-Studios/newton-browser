@@ -1,124 +1,144 @@
 # Installation
 
-Newton Browser requires Node 20 or newer to run, Node 24 or newer to develop, a Chromium browser, and an MCP client that can start a local stdio server. It does not require a daemon, hosted service, database, or global Newton Browser package.
+Newton Browser requires Node 24+, a current
+local Chrome or Edge, and an MCP client that can start a stdio server. Direct mode needs
+no extension, global package, daemon, hosted service, database, pairing secret, or debug
+TCP port.
 
-## Install from source
+## Install the direct runtime
 
-This is the recommended path while npm and browser-store packages are not published.
+Version 0.5.0 is a private local candidate and is not published to npm. From this
+checkout, build and run the exact compiled entrypoint:
 
-### 1. Clone and build
-
-```bash
-git clone https://github.com/Koala-Studios/newton-browser.git
-cd newton-browser
-npm install --global pnpm@10.8.0
+```powershell
 pnpm install --frozen-lockfile
 pnpm build
 ```
 
-The build must produce:
+The MCP server can immediately start ephemeral sessions using a discovered Chrome or
+Edge installation. Optional setup selects a default (`--browser edge` for Edge), writes
+only that browser preference, and never selects an identity implicitly.
 
-- `apps/mcp-server/dist/index.js`
-- `apps/extension/dist/src/service-worker.js`
+```powershell
+node apps/mcp-server/dist/index.js setup --browser chrome
+```
 
-### 2. Load the unpacked extension
+Optional operator login:
 
-Open `chrome://extensions` or `edge://extensions`, enable Developer mode, select **Load unpacked**, and choose `apps/extension`. The selected directory must contain `manifest.json` at its root.
+```powershell
+node apps/mcp-server/dist/index.js identity create --browser chrome
+node apps/mcp-server/dist/index.js identity login nbi_<opaque-id> --origin https://example.com
+```
 
-Do not select `apps/extension/dist`; that directory contains generated runtime files but not the extension manifest.
+The operator enters credentials personally in the visible contained browser. Add only
+required exact redirect origins with repeated `--allow-origin`; never repeat the primary
+`--origin`. Close the browser after
+login so Newton can confirm process, proxy, and lease cleanup.
 
-### 3. Configure an MCP client
+Optional live doctor:
 
-Configure a local stdio MCP server with:
+```powershell
+node apps/mcp-server/dist/index.js doctor --live
+```
+
+## Configure an MCP client
 
 ```json
 {
-  "command": "npx",
-  "args": ["-y", "newton-browser"]
+  "command": "node",
+  "args": ["C:\\absolute\\path\\newton-browser\\apps\\mcp-server\\dist\\index.js"]
 }
 ```
 
-Use a real absolute path. Windows paths in JSON or double-quoted TOML strings must escape backslashes.
-
-For Codex, add the equivalent `[mcp_servers.newton-browser]` entry to `~/.codex/config.toml` and restart Codex. For Claude Desktop or Claude Code, merge the `mcpServers` entry documented in the root README and start a new client session. Generic clients use the same `command` and `args` shape.
-
-#### Configure automatically
-
-Instead of editing configuration by hand, let the host write it for you:
-
-```bash
-npx -y newton-browser --install codex          # or claude-desktop
-npx -y newton-browser --install codex --dry-run # preview the change first
-```
-
-`--install` locates the client's configuration, backs up any existing file to a
-timestamped `.bak`, and merges a `newton-browser` entry. It refuses to overwrite an
-existing entry unless you pass `--force`. For Claude Code and generic clients it prints
-the exact command or config block to apply instead of editing files it does not own.
-Restart the client afterward.
-
-### 4. Verify startup
-
-Call `browser.status` from the MCP client. The default `local_trust` mode connects the extension automatically and requires no pairing key or popup step.
-
-The optional doctor command verifies Node support, configuration, transport-auth mode, the bounded loopback range, supported MCP revisions, and any extension connection visible through a running host:
-
-```bash
-node /absolute/path/to/newton-browser/apps/mcp-server/dist/index.js --doctor
-```
-
-`ready: false` is a setup result, not a crash. Follow the typed `nextAction`.
-
-## Install from release artifacts
-
-When a GitHub release provides the following files, you can install without keeping a source checkout:
-
-- `newton-browser-0.4.5.tgz`
-- `newton-browser-extension-0.4.5.zip`
-- `newton-browser-extension-0.4.5.zip.sha256`
-
-Keep all three files together and verify the extension checksum before extracting it.
-
-PowerShell:
+Use an absolute executable/tarball path when testing a local artifact. Installer helpers:
 
 ```powershell
-$expected = (Get-Content .\newton-browser-extension-0.4.5.zip.sha256).Split()[0]
-$actual = (Get-FileHash .\newton-browser-extension-0.4.5.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw "Newton Browser extension checksum mismatch" }
+node apps/mcp-server/dist/index.js install codex --dry-run
+node apps/mcp-server/dist/index.js install generic
 ```
 
-macOS or Linux:
+Review the dry run, apply deliberately, and restart the client. Clients that do not
+support stateless MCP `2026-07-28` cannot use this release. See
+[`MCP_CLIENTS.md`](MCP_CLIENTS.md) for exact client shapes.
 
-```bash
-sha256sum --check newton-browser-extension-0.4.5.zip.sha256
+## Install from source
+
+```powershell
+git clone https://github.com/Koala-Studios/newton-browser.git
+cd newton-browser
+corepack enable
+pnpm install --frozen-lockfile
+pnpm build
+node apps/mcp-server/dist/index.js doctor --live
 ```
 
-Extract the ZIP and load the extracted directory through the browser's **Load unpacked** flow. Then copy the matching example from `examples/mcp`, replace its tarball path with the absolute path on your machine, and restart the MCP client.
+Point the MCP client at the absolute compiled entrypoint:
 
-`npx --package <absolute-tarball> newton-browser` installs into the npm cache and starts one stdio host per client. It is not a global install.
-
-To generate a version-pinned artifact configuration, set `NEWTON_BROWSER_PACKAGE_SPEC` to the absolute tarball path and run:
-
-```text
-newton-browser --print-config codex|claude-desktop|claude-code|generic
+```json
+{
+  "command": "node",
+  "args": ["C:\\absolute\\path\\newton-browser\\apps\\mcp-server\\dist\\index.js"]
+}
 ```
 
-## Chrome and Edge together
+Rebuild after source changes.
 
-Both extensions may remain enabled. The host atomically assigns each session to one browser; the other browser stays connected as standby and cannot attach to or receive commands for that session.
+## Install from a tarball
 
-The default `auto` selection requires no extension toggling. To choose one browser, add `"browserTarget":"chrome"` or `"browserTarget":"edge"` to the per-user `config.json` and restart the MCP client. The equivalent process override is `NEWTON_BROWSER_BROWSER=chrome|edge`.
+Use `artifacts/newton-browser-0.5.0.tgz` only after verifying it was produced by the
+current tree, or use a verified release asset:
 
-## Optional hardened pairing
+```powershell
+$installRoot = Join-Path $env:LOCALAPPDATA "NewtonBrowser\package"
+npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.5.0.tgz"
+node "$installRoot\node_modules\newton-browser\dist\index.js" install codex --dry-run
+```
 
-To require the HMAC handshake, add `"transportAuth":"paired"` to the per-user `config.json`, restart the MCP client, run `--doctor`, and paste the displayed secret into the extension popup once.
+The installer pins that exact local entrypoint and the current Node executable. It does
+not invoke `npx`, consult npm, or resolve a package version when the MCP client starts.
 
-Do not store the secret in screenshots, issues, repositories, MCP arguments, or chat.
+The package contains the compiled MCP host and its browser guardian. Source maps are not
+shipped. No browser-extension artifact is produced or installed.
+
+## Verify startup
+
+Restart the MCP client and call `browser.status`. Direct configured/idle status reports
+`ready:true` with `runtimeState:"idle"`; session start creates the browser process. A
+new session should report `mode:"direct"`, own one browser process, and clean it on stop.
+
+If browser discovery fails, optionally run setup to select Chrome or Edge, then restart
+the MCP client. There is no extension fallback.
 
 Configuration locations:
 
-- Windows: `%LOCALAPPDATA%\NewtonBrowser\config.json`
-- macOS: `~/Library/Application Support/NewtonBrowser/config.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/newton-browser/config.json`
+- Windows: `%LOCALAPPDATA%\NewtonBrowser`
+- macOS: `~/Library/Application Support/NewtonBrowser`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/newton-browser`
 
-Continue with [MCP client configuration](MCP_CLIENTS.md) or [troubleshooting](TROUBLESHOOTING.md).
+The optional `config.json` accepts only `browser` and `hostPolicies`. Host policies can
+raise the structural commit boundary for exact origins and can add screenshot masks; they
+cannot authorize an action or weaken the generic floor. For example:
+
+```json
+{
+  "browser": "chrome",
+  "hostPolicies": [
+    {
+      "origins": ["https://example.com"],
+      "commitRules": [
+        { "match": { "name": "Publish" }, "effect": "external_effect", "reason": "publishes_content" }
+      ],
+      "sensitiveZones": [{ "selector": "[data-private-panel]" }]
+    }
+  ]
+}
+```
+
+Origins must be exact HTTP(S) origins. Commit rules and sensitive zones are bounded,
+strictly validated local operator configuration; page content cannot create them.
+
+Continue with [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+
+This prerelease is not a general production-ready browser agent. Verify the exact target
+site and workflow in the current session before consequential use; current-tree complete
+release and real-site evidence are tracked in [`PROGRESS_LEDGER.md`](PROGRESS_LEDGER.md).

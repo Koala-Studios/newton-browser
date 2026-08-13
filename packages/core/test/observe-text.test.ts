@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseBrowserAction, redactBrowserResult, summarizeBrowserResult } from "../src/index.ts";
+import { parseBrowserAction, redactBrowserResult } from "../src/index.ts";
 
 test("parseBrowserAction accepts mode:text and a bounded maxChars", () => {
   const action = parseBrowserAction({ kind: "observe", mode: "text", maxChars: 5000 });
@@ -9,13 +9,13 @@ test("parseBrowserAction accepts mode:text and a bounded maxChars", () => {
   assert.equal(action.maxChars, 5000);
 });
 
-test("maxChars is clamped into range", () => {
-  assert.equal(parseBrowserAction({ kind: "observe", mode: "text", maxChars: 10 }).maxChars, 200);
-  assert.equal(parseBrowserAction({ kind: "observe", mode: "text", maxChars: 9_999_999 }).maxChars, 200_000);
+test("out-of-range maxChars is rejected instead of silently repaired", () => {
+  assert.throws(() => parseBrowserAction({ kind: "observe", mode: "text", maxChars: 10 }), /outside bounds/);
+  assert.throws(() => parseBrowserAction({ kind: "observe", mode: "text", maxChars: 9_999_999 }), /outside bounds/);
 });
 
-test("an unknown mode falls back rather than passing through", () => {
-  assert.notEqual(parseBrowserAction({ kind: "observe", mode: "bogus" }).mode, "bogus");
+test("an unknown mode is rejected instead of silently falling back", () => {
+  assert.throws(() => parseBrowserAction({ kind: "observe", mode: "bogus" }), /allowed value/);
 });
 
 test("observation_text survives redaction and keeps readable prose", () => {
@@ -78,21 +78,4 @@ test("oversized text is truncated at the hard cap", () => {
   if (result?.kind !== "observation_text") throw new Error("expected observation_text");
   assert.equal(result.text.length, 200_000);
   assert.equal(result.truncated, true);
-});
-
-test("summarizeBrowserResult reports a text observation without leaking the body", () => {
-  const summary = summarizeBrowserResult({
-    kind: "observation_text",
-    mode: "text",
-    origin: "https://example.com",
-    title: "Docs",
-    text: "secret prose that should not appear in the summary",
-    chars: 50,
-    truncated: true,
-    capturedAt: "2026-07-10T00:00:00.000Z",
-  });
-  assert.equal(summary.kind, "observation_text");
-  assert.equal(summary.chars, 50);
-  assert.equal(summary.truncated, true);
-  assert.ok(!JSON.stringify(summary).includes("secret prose"));
 });

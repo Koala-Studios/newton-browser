@@ -1,63 +1,59 @@
-import type { BrowserAction, BrowserFloorDecision, BrowserSignals } from "./protocol.ts";
-import type { BrowserResolvedTarget } from "./risk.ts";
+import type { BrowserActionResultStatus, BrowserFloorDecision, BrowserCommandOutcome, BrowserCommandResultMetadata } from "./protocol.ts";
 
-export type BridgeCommand = {
+export const BROWSER_SESSION_LIFECYCLE_STATES = [
+  "starting_runtime",
+  "starting_browser",
+  "attaching_cdp",
+  "active",
+  "degraded",
+  "stopping",
+  "stopped",
+] as const;
+
+export type BrowserSessionLifecycleState = (typeof BROWSER_SESSION_LIFECYCLE_STATES)[number];
+type BrowserResultBase = BrowserCommandResultMetadata & {
   commandId: string;
-  sessionId: string;
-  actionKind: string;
-  action: BrowserAction;
+  ok: boolean;
+  status: BrowserActionResultStatus;
+  decision: BrowserFloorDecision;
 };
 
-export type BridgeResultEvent =
-  | { commandId: string; ok: true; result: unknown; decision?: BrowserFloorDecision }
-  | { commandId: string; ok: false; errorCode: string; decision?: BrowserFloorDecision };
+type BrowserResultSuccess = BrowserResultBase & {
+  ok: true;
+  outcome: "completed";
+  result: unknown;
+  reason?: string;
+  changed?: Record<string, unknown>;
+};
 
-export type BridgeSessionInit = {
+type BrowserResultFailure = BrowserResultBase & {
+  ok: false;
+  outcome: Exclude<BrowserCommandOutcome, "completed">;
+  errorCode: string;
+};
+
+export type BrowserCommandResult = BrowserResultSuccess | BrowserResultFailure;
+
+export type BrowserDispatchOptions = {
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+};
+
+export type BrowserSessionInit = {
   origin: string;
   allowedOrigins: string[];
-  goal?: string;
-  tabMode: "owned_group" | "current";
-  instanceLabel?: string;
-  ownedTabId?: number;
-  tabGroupId?: number;
-  // Open the owned tab in an incognito window (WS: incognito sessions). Owned-group
-  // only; ignored for current-tab. Requires the extension to be allowed in incognito.
-  incognito?: boolean;
+  // This opaque operator-created identity selects one
+  // exclusive Newton profile without exposing its filesystem path.
+  identityId?: string;
+  // Persistent identities remain authoritative for
+  // their browser family; ephemeral sessions may select either supported family.
+  browserFamily?: "chrome" | "edge";
 };
 
-export type BridgeSessionInfo = {
+export type BrowserSessionInfo = {
   sessionId: string;
-  hostInstanceId?: string;
   origin: string;
-  allowedOrigins?: string[];
-  tabMode: "owned_group" | "current";
-  ownedTabId?: number | null;
-  tabGroupId?: number | null;
-  attached?: boolean;
-  liveOrigin?: string | null;
-  goal?: string;
-  instanceLabel?: string;
-  incognito?: boolean;
+  allowedOrigins: string[];
+  lifecycleState: BrowserSessionLifecycleState;
 };
-
-export type BridgeFloorInput = {
-  action: BrowserAction;
-  origin?: string;
-  allowedOrigins?: string[];
-  resolved?: BrowserResolvedTarget | null;
-  signals?: BrowserSignals;
-  requestedClass?: string;
-};
-
-export type BridgeFloorEvaluator = (input: BridgeFloorInput) => BrowserFloorDecision | null | Promise<BrowserFloorDecision | null>;
-
-export interface BridgeTransport {
-  createSession(init: BridgeSessionInit): Promise<{ sessionId: string }>;
-  attachTab(sessionId: string, tab: { ownedTabId: number; tabGroupId?: number | null; attached?: boolean; liveOrigin?: string }): Promise<void>;
-  subscribe(sessionId: string, onCommand: (cmd: BridgeCommand) => void | Promise<void>): () => void;
-  listSessions(): Promise<BridgeSessionInfo[]>;
-  postEvent(commandId: string, eventType: string, detail: unknown): Promise<void>;
-  postResult(event: BridgeResultEvent): Promise<void>;
-  stopSession(sessionId: string): Promise<void>;
-  stopAll(): Promise<void>;
-}

@@ -1,0 +1,8 @@
+{
+  "cases": [
+    { "id": "base64-json", "mimeType": "application/json", "encoding": "base64", "base64Encoded": true, "data": "eyJ0b2tlbiI6InNlY3JldCJ9" },
+    { "id": "binary-mime", "mimeType": "application/octet-stream", "encoding": "binary", "data": "opaque-binary-secret" },
+    { "id": "malformed-utf8", "mimeType": "text/plain", "encoding": "malformed_utf8", "data": "replacement-secret" },
+    { "id": "compressed", "mimeType": "application/json", "encoding": "gzip", "data": "compressed-secret" }
+  ]
+}

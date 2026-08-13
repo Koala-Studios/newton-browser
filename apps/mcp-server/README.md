@@ -1,56 +1,56 @@
-# Newton Browser Host
+# Newton Browser MCP host
 
-Local MCP host for the Newton Browser extension.
+Local stdio MCP host for Newton-owned Chrome or Edge processes over inherited private
+CDP pipes. It uses no browser extension, relay, daemon, telemetry, or CDP TCP listener.
 
-## Run
+## Optional persistent identity
 
 ```powershell
-newton-browser
+newton-browser setup --browser chrome
+newton-browser identity create --browser chrome
+newton-browser identity login <identity-id> --origin https://example.com
+newton-browser doctor --live
 ```
 
-The host listens on `127.0.0.1:17321`, exposes an MCP server over stdio, and relays commands to the loaded unpacked Newton Browser extension over localhost WebSocket. It has no database and no platform dependency.
+Ordinary ephemeral sessions require no setup after the MCP entrypoint is configured;
+Newton discovers a supported browser automatically. Setup records only a browser
+preference. Identity creation is a separate explicit operator action; an identity is
+used only when its opaque ID is supplied to session start. Optional login opens that
+identity in a visible browser restricted
+to the exact origin and explicit `--allow-origin` values;
+closing it succeeds only after browser, proxy, and identity-lease cleanup. The live doctor
+uses one disposable browser to verify blank-first containment, private CDP, observation,
+shutdown, and cleanup. Ordinary `doctor` is configuration-only.
 
-## Extension Pairing
-
-1. Build the extension runtime:
-
-   ```powershell
-   pnpm extension:build
-   ```
-
-2. Load unpacked from:
-
-   ```text
-   apps/extension
-   ```
-
-3. Start this host process. The extension discovers the localhost host in the background; the popup only shows connected/disconnected status.
-
-## MCP Tools
-
-The stdio server exposes the `browser.*` tools documented in the canonical skill.
-
-## MCP Client Config
-
-Use the host as a stdio MCP server. Keep normal network access disabled for the calling agent when you want local-only operation; the extension and host only need localhost.
+## MCP client
 
 ```json
 {
   "mcpServers": {
     "newton-browser": {
-      "command": "npx",
-      "args": ["-y", "newton-browser"]
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\absolute\\path\\newton-browser\\apps\\mcp-server\\dist\\index.js"]
     }
   }
 }
 ```
 
-Install the extension first, then use this npx configuration in Codex, Claude Code, Claude Desktop, or any compatible stdio client. Development can run the compiled `apps/mcp-server/dist/index.js` after `pnpm build`.
+Each session owns an isolated browser process, launch-time exact-origin policy proxy,
+private CDP pipe, identity lease, and FIFO command queue. Sessions progress concurrently.
+A guardian terminates the exact browser tree and releases only proven owned identity state
+if the MCP host dies. The MCP control plane is stateless newline-delimited stdio only.
 
-## Privacy Boundary
+## Identities
 
-The host and extension run on the user's machine. Browser control traffic stays on localhost. Page observations and screenshots only leave the machine if the calling agent sends them to its model provider.
+Operator-only commands create, list, inspect, import, recover a stale lease, and delete
+Newton identities. Import byte-copies a narrow documented authentication allowlist from a
+closed stable local profile. It never interprets or exports profile contents and excludes
+passwords, autofill, history, downloads, extensions, restored sessions, service workers,
+and caches. Lease recovery refuses while the recorded process exists.
 
 ## Safety
 
-The host runs the Newton Browser safety floor before relaying mutating actions. Blocked actions return a blocked result. Commit-like actions are relayed without a human approval prompt; Newton Browser is a local hands-and-eyes tool for the worker, not a moderation layer.
+Every session requires one normalized HTTP(S) origin plus explicit grants. Proxy and driver
+containment are active before the first navigation. Page content is untrusted data, never
+authorization. Sensitive screenshot zones are captured as bounded lossless PNG and masked
+in Newton's trusted Node process before bytes reach the MCP client.

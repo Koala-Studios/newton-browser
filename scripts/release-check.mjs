@@ -1,28 +1,16 @@
 import { spawnSync } from "node:child_process";
-import net from "node:net";
-
+const whitespace = spawnSync("git", ["diff", "--check"], { cwd: process.cwd(), stdio: "inherit", windowsHide: true });
+if (whitespace.error) throw whitespace.error;
+if (whitespace.status !== 0) throw new Error(`release whitespace check failed (${whitespace.status})`);
 // `build` runs before `typecheck`/`test`: @newton-browser/core resolves its types and
 // runtime entry from dist, so tsc and the by-name package imports in the test suite
 // need the workspace built first.
-for (const command of ["build", "lint", "typecheck", "test", "extension:artifact", "pack:check", "smoke:quick", "smoke:matrix", "smoke:chaos", "smoke:multi-client", "smoke:clean-user"]) {
+const stages = ["build", "lint", "typecheck", "test", "eval:agent-cost", "pack:check"];
+for (const command of stages) {
   const executable = process.env.npm_execpath ? process.execPath : "pnpm";
   const args = process.env.npm_execpath ? [process.env.npm_execpath, command] : [command];
-  const timeout = command === "smoke:chaos" ? 420_000 : 300_000;
-  const result = spawnSync(executable, args, { cwd: process.cwd(), stdio: "inherit", windowsHide: true, timeout });
+  const result = spawnSync(executable, args, { cwd: process.cwd(), stdio: "inherit", windowsHide: true, timeout: 600_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`release stage ${command} failed (${result.status})`);
 }
-const occupied = [];
-for (let port = 17321; port <= 17340; port += 1) if (await canConnect(port)) occupied.push(port);
-if (occupied.length) throw new Error(`orphan Newton Browser host ports remain: ${occupied.join(", ")}`);
-process.stdout.write(`${JSON.stringify({ ok: true, stages: 11, orphanHostPorts: 0 })}\n`);
-
-function canConnect(port) {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: "127.0.0.1", port });
-    const finish = (value) => { socket.destroy(); resolve(value); };
-    socket.setTimeout(150, () => finish(false));
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-  });
-}
+process.stdout.write(`${JSON.stringify({ ok: true, architecture: "owned_process_private_cdp", stages: stages.length })}\n`);

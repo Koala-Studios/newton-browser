@@ -1,11 +1,12 @@
-import { type BrowserAction, type BrowserActionKind, type BrowserTarget, type BrowserWaitFor } from "./protocol.ts";
+import { type BrowserAction, type BrowserActionKind, type BrowserWaitFor } from "./protocol.ts";
+import { ACTION_REQUIRED_FIELDS, ACTION_VARIANT_FIELDS, BROWSER_COMPOSITE_REF_PATTERN, TARGET_REQUIRED_ACTION_KINDS } from "./action-json-schema.ts";
 
 const TEXT_CAP = 240;
 const ROLE_CAP = 80;
 const URL_CAP = 500;
+const VALUE_CAP = 65_536;
 
 type BrowserActionFieldSpec =
-  | { kind: "target" }
   | { kind: "waitFor" }
   | { kind: "text"; cap: number }
   | { kind: "secret" }
@@ -22,7 +23,6 @@ type BrowserActionFieldSpec =
   | { kind: "clip" };
 
 export const BROWSER_ACTION_FIELD_SPECS = {
-  target: { kind: "target" },
   waitFor: { kind: "waitFor" },
   ref: { kind: "text", cap: TEXT_CAP },
   role: { kind: "text", cap: ROLE_CAP },
@@ -36,6 +36,8 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   text: { kind: "text", cap: TEXT_CAP },
   selector: { kind: "text", cap: TEXT_CAP },
   query: { kind: "text", cap: TEXT_CAP },
+  roles: { kind: "stringArray", cap: 12, itemCap: ROLE_CAP },
+  includeInteractive: { kind: "bool" },
   maxNodes: { kind: "int", min: 1, max: 250 },
   timeoutMs: { kind: "int", min: 100, max: 120_000 },
   x: { kind: "num" },
@@ -43,12 +45,7 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   keys: { kind: "stringArray", cap: 8, itemCap: 80 },
   files: { kind: "filePaths", cap: 8, itemCap: 32_767 },
   sensitiveZones: { kind: "sensitiveZones", cap: 32, itemCap: TEXT_CAP },
-  checked: { kind: "bool" },
-  intent: { kind: "text", cap: TEXT_CAP },
   fullPage: { kind: "bool" },
-  device: { kind: "enum", values: ["mobile", "desktop"] },
-  waitMs: { kind: "int", min: 0, max: 10_000 },
-  inline: { kind: "bool" },
   clip: { kind: "clip" },
   mode: { kind: "enum", values: ["full", "diff", "text"] },
   maxChars: { kind: "int", min: 200, max: 200_000 },
@@ -58,7 +55,6 @@ export const BROWSER_ACTION_FIELD_SPECS = {
   level: { kind: "enum", values: ["log", "info", "warn", "error", "debug"] },
   pattern: { kind: "text", cap: TEXT_CAP },
   limit: { kind: "int", min: 1, max: 500 },
-  clear: { kind: "bool" },
   urlPattern: { kind: "text", cap: URL_CAP },
   requestId: { kind: "text", cap: TEXT_CAP },
   format: { kind: "enum", values: ["png", "jpeg"] },
@@ -69,23 +65,116 @@ export type BrowserActionField = keyof typeof BROWSER_ACTION_FIELD_SPECS;
 
 export const BROWSER_ACTION_FIELDS = Object.keys(BROWSER_ACTION_FIELD_SPECS) as BrowserActionField[];
 
+export class InvalidBrowserActionError extends TypeError {
+  readonly code = "invalid_arguments";
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidBrowserActionError";
+  }
+}
+
 export function parseBrowserAction(raw: unknown): BrowserAction {
   const input = objectRecord(raw);
-  const action: BrowserAction = { kind: parseActionKind(input?.kind) };
-  if (!input) return action;
+  if (!input) invalid("action must be an object");
+  const kind = parseActionKind(input.kind);
+  const allowed = new Set(["kind", ...ACTION_VARIANT_FIELDS[kind]]);
+  const unknown = Object.keys(input).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) invalid(`unsupported field(s) for ${kind}: ${unknown.join(",")}`);
+  for (const required of ACTION_REQUIRED_FIELDS[kind] ?? []) {
+    if (!(required in input)) invalid(`${kind}.${required} is required`);
+  }
+  const action: BrowserAction = { kind };
   const output = action as Record<string, unknown>;
-  for (const key of BROWSER_ACTION_FIELDS) {
+  for (const key of ACTION_VARIANT_FIELDS[kind] as BrowserActionField[]) {
+    if (key in input) validateRawField(input[key], BROWSER_ACTION_FIELD_SPECS[key], `${kind}.${key}`);
     const value = parseBrowserActionField(input[key], BROWSER_ACTION_FIELD_SPECS[key]);
+    if (key in input && value === undefined) invalid(`${kind}.${key} is invalid`);
     if (value !== undefined) output[key] = value;
+  }
+  validateCompositeRefs(input, kind);
+  if (TARGET_REQUIRED_ACTION_KINDS.has(kind)) {
+    validateActionTargetShape(input, kind);
+    if (!hasActionTarget(action)) invalid(`${kind} requires a target`);
   }
   return action;
 }
 
+function validateRawField(raw: unknown, spec: BrowserActionFieldSpec, label: string): void {
+  if (spec.kind === "waitFor") {
+    validateObjectKeys(raw, ["url", "title", "text", "selector", "role", "name", "ref", "value", "state", "timeoutMs"], label);
+    const input = objectRecord(raw)!;
+    for (const field of ["url", "title", "text", "selector", "role", "name", "ref", "value"]) if (input[field] !== undefined && (typeof input[field] !== "string" || !String(input[field]).trim())) invalid(`${label}.${field} is invalid`);
+    if (input.state !== undefined && !isWaitForState(input.state)) invalid(`${label}.state is invalid`);
+    if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || Number(input.timeoutMs) < 100 || Number(input.timeoutMs) > 120_000)) invalid(`${label}.timeoutMs is outside bounds`);
+    return;
+  }
+  if (spec.kind === "text" || spec.kind === "secret" || spec.kind === "url") {
+    const empty = spec.kind === "secret" ? typeof raw !== "string" || raw.length === 0 : typeof raw !== "string" || !raw.trim();
+    if (empty || (raw as string).length > (spec.kind === "url" ? URL_CAP : spec.kind === "text" ? spec.cap : VALUE_CAP)) invalid(`${label} must be a bounded string`);
+    return;
+  }
+  if (spec.kind === "bool") { if (typeof raw !== "boolean") invalid(`${label} must be boolean`); return; }
+  if (spec.kind === "int") { if (!Number.isInteger(raw) || Number(raw) < spec.min || Number(raw) > spec.max) invalid(`${label} is outside bounds`); return; }
+  if (spec.kind === "num") { if (typeof raw !== "number" || !Number.isFinite(raw)) invalid(`${label} must be finite`); return; }
+  if (spec.kind === "enum") { if (typeof raw !== "string" || !spec.values.includes(raw)) invalid(`${label} is not an allowed value`); return; }
+  if (spec.kind === "stringArray" || spec.kind === "filePaths") {
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > spec.cap || raw.some((value) => typeof value !== "string" || !value.trim() || value.length > spec.itemCap)) invalid(`${label} must be a bounded string array`);
+    return;
+  }
+  if (spec.kind === "sensitiveZones") {
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > spec.cap) invalid(`${label} is invalid`);
+    for (const [index, zone] of raw.entries()) {
+      validateObjectKeys(zone, ["ref", "selector", "name", "label"], `${label}[${index}]`);
+      const record = objectRecord(zone)!;
+      const values = [record.ref, record.selector, record.name, record.label];
+      const configured = values.filter((value) => value !== undefined);
+      if (configured.length !== 1
+        || configured.some((value) => typeof value !== "string" || !value.trim() || value.length > spec.itemCap)
+        || (record.ref !== undefined && !BROWSER_COMPOSITE_REF_PATTERN.test(String(record.ref)))) {
+        invalid(`${label}[${index}] must contain exactly one bounded ref, selector, name, or label`);
+      }
+    }
+    return;
+  }
+  if (spec.kind === "viewport") {
+    validateObjectKeys(raw, ["width", "height"], label);
+    const input = objectRecord(raw)!;
+    if (!Number.isInteger(input.width) || Number(input.width) < 200 || Number(input.width) > 3840 || !Number.isInteger(input.height) || Number(input.height) < 200 || Number(input.height) > 2160) invalid(`${label} is outside bounds`);
+    return;
+  }
+  if (spec.kind === "clip") {
+    validateObjectKeys(raw, ["x", "y", "width", "height"], label);
+    const input = objectRecord(raw)!;
+    if (![input.x, input.y, input.width, input.height].every((value) => typeof value === "number" && Number.isFinite(value)) || Number(input.width) <= 0 || Number(input.height) <= 0) invalid(`${label} is invalid`);
+    return;
+  }
+  if (spec.kind === "formFields") {
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > spec.cap) invalid(`${label} must be a non-empty bounded array`);
+    for (const [index, field] of raw.entries()) {
+      validateObjectKeys(field, ["ref", "role", "name", "label", "placeholder", "testId", "selector", "value"], `${label}[${index}]`);
+      const record = objectRecord(field)!;
+      if (typeof record.value !== "string" || record.value.length === 0 || record.value.length > VALUE_CAP) invalid(`${label}[${index}].value is required and bounded`);
+      for (const key of ["ref", "role", "name", "label", "placeholder", "testId", "selector"]) {
+        if (record[key] !== undefined && (typeof record[key] !== "string" || !String(record[key]).trim())) invalid(`${label}[${index}].${key} is invalid`);
+      }
+      validateActionTargetShape(record, `${label}[${index}]`);
+      const candidate = { kind: "fill", ...record } as BrowserAction;
+      if (!hasActionTarget(candidate)) invalid(`${label}[${index}] requires a target`);
+    }
+  }
+}
+
+function validateObjectKeys(raw: unknown, allowed: readonly string[], label: string): void {
+  const input = objectRecord(raw);
+  if (!input) invalid(`${label} must be an object`);
+  const unknown = Object.keys(input).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) invalid(`${label} has unsupported field(s): ${unknown.join(",")}`);
+}
+
 function parseBrowserActionField(raw: unknown, spec: BrowserActionFieldSpec): unknown {
-  if (spec.kind === "target") return parseBrowserTarget(raw);
   if (spec.kind === "waitFor") return parseBrowserWaitFor(raw);
   if (spec.kind === "text") return boundedString(raw, spec.cap);
-  if (spec.kind === "secret") return optionalString(raw);
+  if (spec.kind === "secret") return secretString(raw);
   if (spec.kind === "url") return boundedString(raw, URL_CAP);
   if (spec.kind === "bool") return typeof raw === "boolean" ? raw : undefined;
   if (spec.kind === "int") return boundedInt(raw, spec.min, spec.max);
@@ -99,31 +188,27 @@ function parseBrowserActionField(raw: unknown, spec: BrowserActionFieldSpec): un
   return parseClip(raw);
 }
 
-// Ordered fill_form fields (WS9.8). Each entry keeps a resolvable target plus its
-// value; entries with neither a target nor targeting hint are dropped so a malformed
-// field cannot silently fill the wrong control.
+// Ordered flat fill_form fields. Entries without a resolvable target are dropped
+// so a malformed field cannot silently fill the wrong control.
 function parseFormFields(raw: unknown, cap: number): unknown {
   if (!Array.isArray(raw)) return undefined;
   const fields = raw.slice(0, cap).flatMap((entry) => {
     const input = objectRecord(entry);
     if (!input) return [];
-    const target = parseBrowserTarget(input);
     const field: Record<string, unknown> = {};
-    if (target) field.target = target;
     for (const key of ["ref", "role", "name", "label", "placeholder", "testId", "selector"] as const) {
       const value = boundedString(input[key], TEXT_CAP);
       if (value) field[key] = value;
     }
-    const value = optionalString(input.value);
+    const value = secretString(input.value);
     if (value !== undefined) field.value = value;
-    const hasTarget = target || field.ref || field.role || field.label || field.placeholder || field.testId || field.selector;
+    const hasTarget = field.ref || field.role || field.name || field.label || field.placeholder || field.testId || field.selector;
     return hasTarget ? [field] : [];
   });
   return fields.length > 0 ? fields : undefined;
 }
 
-// Owned-tab viewport for `resize` (WS9.6). Bounded to sane device sizes so a caller
-// cannot request a multi-thousand-pixel surface that wedges the serial capture pump.
+// Isolated-process viewport for `resize`, bounded to avoid oversized surfaces.
 function parseViewport(raw: unknown): { width: number; height: number } | undefined {
   const input = objectRecord(raw);
   if (!input) return undefined;
@@ -131,36 +216,6 @@ function parseViewport(raw: unknown): { width: number; height: number } | undefi
   const height = boundedInt(input.height, 200, 2160);
   if (width === undefined || height === undefined) return undefined;
   return { width, height };
-}
-
-export function parseBrowserTarget(raw: unknown): BrowserTarget | undefined {
-  const input = objectRecord(raw);
-  if (!input) return undefined;
-  const ref = boundedString(input.ref, TEXT_CAP);
-  if (ref) return { ref };
-  const role = boundedString(input.role, ROLE_CAP);
-  if (role) {
-    return {
-      role,
-      ...(boundedString(input.name, TEXT_CAP) ? { name: boundedString(input.name, TEXT_CAP) } : {}),
-      ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}),
-    };
-  }
-  const text = boundedString(input.text, TEXT_CAP);
-  if (text) return { text, ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
-  const label = boundedString(input.label, TEXT_CAP);
-  if (label) return { label, ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
-  const placeholder = boundedString(input.placeholder, TEXT_CAP);
-  if (placeholder) return { placeholder, ...(typeof input.exact === "boolean" ? { exact: input.exact } : {}) };
-  const testId = boundedString(input.testId, TEXT_CAP);
-  if (testId) return { testId };
-  const selector = boundedString(input.selector, TEXT_CAP);
-  if (selector) return { selector };
-  const coordinates = objectRecord(input.coordinates);
-  const x = finiteNumber(coordinates?.x);
-  const y = finiteNumber(coordinates?.y);
-  if (x !== undefined && y !== undefined) return { coordinates: { x, y } };
-  return undefined;
 }
 
 export function parseBrowserWaitFor(raw: unknown): BrowserWaitFor | undefined {
@@ -191,7 +246,50 @@ export function parseBrowserWaitFor(raw: unknown): BrowserWaitFor | undefined {
 
 function parseActionKind(raw: unknown): BrowserActionKind {
   const kind = optionalString(raw);
-  return (kind ?? "observe") as BrowserActionKind;
+  if (!kind || !(kind in ACTION_VARIANT_FIELDS)) invalid("action.kind is unknown or missing");
+  return kind as BrowserActionKind;
+}
+
+function validateCompositeRefs(input: Record<string, unknown>, kind: BrowserActionKind): void {
+  const refs = [input.ref, objectRecord(input.waitFor)?.ref];
+  for (const value of refs) {
+    if (value !== undefined && (typeof value !== "string" || !BROWSER_COMPOSITE_REF_PATTERN.test(value))) {
+      invalid(`${kind}.ref must be a fresh composite Newton reference`);
+    }
+  }
+  if (Array.isArray(input.fields)) {
+    for (const field of input.fields) {
+      const record = objectRecord(field);
+      const ref = record?.ref;
+      if (ref !== undefined && (typeof ref !== "string" || !BROWSER_COMPOSITE_REF_PATTERN.test(ref))) invalid(`${kind}.fields ref is invalid`);
+    }
+  }
+}
+
+function hasActionTarget(action: BrowserAction): boolean {
+  return Boolean(action.ref || action.role || action.name || action.label || action.placeholder || action.testId || action.selector || action.text || (Number.isFinite(action.x) && Number.isFinite(action.y)));
+}
+
+function validateActionTargetShape(input: Record<string, unknown>, label: string): void {
+  const coordinatePresent = input.x !== undefined || input.y !== undefined;
+  if (coordinatePresent && !(typeof input.x === "number" && Number.isFinite(input.x) && typeof input.y === "number" && Number.isFinite(input.y))) invalid(`${label} coordinates require x and y`);
+  const shorthands = [
+    input.ref !== undefined,
+    input.role !== undefined || input.name !== undefined,
+    input.label !== undefined,
+    input.placeholder !== undefined,
+    input.testId !== undefined,
+    input.selector !== undefined,
+    input.text !== undefined,
+    coordinatePresent,
+  ].filter(Boolean).length;
+  if (shorthands > 1) invalid(`${label} has ambiguous target strategies`);
+  if (input.name !== undefined && input.role === undefined) invalid(`${label}.name requires role`);
+  if (input.exact !== undefined && !["role", "text", "label", "placeholder"].some((key) => input[key] !== undefined)) invalid(`${label}.exact is not valid for this strategy`);
+}
+
+function invalid(message: string): never {
+  throw new InvalidBrowserActionError(message);
 }
 
 function parseClip(raw: unknown): BrowserAction["clip"] | undefined {
@@ -227,10 +325,12 @@ function sensitiveZoneArray(raw: unknown, cap: number, itemCap: number): Browser
   const zones = raw.slice(0, cap).flatMap((value) => {
     const input = objectRecord(value);
     if (!input) return [];
+    const ref = boundedString(input.ref, itemCap);
     const selector = boundedString(input.selector, itemCap);
     const name = boundedString(input.name, itemCap);
     const label = boundedString(input.label, itemCap);
-    return selector || name || label ? [{ ...(selector ? { selector } : {}), ...(name ? { name } : {}), ...(label ? { label } : {}) }] : [];
+    const configured = [ref, selector, name, label].filter((value) => value !== undefined);
+    return configured.length === 1 ? [{ ...(ref ? { ref } : {}), ...(selector ? { selector } : {}), ...(name ? { name } : {}), ...(label ? { label } : {}) }] : [];
   });
   return zones.length > 0 ? zones : undefined;
 }
@@ -253,6 +353,10 @@ function boundedString(raw: unknown, cap: number): string | undefined {
 
 function optionalString(raw: unknown): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function secretString(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.length > 0 && raw.length <= VALUE_CAP ? raw : undefined;
 }
 
 function objectRecord(raw: unknown): Record<string, unknown> | undefined {

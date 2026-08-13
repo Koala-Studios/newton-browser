@@ -1,0 +1,5 @@
+**
+!scripts/
+!scripts/smoke/
+!scripts/smoke/linux-chrome-live/
+!scripts/smoke/linux-chrome-live/**

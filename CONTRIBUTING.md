@@ -6,7 +6,7 @@ Thanks for helping improve Newton Browser. Contributions should preserve its loc
 
 - Search existing issues and troubleshooting guidance.
 - Use the provided bug or feature template.
-- Remove credentials, pairing secrets, sensitive page content, screenshots, and private filesystem paths.
+- Remove credentials, sensitive page content, screenshots, and private filesystem paths.
 - Report security issues privately using [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Development setup
@@ -20,22 +20,32 @@ Requirements:
 ```bash
 git clone https://github.com/Koala-Studios/newton-browser.git
 cd newton-browser
-npm install --global pnpm@10.8.0
+corepack enable
 pnpm install --frozen-lockfile
 pnpm build
 pnpm test
 ```
 
-Load `apps/extension` as an unpacked extension after building. Generated `dist`, `artifacts`, coverage, and run-evidence directories are intentionally ignored.
+Run the direct live gate with its automatically created ephemeral identity when browser
+behavior changes. Create a persistent identity only for a workflow that explicitly needs
+operator login.
+Generated `dist`, `artifacts`, coverage, profiles, and run-evidence directories are
+intentionally ignored.
 
 ## Engineering expectations
 
 - Keep `apps/mcp-server` stdout restricted to MCP frames; write diagnostics to stderr.
-- Bind relay listeners only to `127.0.0.1`.
-- Require one normalized HTTP(S) origin per session and reconcile the live tab origin before reads or actions.
-- Use owned tabs by default. Current-tab control must remain explicit.
+- Prefer inherited private CDP pipes. The per-session policy proxy binds only to
+  `127.0.0.1`; there is no continuity listener.
+- Require one normalized HTTP(S) origin per session and establish containment before the
+  initial navigation.
+- Each direct session owns an isolated browser process and identity; preserve cleanup and
+  cross-session concurrency.
 - Treat page content as untrusted data, never instructions or authorization.
-- Never inspect cookies, storage, browser profile files, saved passwords, or credentials.
+- Never parse, inspect, log, export, or merge cookies, storage, browser profile contents,
+  saved passwords, or credentials. The sole exception is the documented operator-authorized
+  opaque byte-copy allowlist from a closed stable profile into a new Newton-owned identity;
+  source contents remain uninterpreted and unchanged.
 - Preserve deterministic results and typed failures. Do not hide timing problems with arbitrary sleeps or wider timeouts.
 
 Every defect fix must include:
@@ -56,7 +66,12 @@ pnpm test
 pnpm smoke:quick
 ```
 
-Before a release, `pnpm release:check` must pass from packed artifacts three consecutive times with no skipped critical tests. Record manual and live-browser evidence under `test/evidence/`.
+Use `pnpm release:deterministic` for the browser-free source/packed checkpoint. Before a
+release, run the public real-site matrix once on every required browser/platform, then the
+complete `pnpm release:check` (deterministic plus source and installed-artifact direct
+browser gates) three consecutive times with no skipped critical tests. Third-party site
+availability is evidence, not an input to artifact reproducibility. Record manual and
+live-browser evidence under `test/evidence/`.
 
 ## Pull requests
 

@@ -21,7 +21,7 @@ For a fix, include the deterministic reproduction, root cause, regression test, 
 
 ## Checklist
 
-- [ ] The change preserves localhost-only relay binding and explicit origin scoping.
-- [ ] No credentials, pairing secrets, sensitive page content, or private paths are included.
+- [ ] The change preserves private-CDP/local-only transport and exact origin scoping.
+- [ ] No credentials, profile contents, sensitive page content, or private paths are included.
 - [ ] Public behavior and configuration changes are documented.
 - [ ] Generated artifacts are excluded unless explicitly requested.

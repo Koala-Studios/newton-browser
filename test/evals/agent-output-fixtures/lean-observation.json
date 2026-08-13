@@ -1,0 +1,8 @@
+{
+  "id": "lean-observation",
+  "caseType": "observation",
+  "format": "json",
+  "limit": 12,
+  "maxTokens": 1050,
+  "inputRef": "checkout-observation-shared.fixture"
+}

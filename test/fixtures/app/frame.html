@@ -1,1 +1,58 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Frame fixture</title></head><body><button id="frame-button">Same-origin frame button</button><label>Frame input <input></label></body></html>
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Frame fixture</title></head>
+<body>
+  <p id="frame-provenance">frame-loading</p>
+  <p id="frame-render-state" role="status" aria-label="frame-render-pending">frame-render-pending</p>
+  <p id="input-route-state" role="status" aria-label="input-route-none">input-route-none</p>
+  <button id="frame-button">Same-origin frame button</button>
+  <button id="frame-stale-target">Frame stale target</button>
+  <button id="rerender-frame-target" type="button">Rerender frame target</button>
+  <button id="navigate-frame-document" type="button">Navigate frame document</button>
+  <label>Frame input <input></label>
+  <output id="frame-status">frame-idle</output>
+  <div id="nested-frame-slot"></div>
+  <script>
+    const parameters = new URLSearchParams(location.search);
+    const label = parameters.get("label") || "Same-origin";
+    const revision = Number(parameters.get("revision") || 1);
+    const frameButton = document.querySelector("#frame-button");
+    document.querySelector("#frame-provenance").textContent = `${label} frame revision ${revision}`;
+    const renderState = document.querySelector("#frame-render-state");
+    const inputRouteState = document.querySelector("#input-route-state");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      renderState.textContent = `${label} render ready`;
+      renderState.setAttribute("aria-label", `${label} render ready`);
+    }));
+    for (const eventType of ["pointerdown", "mousedown", "mouseup", "click"]) {
+      document.addEventListener(eventType, (event) => {
+        const targetId = event.target instanceof Element ? event.target.id : "";
+        const targetKey = ["frame-button", "nested-oopif-frame"].includes(targetId) ? targetId : "other";
+        const inputState = `${label} ${eventType} ${targetKey}`;
+        inputRouteState.textContent = inputState;
+        inputRouteState.setAttribute("aria-label", inputState);
+      }, true);
+    }
+    frameButton.textContent = `${label} frame button`;
+    frameButton.addEventListener("click", (event) => {
+      event.currentTarget.textContent = `${label} frame button clicked`;
+    });
+    document.querySelector("#rerender-frame-target").addEventListener("click", () => {
+      document.querySelector("#frame-stale-target").outerHTML = '<button id="frame-fresh-target">Frame fresh target</button>';
+      document.querySelector("#frame-status").textContent = "frame-target-rerendered";
+    });
+    document.querySelector("#navigate-frame-document").addEventListener("click", () => {
+      parameters.set("revision", String(revision + 1));
+      location.assign(`${location.pathname}?${parameters}`);
+    });
+    const nestedOrigin = parameters.get("nestedOrigin");
+    if (nestedOrigin && parameters.get("leaf") !== "1") {
+      const nested = document.createElement("iframe");
+      nested.id = "nested-oopif-frame";
+      nested.title = "Nested OOPIF frame";
+      nested.src = `${nestedOrigin}/frame.html?leaf=1&label=Nested-OOPIF`;
+      document.querySelector("#nested-frame-slot").append(nested);
+    }
+  </script>
+</body>
+</html>
