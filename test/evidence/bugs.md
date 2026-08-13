@@ -1809,6 +1809,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   only with the canonical user-data root.
 - Regression/evidence: browser discovery, Chromium launch, profile import, and guardian
   tests exercise real linked/junction ancestors; separate cases continue to reject
-  linked executable, source, and store leaves. The affected 38-test suite and workspace
-  strict typecheck pass locally.
+  linked executable, source, and store leaves. The identity CLI contract also requires
+  closure verification against the canonical source root. The affected 38-test suite,
+  complete 563-test suite, token budgets, and workspace strict typecheck pass locally.
 - Status: implemented; PR validation pending.

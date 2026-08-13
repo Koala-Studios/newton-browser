@@ -47,7 +47,7 @@ test("opaque import requires injected closure evidence and never exposes hostile
       store: fixture.store,
       sourceClosureVerifier(source) {
         assert.deepEqual(source, {
-          userDataRoot: fixture.userDataRoot,
+          userDataRoot: fs.realpathSync.native(fixture.userDataRoot),
           profileDirectory: fixture.profileDirectory,
         });
         return true;
