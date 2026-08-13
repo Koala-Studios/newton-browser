@@ -1792,3 +1792,23 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   prove normal operation and exact cleanup through them, and separately prove a linked
   store leaf is refused.
 - Status: implemented; PR validation pending.
+
+## BB-153 - Windows CI rejected safe files and cleanup beneath junction-backed ancestors
+
+- Found: 2026-08-12 in the second pull-request Windows validation.
+- Minimal repro: create a regular browser executable, opaque source profile, or guardian
+  identity beneath the runner's junction-backed temp/workspace ancestor. Discovery and
+  launch report the executable invalid, import reports the source invalid, and guardian
+  cleanup leaves the otherwise proven identity behind.
+- Root cause: the first junction correction covered profile-store and eval roots only.
+  Three remaining boundaries still required the complete lexical path to equal its
+  canonical path, conflating a trusted ancestor reparse point with a linked leaf.
+- Fix: validate each leaf with `lstat`, canonicalize its parent, require the canonical
+  leaf to be the exact basename beneath that parent, and retain existing file type,
+  link-count, owner-marker, device/inode, and nonce checks. Opaque source facts are stored
+  only with the canonical user-data root.
+- Regression/evidence: browser discovery, Chromium launch, profile import, and guardian
+  tests exercise real linked/junction ancestors; separate cases continue to reject
+  linked executable, source, and store leaves. The affected 38-test suite and workspace
+  strict typecheck pass locally.
+- Status: implemented; PR validation pending.

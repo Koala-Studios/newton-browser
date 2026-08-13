@@ -169,8 +169,9 @@ export function prepareOpaqueProfileSource(input: {
 }): OpaqueProfileSource {
   if (typeof input.verifyClosed !== "function") fail("profile_source_closure_unproved");
   const browserFamily = checkedBrowserFamily(input.browserFamily);
-  const userDataRoot = checkedAbsolute(input.userDataRoot, "profile_source_invalid");
-  assertPlainDirectory(userDataRoot, "profile_source_invalid");
+  const requestedUserDataRoot = checkedAbsolute(input.userDataRoot, "profile_source_invalid");
+  assertPlainDirectory(requestedUserDataRoot, "profile_source_invalid");
+  const userDataRoot = canonicalDirectory(requestedUserDataRoot, "profile_source_invalid");
   const profileDirectory = checkedProfileDirectory(input.profileDirectory);
   const profileRoot = path.join(userDataRoot, profileDirectory);
   assertDirectChild(userDataRoot, profileRoot, "profile_source_invalid");

@@ -51,6 +51,44 @@ test("explicit executable wins and must be an exact executable regular file", (c
   }
 });
 
+test("explicit executable canonicalizes a linked ancestor but rejects a linked executable leaf", (context) => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "newton-browser-discovery-link-"));
+  try {
+    const physicalParent = path.join(root, "physical");
+    const linkedParent = path.join(root, "linked");
+    fs.mkdirSync(physicalParent);
+    try {
+      fs.symlinkSync(physicalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && ["EPERM", "EACCES", "ENOTSUP"].includes(String(error.code))) {
+        context.skip(`directory link unavailable: ${String(error.code)}`);
+        return;
+      }
+      throw error;
+    }
+    const name = process.platform === "win32" ? "browser.exe" : "browser";
+    const physicalExecutable = path.join(physicalParent, name);
+    const linkedExecutable = path.join(linkedParent, name);
+    fs.writeFileSync(physicalExecutable, "fixture", { mode: 0o700 });
+    if (process.platform !== "win32") fs.chmodSync(physicalExecutable, 0o700);
+    assert.equal(discoverBrowserExecutable({
+      family: "chrome",
+      explicitPath: linkedExecutable,
+      platform: process.platform as "win32" | "darwin" | "linux",
+    })?.path, fs.realpathSync.native(physicalExecutable));
+
+    const linkedLeaf = path.join(root, process.platform === "win32" ? "linked-leaf.exe" : "linked-leaf");
+    fs.symlinkSync(physicalExecutable, linkedLeaf, "file");
+    assert.throws(() => discoverBrowserExecutable({
+      family: "chrome",
+      explicitPath: linkedLeaf,
+      platform: process.platform as "win32" | "darwin" | "linux",
+    }), /browser_executable_invalid/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("missing system candidates return null while invalid explicit paths fail closed", () => {
   assert.equal(discoverBrowserExecutable({ family: "chrome", platform: "win32", env: {} }), null);
   assert.throws(() => discoverBrowserExecutable({ family: "chrome", explicitPath: path.join(os.tmpdir(), "missing-newton-browser.exe"), platform: "win32" }), /browser_executable_unavailable/);

@@ -305,3 +305,25 @@ test("rejects directories, symlinks, and platform-nonexecutable browser paths be
     assert.equal(current.spawnCalls.length, 0);
   }
 });
+
+test("launch accepts an executable beneath a linked ancestor without accepting a linked leaf", async (t) => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "newton-chromium-linked-parent-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const physicalParent = path.join(root, "physical");
+  const linkedParent = path.join(root, "linked");
+  fs.mkdirSync(physicalParent);
+  fs.symlinkSync(physicalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+  const name = process.platform === "win32" ? "browser.exe" : "browser";
+  const physicalExecutable = path.join(physicalParent, name);
+  fs.writeFileSync(physicalExecutable, "fixture", { mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(physicalExecutable, 0o700);
+  const current = fixture();
+  const launched = await launchChromium({
+    executablePath: path.join(linkedParent, name),
+    userDataDir: profileDirectory(t),
+    spawn: current.spawn,
+    transportFactory: () => current.transport,
+  });
+  assert.equal(current.spawnCalls.length, 1);
+  await launched.close();
+});

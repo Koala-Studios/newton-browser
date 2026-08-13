@@ -1,6 +1,13 @@
 # Changelog
 
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
+
+## [0.5.0] - 2026-08-12
 
 ### Fixed
 
@@ -65,6 +72,9 @@
   repetitions.
 - Canonicalized secure profile-store and hermetic-eval roots beneath a linked/junction
   temporary ancestor while continuing to reject a linked store leaf.
+- Extended junction-safe canonicalization to executable validation, opaque profile
+  sources, and guardian-owned identity cleanup without permitting linked leaves or hard
+  links.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser
@@ -146,11 +156,6 @@
   manifest, removing both duplicated literals and an unresolved doctor constant.
 - Extended exact optional-property, checked index-access, and override enforcement from
   the driver to the entire core/MCP TypeScript workspace.
-
-All notable changes to this project are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
-this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 

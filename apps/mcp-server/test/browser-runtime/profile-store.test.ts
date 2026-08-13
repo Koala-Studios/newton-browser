@@ -61,6 +61,48 @@ test("profile stores canonicalize a linked ancestor while rejecting a linked sto
   }
 });
 
+test("opaque profile sources canonicalize a linked ancestor while rejecting a linked source leaf", (context) => {
+  const fixture = createFixture();
+  try {
+    const physicalParent = path.join(fixture.root, "source-physical-parent");
+    const linkedParent = path.join(fixture.root, "source-linked-parent");
+    const physicalUserData = path.join(physicalParent, "user-data");
+    const profileDirectory = "Default";
+    fs.mkdirSync(path.join(physicalUserData, profileDirectory), { recursive: true });
+    fs.writeFileSync(path.join(physicalUserData, "Local State"), "opaque");
+    write(path.join(physicalUserData, profileDirectory), "Network/Cookies", "opaque-cookie");
+    try {
+      fs.symlinkSync(physicalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && ["EPERM", "EACCES", "ENOTSUP"].includes(String(error.code))) {
+        context.skip(`directory link unavailable: ${String(error.code)}`);
+        return;
+      }
+      throw error;
+    }
+    const canonicalUserData = fs.realpathSync.native(physicalUserData);
+    const source = prepareOpaqueProfileSource({
+      browserFamily: "chrome",
+      userDataRoot: path.join(linkedParent, "user-data"),
+      profileDirectory,
+      verifyClosed: (facts) => facts.userDataRoot === canonicalUserData,
+    });
+    const receipt = importOpaqueProfile(openProfileStore(fixture.storeRoot), { source });
+    assert.equal(receipt.source, "opaque_import");
+
+    const linkedLeaf = path.join(fixture.root, "linked-user-data");
+    fs.symlinkSync(physicalUserData, linkedLeaf, process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => prepareOpaqueProfileSource({
+      browserFamily: "chrome",
+      userDataRoot: linkedLeaf,
+      profileDirectory,
+      verifyClosed: () => true,
+    }), /profile_source_invalid/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("opaque import copies only the fixed auth allowlist and never returns contents", () => {
   const fixture = createFixture();
   try {

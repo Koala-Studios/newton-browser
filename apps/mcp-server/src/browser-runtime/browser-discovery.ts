@@ -104,12 +104,15 @@ function validateExecutable(candidate: string, platform: BrowserPlatform, source
   }
   if (!stat.isFile() || stat.nlink !== 1) throw new Error("browser_executable_invalid");
   let resolved: string;
+  let parentReal: string;
   try {
     resolved = fs.realpathSync.native(absolute);
+    parentReal = fs.realpathSync.native(path.dirname(absolute));
   } catch {
     throw new Error("browser_executable_invalid");
   }
-  if (path.resolve(resolved) !== absolute) throw new Error("browser_executable_invalid");
+  const expected = path.join(parentReal, path.basename(absolute));
+  if (path.relative(resolved, expected) !== "") throw new Error("browser_executable_invalid");
   if (platform !== "win32") {
     try {
       fs.accessSync(resolved, fs.constants.X_OK);

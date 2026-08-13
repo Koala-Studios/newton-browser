@@ -255,8 +255,10 @@ function validateExecutablePath(value: string, platform: NodeJS.Platform): void 
   try {
     if (!path.isAbsolute(value) || value.includes("\0")) throw new Error();
     const stat = fs.lstatSync(value);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error();
-    if (fs.realpathSync.native(value) !== path.resolve(value)) throw new Error();
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error();
+    const resolved = fs.realpathSync.native(value);
+    const parentReal = fs.realpathSync.native(path.dirname(value));
+    if (path.relative(resolved, path.join(parentReal, path.basename(path.resolve(value)))) !== "") throw new Error();
     if (platform === "win32") {
       if (path.extname(value).toLowerCase() !== ".exe") throw new Error();
     } else if (platform === "linux" || platform === "darwin") {

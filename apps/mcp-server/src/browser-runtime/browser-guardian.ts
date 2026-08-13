@@ -121,10 +121,15 @@ async function finishBrowserExit(code: number | null, signal: NodeJS.Signals | n
 async function cleanupProfile(plan: CleanupPlan | null): Promise<void> {
   if (!plan) return;
   try {
+    const storeStat = fs.lstatSync(plan.storeRoot);
+    const plannedIdentityStat = fs.lstatSync(plan.identityPath);
+    if (!storeStat.isDirectory() || storeStat.isSymbolicLink()
+      || !plannedIdentityStat.isDirectory() || plannedIdentityStat.isSymbolicLink()
+      || path.dirname(path.resolve(plan.identityPath)) !== path.resolve(plan.storeRoot)) return;
     const storeRoot = fs.realpathSync.native(plan.storeRoot);
     const identityPath = fs.realpathSync.native(plan.identityPath);
-    if (storeRoot !== path.resolve(plan.storeRoot) || identityPath !== path.resolve(plan.identityPath)
-      || path.dirname(identityPath) !== storeRoot || path.basename(identityPath) !== plan.identityId) return;
+    if (path.dirname(identityPath) !== storeRoot || path.basename(identityPath) !== plan.identityId
+      || path.relative(identityPath, path.join(storeRoot, plan.identityId)) !== "") return;
     const identityStat = fs.lstatSync(identityPath, { bigint: true });
     if (!identityStat.isDirectory() || identityStat.isSymbolicLink()
       || identityStat.dev.toString() !== plan.identityDev || identityStat.ino.toString() !== plan.identityIno) return;
@@ -134,8 +139,9 @@ async function cleanupProfile(plan: CleanupPlan | null): Promise<void> {
     if (!markerStat.isFile() || markerStat.isSymbolicLink() || marker.nonce !== plan.identityMarkerNonce
       || marker.storeNonce !== plan.storeNonce || marker.identity !== plan.identityId
       || marker.dev !== plan.identityDev || marker.ino !== plan.identityIno) return;
-    if (path.dirname(plan.leasePath) !== identityPath || fs.realpathSync.native(plan.leasePath) !== path.resolve(plan.leasePath)) return;
+    if (path.dirname(path.resolve(plan.leasePath)) !== path.resolve(plan.identityPath)) return;
     const leaseStat = fs.lstatSync(plan.leasePath, { bigint: true });
+    if (leaseStat.isSymbolicLink() || fs.realpathSync.native(plan.leasePath) !== path.join(identityPath, path.basename(plan.leasePath))) return;
     const lease = JSON.parse(fs.readFileSync(plan.leasePath, "utf8")) as Record<string, unknown>;
     if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || leaseStat.nlink !== 1n
       || leaseStat.dev.toString() !== plan.leaseDev || leaseStat.ino.toString() !== plan.leaseIno
