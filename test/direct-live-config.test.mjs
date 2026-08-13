@@ -91,4 +91,5 @@ test("primary live receipts are emitted only after authoritative cleanup", () =>
     assert.ok(source.indexOf("temporaryRootRemoved:") > source.indexOf("} finally {"), file);
     assert.match(source, /terminalFailure/u, file);
   }
+  assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /fs\.realpathSync\.native\(os\.tmpdir\(\)\)/u);
 });

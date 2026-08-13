@@ -1871,3 +1871,18 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   cannot change fixture resolution. The corrected tagged workflow must pass both
   three-pass jobs before publication.
 - Status: implemented; release verification pending.
+
+## BB-157 - Windows live cleanup mixed two canonical path representations
+
+- Found: 2026-08-12 in the corrected guarded release's first Windows pass, after all
+  deterministic/package checks and real Chrome behavior succeeded.
+- Minimal repro: run `direct-runtime-live.mjs` with `os.tmpdir()` expressed as a Windows
+  8.3 path. The parent is captured with non-native `realpathSync`, while the owned child
+  and cleanup check use `realpathSync.native`; exact parent comparison fails after the
+  browser/session cleanup is already confirmed.
+- Root cause: one ownership record mixed two Node canonicalization APIs.
+- Fix: capture the temp parent with `realpathSync.native` just like creation and removal.
+  No target, ownership, marker, device/inode, or deletion check is relaxed.
+- Regression/evidence: the live-suite contract requires native canonicalization of the
+  temp parent; the next tagged Windows release pass must prove real cleanup three times.
+- Status: implemented; release verification pending.

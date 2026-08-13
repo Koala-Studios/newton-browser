@@ -16,7 +16,7 @@ if (!browser) {
 }
 logStep("direct_runtime_browser_discovered");
 
-const tempRoot = fs.realpathSync(os.tmpdir());
+const tempRoot = fs.realpathSync.native(os.tmpdir());
 const runOwnership = createRunRoot(tempRoot);
 const runRoot = runOwnership.root;
 let deniedRequests = 0;

@@ -84,6 +84,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Made release verification run the Linux container as the exact runner UID/GID for its
   owned evidence mount, and made Windows resolve pnpm from the active setup action when
   setup-node leaves a stale non-existent `npm_execpath`.
+- Standardized the direct-runtime live harness on native canonical temp paths so Windows
+  8.3 runner paths cannot make successful authoritative cleanup look refused.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser
