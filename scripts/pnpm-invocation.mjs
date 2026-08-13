@@ -13,7 +13,9 @@ export function resolvePnpmInvocation(options = {}) {
     }
   }
   if (platform === "win32") {
-    const pnpmHome = options.pnpmHome ?? process.env.PNPM_HOME;
+    const pnpmHome = Object.hasOwn(options, "pnpmHome")
+      ? options.pnpmHome
+      : hasExplicitNpmExecPath ? undefined : process.env.PNPM_HOME;
     const entrypoint = typeof pnpmHome === "string" && pnpmHome.length > 0
       ? path.resolve(pnpmHome, "..", "pnpm", "bin", "pnpm.cjs")
       : path.join(path.dirname(execPath), "node_modules", "pnpm", "bin", "pnpm.cjs");

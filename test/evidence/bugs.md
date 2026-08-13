@@ -1867,5 +1867,7 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   `pnpm.cjs` adjacent to the active `PNPM_HOME`; explicit caller paths remain strict.
 - Regression/evidence: workflow contract tests require UID/GID propagation and the pnpm
   resolver test reproduces the setup-node/pnpm-action directory layout with absent stale
-  state. The corrected tagged workflow must pass both three-pass jobs before publication.
+  state. Explicit test inputs suppress both ambient pnpm paths so hosted-runner state
+  cannot change fixture resolution. The corrected tagged workflow must pass both
+  three-pass jobs before publication.
 - Status: implemented; release verification pending.
