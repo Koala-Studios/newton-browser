@@ -114,9 +114,9 @@ const preparedSources = new WeakMap<OpaqueProfileSource, PreparedSource>();
 const leases = new WeakMap<NewtonIdentityLease, RegisteredLease>();
 
 export function openProfileStore(storeRoot: string): ProfileStore {
-  const absolute = checkedAbsolute(storeRoot, "profile_store_invalid");
-  const parent = path.dirname(absolute);
-  assertPlainDirectory(parent, "profile_store_invalid");
+  const requested = checkedAbsolute(storeRoot, "profile_store_invalid");
+  const parent = canonicalDirectory(path.dirname(requested), "profile_store_invalid");
+  const absolute = path.join(parent, path.basename(requested));
   if (!fs.existsSync(absolute)) {
     try {
       fs.mkdirSync(absolute, { mode: 0o700 });
@@ -804,7 +804,27 @@ function assertPlainDirectory(directory: string, code: string): void {
   } catch {
     fail(code);
   }
-  if (path.resolve(real) !== path.resolve(directory)) fail(code);
+  let parentReal: string;
+  try {
+    parentReal = fs.realpathSync.native(path.dirname(directory));
+  } catch {
+    fail(code);
+  }
+  const expected = path.join(parentReal, path.basename(path.resolve(directory)));
+  if (path.relative(real, expected) !== "") fail(code);
+}
+
+function canonicalDirectory(directory: string, code: string): string {
+  let stat: fs.Stats;
+  let real: string;
+  try {
+    stat = fs.statSync(directory);
+    real = fs.realpathSync.native(directory);
+  } catch {
+    fail(code);
+  }
+  if (!stat.isDirectory()) fail(code);
+  return real;
 }
 
 function assertDirectChild(parent: string, child: string, code: string): void {

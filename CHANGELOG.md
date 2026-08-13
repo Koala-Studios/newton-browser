@@ -63,6 +63,8 @@
 - Kept mandatory public real-site QA as one evidence matrix per browser/platform while
   removing volatile third-party availability from the three artifact-reproducibility
   repetitions.
+- Canonicalized secure profile-store and hermetic-eval roots beneath a linked/junction
+  temporary ancestor while continuing to reject a linked store leaf.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser

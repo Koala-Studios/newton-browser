@@ -1772,3 +1772,23 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   separate and absent from the repeated script; the bounded preflight receipt records all
   three successful seven-site lanes.
 - Status: implemented; final immutable execution pending.
+
+## BB-152 - Windows CI rejected every root beneath its junction-backed temp directory
+
+- Found: 2026-08-12 in pull-request Windows validation.
+- Minimal repro: create a regular profile-store directory or hermetic eval root beneath a
+  parent reached through a Windows junction. The leaf is a real directory, but its full
+  canonical path differs from the lexical temp path, producing `profile_store_invalid` or
+  `local write escaped hermetic root`.
+- Root cause: leaf-link protection compared the complete lexical and canonical paths,
+  thereby rejecting a safe operating-system ancestor reparse point as if the owned leaf
+  itself were a link. Hermetic validation likewise mixed a lexical root with canonical
+  report paths.
+- Fix: require the leaf to remain a regular non-link directory whose canonical location is
+  the exact basename under its canonical parent, store only that canonical root, and
+  canonicalize the hermetic parent before creating descendants. A linked store leaf remains
+  rejected.
+- Regression/evidence: profile-store and eval tests create real Windows junction ancestors,
+  prove normal operation and exact cleanup through them, and separately prove a linked
+  store leaf is refused.
+- Status: implemented; PR validation pending.

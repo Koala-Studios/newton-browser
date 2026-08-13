@@ -15,7 +15,7 @@ import {
   parseEvalTaskFromDirectory,
   parseEvalTask,
 } from "../../scripts/evals/schema.mjs";
-import { replayTask, replayTasks, fixtureResolveRef } from "../../scripts/evals/replay.mjs";
+import { fixtureResolveRef, replayTask, replayTasks, withHermeticEvalRoots } from "../../scripts/evals/replay.mjs";
 
 const tasksDir = path.join("test", "evals", "tasks");
 
@@ -161,6 +161,28 @@ test("replay isolates all local roots and rejects writes outside them", async ()
     assert.equal(fs.existsSync(isolatedRoot), false);
   } finally {
     await fs.promises.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("hermetic eval roots canonicalize a linked temporary ancestor", async () => {
+  const root = await fs.promises.mkdtemp(path.join(fs.realpathSync.native(os.tmpdir()), "newton-eval-linked-parent-"));
+  const physicalParent = path.join(root, "physical-parent");
+  const linkedParent = path.join(root, "linked-parent");
+  await fs.promises.mkdir(physicalParent);
+  await fs.promises.symlink(physicalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+  try {
+    let isolatedRoot = "";
+    const result = await withHermeticEvalRoots(async (roots) => {
+      isolatedRoot = roots.root;
+      const output = roots.recordWrite(path.join(roots.output, "result.json"));
+      await fs.promises.writeFile(output, "{}", "utf8");
+      return "complete";
+    }, { parent: linkedParent });
+    assert.equal(result, "complete");
+    assert.equal(isolatedRoot.startsWith(fs.realpathSync.native(physicalParent)), true);
+    assert.equal(fs.existsSync(isolatedRoot), false);
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
   }
 });
 

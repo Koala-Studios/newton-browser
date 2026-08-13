@@ -155,7 +155,8 @@ export async function replayTasks(tasks, options = {}) {
 
 export async function withHermeticEvalRoots(callback, options = {}) {
   if (typeof callback !== "function") throw new TypeError("withHermeticEvalRoots requires a callback");
-  const parent = path.resolve(options.parent ?? os.tmpdir());
+  const requestedParent = path.resolve(options.parent ?? os.tmpdir());
+  const parent = await fs.promises.realpath(requestedParent);
   const root = await fs.promises.mkdtemp(path.join(parent, "newton-browser-eval-"));
   const recordedWrites = [];
   const directories = Object.fromEntries(HERMETIC_DIRECTORY_NAMES.map((name) => [name, path.join(root, name)]));

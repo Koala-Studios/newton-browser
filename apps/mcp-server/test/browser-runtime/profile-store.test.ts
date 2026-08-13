@@ -41,6 +41,26 @@ test("persistent Newton identities use host-generated opaque IDs and are removab
   }
 });
 
+test("profile stores canonicalize a linked ancestor while rejecting a linked store leaf", () => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "newton-profile-ancestor-link-"));
+  try {
+    const physicalParent = path.join(root, "physical-parent");
+    const linkedParent = path.join(root, "linked-parent");
+    fs.mkdirSync(physicalParent);
+    fs.symlinkSync(physicalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    const store = openProfileStore(path.join(linkedParent, "store"));
+    assert.equal(store.root, fs.realpathSync.native(path.join(physicalParent, "store")));
+    const identity = createNewtonIdentity(store, { browserFamily: "chrome" });
+    assert.equal(fs.existsSync(identity.path), true);
+
+    const linkedStore = path.join(root, "linked-store");
+    fs.symlinkSync(store.root, linkedStore, process.platform === "win32" ? "junction" : "dir");
+    assert.throws(() => openProfileStore(linkedStore), /profile_store_invalid/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("opaque import copies only the fixed auth allowlist and never returns contents", () => {
   const fixture = createFixture();
   try {
