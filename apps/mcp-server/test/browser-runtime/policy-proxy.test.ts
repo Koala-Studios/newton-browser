@@ -179,6 +179,7 @@ test("CONNECT permits only an exact granted HTTPS authority and tunnels after va
     assert.equal(proxy.ledger().upstreamConnections, 1);
   } finally {
     await proxy.close();
+    if (tunnelClient) await closed(tunnelClient);
     assert.equal(tunnelClient?.closed, true);
     assert.equal(await connectionCount(allowed), 0);
     await Promise.all([closeServer(allowed), closeServer(denied)]);
@@ -349,6 +350,7 @@ test("close prevents a queued keep-alive request from registering a late upstrea
     // the proxy can dispatch the queued request on a later I/O callback.
     client.write(`GET http://${queuedAuthority}/late HTTP/1.1\r\nHost: ${queuedAuthority}\r\nConnection: close\r\n\r\n`);
     await proxy.close();
+    await closed(client);
 
     assert.equal(queuedConnections, 0);
     assert.equal(client.closed, true);

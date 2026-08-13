@@ -84,11 +84,12 @@ test("host policy refuses linked config files", (t) => {
 });
 
 test("MCP and identity utilities resolve one authoritative profile store", () => {
-  const configured = path.resolve("C:/newton-test-profile-store");
-  assert.equal(profileStoreDirectory({ NEWTON_BROWSER_PROFILE_STORE_DIR: configured }, "C:/ignored-config"), configured);
-  assert.equal(profileStoreDirectory({}, "C:/newton-config"), path.resolve("C:/newton-config/identities"));
-  assert.throws(() => profileStoreDirectory({ NEWTON_BROWSER_PROFILE_STORE_DIR: "" }, "C:/newton-config"), /direct_config_invalid/u);
-  assert.throws(() => profileStoreDirectory({ NEWTON_BROWSER_PROFILE_STORE_DIR: "bad\0path" }, "C:/newton-config"), /direct_config_invalid/u);
+  const configured = path.join(path.resolve(os.tmpdir()), "newton-test-profile-store");
+  const config = path.join(path.resolve(os.tmpdir()), "newton-test-config");
+  assert.equal(profileStoreDirectory({ NEWTON_BROWSER_PROFILE_STORE_DIR: configured }, path.join(config, "ignored")), configured);
+  assert.equal(profileStoreDirectory({}, config), path.join(config, "identities"));
+  assert.throws(() => profileStoreDirectory({ NEWTON_BROWSER_PROFILE_STORE_DIR: "" }, config), /direct_config_invalid/u);
+  assert.throws(() => profileStoreDirectory({ NEWTON_BROWSER_PROFILE_STORE_DIR: "bad\0path" }, config), /direct_config_invalid/u);
 });
 
 test("explicit config and profile roots are absolute, bounded, and never a filesystem root", () => {

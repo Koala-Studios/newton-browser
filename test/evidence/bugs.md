@@ -1813,3 +1813,40 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   closure verification against the canonical source root. The affected 38-test suite,
   complete 563-test suite, token budgets, and workspace strict typecheck pass locally.
 - Status: implemented; PR validation pending.
+
+## BB-154 - Linux validation retained Windows paths and racy socket/path assertions
+
+- Found: 2026-08-12 while independently reproducing the pull-request Ubuntu test hang in
+  a clean Node 24 Linux container.
+- Minimal repro: run the complete test suite from `/work`. Two policy-proxy tests assert a
+  remote client socket's `closed` property immediately after the server-owned proxy drain;
+  one config test treats `C:/...` as absolute; and build parity searches for the unbounded
+  substring `/work`, which matches ordinary `/worker` text in production output. The four
+  failures leave failed-test network fixtures resident and make the Node process appear
+  hung after printing its summary.
+- Root cause: the tests mixed a server resource-ownership acknowledgement with the peer's
+  later local close event, and embedded Windows/long-checkout assumptions in nominally
+  cross-platform assertions.
+- Fix: explicitly await the peer socket close event after authoritative proxy cleanup,
+  construct config paths from the host temporary root, and require the workspace needle
+  to end at a path separator.
+- Regression/evidence: the exact full suite passes 563/563 with zero skips and exits
+  normally in a clean Node 24 Linux container. GitHub's Windows, Ubuntu, and packed
+  release lanes are required before merge.
+- Status: implemented; PR validation pending.
+
+## BB-155 - Driver parity builds raced concurrent core imports
+
+- Found: 2026-08-12 during focused verification of the Linux CI corrections.
+- Minimal repro: run the policy, config, and driver build-parity files in one Node test
+  process. The parity test invokes two custom driver builds; each removes and rebuilds
+  `packages/core/dist`, so a concurrent config import can fail with
+  `ERR_MODULE_NOT_FOUND` during the deletion window.
+- Root cause: the exported driver builder treated an isolated custom output build as a
+  complete package build and mutated the shared core output every time.
+- Fix: only the normal default-destination driver build refreshes core. Custom parity
+  destinations compile against the already-built core and never mutate shared output.
+- Regression/evidence: parity records the core entry's device, inode, and nanosecond
+  modification time around both custom builds and requires all three to remain exact;
+  the clean Linux full suite passes 563/563 with zero skips.
+- Status: implemented; PR validation pending.

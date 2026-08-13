@@ -78,6 +78,8 @@ function removeExactTempRoot(root) {
 
 test("driver builds are deterministic and contain only production outputs", () => {
   const resolvedTemp = realpathSync(tmpdir());
+  const coreEntry = path.join(workspaceRoot, "packages", "core", "dist", "index.js");
+  const coreBefore = statSync(coreEntry, { bigint: true });
   const destinations = [
     mkdtempSync(path.join(resolvedTemp, TEMP_PREFIX)),
     mkdtempSync(path.join(resolvedTemp, TEMP_PREFIX)),
@@ -104,8 +106,8 @@ test("driver builds are deterministic and contain only production outputs", () =
 
     const forbiddenPathSegment = /(^|\/)(?:test|tests|fixtures|__fixtures__)(?:\/|$)/i;
     const workspaceNeedles = [
-      workspaceRoot,
-      workspaceRoot.split(path.sep).join("/"),
+      `${workspaceRoot}${path.sep}`,
+      `${workspaceRoot.split(path.sep).join("/")}/`,
     ].map((value) => value.toLowerCase());
 
     for (const [relative, file] of first) {
@@ -121,6 +123,10 @@ test("driver builds are deterministic and contain only production outputs", () =
 
     assert.equal(statSync(firstDestination).isDirectory(), true);
     assert.equal(statSync(secondDestination).isDirectory(), true);
+    const coreAfter = statSync(coreEntry, { bigint: true });
+    assert.equal(coreAfter.dev, coreBefore.dev, "custom driver build replaced the shared core device");
+    assert.equal(coreAfter.ino, coreBefore.ino, "custom driver build replaced the shared core output");
+    assert.equal(coreAfter.mtimeNs, coreBefore.mtimeNs, "custom driver build rewrote the shared core output");
   } finally {
     for (const destination of destinations) removeExactTempRoot(destination);
   }

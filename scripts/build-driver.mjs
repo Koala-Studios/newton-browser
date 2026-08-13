@@ -17,7 +17,11 @@ export function buildDriver({ destination = defaultDestination, quiet = false } 
   const resolvedDestination = path.resolve(destination);
   prepareDestination(resolvedDestination);
 
-  buildCore({ quiet });
+  // A normal package build owns and refreshes the shared core output first. Custom
+  // destinations are used for deterministic parity builds after that package build;
+  // rebuilding the shared core there would delete live modules while concurrent tests
+  // import them.
+  if (resolvedDestination === defaultDestination) buildCore({ quiet });
 
   runTypeScript([
     "-p",

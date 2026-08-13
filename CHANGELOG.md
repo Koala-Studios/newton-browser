@@ -75,6 +75,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Extended junction-safe canonicalization to executable validation, opaque profile
   sources, and guardian-owned identity cleanup without permitting linked leaves or hard
   links.
+- Made Linux validation wait for peer socket-close events and use platform-native
+  absolute-path fixtures; absolute workspace-path scanning now requires a path boundary
+  instead of misclassifying ordinary `/worker` text under a short `/work` checkout.
+- Prevented custom driver parity builds from deleting and rebuilding the shared core
+  output while concurrent tests import it; the normal package build remains the sole
+  owner of core compilation.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser
