@@ -36,3 +36,29 @@ test("release verifier uses an exact package-manager entrypoint supplied by pnpm
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Windows release verifier rejects stale npm state in favor of the active pnpm home", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-pnpm-invocation-"));
+  try {
+    const execPath = path.join(root, "node.exe");
+    const pnpmHome = path.join(root, "setup-pnpm", "node_modules", ".bin");
+    const entrypoint = path.join(root, "setup-pnpm", "node_modules", "pnpm", "bin", "pnpm.cjs");
+    fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+    fs.mkdirSync(pnpmHome, { recursive: true });
+    fs.writeFileSync(execPath, "node");
+    fs.writeFileSync(entrypoint, "pnpm");
+    const prior = process.env.npm_execpath;
+    process.env.npm_execpath = path.join(root, "missing", "pnpm.cjs");
+    try {
+      assert.deepEqual(resolvePnpmInvocation({ platform: "win32", execPath, pnpmHome }), {
+        command: execPath,
+        argsPrefix: [entrypoint],
+      });
+    } finally {
+      if (prior === undefined) delete process.env.npm_execpath;
+      else process.env.npm_execpath = prior;
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

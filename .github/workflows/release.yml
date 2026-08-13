@@ -51,6 +51,7 @@ jobs:
           docker build --platform linux/amd64 --file scripts/smoke/linux-chrome-live/Dockerfile --tag newton-linux-chrome-live:release .
           image_id="$(docker image inspect --format '{{.Id}}' newton-linux-chrome-live:release)"
           docker run --rm --init --platform linux/amd64 --shm-size 1g \
+            --user "$(id -u):$(id -g)" \
             --security-opt seccomp=unconfined \
             --env "NEWTON_IMAGE_ID=$image_id" \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace-source,readonly" \

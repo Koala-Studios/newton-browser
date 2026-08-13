@@ -81,6 +81,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Prevented custom driver parity builds from deleting and rebuilding the shared core
   output while concurrent tests import it; the normal package build remains the sole
   owner of core compilation.
+- Made release verification run the Linux container as the exact runner UID/GID for its
+  owned evidence mount, and made Windows resolve pnpm from the active setup action when
+  setup-node leaves a stale non-existent `npm_execpath`.
 - Removed arbitrary Chromium argument injection from the runtime composition. Browser
   launch switches are now a fixed product policy rather than a caller-controlled blacklist.
 - Removed the empty/active-session-derived browser-family list from public status; browser

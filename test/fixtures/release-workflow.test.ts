@@ -7,6 +7,7 @@ test("release workflow reconciles partial releases and publishes the verified ta
 
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /git checkout --detach "\$release_tag"/);
+  assert.match(workflow, /--user "\$\(id -u\):\$\(id -g\)"/);
   assert.match(workflow, /gh release view "\$RELEASE_TAG"/);
   assert.match(workflow, /gh release upload "\$RELEASE_TAG"[\s\S]+--clobber/);
   assert.match(

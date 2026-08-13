@@ -1850,3 +1850,22 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   modification time around both custom builds and requires all three to remain exact;
   the clean Linux full suite passes 563/563 with zero skips.
 - Status: implemented; PR validation pending.
+
+## BB-156 - First guarded release could not enter platform verification
+
+- Found: 2026-08-12 in release workflow run `31656823021`; publication was skipped and
+  neither GitHub Release nor npm package was created.
+- Minimal repro: mount a runner-created `0700` Linux results root into the image's fixed
+  UID 10001, or run the Windows three-pass verifier after setup-node exports an
+  `npm_execpath` beneath its Node toolcache where pnpm is not installed.
+- Root cause: the Linux workflow did not align container and mount ownership. The Windows
+  resolver treated a stale inherited pnpm path as authoritative and never consulted the
+  active `PNPM_HOME` installed by pnpm/action-setup.
+- Fix: run the pinned Linux image as the exact host runner UID/GID, preserving non-root
+  execution and a private runner-owned results directory. On Windows, use an existing
+  exact inherited pnpm entrypoint when valid, otherwise resolve the exact regular
+  `pnpm.cjs` adjacent to the active `PNPM_HOME`; explicit caller paths remain strict.
+- Regression/evidence: workflow contract tests require UID/GID propagation and the pnpm
+  resolver test reproduces the setup-node/pnpm-action directory layout with absent stale
+  state. The corrected tagged workflow must pass both three-pass jobs before publication.
+- Status: implemented; release verification pending.
