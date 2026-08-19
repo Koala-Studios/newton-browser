@@ -1,9 +1,5 @@
 import type { BrowserAction, BrowserCommitBoundary } from "./protocol.ts";
 
-export type BrowserHostPolicy = {
-  allowedOrigins: readonly string[];
-};
-
 // Optional host-policy manifests let a user add structural commit rules and
 // screenshot masking for specific origins. Manifests are loaded from local
 // configuration; the product ships without vendor-specific defaults.
@@ -34,8 +30,8 @@ export type BrowserHostPolicyManifest = {
   sensitiveZones?: readonly BrowserHostSensitiveZone[];
 };
 
-// Session grants are stricter than display/policy URL normalization: callers
-// must provide an exact HTTP(S) origin, never a path, wildcard, or credentialed URL.
+// Session starts and local policy bindings use canonical HTTP(S) origins as stable
+// identifiers. This normalization does not authorize or block browser networking.
 export function normalizeHttpOrigin(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > 512 || /[\u0000-\u001f\u007f*]/.test(value)) return "";
   try {
@@ -52,19 +48,6 @@ export function normalizeHttpOrigin(value: unknown): string {
   } catch {
     return "";
   }
-}
-
-export function hostMatchesBrowserPolicy(input: {
-  origin: string;
-  policy: BrowserHostPolicy;
-}): { allowed: boolean; reason: string } {
-  const origin = normalizeHttpOrigin(input.origin);
-  if (!origin) return { allowed: false, reason: "missing_origin" };
-  if (input.policy.allowedOrigins.length === 0) return { allowed: false, reason: "no_allowed_origins" };
-  if (!input.policy.allowedOrigins.some((candidate) => normalizeHttpOrigin(candidate) === origin)) {
-    return { allowed: false, reason: "origin_not_granted" };
-  }
-  return { allowed: true, reason: "origin_granted" };
 }
 
 // Resolve the strongest commit boundary a host manifest declares for an action

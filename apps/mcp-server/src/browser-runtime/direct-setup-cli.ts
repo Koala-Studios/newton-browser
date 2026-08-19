@@ -4,12 +4,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  startDirectDriverSession,
-  type DirectDriverSession,
-  type StartDirectDriverSessionOptions,
-} from "@newton-browser/driver/direct-session-runtime";
-
 import { configDirectory, ensureConfigDirectory, loadBrowserPreference, profileStoreDirectory, resolveConfigDirectory, writeBrowserPreference } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { createConfiguredDirectBrowserHost } from "./configured-direct-host.ts";
@@ -32,7 +26,6 @@ type SetupOwnedRuntime = Readonly<{
   close(): Promise<void>;
 }>;
 type SetupRuntimeLauncher = (options: LaunchOwnedBrowserRuntimeOptions) => Promise<SetupOwnedRuntime>;
-type SetupSessionStarter = (options: StartDirectDriverSessionOptions) => Promise<DirectDriverSession>;
 
 export type DirectBrowserSetupReceipt = Readonly<{
   configured: true;
@@ -45,7 +38,6 @@ export type DirectIdentityLoginReceipt = Readonly<{
   status: "ready" | "closed";
   browserFamily: BrowserFamily;
   identityId: string;
-  grantedOriginCount: number;
   cleanupConfirmed?: true;
 }>;
 
@@ -55,7 +47,7 @@ export type DirectLiveDoctorReceipt = Readonly<{
   cleanupConfirmed: true;
   browserFamily: BrowserFamily;
   transport: "private_cdp_pipe";
-  containment: "enabled_before_navigation";
+  networking: "normal_browser";
 }>;
 
 export function setupDirectBrowser(input: {
@@ -83,20 +75,17 @@ export function setupDirectBrowser(input: {
 export async function runDirectIdentityLogin(input: {
   identityId: string;
   origin: string;
-  allowedOrigins?: readonly string[];
   directory?: string;
   env?: NodeJS.ProcessEnv;
   onReady?(receipt: DirectIdentityLoginReceipt): void;
   discoverBrowser?: typeof discoverBrowserExecutable;
   launchRuntime?: SetupRuntimeLauncher;
-  startDriverSession?: SetupSessionStarter;
   createTerminationSignal?: typeof terminationSignal;
 }): Promise<DirectIdentityLoginReceipt> {
   const env = input.env ?? process.env;
   const directory = resolveConfigDirectory(input.directory ?? configDirectory(env));
   if (!IDENTITY_PATTERN.test(input.identityId)) fail("identity_login_invalid_arguments");
   const origin = exactOrigin(input.origin);
-  const allowedOrigins = exactOrigins(origin, input.allowedOrigins ?? []);
   const store = openProfileStore(profileStoreDirectory(env, directory));
   const identity = listNewtonIdentities(store).find((candidate) => candidate.id === input.identityId);
   if (!identity) fail("identity_login_unavailable");
@@ -108,7 +97,6 @@ export async function runDirectIdentityLogin(input: {
       browserFamily: identity.browserFamily,
       profileStore: store,
       identityId: identity.id,
-      allowedOrigins,
       headless: false,
     });
   } catch (error) {
@@ -119,50 +107,61 @@ export async function runDirectIdentityLogin(input: {
     }
     fail("identity_login_start_failed");
   }
-  let session: DirectDriverSession | null = null;
   const termination = (input.createTerminationSignal ?? terminationSignal)();
   try {
-    const bootstrap = runtime.claimDriverBootstrap(allowedOrigins);
-    session = await (input.startDriverSession ?? startDirectDriverSession)({
-      bootstrap,
-      primaryOrigin: origin,
-      allowedOrigins: allowedOrigins.filter((candidate) => candidate !== origin),
-      initialUrl: `${origin}/`,
-    });
+    const bootstrap = runtime.claimDriverBootstrap();
+    await navigateOperatorLogin(bootstrap, `${origin}/`);
     input.onReady?.(Object.freeze({
       status: "ready",
       browserFamily: identity.browserFamily,
       identityId: identity.id,
-      grantedOriginCount: allowedOrigins.length,
     }));
-    const completion = await Promise.race([
+    await Promise.race([
       runtime.unavailable.then(() => "runtime_unavailable" as const),
       termination.promise.then(() => "operator_close" as const),
     ]);
-    if (completion === "runtime_unavailable") fail("identity_login_runtime_unavailable");
+    // Closing the owned visible Chrome window is the normal operator completion
+    // path. Cleanup below must still confirm the exact process tree and identity
+    // lease before this command reports `closed`.
   } catch (error) {
-    if (!await cleanupLoginRuntime(session, runtime)) fail("identity_login_cleanup_uncertain");
+    if (!await cleanupLoginRuntime(runtime)) fail("identity_login_cleanup_uncertain");
     throw bounded(error, "identity_login_failed");
   } finally {
     termination.dispose();
   }
-  if (!await cleanupLoginRuntime(session, runtime)) fail("identity_login_cleanup_uncertain");
+  if (!await cleanupLoginRuntime(runtime)) fail("identity_login_cleanup_uncertain");
   return Object.freeze({
     status: "closed",
     browserFamily: identity.browserFamily,
     identityId: identity.id,
-    grantedOriginCount: allowedOrigins.length,
     cleanupConfirmed: true,
   });
 }
 
 async function cleanupLoginRuntime(
-  session: DirectDriverSession | null,
   runtime: SetupOwnedRuntime,
 ): Promise<boolean> {
-  if (session) try { await session.stop(); } catch { /* process close is authoritative */ }
   try { await runtime.close(); return true; } catch {
     try { await runtime.close(); return true; } catch { return false; }
+  }
+}
+
+async function navigateOperatorLogin(
+  bootstrap: ReturnType<SetupOwnedRuntime["claimDriverBootstrap"]>,
+  url: string,
+): Promise<void> {
+  const attached = await bootstrap.transport.send("Target.attachToTarget", {
+    targetId: bootstrap.rootTargetId,
+    flatten: true,
+  });
+  const sessionId = typeof attached.sessionId === "string" && attached.sessionId.length > 0
+    ? attached.sessionId
+    : null;
+  if (!sessionId) fail("identity_login_start_failed");
+  await bootstrap.transport.send("Page.enable", {}, sessionId);
+  const navigation = await bootstrap.transport.send("Page.navigate", { url }, sessionId);
+  if (typeof navigation.errorText === "string" && navigation.errorText.length > 0) {
+    fail("identity_login_navigation_failed");
   }
 }
 
@@ -197,7 +196,6 @@ export async function runDirectLiveDoctor(input: {
     });
     const created = host.createSession({
       origin,
-      allowedOrigins: [origin],
     });
     await host.waitForSessionReady(created.sessionId);
     const observed = await host.dispatch(created.sessionId, { kind: "observe" });
@@ -222,7 +220,7 @@ export async function runDirectLiveDoctor(input: {
     cleanupConfirmed: true,
     browserFamily,
     transport: "private_cdp_pipe",
-    containment: "enabled_before_navigation",
+    networking: "normal_browser",
   });
 }
 
@@ -256,13 +254,6 @@ function terminationSignal(): Readonly<{ promise: Promise<void>; dispose(): void
   });
 }
 
-function exactOrigins(primary: string, secondary: readonly string[]): string[] {
-  if (!Array.isArray(secondary) || secondary.length > 31) fail("identity_login_invalid_arguments");
-  const normalized = secondary.map(exactOrigin);
-  if (normalized.includes(primary) || new Set(normalized).size !== normalized.length) fail("identity_login_invalid_arguments");
-  return [primary, ...normalized];
-}
-
 function exactOrigin(value: string): string {
   if (typeof value !== "string" || value !== value.trim() || value.length > 512) fail("identity_login_invalid_arguments");
   try {
@@ -288,7 +279,13 @@ function discoverConfiguredBrowser(
   errorCode: string,
 ): BrowserExecutable {
   try {
-    const executable = (provider ?? discoverBrowserExecutable)({ family, env });
+    const executable = (provider ?? discoverBrowserExecutable)({
+      family,
+      env,
+      ...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE
+        ? { explicitPath: env.NEWTON_BROWSER_BROWSER_EXECUTABLE }
+        : {}),
+    });
     if (!executable || executable.family !== family || typeof executable.path !== "string" || executable.path.length === 0) fail(errorCode);
     return executable;
   } catch { fail(errorCode); }

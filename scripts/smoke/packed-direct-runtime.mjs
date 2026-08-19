@@ -29,9 +29,9 @@ const configRoot = path.join(runRoot, "Newton Identity Config");
 const profileStoreRoot = path.join(runRoot, "Newton Identity Store");
 const tarball = path.resolve("artifacts", TAR_NAME);
 let fixture = null;
-let denied = null;
+let destination = null;
 let client = null;
-let deniedRequests = 0;
+let destinationApplicationRequests = 0;
 let receipt = null;
 let failureCode = null;
 
@@ -50,19 +50,19 @@ try {
   const entry = path.join(installRoot, "node_modules", "newton-browser", "dist", "index.js");
   requireState(fs.existsSync(entry), "packed_entry_missing");
 
-  denied = http.createServer((_request, response) => {
-    deniedRequests += 1;
-    response.statusCode = 204;
-    response.end();
+  destination = http.createServer((request, response) => {
+    if (request.url === "/arrive") destinationApplicationRequests += 1;
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end("<!doctype html><title>Cross-origin destination</title><main>destination-ready</main>");
   });
-  const deniedAddress = await listen(denied);
-  const deniedUrl = `http://127.0.0.1:${deniedAddress.port}/must-not-arrive`;
+  const destinationAddress = await listen(destination);
+  const destinationUrl = `http://127.0.0.1:${destinationAddress.port}/arrive`;
 
   fixture = http.createServer((_request, response) => {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.end(`<!doctype html><meta charset="utf-8"><title>Packed direct fixture</title>
       <button onclick="this.textContent='Verified'">Direct action</button>
-      <button onclick="location.href='${deniedUrl}'">Blocked navigation</button>`);
+      <button onclick="location.href='${destinationUrl}'">Cross-origin navigation</button>`);
   });
   const fixtureAddress = await listen(fixture);
   const origin = `http://127.0.0.1:${fixtureAddress.port}`;
@@ -110,19 +110,19 @@ try {
   requireSuccess(verified, "packed_direct_verify_failed");
   const nodes = observationNodes(verified.value);
   requireState(nodes.some((node) => node.role === "button" && node.name === "Verified"), "packed_direct_effect_unverified");
-  const blockedButton = nodes.find((node) => node.role === "button" && node.name === "Blocked navigation");
-  requireState(typeof blockedButton?.ref === "string", "packed_direct_blocked_ref_missing");
+  const navigationButton = nodes.find((node) => node.role === "button" && node.name === "Cross-origin navigation");
+  requireState(typeof navigationButton?.ref === "string", "packed_direct_cross_origin_ref_missing");
 
-  const contained = await client.tool("browser.act", {
+  const navigated = await client.tool("browser.act", {
     sessionId,
-    action: { kind: "click", ref: blockedButton.ref },
+    action: { kind: "click", ref: navigationButton.ref },
   });
-  const containmentOutcome = contained.value?.outcome;
-  requireState(contained.envelope?.isError !== true
-    && containmentOutcome === "completed"
-    && contained.value?.retrySafe === false
-    && contained.value?.status === "verified", "packed_direct_denied_outcome_invalid");
-  requireState(deniedRequests === 0, "packed_direct_denied_request_leaked");
+  requireSuccess(navigated, "packed_direct_cross_origin_action_failed");
+  requireSuccess(await client.tool("browser.act", {
+    sessionId,
+    action: { kind: "wait_for", waitFor: { text: "destination-ready", timeoutMs: 10_000 } },
+  }), "packed_direct_cross_origin_navigation_failed");
+  requireState(destinationApplicationRequests === 1, "packed_direct_cross_origin_request_missing");
 
   const stopped = await client.tool("browser.session.stop", { sessionId });
   requireSuccess(stopped, "packed_direct_stop_failed");
@@ -148,9 +148,8 @@ try {
     sessionStarted: true,
     jsonObserved: true,
     clickVerified: true,
-    containmentOutcome,
-    navigationBoundaryEnforced: true,
-    deniedDestinationRequests: 0,
+    crossOriginNavigation: "completed",
+    destinationApplicationRequests: 1,
     sessionStopped: true,
     remainingSessions: 0,
     childExited: true,
@@ -169,7 +168,7 @@ try {
     }
   }
   if (fixture) await closeServer(fixture);
-  if (denied) await closeServer(denied);
+  if (destination) await closeServer(destination);
   if (clientCleanupConfirmed) {
     try {
       await removeRunRoot(tempOwnership);
@@ -188,7 +187,7 @@ if (receipt && !fs.existsSync(runRoot)) {
     ok: false,
     browserFamily: family,
     errorCode: failureCode ?? "packed_direct_runtime_failed",
-    deniedDestinationRequests: Math.min(deniedRequests, 64),
+    destinationApplicationRequests: Math.min(destinationApplicationRequests, 64),
     tempCleanupConfirmed: !fs.existsSync(runRoot),
   })}\n`);
 }

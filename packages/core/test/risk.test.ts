@@ -10,59 +10,56 @@ import {
   type BrowserHostPolicyManifest,
 } from "../src/index.ts";
 
-const allowed = { allowedOrigins: ["https://example.com"] };
-
-test("read-only browser actions stay read-only on granted origins", () => {
+test("read-only browser actions stay read-only on ordinary HTTP origins", () => {
   const decision = evaluateBrowserFloor({
     action: { kind: "observe" },
     origin: "https://mail.google.com",
-    policy: { allowedOrigins: ["https://mail.google.com"] },
   });
   assert.equal(decision.class, "read_only");
 });
 
 test("non-committing work never prompts", () => {
-  assert.equal(evaluateBrowserFloor({ action: { kind: "scroll" }, origin: "https://example.com", policy: allowed }).class, "agentic");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "navigate", url: "https://example.com/next" }, origin: "https://example.com", policy: allowed }).class, "agentic");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "Primary text", value: "hi" }, origin: "https://example.com", policy: allowed }).class, "agentic");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "click", text: "Open menu" }, origin: "https://example.com", policy: allowed }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "scroll" }, origin: "https://example.com" }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "navigate", url: "https://example.com/next" }, origin: "https://example.com" }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "Primary text", value: "hi" }, origin: "https://example.com" }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "click", text: "Open menu" }, origin: "https://example.com" }).class, "agentic");
 });
 
 test("dialog accept/dismiss are agentic and never blocked", () => {
-  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_accept" }, origin: "https://example.com", policy: allowed }).class, "agentic");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_dismiss" }, origin: "https://example.com", policy: allowed }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_accept" }, origin: "https://example.com" }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "dialog_dismiss" }, origin: "https://example.com" }).class, "agentic");
 });
 
 test("credential/secret fields are blocked and never typed", () => {
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "Password" }, origin: "https://example.com", policy: allowed }).class, "blocked");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "type", selector: "#api-key" }, origin: "https://example.com", policy: allowed }).class, "blocked");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill" }, resolved: { inputType: "password" }, origin: "https://example.com", policy: allowed }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "Password" }, origin: "https://example.com" }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "type", selector: "#api-key" }, origin: "https://example.com" }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill" }, resolved: { inputType: "password" }, origin: "https://example.com" }).class, "blocked");
 });
 
 test("a structurally-detected commit on an unknown host is classified as commit metadata", () => {
   // Submit-like accessible name on an unknown (no-manifest) host → conservative classification.
-  const submitLike = evaluateBrowserFloor({ action: { kind: "click", text: "Publish" }, origin: "https://example.com", policy: allowed });
+  const submitLike = evaluateBrowserFloor({ action: { kind: "click", text: "Publish" }, origin: "https://example.com" });
   assert.equal(submitLike.class, "agentic");
   assert.equal(submitLike.commitBoundary, "commit");
 
   // A resolved form-submit element is structurally a commit regardless of text.
-  const formSubmit = evaluateBrowserFloor({ action: { kind: "click", text: "Go" }, resolved: { role: "button", formOwner: "checkout-form" }, origin: "https://example.com", policy: allowed });
+  const formSubmit = evaluateBrowserFloor({ action: { kind: "click", text: "Go" }, resolved: { role: "button", formOwner: "checkout-form" }, origin: "https://example.com" });
   assert.equal(formSubmit.class, "agentic");
 
   // Spaced or styled commit labels remain detectable.
   for (const name of ["CHECK OUT", "Place Order", "Complete order", "Remove item"]) {
-    const decision = evaluateBrowserFloor({ action: { kind: "click", ref: "n1" }, resolved: { role: "button", accessibleName: name }, origin: "https://shop.example", policy: { allowedOrigins: ["https://shop.example"] } });
+    const decision = evaluateBrowserFloor({ action: { kind: "click", ref: "n1" }, resolved: { role: "button", accessibleName: name }, origin: "https://shop.example" });
     assert.equal(decision.class, "agentic", `${name} should be classified as commit metadata`);
   }
 });
 
 test("social engagement actions are classified as external effects", () => {
-  const like = evaluateBrowserFloor({ action: { kind: "click", text: "Like" }, origin: "https://www.youtube.com", policy: { allowedOrigins: ["https://www.youtube.com"] } });
+  const like = evaluateBrowserFloor({ action: { kind: "click", text: "Like" }, origin: "https://www.youtube.com" });
   assert.equal(like.class, "agentic");
   assert.equal(like.commitBoundary, "external_effect");
   assert.equal(like.reason, "social_engagement_action");
 
-  const subscribe = evaluateBrowserFloor({ action: { kind: "click", selector: "button[aria-label='Subscribe']" }, origin: "https://www.youtube.com", policy: { allowedOrigins: ["https://www.youtube.com"] } });
+  const subscribe = evaluateBrowserFloor({ action: { kind: "click", selector: "button[aria-label='Subscribe']" }, origin: "https://www.youtube.com" });
   assert.equal(subscribe.class, "agentic");
   assert.equal(subscribe.commitBoundary, "external_effect");
 });
@@ -77,7 +74,6 @@ test("misleading page text cannot authorize a write; the floor only raises risk"
     action: { kind: "click", text: "Publish (safe preview only)" },
     manifest,
     origin: "https://example.com",
-    policy: allowed,
   });
   assert.equal(decision.class, "agentic");
   assert.equal(decision.commitBoundary, "external_effect");
@@ -88,10 +84,8 @@ test("a ref-targeted commit is gated once the driver supplies resolved evidence 
     origins: ["https://app.example.invalid"],
     commitRules: [{ match: { name: "publish" }, effect: "external_effect", reason: "custom_policy_publish" }],
   };
-  const hostPolicy = { allowedOrigins: ["https://app.example.invalid"] };
-
   // Without resolved evidence a ref click is opaque → agentic (the old gap).
-  const blind = evaluateBrowserFloor({ action: { kind: "click", ref: "n5" }, manifest, origin: "https://app.example.invalid", policy: hostPolicy });
+  const blind = evaluateBrowserFloor({ action: { kind: "click", ref: "n5" }, manifest, origin: "https://app.example.invalid" });
   assert.equal(blind.class, "agentic");
 
   // With the driver's pre-dispatch resolved name, the host rule matches by ref.
@@ -100,7 +94,6 @@ test("a ref-targeted commit is gated once the driver supplies resolved evidence 
     resolved: { role: "button", accessibleName: "Publish" },
     manifest,
     origin: "https://app.example.invalid",
-    policy: hostPolicy,
   });
   assert.equal(resolved.class, "agentic");
   assert.equal(resolved.commitBoundary, "external_effect");
@@ -110,23 +103,22 @@ test("a ref-targeted commit is gated once the driver supplies resolved evidence 
     action: { kind: "click", ref: "n9" },
     resolved: { role: "button", accessibleName: "Delete account" },
     origin: "https://app.unknown.example",
-    policy: { allowedOrigins: ["https://app.unknown.example"] },
   });
   assert.equal(unknown.class, "agentic");
 });
 
 test("payment / government-id fields are blocked like credentials (S22)", () => {
-  const cc = evaluateBrowserFloor({ action: { kind: "fill", label: "Credit card number", value: "4111111111111111" }, origin: "https://example.com", policy: allowed });
+  const cc = evaluateBrowserFloor({ action: { kind: "fill", label: "Credit card number", value: "4111111111111111" }, origin: "https://example.com" });
   assert.equal(cc.class, "blocked");
   assert.equal(cc.reason, "payment_or_pii_field");
 
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", label: "CVV" }, origin: "https://example.com", policy: allowed }).class, "blocked");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "type", placeholder: "SSN" }, origin: "https://example.com", policy: allowed }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", label: "CVV" }, origin: "https://example.com" }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "type", placeholder: "SSN" }, origin: "https://example.com" }).class, "blocked");
   // Autocomplete tokens from the resolved field also block.
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "card" }, resolved: { autocomplete: "cc-number" }, origin: "https://example.com", policy: allowed }).class, "blocked");
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill" }, resolved: { autocomplete: "one-time-code" }, origin: "https://example.com", policy: allowed }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", text: "card" }, resolved: { autocomplete: "cc-number" }, origin: "https://example.com" }).class, "blocked");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill" }, resolved: { autocomplete: "one-time-code" }, origin: "https://example.com" }).class, "blocked");
   // A plain draft field is still agentic.
-  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", label: "Primary text", value: "hi" }, origin: "https://example.com", policy: allowed }).class, "agentic");
+  assert.equal(evaluateBrowserFloor({ action: { kind: "fill", label: "Primary text", value: "hi" }, origin: "https://example.com" }).class, "agentic");
 });
 
 test("sensitive prefilled values are withheld from observations and deltas (S18)", () => {
@@ -238,7 +230,6 @@ test("opaque network fixture bodies are omitted at the host redaction boundary",
     assert.equal(JSON.stringify(result).includes(String(body.data)), false, body.id);
   }
 });
-
 test("allowed text network bodies are redacted and opaque metadata is allowlisted", () => {
   const text = redactBrowserResult({
     kind: "network_log", origin: "https://example.com", entries: [], count: 0, dropped: 0,
@@ -267,10 +258,6 @@ test("allowed text network bodies are redacted and opaque metadata is allowliste
     assert.equal(denied.body, null);
     assert.equal(JSON.stringify(denied).includes(String(body.data)), false);
   }
-});
-
-test("denied / ungranted origins are blocked", () => {
-  assert.equal(evaluateBrowserFloor({ action: { kind: "observe" }, origin: "https://evil.example", policy: allowed }).class, "blocked");
 });
 
 test("browser redaction removes action values and persists only summaries", () => {

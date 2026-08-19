@@ -27,7 +27,6 @@ export function evaluateHostFloor(input: {
   const decision = evaluateBrowserFloor({
     action,
     origin,
-    policy: { allowedOrigins: input.session.allowedOrigins },
     manifest,
     ...(input.resolved === undefined ? {} : { resolved: input.resolved }),
     ...(input.signals === undefined ? {} : { signals: input.signals }),

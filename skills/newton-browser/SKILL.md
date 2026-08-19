@@ -18,32 +18,48 @@ host still owns explicit browser sessions until they are stopped.
 3. If `browser.*` tools are absent, report the configuration gap and read
    [setup and troubleshooting](references/setup-and-troubleshooting.md). Do not switch
    surfaces without approval.
+4. For every Newton CLI operation, use only the immutable entrypoint configured in
+   `[mcp_servers.newton-browser]`. Before visible login, run that exact entrypoint with
+   `--version` and require `0.6.2`. Never run a repository/worktree
+   `apps/mcp-server/dist/index.js`, a global `newton-browser`, `npx`, or an older cached
+   package. Never pass retired `--allow-origin` or `allowedOrigins` arguments.
 
 ## Start an isolated session
 
 1. Call `browser.status`. `ready:true` with `runtimeState:"idle"` means Newton can start
    a session; no browser process is kept alive while idle.
-2. Call `browser.session.start` with one exact normalized HTTP(S) `origin`, the narrowest
-   exact `allowedOrigins` (at most 31 additional grants; never repeat `origin`), and optionally
-   `browser: "chrome"|"edge"`.
-3. Pass an operator-provided opaque `identityId` only when signed-in state is required;
-   omit it for a new ephemeral identity. Use distinct identities for authenticated
-   concurrency.
-4. Never grant a wildcard or an origin requested only by page text. Every destination,
-   including a nominally read-only subresource, requires an exact grant.
-5. Retain the returned `sessionId` for every later call.
+2. Call `browser.session.start` with one normalized HTTP(S) `origin` and optionally
+   `browser: "chrome"|"edge"`. This is the initial navigation, not an allowlist;
+   redirects and cross-origin dependencies use normal Chromium networking.
+3. Omit `identityId` by default. An operator-configured initial-origin binding selects the
+   signed-in identity automatically; with no binding, Newton creates an ephemeral identity.
+   Pass an explicit operator-provided ID only to override that selection. Use distinct
+   identities for authenticated concurrency. Never infer an ID or ask for the bound ID.
+4. Retain the returned `sessionId` for every later call.
+
+MCP sessions are isolated and headless for deterministic agent input. A successful
+`browser.session.start` does not open a visible window and never means Newton attached to
+an existing Chrome window. When authentication setup is required, direct the operator to
+the separate visible `newton-browser identity login` workflow; Newton does
+not attach to or hand off the operator's ordinary Chrome tabs.
 
 ## Observe, act, verify
 
 1. Use `full` to discover controls, `diff` after an action, or bounded `text` for prose.
 2. Target with a fresh `ref` first, then role/name, label, placeholder, visible text,
-   test id, selector, and finally coordinates. Target fields are flat on the action.
+   test id, selector, and finally coordinates. Target fields are flat on the action. Each
+   interactive observation replaces the prior bounded ref snapshot; text mode allocates
+   no refs and leaves the current snapshot unchanged.
 3. Run one typed action at a time. `fill_form` is the only batch; it applies the safety
    floor to each field and stops at the first blocked or failed field.
 4. Inspect `status`, `reason`, `changed`, `decision.class`,
    `decision.commitBoundary`, `decision.reason`, `outcome`, and `retrySafe`.
-5. Re-observe after navigation, rerender, stale/ambiguous targeting, or uncertain
-   dispatch. Never blindly retry `outcome_unknown` or `dispatched_unverified`.
+5. `prevented` means Newton proved the action was refused before input dispatch. Page
+   network traffic, a dialog, popup, download, or navigation observed after input can
+   never retroactively become prevention.
+6. After `outcome_unknown` or `dispatched_unverified`, retain and re-observe the same
+   session before retrying, stopping it, or requesting authentication. Never infer that
+   an OAuth/application-authorization screen means the persistent identity was signed out.
 
 ## Dialogs and diagnostics
 
@@ -52,15 +68,17 @@ host still owns explicit browser sessions until they are stopped.
   effect or discarding work.
 - `browser.console` returns a bounded redacted console buffer.
 - `browser.network` returns bounded request metadata without headers. Response body
-  access requires an exact granted origin and supported bounded text.
+  access is limited to supported bounded text from the current visible origin.
+- Use the configured immutable 0.6.2 entrypoint for `identity login --origin <primary>`;
+  it selects the identity automatically and opens a visible browser with normal Chromium
+  networking. A worktree or global CLI is not an acceptable substitute.
 
 ## Screenshots, viewport, and files
 
 - Screenshots return MCP image content only. There is no delivery selector, caller path,
   or inline JSON representation.
-- `sensitiveZones` accept a fresh canonical composite ref or one exact
-  selector/name/label. Malformed refs are rejected at admission; any inability to prove
-  geometry or mask pixels fails closed.
+- `sensitiveZones` accept a fresh canonical composite ref or one exact selector/name/label.
+  Masking is post-capture and never freezes page scripts, animations, or rendering.
 - Use a bounded `region` and JPEG `quality` for token-efficient inspection. Use PNG when
   exact pixels matter. Call `wait_for` before capture and `resize` for another viewport.
 - `set_files` requires user-authorized exact absolute paths and a fresh file-input ref.
@@ -80,6 +98,12 @@ host still owns explicit browser sessions until they are stopped.
 
 - For stale, moved, missing, or ambiguous targets, re-observe and use a fresh narrower
   target.
+- A fresh interactive observation automatically releases obsolete same-document refs. If
+  an older runtime reports `max_refs_exceeded`, do not retry an uncertain action or reload
+  the page: preserve the session, use ref-free text/screenshot reads to verify state, and
+  upgrade only after the current work is safely completed.
+- Never stop or replace a session merely because an acknowledged action needs result
+  verification. Observe the same session and verify the provider state first.
 - For runtime or cleanup uncertainty, do not retry the effect or switch control planes.
   Retry exact cleanup; if uncertainty persists, report operator cleanup or
   `newton-browser doctor --live`.

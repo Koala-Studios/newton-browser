@@ -1,13 +1,21 @@
 import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
 import { dispatchIdentityCommand } from "./browser-runtime/identity-cli.ts";
 import { createProfileSourceClosureVerifier } from "./browser-runtime/profile-closure.ts";
-import { openProfileStore } from "./browser-runtime/profile-store.ts";
+import { listNewtonIdentities, openProfileStore } from "./browser-runtime/profile-store.ts";
 import {
   runDirectIdentityLogin,
   runDirectLiveDoctor,
   setupDirectBrowser,
 } from "./browser-runtime/direct-setup-cli.ts";
-import { configDirectory, ensureConfigDirectory, profileStoreDirectory, resolveConfigDirectory } from "./config.ts";
+import {
+  configDirectory,
+  ensureConfigDirectory,
+  loadDirectConfiguration,
+  profileStoreDirectory,
+  removeIdentityBinding,
+  resolveConfigDirectory,
+  writeIdentityBinding,
+} from "./config.ts";
 import { INSTALL_CLIENTS, type InstallClient, runInstall } from "./install.ts";
 import { MAX_MCP_IN_FLIGHT_REQUESTS, MAX_MCP_LINE_BYTES, MODERN_MCP_PROTOCOL_VERSION } from "./modern-mcp-stdio.ts";
 
@@ -42,21 +50,60 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
       return true;
     }
     const identityDirectory = ensureConfigDirectory(configDirectory());
-    if (identityArgs[0] === "login") {
-      const id = identityArgs[1];
-      if (!id || id.startsWith("--")) throw utilityError("identity_login_invalid_arguments");
-      const flags = parseUtilityFlags(identityArgs.slice(2), new Set(["--origin", "--allow-origin"]), new Set(["--allow-origin"]));
+    if (identityArgs[0] === "bindings" && identityArgs.length === 1) {
+      const bindings = loadDirectConfiguration({ directory: identityDirectory, env: process.env }).identityBindings;
+      process.stdout.write(`${JSON.stringify(bindings, null, 2)}\n`);
+      return true;
+    }
+    if (identityArgs[0] === "bind") {
+      const flags = parseUtilityFlags(identityArgs.slice(1), new Set(["--id", "--origin"]));
+      const id = flags.single("--id");
       const origin = flags.single("--origin");
-      if (!id || !origin) throw utilityError("identity_login_invalid_arguments");
+      if (!id || !origin || !/^nbi_[a-f0-9]{32}$/u.test(id)) throw utilityError("identity_binding_invalid_arguments");
+      const store = openProfileStore(profileStoreDirectory(process.env, identityDirectory));
+      if (!listNewtonIdentities(store).some((identity) => identity.id === id)) {
+        throw utilityError("identity_binding_identity_missing");
+      }
+      try {
+        const output = writeIdentityBinding({ directory: identityDirectory, origin, identityId: id });
+        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+      } catch { throw utilityError("identity_binding_failed"); }
+      return true;
+    }
+    if (identityArgs[0] === "unbind") {
+      const flags = parseUtilityFlags(identityArgs.slice(1), new Set(["--origin"]));
+      const origin = flags.single("--origin");
+      if (!origin) throw utilityError("identity_binding_invalid_arguments");
+      try {
+        const output = removeIdentityBinding({ directory: identityDirectory, origin });
+        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+      } catch { throw utilityError("identity_binding_failed"); }
+      return true;
+    }
+    if (identityArgs[0] === "login") {
+      const explicitId = identityArgs[1]?.startsWith("--") ? undefined : identityArgs[1];
+      const flags = parseUtilityFlags(identityArgs.slice(explicitId ? 2 : 1), new Set(["--origin"]));
+      const origin = flags.single("--origin");
+      if (!origin) throw utilityError("identity_login_invalid_arguments");
+      const id = explicitId ?? loadDirectConfiguration({ directory: identityDirectory, env: process.env }).identityBindings
+        .find((binding) => binding.origin === origin)?.identityId;
+      if (!id) throw utilityError("identity_login_binding_missing");
       const output = await runDirectIdentityLogin({
         identityId: id,
         origin,
-        allowedOrigins: flags.many("--allow-origin"),
         directory: identityDirectory,
         onReady: (receipt) => process.stdout.write(`${JSON.stringify(receipt)}\n`),
       });
       process.stdout.write(`${JSON.stringify(output)}\n`);
       return true;
+    }
+    if (identityArgs[0] === "delete") {
+      const idIndex = identityArgs.indexOf("--id");
+      const id = idIndex >= 0 ? identityArgs[idIndex + 1] : undefined;
+      if (id && loadDirectConfiguration({ directory: identityDirectory, env: process.env }).identityBindings
+        .some((binding) => binding.identityId === id)) {
+        throw utilityError("identity_delete_binding_active");
+      }
     }
     const browserFamily = identityImportBrowserFamily(identityArgs);
     const output = dispatchIdentityCommand({
@@ -84,7 +131,10 @@ function identityHelp(): string {
     "",
     "  newton-browser identity create --browser <chrome|edge>",
     "  newton-browser identity list",
-    "  newton-browser identity login <identity-id> --origin <origin> [--allow-origin <origin>]",
+    "  newton-browser identity login [identity-id] --origin <origin>",
+    "  newton-browser identity bind --id <identity-id> --origin <origin>",
+    "  newton-browser identity unbind --origin <origin>",
+    "  newton-browser identity bindings",
     "  newton-browser identity import --browser <chrome|edge> --user-data-root <path> --profile-directory <name>",
     "  newton-browser identity lease-inspect --id <identity-id>",
     "  newton-browser identity lease-recover --id <identity-id>",
@@ -101,7 +151,8 @@ function utilityHelp(): string {
     "",
     "Optional persistent identity:",
     "  newton-browser identity create --browser <chrome|edge>",
-    "  newton-browser identity login <identity-id> --origin <https-origin> [--allow-origin <https-origin>]",
+    "  newton-browser identity login [identity-id] --origin <https-origin>",
+    "  newton-browser identity bind --id <identity-id> --origin <https-origin>",
     "  newton-browser doctor --live",
     "",
     "MCP client setup:",

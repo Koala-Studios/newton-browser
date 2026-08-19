@@ -6,14 +6,18 @@ import path from "node:path";
 import { type BrowserHostPolicyManifest, normalizeHttpOrigin } from "@newton-browser/core";
 
 export type BrowserPreference = "auto" | "chrome" | "edge";
+export type IdentityBinding = Readonly<{ origin: string; identityId: string }>;
 export type DirectConfiguration = Readonly<{
   browser: BrowserPreference;
   hostPolicies: readonly BrowserHostPolicyManifest[];
+  identityBindings: readonly IdentityBinding[];
 }>;
 
 const MAX_CONFIG_BYTES = 256 * 1024;
 const MAX_CONFIG_KEYS = 64;
-const CONFIG_KEYS = new Set(["browser", "hostPolicies"]);
+const CONFIG_KEYS = new Set(["browser", "hostPolicies", "identityBindings"]);
+const IDENTITY_PATTERN = /^nbi_[a-f0-9]{32}$/u;
+const MAX_IDENTITY_BINDINGS = 64;
 
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
   if (env.NEWTON_BROWSER_CONFIG_DIR !== undefined) return resolveConfigDirectory(env.NEWTON_BROWSER_CONFIG_DIR);
@@ -74,7 +78,12 @@ export function loadDirectConfiguration(input: { directory?: string; env?: NodeJ
     ? configured.browser === undefined ? "auto" : parseBrowserPreference(configured.browser, "config.json browser")
     : parseBrowserPreference(override, "NEWTON_BROWSER_BROWSER");
   const hostPolicies = normalizeHostPolicies(configured.hostPolicies, file);
-  return Object.freeze({ browser, hostPolicies: Object.freeze(hostPolicies) });
+  const identityBindings = normalizeIdentityBindings(configured.identityBindings, file);
+  return Object.freeze({
+    browser,
+    hostPolicies: Object.freeze(hostPolicies),
+    identityBindings: Object.freeze(identityBindings),
+  });
 }
 
 export function writeBrowserPreference(input: {
@@ -86,10 +95,64 @@ export function writeBrowserPreference(input: {
   ensureConfigDirectory(directory);
   const current = readConfigObject(directory);
   const hostPolicies = normalizeHostPolicies(current.hostPolicies, path.join(directory, "config.json"));
+  const identityBindings = normalizeIdentityBindings(current.identityBindings, path.join(directory, "config.json"));
   const next = Object.freeze({
     ...(hostPolicies.length ? { hostPolicies } : {}),
+    ...(identityBindings.length ? { identityBindings } : {}),
     browser: input.browser,
   });
+  writeConfigObject(directory, next);
+  return Object.freeze({ browser: input.browser });
+}
+
+export function writeIdentityBinding(input: {
+  directory?: string;
+  origin: string;
+  identityId: string;
+}): IdentityBinding {
+  const directory = resolveConfigDirectory(input.directory ?? configDirectory());
+  ensureConfigDirectory(directory);
+  const file = path.join(directory, "config.json");
+  const current = readConfigObject(directory);
+  const origin = exactConfigOrigin(input.origin, "identity binding origin");
+  const identityId = exactIdentityId(input.identityId, "identity binding identityId");
+  const identityBindings = normalizeIdentityBindings(current.identityBindings, file)
+    .filter((binding) => binding.origin !== origin);
+  if (identityBindings.length >= MAX_IDENTITY_BINDINGS) throw new Error("direct_config_invalid");
+  identityBindings.push(Object.freeze({ origin, identityId }));
+  identityBindings.sort((left, right) => left.origin.localeCompare(right.origin));
+  const hostPolicies = normalizeHostPolicies(current.hostPolicies, file);
+  const browser = current.browser === undefined ? undefined : parseBrowserPreference(current.browser, "config.json browser");
+  writeConfigObject(directory, Object.freeze({
+    ...(browser === undefined ? {} : { browser }),
+    ...(hostPolicies.length ? { hostPolicies } : {}),
+    identityBindings,
+  }));
+  return Object.freeze({ origin, identityId });
+}
+
+export function removeIdentityBinding(input: {
+  directory?: string;
+  origin: string;
+}): Readonly<{ origin: string; removed: boolean }> {
+  const directory = resolveConfigDirectory(input.directory ?? configDirectory());
+  ensureConfigDirectory(directory);
+  const file = path.join(directory, "config.json");
+  const current = readConfigObject(directory);
+  const origin = exactConfigOrigin(input.origin, "identity binding origin");
+  const existing = normalizeIdentityBindings(current.identityBindings, file);
+  const identityBindings = existing.filter((binding) => binding.origin !== origin);
+  const hostPolicies = normalizeHostPolicies(current.hostPolicies, file);
+  const browser = current.browser === undefined ? undefined : parseBrowserPreference(current.browser, "config.json browser");
+  writeConfigObject(directory, Object.freeze({
+    ...(browser === undefined ? {} : { browser }),
+    ...(hostPolicies.length ? { hostPolicies } : {}),
+    ...(identityBindings.length ? { identityBindings } : {}),
+  }));
+  return Object.freeze({ origin, removed: identityBindings.length !== existing.length });
+}
+
+function writeConfigObject(directory: string, next: Readonly<Record<string, unknown>>): void {
   if (Object.keys(next).length > MAX_CONFIG_KEYS) throw new Error("direct_config_invalid");
   const serialized = `${JSON.stringify(next, null, 2)}\n`;
   if (Buffer.byteLength(serialized) > MAX_CONFIG_BYTES) throw new Error("direct_config_invalid");
@@ -127,7 +190,6 @@ export function writeBrowserPreference(input: {
     }
     throw new Error("direct_config_write_failed");
   }
-  return Object.freeze({ browser: input.browser });
 }
 
 export function loadHostPolicies(input: { directory?: string } = {}): BrowserHostPolicyManifest[] {
@@ -141,6 +203,46 @@ function normalizeHostPolicies(entries: unknown, file: string): BrowserHostPolic
   const origins = policies.flatMap((policy) => policy.origins);
   if (new Set(origins).size !== origins.length) throw new Error(`invalid_config: ${file} hostPolicies contain an overlapping origin`);
   return policies;
+}
+
+function normalizeIdentityBindings(entries: unknown, file: string): IdentityBinding[] {
+  if (entries === undefined) return [];
+  if (!Array.isArray(entries) || entries.length > MAX_IDENTITY_BINDINGS) {
+    throw new Error(`invalid_config: ${file} identityBindings must be a bounded array`);
+  }
+  const bindings = entries.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`invalid_config: ${file} identityBindings[${index}] is invalid`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    if (Object.keys(candidate).length !== 2 || !("origin" in candidate) || !("identityId" in candidate)) {
+      throw new Error(`invalid_config: ${file} identityBindings[${index}] is invalid`);
+    }
+    return Object.freeze({
+      origin: exactConfigOrigin(candidate.origin, `${file} identityBindings[${index}] origin`),
+      identityId: exactIdentityId(candidate.identityId, `${file} identityBindings[${index}] identityId`),
+    });
+  });
+  if (new Set(bindings.map((binding) => binding.origin)).size !== bindings.length) {
+    throw new Error(`invalid_config: ${file} identityBindings contain a duplicate origin`);
+  }
+  return bindings;
+}
+
+function exactConfigOrigin(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length > 512 || value !== value.trim()) {
+    throw new Error(`invalid_config: ${label} is invalid`);
+  }
+  const origin = normalizeHttpOrigin(value);
+  if (!origin || origin !== value) throw new Error(`invalid_config: ${label} is invalid`);
+  return origin;
+}
+
+function exactIdentityId(value: unknown, label: string): string {
+  if (typeof value !== "string" || !IDENTITY_PATTERN.test(value)) {
+    throw new Error(`invalid_config: ${label} is invalid`);
+  }
+  return value;
 }
 
 function parseBrowserPreference(value: unknown, label: string): BrowserPreference {

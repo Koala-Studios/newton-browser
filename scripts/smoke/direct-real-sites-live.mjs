@@ -49,7 +49,6 @@ try {
     id: "rfc_editor",
     origin: "https://www.rfc-editor.org",
     readySelector: "body",
-    allowedOrigins: [],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("wikipedia", () => runReadSite({
@@ -57,32 +56,28 @@ try {
     origin: "https://en.wikipedia.org",
     url: "https://en.wikipedia.org/wiki/Web_browser",
     readySelector: "main, #firstHeading",
-    allowedOrigins: ["https://upload.wikimedia.org"],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("youtube_public", () => runReadSite({
     id: "youtube_public",
     origin: "https://www.youtube.com",
-    url: "https://www.youtube.com/robots.txt",
-    readySelector: "body",
+    url: "https://www.youtube.com/",
+    readySelector: "ytd-app, main, #content",
     titleOptional: true,
-    allowedOrigins: ["https://i.ytimg.com", "https://fonts.googleapis.com", "https://fonts.gstatic.com"],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("reddit_public", () => runReadSite({
     id: "reddit_public",
     origin: "https://www.reddit.com",
-    url: "https://www.reddit.com/robots.txt",
+    url: "https://www.reddit.com/r/webdev/.rss",
     readySelector: "body",
     titleOptional: true,
-    allowedOrigins: ["https://www.redditstatic.com"],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("mercato_storefront", () => runSearchSite({
     id: "mercato_storefront",
     origin: "https://mercatodibellina.com",
     url: "https://mercatodibellina.com/search",
-    allowedOrigins: ["https://cdn.shopify.com", "https://shop.app"],
     documentReadySelector: "main, #MainContent",
     readySelector: 'form[action*="/search"] input[name="q"]',
     searchPattern: /search|cerca/i,
@@ -94,7 +89,6 @@ try {
     origin: "https://www.w3.org",
     url: "https://www.w3.org/WAI/",
     readySelector: "main, body",
-    allowedOrigins: [],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
   receipts.push(await recordSite("meta_ads_public", () => runReadSite({
@@ -103,7 +97,6 @@ try {
     url: "https://www.facebook.com/business/ads",
     readySelector: "body",
     titleOptional: true,
-    allowedOrigins: ["https://static.xx.fbcdn.net"],
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),
   })));
 
@@ -204,16 +197,20 @@ async function runSearchSite(site) {
         }
       }
     }
-    const searchTarget = search
-      ? { ref: search.ref }
-      : site.id === "mercato_storefront"
+    const searchTarget = site.id === "mercato_storefront"
         ? { selector: 'form[action*="/search"] input[name="q"]' }
-        : null;
+        : search ? { ref: search.ref } : null;
     if (!searchTarget) fail(`real_site_${site.id}_search_missing`);
     const maskedScreenshot = site.id === "mercato_storefront"
       ? await screenshotInMemory(sessionId, site.id, [search?.ref ? { ref: search.ref } : { selector: 'form[action*="/search"] input[name="q"]' }])
       : null;
-    requireCompleted(await call("browser.act", { sessionId, action: { kind: "fill", ...searchTarget, value: site.value } }), `real_site_${site.id}_fill_failed`);
+    const fillAction = { kind: "fill", ...searchTarget, value: site.value };
+    let fillResult = await call("browser.act", { sessionId, action: fillAction });
+    if (retryableFreshTargetFailure(fillResult)) {
+      await observe(sessionId);
+      fillResult = await call("browser.act", { sessionId, action: fillAction });
+    }
+    requireCompleted(fillResult, `real_site_${site.id}_fill_failed`);
     const afterFill = await observe(sessionId);
     const submitButtons = afterFill.nodes.filter((node) => typeof node.ref === "string" && node.role === "button" && /search|cerca/i.test(String(node.name ?? "")));
     const submissionMode = submitButtons.length === 1 ? "observed_submit_button" : "same_origin_query_navigation";
@@ -246,7 +243,7 @@ async function runReadSite(site) {
 }
 
 async function withSession(site, task) {
-  const start = await call("browser.session.start", { origin: site.origin, allowedOrigins: site.allowedOrigins, browser: family, observe: false, ...(site.identityId ? { identityId: site.identityId } : {}) });
+  const start = await call("browser.session.start", { origin: site.origin, browser: family, ...(site.identityId ? { identityId: site.identityId } : {}) });
   requireCompleted(start, `real_site_${site.id}_start_failed`);
   const sessionId = start.value.sessionId;
   if (typeof sessionId !== "string") fail(`real_site_${site.id}_session_missing`);
@@ -255,13 +252,7 @@ async function withSession(site, task) {
       sessionId,
       action: { kind: "wait_for", waitFor: { selector: site.documentReadySelector ?? "body", state: "attached", timeoutMs: 30_000 } },
     });
-    if (ready.envelope?.isError === true || ready.value?.ok === false) {
-      const detail = closedResultCode(ready.value);
-      if (ready.value?.outcome !== "prevented" || detail !== "ungranted_navigation") {
-        fail(`real_site_${site.id}_document_${detail}`);
-      }
-    }
-    else requireVerifiedAction(ready, `real_site_${site.id}_document_not_ready`);
+    requireVerifiedAction(ready, `real_site_${site.id}_document_not_ready`);
     return await task(sessionId);
   }
   finally { await stopSession(sessionId, site.id); }
@@ -289,7 +280,12 @@ async function observe(sessionId, mode = "full") {
   requireCompleted(result, "real_site_observe_failed");
   const payload = result.value?.result;
   const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
-  return Object.freeze({ nodes, nodeCount: nodes.length, titlePresent: typeof payload?.title === "string" && payload.title.trim().length > 0, interactiveCount: nodes.filter((node) => typeof node?.ref === "string").length });
+  const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+  const surface = [title, ...nodes.flatMap((node) => [node?.role, node?.name, node?.value, node?.description, node?.placeholder])]
+    .filter((value) => typeof value === "string")
+    .join("\n");
+  requireNormalBrowserSurface(surface);
+  return Object.freeze({ nodes, nodeCount: nodes.length, titlePresent: title.length > 0, interactiveCount: nodes.filter((node) => typeof node?.ref === "string").length });
 }
 
 function requireUseful(observation, id, titleOptional = false) {
@@ -305,11 +301,21 @@ async function requireUsefulOrText(sessionId, observation, id, titleOptional = f
   requireCompleted(result, `real_site_${id}_text_observe_failed`);
   const payload = result.value?.result;
   const text = typeof payload?.text === "string" ? payload.text : "";
+  requireNormalBrowserSurface(text);
   const chars = typeof payload?.chars === "number" ? payload.chars : text.length;
   if (!Number.isSafeInteger(chars) || chars < 200) {
     fail(`real_site_${id}_text_too_short`);
   }
   return "text";
+}
+
+function requireNormalBrowserSurface(value) {
+  if (/ERR_BLOCKED_BY_CLIENT|This page has been blocked by Chrome|This site can.t be reached|Connection failed \(-111\)/iu.test(value)) {
+    fail("real_site_browser_error_surface");
+  }
+  if (/\b(?:radio_button_(?:checked|unchecked)|material-icons|material-symbols-(?:outlined|rounded|sharp))\b/iu.test(value)) {
+    fail("real_site_resource_rendering_corrupt");
+  }
 }
 
 async function screenshotInMemory(sessionId, id, sensitiveZones) {
@@ -375,6 +381,10 @@ function requireVerifiedAction(result, code) {
     const error = Object.assign(new Error(code), { code, productCode: closedResultCode(result.value) });
     throw error;
   }
+}
+function retryableFreshTargetFailure(result) {
+  if (result.value?.retrySafe !== true) return false;
+  return new Set(["stale_target", "target_moved", "not_found"]).has(closedResultCode(result.value));
 }
 function closedResultCode(value) {
   for (const candidate of [value?.errorCode, value?.reason, value?.status]) {

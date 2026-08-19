@@ -1,5 +1,9 @@
 # MCP 2026 modern-only and bloat audit
 
+> Historical audit. Its stateless MCP and compatibility-removal conclusions remain
+> current. Policy-proxy and containment references were superseded by the normal Chromium
+> networking decision on 2026-08-19; see `docs/DECISIONS.md`.
+
 Date: 2026-08-12
 
 This audit records the implemented target and the final verification questions. It is

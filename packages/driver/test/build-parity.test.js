@@ -25,8 +25,6 @@ const EXPECTED_FILES = [
   "driver.js",
   "input-dispatcher.d.ts",
   "input-dispatcher.js",
-  "origin-containment.d.ts",
-  "origin-containment.js",
   "raster-mask.d.ts",
   "raster-mask.js",
   "renderer-liveness.d.ts",

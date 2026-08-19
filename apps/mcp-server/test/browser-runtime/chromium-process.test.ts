@@ -9,7 +9,6 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 import { chromiumLaunchArgs, ChromiumLaunchError, launchChromium } from "../../src/browser-runtime/chromium-process.ts";
 import type { CdpEventListener, CdpParams, PrivateCdpTransport } from "../../src/browser-runtime/cdp-pipe.ts";
-import { startPolicyProxy } from "../../src/browser-runtime/policy-proxy.ts";
 import { acquireNewtonIdentityLease, createNewtonIdentity, openProfileStore, releaseNewtonIdentityLease, validateNewtonIdentityLease } from "../../src/browser-runtime/profile-store.ts";
 
 class FakeChild extends EventEmitter {
@@ -83,8 +82,11 @@ test("builds a private pipe launch with an exact blank profile and no debug port
   assert.ok(args.includes(`--user-data-dir=${userDataDir}`));
   assert.ok(args.includes("--headless=new"));
   assert.ok(args.includes("--profile-directory=Default"));
-  assert.ok(args.includes("--site-per-process"));
-  assert.ok(args.includes("--disable-extensions"));
+  assert.equal(args.includes("--site-per-process"), false);
+  for (const flag of ["--disable-background-networking", "--disable-component-update", "--disable-extensions", "--disable-sync"]) {
+    assert.equal(args.includes(flag), false);
+  }
+  assert.equal(args.some((arg) => arg.startsWith("--proxy-")), false);
   assert.equal(args.some((arg) => arg.startsWith("--remote-debugging-port")), false);
   assert.ok(args.includes("--no-startup-window"));
   assert.equal(args.includes("about:blank"), false);
@@ -147,26 +149,6 @@ test("fails readiness and rolls back when Target.createTarget does not return on
     assert.equal(current.transport.methods.includes("Target.getTargets"), false);
     assert.equal(current.child.exitCode, 0);
   }
-});
-
-test("derives proxy flags only from an exact live PolicyProxy capability", async (t) => {
-  const proxy = await startPolicyProxy({ allowedOrigins: ["https://example.com"] });
-  t.after(() => proxy.close());
-  const args = chromiumLaunchArgs({ userDataDir: path.resolve("C:/runtime/profile"), policyProxy: proxy });
-  assert.ok(args.includes(`--proxy-server=http://127.0.0.1:${proxy.port}`));
-  assert.ok(args.includes("--proxy-bypass-list=<-loopback>"));
-  assert.ok(args.includes("--disable-quic"));
-
-  const current = fixture();
-  const error = await launchChromium({
-    executablePath: executableFile(t),
-    userDataDir: profileDirectory(t),
-    policyProxy: { ...proxy },
-    spawn: current.spawn,
-  }).catch((value: unknown) => value);
-  assert.ok(error instanceof ChromiumLaunchError);
-  assert.equal(error.phase, "profile_validation");
-  assert.equal(current.spawnCalls.length, 0);
 });
 
 test("rejects a copied identity lease capability before spawn", async (t) => {

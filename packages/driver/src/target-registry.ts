@@ -18,12 +18,6 @@ type FrameInput = {
   parentFrameId?: unknown;
   origin?: unknown;
 };
-type BlockedFrameOriginInput = {
-  frameId?: unknown;
-  sourceTargetId?: unknown;
-  sourceSessionId?: unknown;
-  origin?: unknown;
-};
 type TargetRecord = {
   targetId: string;
   type: TargetType | null;
@@ -50,12 +44,6 @@ type SwappingFrameRecord = {
 type SwappingTargetRecord = {
   target: TargetRecord;
   priorSessionId: string | null;
-};
-type BlockedFrameOriginRecord = {
-  frameId: string;
-  sourceTargetId: string;
-  sourceSessionId: string | null;
-  origin: string;
 };
 type RefRoute = {
   documentEpoch: number;
@@ -174,7 +162,6 @@ export class TargetRegistry {
   readonly swappingTargets: Map<string, SwappingTargetRecord>;
   readonly frames: Map<string, FrameRecord>;
   readonly pendingFrames: Map<string, FrameRecord>;
-  readonly blockedFrameOrigins: Map<string, BlockedFrameOriginRecord>;
   readonly sessionToTarget: Map<string, string>;
   readonly detachedTargets: Set<string>;
   readonly detachedFrames: Set<string>;
@@ -194,7 +181,6 @@ export class TargetRegistry {
     this.swappingTargets = new Map<string, SwappingTargetRecord>();
     this.frames = new Map<string, FrameRecord>();
     this.pendingFrames = new Map<string, FrameRecord>();
-    this.blockedFrameOrigins = new Map<string, BlockedFrameOriginRecord>();
     this.sessionToTarget = new Map<string, string>();
     this.detachedTargets = new Set<string>();
     this.detachedFrames = new Set<string>();
@@ -266,7 +252,6 @@ export class TargetRegistry {
           : "detached_target",
       );
     }
-    this.#consumeBlockedFrameOrigin(incoming);
     const existing = this.frames.get(incoming.frameId) || this.pendingFrames.get(incoming.frameId);
     const candidate = existing ? this.#mergeFrame(existing, incoming) : incoming;
     this.#assertFrameGraph(candidate);
@@ -284,44 +269,6 @@ export class TargetRegistry {
     this.#storeFrame(candidate);
     this.#drain();
     return this.#publicFrame(candidate.frameId);
-  }
-
-  recordBlockedFrameOrigin(input: BlockedFrameOriginInput = {}): boolean {
-    const frameId = identifier(input.frameId, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
-    const sourceTargetId = identifier(input.sourceTargetId, TARGET_REGISTRY_ERROR_CODES.TARGET_CONFLICT);
-    const sourceSessionId = optionalIdentifier(input.sourceSessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
-    const blockedOrigin = origin(input.origin, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
-    if (!blockedOrigin || this.detachedFrames.has(frameId) || this.swappingFrames.has(frameId)) return false;
-    const sourceTarget = this.targets.get(sourceTargetId) || this.pendingTargets.get(sourceTargetId);
-    if (!sourceTarget || sourceTarget.sessionId !== sourceSessionId || sourceTarget.type === "worker") return false;
-    if (sourceTarget.type === "page" && sourceTargetId !== this.mainTargetId) return false;
-    const frame = this.frames.get(frameId) || this.pendingFrames.get(frameId);
-    if (frame) {
-      if (frame.targetId !== sourceTargetId) return false;
-      if (frame.origin && frame.origin !== blockedOrigin) return false;
-      if (frame.origin === blockedOrigin) return true;
-      this.#retireRefs((route) => route.frameId === frameId, TARGET_REGISTRY_ERROR_CODES.FRAME_DETACHED);
-      frame.origin = blockedOrigin;
-      frame.generation += 1;
-      frame.ordinal = null;
-      this.#storeFrame(frame);
-      this.#drain();
-      return true;
-    }
-    if (this.blockedFrameOrigins.has(frameId)) {
-      const existing = this.blockedFrameOrigins.get(frameId)!;
-      return existing.sourceTargetId === sourceTargetId
-        && existing.sourceSessionId === sourceSessionId
-        && existing.origin === blockedOrigin;
-    }
-    try {
-      this.#reserveFrame();
-    } catch (error) {
-      if (error instanceof TargetRegistryError && error.code === TARGET_REGISTRY_ERROR_CODES.MAX_FRAMES_EXCEEDED) return false;
-      throw error;
-    }
-    this.blockedFrameOrigins.set(frameId, { frameId, sourceTargetId, sourceSessionId, origin: blockedOrigin });
-    return true;
   }
 
   reconcileOopifFrame(input: FrameInput = {}) {
@@ -353,23 +300,6 @@ export class TargetRegistry {
     sessionId = identifier(sessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
     const targetId = this.sessionToTarget.get(sessionId);
     return targetId ? this.#publicTarget(targetId) : undefined;
-  }
-
-  relatedPageAncestorForSession(sessionId: string) {
-    sessionId = identifier(sessionId, TARGET_REGISTRY_ERROR_CODES.SESSION_CONFLICT);
-    let targetId: string | null = this.sessionToTarget.get(sessionId) ?? null;
-    const visited = new Set<string>();
-    while (targetId) {
-      if (visited.size >= this.maxTargets || visited.has(targetId)) return undefined;
-      visited.add(targetId);
-      const target = this.targets.get(targetId) || this.pendingTargets.get(targetId);
-      if (!target) return undefined;
-      if (target.type === "page" && target.targetId !== this.mainTargetId) {
-        return this.#publicTarget(target.targetId);
-      }
-      targetId = target.parentTargetId;
-    }
-    return undefined;
   }
 
   frameIdentity(frameId: string): {
@@ -575,6 +505,28 @@ export class TargetRegistry {
     return ref;
   }
 
+  /**
+   * Start a new interactive observation cycle.
+   *
+   * Refs are document-scoped for routing, but only the latest interactive
+   * observation is useful to an agent. Long-lived SPAs can replace thousands
+   * of controls without committing a new document, so retaining every prior
+   * ref eventually turns the safety cap into a permanent session failure.
+   * Clearing both active and terminal entries here keeps the cap per snapshot;
+   * an old ref that is not recreated resolves fail-closed as stale_target.
+   */
+  resetObservationRefs(): void {
+    this.refs.clear();
+    this.deadRefs.clear();
+  }
+
+  /** Remove an observation candidate that was not emitted to the client. */
+  discardObservationRef(ref: string): void {
+    const parsed = this.parseRef(ref);
+    if (parsed.documentEpoch !== this.documentEpoch) return;
+    this.refs.delete(ref);
+  }
+
   resolveRef(ref: string) {
     const parsed = this.parseRef(ref);
     if (parsed.documentEpoch !== this.documentEpoch) fail(TARGET_REGISTRY_ERROR_CODES.STALE_TARGET);
@@ -657,7 +609,6 @@ export class TargetRegistry {
   beginFrameSwap(frameId: string, sourceTargetId: string): void {
     frameId = identifier(frameId, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
     sourceTargetId = identifier(sourceTargetId, TARGET_REGISTRY_ERROR_CODES.FRAME_CONFLICT);
-    this.blockedFrameOrigins.delete(frameId);
     if (this.detachedFrames.has(frameId)) return;
     const swapping = this.swappingFrames.get(frameId);
     if (swapping) {
@@ -727,7 +678,7 @@ export class TargetRegistry {
         },
         frames: {
           active: this.frames.size,
-          waiting: this.pendingFrames.size + this.blockedFrameOrigins.size,
+          waiting: this.pendingFrames.size,
           detached: this.detachedFrames.size + this.swappingFrames.size,
         },
         refs: { active: this.refs.size, terminal: this.deadRefs.size },
@@ -961,7 +912,7 @@ export class TargetRegistry {
   }
 
   #reserveFrame() {
-    if (this.frames.size + this.pendingFrames.size + this.blockedFrameOrigins.size + this.detachedFrames.size + this.swappingFrames.size >= this.maxFrames) {
+    if (this.frames.size + this.pendingFrames.size + this.detachedFrames.size + this.swappingFrames.size >= this.maxFrames) {
       fail(TARGET_REGISTRY_ERROR_CODES.MAX_FRAMES_EXCEEDED);
     }
   }
@@ -1048,7 +999,6 @@ export class TargetRegistry {
     }
     this.frames.clear();
     this.pendingFrames.clear();
-    this.blockedFrameOrigins.clear();
     this.detachedTargets.clear();
     this.swappingTargets.clear();
     this.detachedFrames.clear();
@@ -1157,9 +1107,6 @@ export class TargetRegistry {
     this.targets.delete(targetId);
     this.pendingTargets.delete(targetId);
     this.swappingTargets.delete(targetId);
-    for (const [frameId, blocked] of this.blockedFrameOrigins) {
-      if (blocked.sourceTargetId === targetId) this.blockedFrameOrigins.delete(frameId);
-    }
     if (detached) this.detachedTargets.add(targetId);
   }
 
@@ -1211,21 +1158,7 @@ export class TargetRegistry {
   #removeFrame(frameId: string, detached: boolean): void {
     this.frames.delete(frameId);
     this.pendingFrames.delete(frameId);
-    this.blockedFrameOrigins.delete(frameId);
     if (detached) this.detachedFrames.add(frameId);
-  }
-
-  #consumeBlockedFrameOrigin(incoming: FrameRecord): void {
-    const blocked = this.blockedFrameOrigins.get(incoming.frameId);
-    if (!blocked) return;
-    this.blockedFrameOrigins.delete(incoming.frameId);
-    const sourceTarget = this.targets.get(blocked.sourceTargetId) || this.pendingTargets.get(blocked.sourceTargetId);
-    if (!sourceTarget
-      || sourceTarget.targetId !== incoming.targetId
-      || sourceTarget.sessionId !== blocked.sourceSessionId
-      || (sourceTarget.type === "page" && sourceTarget.targetId !== this.mainTargetId)
-      || sourceTarget.type === "worker") return;
-    if (!incoming.origin || incoming.origin === blocked.origin) incoming.origin = blocked.origin;
   }
 
   #removePendingDescendants(targets: Set<string>, frames: Set<string>): void {

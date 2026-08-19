@@ -1886,3 +1886,317 @@ All defects below have deterministic regression coverage. Foundation defects BB-
 - Regression/evidence: the live-suite contract requires native canonicalization of the
   temp parent; the next tagged Windows release pass must prove real cleanup three times.
 - Status: implemented; release verification pending.
+
+## BB-158 - Operator login silently discarded exact-origin denial evidence
+
+- Found: 2026-08-18 while reproducing an inert Google sign-in Next button with a
+  persistent Newton identity and grants for `accounts.google.com`, `ads.google.com`, and
+  `www.google.com`.
+- Minimal repro: start `identity login`, enter the account personally, and activate Next.
+  The policy proxy rejects ungranted destinations before an upstream connection, but the
+  login command previously printed no reason or destination. A diagnostic run observed
+  a denied `https://www.gstatic.com` attempt from the sign-in load; it also demonstrated
+  why Newton must not guess a provider bundle, because Chrome background services
+  independently attempted several unrelated Google API origins.
+- Root cause: the proxy retained only aggregate reason counters. Its canonical parsed
+  origin was discarded at the enforcement boundary, before CDP network diagnostics
+  could observe the request.
+- Fix: the proxy now emits each canonical denied origin once through a capped private
+  callback. Only the operator `identity login` utility projects it as a typed
+  `blocked_origin`/`origin_denied` JSON event. Paths, queries, headers, content, and
+  credentials are never included; callback failure cannot change the 403 decision; and
+  the live grant set is never widened.
+- Regression/evidence: focused proxy tests prove exact-origin-only output, deduplication,
+  zero upstream connections, callback-failure isolation, and no diagnostic field in the
+  aggregate ledger. Login tests prove the closed receipt and duplicate suppression.
+  Strict workspace typecheck, 29 focused tests, MCP build, and diff validation pass. A
+  real contained Chrome run emitted the typed events and then confirmed process, proxy,
+  and identity cleanup.
+- Live confirmation: with `accounts.google.com`, `ads.google.com`, `www.google.com`, and
+  `www.gstatic.com` granted, Google redirected the main frame to
+  `https://accounts.google.ca/accounts/SetSID...`. Newton emitted the exact typed
+  `blocked_origin`/`origin_denied` receipt for `https://accounts.google.ca`; the visible
+  page showed `ERR_BLOCKED_BY_CLIENT` and `Connection failed (-111)`. This proves that
+  failure was containment, not credentials or Cloud Identity licensing. Other Google
+  service/font/analytics origins in the stream were not proven necessary and remain
+  ungranted.
+- Status: implemented and live-proven for exact-origin reporting. Navigation-versus-
+  optional-background prioritization now uses a private CDP request classifier that adds
+  only `main_frame_navigation`, `frame_navigation`, or `subresource` to a bounded receipt;
+  the authenticated main-frame request event also records authoritative
+  `ungranted_navigation` for the active action before a proxy-first failure can leave an
+  inert, apparently successful click. Frame/subresource denials remain diagnostic-only.
+  Public network entries retain only the closed request class and `origin_denied`
+  decision. An operator approve/restart UI remains separate usability work. A
+  provider-wide grant bundle is intentionally not a Newton default.
+
+## BB-159 - Codex configuration could be switched to an unverified or protocol-disabled Newton build
+
+- Found: 2026-08-18 after Codex was pointed from a working 0.4.5 package to the newer
+  0.5.0 source entrypoint and then had to be reverted. Codex 0.147.0 had modern MCP
+  support installed but its `mcp_2026_07_28` feature was disabled, and the server entry
+  lacked `CODEX_MCP_PROTOCOL_VERSION=2026-07-28`, so Codex used its older protocol path
+  and Newton's tools disappeared.
+- Minimal repro: edit the Codex MCP table to any existing Newton entrypoint. The old
+  installer validated only filesystem shape and wrote the table without starting the
+  candidate or checking its tool catalog.
+- Root cause: package version, client feature selection, protocol environment, and
+  required tool discovery were not one installation transaction. An exact path prevented
+  floating resolution but did not prove that Codex would invoke that binary with the
+  protocol it implements. The first attempted verifier repeated the same mistake by
+  testing the legacy `initialize` handshake; it was rejected during review and replaced.
+- Fix: before a non-dry-run Codex install, Newton now launches the exact candidate with a
+  bounded stateless `2026-07-28` discovery/tool-list exchange under a fresh isolated
+  Newton configuration, requires the exact package version, all ten required
+  `browser.*` tools, clean exit, and bounded output. Only a successful probe can reach
+  the existing atomic config writer. The same write enables Codex's
+  `mcp_2026_07_28` feature, pins `CODEX_MCP_PROTOCOL_VERSION` and
+  `NEWTON_BROWSER_EXPECTED_VERSION`, and the server refuses a mismatched package at
+  startup.
+- Regression/evidence: installer tests cover complete modern discovery, exact version,
+  complete tool catalog, protocol environment, feature activation, isolated probing,
+  mismatch refusal, and verified atomic writes. The focused 39-test suite, strict
+  typecheck, MCP build, and diff validation pass. The deterministic five-file 0.5.0
+  artifact (`26b498047de3b1679e3f0af2cb8a9c0d020535021a7b2822e53bb8ae629946eb`)
+  was installed to its versioned local directory; its live doctor confirmed private-CDP
+  Chrome startup, containment-before-navigation, and cleanup. The active Codex table now
+  resolves only that entrypoint, both version/protocol environment guards are present,
+  `codex features list` reports `mcp_2026_07_28` true, and 20 already-running 0.4.5 MCP
+  child processes were terminated with zero remaining.
+- Status: superseded locally by immutable `0.5.1`. Its exact five-file artifact is
+  installed under the versioned local root, Codex is transactionally pinned to that
+  entrypoint and exact expected version, and installed `doctor --live` passed. Existing
+  tasks retain their already-started 0.5.0 children until the application restarts; new
+  tasks cannot accept those bytes as 0.5.1. Full release verification remains pending.
+
+## BB-160 - Active MCP session was mistaken for an operator-visible browser
+
+- Found: 2026-08-18 when an agent reported that Chrome was open solely because
+  `browser.session.start` returned an active session, while the operator correctly saw no
+  window.
+- Root cause: production correctly defaults MCP sessions to headless Chromium and uses
+  headful mode only for operator `identity login`, but the public tool description and
+  operating skill did not state that distinction.
+- Fix: the tool catalog now calls `browser.session.start` headless. README, MCP client,
+  troubleshooting, and skill guidance explicitly forbid equating active state with a
+  visible window and direct personal authentication to the separate headful login flow.
+  No current-tab attachment or handoff surface was added.
+- Regression/evidence: MCP contract/tool-catalog verification and skill validation must
+  confirm the new description and absence of retired handoff/current-tab contracts.
+- Status: implemented; MCP catalog, 576-test integrated suite, and connected direct-live
+  suite pass on the 0.5.1 candidate.
+
+## BB-161 - Persistent identity selection depended on conversational memory
+
+- Found: 2026-08-18 after a signed-in identity worked across restarts only when an agent
+  remembered and resupplied its opaque ID.
+- Root cause: persistent identities and exclusive leases existed, but operator config
+  contained no durable selection policy. Making one identity global would unnecessarily
+  expose authenticated state to unrelated sites and serialize all concurrent sessions.
+- Fix: add bounded operator-only `identityBindings`, each mapping one exact primary origin
+  to one existing opaque identity. `identity bind`, `identity bindings`, and `identity
+  unbind` manage them atomically. A binding applies only when a session omits
+  `identityId`; an explicit ID wins, unrelated origins remain ephemeral, and the existing
+  exclusive lease rejects concurrent reuse. Bound identities cannot be deleted until
+  unbound. Bindings never widen the network grant.
+- Regression/evidence: config tests cover strict shape, exact-origin matching, atomic
+  preservation, replacement, removal, malformed values, and duplicate rejection. Host
+  tests cover bound reuse, unrelated ephemeral isolation, browser-family selection,
+  lease contention, and malformed binding rejection. Spawned CLI tests prove durable
+  bind/list/unbind behavior. The installed 0.5.1 CLI bound the operator identity to the
+  exact `accounts.google.com` and `ads.google.com` primary origins; unrelated origins
+  remain ephemeral.
+- Status: implemented and locally configured; application restart proof remains.
+
+## BB-162 - Installed Newton Browser skill published removed 0.4.5 contracts
+
+- Found: 2026-08-18 in the active Newton plugin cache. It instructed agents to use
+  removed `instanceLabel`, `browser.session.finalize`, screenshot file/inline delivery,
+  and 0.4.5 references while Codex was running Newton Browser 0.5.0.
+- Root cause: the Newton Browser repository skill had moved to the modern contract, but
+  the Newton plugin marketplace source and installed cache retained an older snapshot.
+- Fix: synchronize the authoritative skill, both Newton plugin source copies, and the
+  installed plugin cache to the compact 0.5.1 contract, including modern stateless MCP,
+  ten tools, headless MCP sessions, headful operator login, exact-origin denial handling,
+  and origin-scoped identity bindings.
+- Regression/evidence: the skill validator passes for authoritative, marketplace, and
+  installed copies; a cross-copy scan finds no removed contract tokens. The next plugin
+  package refresh must retain the synchronized files rather than regenerating the stale
+  snapshot.
+- Status: source and installed cache synchronized and validator-clean; next plugin
+  package/version refresh remains pending.
+
+## BB-163 - Same-version local candidates could conceal stale installed bytes
+
+- Found: 2026-08-18 after the installed 0.5.0 entrypoint and the corrected candidate
+  reported the same package version while their compiled bytes differed.
+- Root cause: the expected-version startup guard correctly rejected other versions, but
+  semver had not advanced after material post-candidate remediation. A same-version
+  overwrite would defeat the operator's ability to distinguish the two builds.
+- Fix: advance the corrected candidate and every current contract reference to 0.5.1,
+  build one deterministic five-file tarball, install it to a new versioned directory,
+  and use the verified installer to pin Codex to that exact local entrypoint with
+  `NEWTON_BROWSER_EXPECTED_VERSION=0.5.1`.
+- Regression/evidence: build, strict typecheck, 576/576 tests, agent-cost limits, source
+  Chrome direct-live (eight stages), seven public real-site surfaces including YouTube,
+  Reddit, Mercato di Bellina, and Meta Ads, packed Chrome and Edge
+  action/containment/cleanup,
+  exact artifact SHA-256
+  `4a214db96511c499daee1c7cf682f88413626e08290318bb655346d066e657c5`,
+  transactional Codex probe/write, and installed live doctor all pass.
+- Status: implemented locally. A Codex restart is required to retire active task-owned
+  0.5.0 server children and load 0.5.1; Linux and three unchanged-tree release passes
+  remain release gates, not local-usability blockers.
+
+## BB-164 - Bound identities still required agents to repeat redirect grants
+
+- Found: 2026-08-18 when a visible account flow redirected from the configured primary
+  origin to a regional account origin and then to a separate account-management origin.
+  The identity was already bound, but every worker still had to remember the opaque ID
+  and reconstruct the approved redirect list. The browser displayed an opaque blocked
+  page while the useful origin diagnostic existed only in the utility stream.
+- Root cause: identity selection and network authorization were separate one-run inputs.
+  Configuration could select a persistent identity but had no exact-primary-origin grant
+  policy, and a prevented MCP action discarded the driver's authoritative main-frame
+  denied-origin fact at the public result boundary.
+- Fix: add bounded operator-owned `originGrants`, merge the matching reviewed origins
+  automatically into MCP and visible-login sessions, and allow `identity login --origin`
+  to select the bound identity without its opaque ID. A causally prevented main-frame
+  navigation now returns only canonical `blockedOrigin` plus
+  `requestClass:"main_frame_navigation"`; subresources and background requests cannot
+  fabricate that signal, and no newly requested origin authorizes itself.
+- Regression/evidence: strict config/CLI/host/login/driver/redaction/MCP tests cover
+  matching, nonmatching, malformed, overflow, privacy, and propagation behavior. The
+  complete 0.5.2 candidate passes build, typecheck, boundary validation, 583/583 tests,
+  token budgets, eight-stage Windows Chrome direct-live, seven public production sites,
+  and exact-packed Chrome and Edge action/containment/cleanup. Its five-file package is
+  132,794 bytes with SHA-256
+  `db83357367ba7bd47627cbd21ae5424d9eee1efcef9a233fd00972bf1afe6943`.
+- Status: implemented, Windows-verified, and installed as immutable 0.5.2. Codex is pinned
+  to that exact version; both primary policies are written, installed live doctor passes,
+  and ID-less visible login proved automatic binding plus six exact grants before clean
+  shutdown. One application restart remains to replace task-owned 0.5.1 MCP children.
+
+## BB-165 - Newton's network boundary broke normal browser behavior systemically
+
+- Found: 2026-08-18 through 2026-08-19 during visible Google account/login flows and
+  public-site rendering. Valid regional redirects produced `ERR_BLOCKED_BY_CLIENT` and
+  connection error `-111`; pages briefly signed in and then reverted; required styles,
+  fonts, images, APIs, frames, and icon fonts were missing; controls could appear inert.
+- Root cause: the product treated a modern browser session as a small exact-origin
+  allowlist. The launch-time proxy, CDP Fetch interception, popup/worker denial machinery,
+  and network-disabling Chromium flags rejected normal browser dependencies by design.
+  Provider-specific grant bundles could only chase symptoms and would remain incomplete.
+  Persistent page instrumentation and screenshot script/animation freezing added a
+  separate fidelity risk even when network requests succeeded.
+- Fix: remove the policy proxy, origin grants/config/CLI, Fetch interception, request
+  denial, blocked-origin metadata, popup containment tickets, and network-altering launch
+  flags. Use Chromium's normal network stack. Remove focus emulation, persistent mutation
+  observers, and screenshot script/animation freezing. Keep isolated process/profile
+  ownership, private CDP, guardian cleanup, trusted input, action verification, the
+  credential/payment safety floor, and post-capture raster masking.
+- Regression/evidence: public schemas reject the removed fields; build artifacts omit the
+  removed modules; the real-site matrix requires usable video, community, commerce,
+  advertising, reference, accessibility, and standards pages and rejects browser-generated
+  blocked pages, connection failures, and raw icon ligatures. Deterministic, packed,
+  Chrome/Edge, and three consecutive unchanged-tree release checks pass. The clean-profile
+  community surface remains an honest external-site negative rather than an allowlist or
+  product workaround.
+- Status: implementation, documentation, and release gates complete. This entry
+  supersedes BB-158 through BB-164 as current product behavior. Those entries remain
+  historical records of the retired 0.5.1/0.5.2 architecture.
+
+## BB-166 - Generic wait and selector assumptions broke dynamic production pages
+
+- Found: 2026-08-19 while running the normal-network candidate against real video and
+  commerce pages. `wait_for` could time out on an attached but non-visible element;
+  responsive desktop/mobile duplicates made an otherwise exact selector ambiguous; and
+  focus/scroll-driven rerenders could retire a selected input before a fill dispatched.
+- Root cause: one visibility predicate was reused for every selector wait state, selector
+  targeting counted hidden DOM duplicates as actionable ambiguity, and fill retained one
+  backend node across pre-input focus and geometry preparation.
+- Fix: model attached and visible separately; evaluate checked, unchecked, and value
+  states against the resolved element; choose a selector only when exactly one visible
+  match exists; and permit a bounded exact selector/semantic refresh only before any
+  input is dispatched. Explicit stale refs are never healed automatically.
+- Regression/evidence: deterministic tests cover every wait state, visible-vs-hidden
+  duplicates, focus replacement, and scroll replacement. The real commerce search/fill
+  and trusted-mask flow passes in Chrome after a retry-safe fresh observation, while the
+  full Chrome and Edge seven-stage direct suites remain green.
+- Status: fixed and verified in the 0.6.0 candidate.
+
+## BB-167 - Agent guidance allowed a stale worktree browser to impersonate 0.6.0
+
+- Found: 2026-08-19 when a visible Facebook login page rendered without its normal CSS
+  despite the immutable 0.6.0 package using ordinary Chromium networking.
+- Minimal repro: a Codex task invoked a worktree `apps/mcp-server/dist/index.js` directly
+  with retired `--allow-origin` arguments. Its Chrome process contained the retired local
+  proxy, background/component/sync disabling, site-process, and QUIC switches.
+- Root cause: the skill described the correct 0.6.0 behavior but did not prohibit agents
+  from substituting a source checkout, Codex worktree, global CLI, or older package for
+  the configured immutable entrypoint. The advertised 0.3.17 cache was also empty while
+  the fallback 0.3.13 cache retained 0.5.2 instructions.
+- Fix: require every CLI workflow to use the exact entrypoint configured in
+  `[mcp_servers.newton-browser]`, require version 0.6.0 before visible login, and forbid
+  worktree/global/npx/older entrypoints plus all retired grant arguments. Synchronize the
+  source skill and both installed cache versions.
+- Regression/evidence: the skill contract test asserts the immutable-entrypoint rule and
+  retired-option prohibition. The stale process tree was closed; a replacement visible
+  login launched from the installed 0.6.0 package with no proxy or retired network flags.
+- Status: fixed; installed skill caches synchronized byte-for-byte.
+
+## BB-168 - Post-action network traffic was falsely reported as prevention
+
+- Found: 2026-08-19 in two independent authenticated workflows: Google Ads account
+  onboarding and Meta Developers application authorization.
+- Minimal repro: dispatch a trusted click whose normal SPA behavior emits a POST. The
+  driver sent mouse-down/up, observed the POST, returned `blocked`, and the host converted
+  the already-dispatched action to `outcome:prevented,retrySafe:true`. Workers stopped the
+  session, retried login, or changed control planes even though Newton had not prevented
+  anything.
+- Root cause: `isNetworkWrite` treated every non-GET/HEAD/OPTIONS request as a business
+  write; post-action reconciliation confused observation with prevention; and the host
+  accepted any driver `blocked` status as proof that no input had run.
+- Fix: remove network-write action signals and every `post_action_*` blocking path. Keep
+  network metadata in `browser.network`; directly observable navigation/dialog/download/
+  target facts may verify a delivered action but never block it. A driver-level blocked
+  result after admission is now `outcome_unknown,retrySafe:false`. Visible identity login
+  treats operator window exit as normal completion only after exact runtime and lease
+  cleanup succeeds. Agent guidance requires same-session observation before retry,
+  teardown, or another authentication request.
+- Regression/evidence: deterministic driver tests cover POST and GET traffic without
+  action failure, host tests reject post-admission prevention, and identity-login tests
+  require cleanup-confirmed window-close completion. The frozen 0.6.1 candidate passes
+  471 deterministic tests plus the full Chrome and Edge source-live and exact-packed
+  runtime matrices. Public-site QA covers video, commerce, advertising, reference,
+  accessibility, and standards surfaces; Reddit remains a bounded external-site content
+  negative rather than a Newton prevention or rendering failure.
+- Status: fixed and verified in the 0.6.1 release candidate.
+
+## BB-169 - Same-document ref retention permanently exhausted long-lived agent sessions
+
+- Found: 2026-08-19 in an authenticated Meta Ads Manager draft after 95 serialized
+  commands. `browser.observe` failed with `max_refs_exceeded`; a semantic click could not
+  resolve a target, and a coordinate click dispatched but its post-action observation hit
+  the same cap and truthfully returned `outcome_unknown`.
+- Minimal repro: keep one document epoch alive while successive SPA snapshots expose more
+  than 1,024 distinct backend nodes. The registry counts every active and terminal ref
+  created since the document commit, although only the newest observation is useful.
+- Root cause: `refIndex` was refreshed per observation but `TargetRegistry.refs` and
+  `deadRefs` were only cleared by a top-level document commit. Invisible and filtered
+  candidates were also registered before being discarded from output, consuming capacity
+  without ever giving the agent a usable ref.
+- Fix: start every interactive observation with a bounded ref cycle reset; retain only refs
+  emitted by the current snapshot; discard invisible, filtered, duplicate, and otherwise
+  non-emitted candidates. Missing old refs remain fail-closed as `stale_target`, stable
+  surviving nodes recreate the same deterministic ref, and text observations remain
+  ref-free so they can verify an uncertain result without altering the interactive cycle.
+- Regression/evidence: deterministic registry tests cover active/terminal release,
+  stale-old-ref behavior, and candidate discard. Driver tests run changing SPA snapshots
+  through a deliberately tiny ref cap, prove stable current refs and bounded counts, and
+  prove text observation preserves the current ref. The complete suite passes 475/475.
+  Chrome and Edge each replace 260 controls through four same-document generations,
+  observe 250 nodes per cycle, continue cross-origin navigation, and clean to zero residue.
+  Exact-packed Chrome and Edge pass from the deterministic 117,455-byte artifact with
+  SHA-256 `f936f3363d410817ffb9e6323f5990ec2d7f88f7b540b0aa81a295e1cd0ed549`.
+- Status: fixed and verified in the 0.6.2 release candidate.

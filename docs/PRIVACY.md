@@ -34,8 +34,8 @@ protection nor treats authentication preservation as release evidence.
   Sensitive zones are masked in trusted post-capture PNG pixels;
   uncertainty fails closed rather than returning an unmasked image.
 - **Console and network evidence:** bounded and redacted. Request headers are never
-  returned. Bodies are eligible only for granted-origin supported UTF-8 text; binary,
-  base64, compressed, malformed, and ungranted bodies are omitted.
+  returned. Bodies are eligible only for supported bounded UTF-8 text from the current
+  visible origin; binary, base64, compressed, malformed, and cross-origin bodies are omitted.
 - **Identity metadata:** opaque identity ID, browser family, creation time, lease state,
   and bounded lifecycle receipts. Source paths and profile contents are not public output.
 - **Local configuration:** selected browser family and opaque identity ID
@@ -46,10 +46,9 @@ model provider chosen by the user. Newton Browser itself does not send them else
 
 ## Network and process isolation
 
-Each session has an exact-origin policy proxy ready before Chromium starts. Control traffic
-uses inherited pipes; no browser debug TCP port is opened. The proxy makes permitted browser
-requests to the websites the operator asked Newton to visit. Denied destinations are not
-dialed in the documented containment scope.
+Browser control uses inherited pipes and no browser debug TCP port is opened. Website
+traffic uses Chromium's ordinary network stack. Newton does not proxy, block, rewrite, or
+log destination traffic, so sites can load their normal redirects and dependencies.
 
 A separate local guardian receives only browser launch arguments plus bounded filesystem
 ownership facts. It never receives page content or parsed profile data. Its only purpose

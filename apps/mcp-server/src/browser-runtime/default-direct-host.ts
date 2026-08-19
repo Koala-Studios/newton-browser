@@ -13,6 +13,7 @@ export function createDefaultDirectBrowserHost(env: NodeJS.ProcessEnv = process.
     profileStoreRoot: profileStoreDirectory(env, directory),
     browserFamily,
     hostPolicies: configuration.hostPolicies,
+    identityBindings: configuration.identityBindings,
     ...(explicitPath ? { executablePath: explicitPath } : {}),
   });
 }

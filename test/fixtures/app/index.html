@@ -114,7 +114,7 @@
     let generation = 1;
     const frameUrl = () => {
       const url = new URL("/frame.html", crossOrigin);
-      url.searchParams.set("label", `Granted-OOPIF-${generation}`);
+      url.searchParams.set("label", `Cross-site-OOPIF-${generation}`);
       if (nestedOrigin) url.searchParams.set("nestedOrigin", nestedOrigin);
       return url.href;
     };

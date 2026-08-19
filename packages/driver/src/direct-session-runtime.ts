@@ -22,7 +22,7 @@ export type DirectDriverBootstrap = Readonly<{
 export type DirectSessionDriver = {
   attach(): Promise<void>;
   detach(): Promise<void>;
-  navigateInitialGranted(url: string): Promise<unknown>;
+  navigateInitial(url: string): Promise<unknown>;
   preflightAction?(action: DriverAction): Promise<void> | void;
   resolveEvidence?(action: DriverAction): Promise<DriverRecord>;
   executeAction(action: DriverAction, context?: DriverContext): Promise<DriverRecord>;
@@ -32,8 +32,6 @@ export type DirectSessionDriverFactory = (options: BrowserDriverOptions) => Dire
 
 export type StartDirectDriverSessionOptions = Readonly<{
   bootstrap: DirectDriverBootstrap;
-  primaryOrigin: string;
-  allowedOrigins: readonly string[];
   initialUrl: string;
   signal?: AbortSignal;
   pump?: SessionCommandPumpOptions;
@@ -150,16 +148,13 @@ export async function startDirectDriverSession(
     rootTargetId: configuration.bootstrap.rootTargetId,
   });
   const driverFactory = options.driverFactory ?? createNewtonBrowserDriver;
-  const driver = driverFactory({
-    allowedOrigins: [configuration.primaryOrigin, ...configuration.allowedOrigins],
-    debuggerPort,
-  });
+  const driver = driverFactory({ debuggerPort });
 
   try {
     configuration.signal?.throwIfAborted();
     await driver.attach();
     configuration.signal?.throwIfAborted();
-    await driver.navigateInitialGranted(configuration.initialUrl);
+    await driver.navigateInitial(configuration.initialUrl);
     configuration.signal?.throwIfAborted();
     return new DirectDriverSessionRuntime(driver, new SessionCommandPump(options.pump));
   } catch (error) {
@@ -174,8 +169,6 @@ export async function startDirectDriverSession(
 
 function validateConfiguration(options: StartDirectDriverSessionOptions): {
   bootstrap: DirectDriverBootstrap;
-  primaryOrigin: string;
-  allowedOrigins: string[];
   initialUrl: string;
   signal?: AbortSignal;
 } {
@@ -189,25 +182,13 @@ function validateConfiguration(options: StartDirectDriverSessionOptions): {
     || typeof bootstrap.rootTargetId !== "string" || bootstrap.rootTargetId.length === 0) {
     throw directSessionError("direct_session_invalid_bootstrap");
   }
-  const primaryOrigin = exactHttpOrigin(options.primaryOrigin);
-  if (!primaryOrigin || !Array.isArray(options.allowedOrigins) || options.allowedOrigins.length > 31) {
-    throw directSessionError("direct_session_invalid_origin_grant");
-  }
-  const allowedOrigins: string[] = [];
-  const seen = new Set([primaryOrigin]);
-  for (const candidate of options.allowedOrigins) {
-    const origin = exactHttpOrigin(candidate);
-    if (!origin || seen.has(origin)) throw directSessionError("direct_session_invalid_origin_grant");
-    seen.add(origin);
-    allowedOrigins.push(origin);
-  }
   let initial: URL;
   try {
     initial = new URL(options.initialUrl);
   } catch {
     throw directSessionError("direct_session_invalid_initial_url");
   }
-  if ((initial.protocol !== "http:" && initial.protocol !== "https:") || initial.origin !== primaryOrigin) {
+  if (initial.protocol !== "http:" && initial.protocol !== "https:") {
     throw directSessionError("direct_session_invalid_initial_url");
   }
   if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) {
@@ -215,22 +196,9 @@ function validateConfiguration(options: StartDirectDriverSessionOptions): {
   }
   return {
     bootstrap,
-    primaryOrigin,
-    allowedOrigins,
     initialUrl: initial.href,
     ...(options.signal ? { signal: options.signal } : {}),
   };
-}
-
-function exactHttpOrigin(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > 512 || value !== value.trim()) return null;
-  try {
-    const parsed = new URL(value);
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.origin !== value) return null;
-    return value;
-  } catch {
-    return null;
-  }
 }
 
 function hasExactKeys(value: object, expected: readonly string[]): boolean {

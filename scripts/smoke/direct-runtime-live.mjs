@@ -19,17 +19,37 @@ logStep("direct_runtime_browser_discovered");
 const tempRoot = fs.realpathSync.native(os.tmpdir());
 const runOwnership = createRunRoot(tempRoot);
 const runRoot = runOwnership.root;
-let deniedRequests = 0;
-const denied = http.createServer((_request, response) => {
-  deniedRequests += 1;
-  response.end("denied");
+let destinationApplicationRequests = 0;
+const destination = http.createServer((request, response) => {
+  if (request.url === "/arrive") destinationApplicationRequests += 1;
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.end("<!doctype html><title>Cross-origin destination</title><main>destination-ready</main>");
 });
-let deniedUrl = "";
+let destinationUrl = "";
 const fixture = http.createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.end(`<!doctype html><title>Newton Direct Live</title>
     <button onclick="this.textContent='Verified'">Direct action</button>
-    <button onclick="location.href='${deniedUrl}'">Blocked navigation</button>`);
+    <button onclick="location.href='${destinationUrl}'">Cross-origin navigation</button>
+    <button id="ref-churn" type="button">Churn refs</button>
+    <section id="ref-churn-nodes"></section>
+    <script>
+      let refGeneration = 0;
+      const refNodes = document.querySelector('#ref-churn-nodes');
+      const renderRefGeneration = () => {
+        refNodes.replaceChildren(...Array.from({ length: 260 }, (_, index) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Generated ' + refGeneration + ' control ' + index;
+          return button;
+        }));
+      };
+      document.querySelector('#ref-churn').addEventListener('click', () => {
+        refGeneration += 1;
+        renderRefGeneration();
+      });
+      renderRefGeneration();
+    </script>`);
 });
 let origin = "";
 let host = null;
@@ -40,12 +60,12 @@ let cleanupConfirmed = false;
 
 try {
   await new Promise((resolve, reject) => {
-    denied.once("error", reject);
-    denied.listen(0, "127.0.0.1", resolve);
+    destination.once("error", reject);
+    destination.listen(0, "127.0.0.1", resolve);
   });
-  const deniedAddress = denied.address();
-  if (!deniedAddress || typeof deniedAddress === "string") fail("direct_denied_fixture_unavailable");
-  deniedUrl = `http://127.0.0.1:${deniedAddress.port}/must-not-arrive`;
+  const destinationAddress = destination.address();
+  if (!destinationAddress || typeof destinationAddress === "string") fail("direct_destination_fixture_unavailable");
+  destinationUrl = `http://127.0.0.1:${destinationAddress.port}/arrive`;
   await new Promise((resolve, reject) => {
     fixture.once("error", reject);
     fixture.listen(0, "127.0.0.1", resolve);
@@ -97,17 +117,32 @@ try {
   if (!effectVerified) fail("direct_effect_unverified");
   logStep("direct_runtime_action_verified");
 
-  const blockedButton = observationNodes(verified.value).find((node) => node.role === "button" && node.name === "Blocked navigation");
-  if (typeof blockedButton?.ref !== "string") fail("direct_blocked_ref_missing");
-  const contained = await tool("browser.act", { sessionId, action: { kind: "click", ref: blockedButton.ref } });
-  const containmentOutcome = contained.value?.outcome;
-  if (contained.envelope?.isError === true || containmentOutcome !== "completed"
-    || contained.value?.retrySafe !== false || contained.value?.status !== "verified") {
-    logStep(`direct_runtime_containment_${closedContainmentResult(contained)}`);
-    fail("direct_containment_outcome_invalid");
+  for (let cycle = 0; cycle < 4; cycle += 1) {
+    requireSuccess(await tool("browser.act", {
+      sessionId,
+      action: { kind: "click", selector: "#ref-churn" },
+    }), "direct_ref_cycle_action_failed");
+    requireSuccess(await tool("browser.observe", {
+      sessionId,
+      format: "json",
+      maxNodes: 250,
+    }), "direct_ref_cycle_observe_failed");
   }
-  if (deniedRequests !== 0) fail("direct_containment_request_leaked");
-  logStep("direct_runtime_containment_verified");
+  logStep("direct_runtime_ref_budget_recycled");
+
+  const navigationObservation = await tool("browser.observe", {
+    sessionId,
+    format: "json",
+    maxNodes: 10,
+    query: "Cross-origin navigation",
+  });
+  requireSuccess(navigationObservation, "direct_cross_origin_observe_failed");
+  const navigationButton = observationNodes(navigationObservation.value).find((node) => node.role === "button" && node.name === "Cross-origin navigation");
+  if (typeof navigationButton?.ref !== "string") fail("direct_cross_origin_ref_missing");
+  requireSuccess(await tool("browser.act", { sessionId, action: { kind: "click", ref: navigationButton.ref } }), "direct_cross_origin_action_failed");
+  requireSuccess(await tool("browser.act", { sessionId, action: { kind: "wait_for", waitFor: { text: "destination-ready", timeoutMs: 10_000 } } }), "direct_cross_origin_navigation_failed");
+  if (destinationApplicationRequests !== 1) fail("direct_cross_origin_request_missing");
+  logStep("direct_runtime_cross_origin_verified");
 
   const stopped = await tool("browser.session.stop", { sessionId });
   requireSuccess(stopped, "direct_stop_failed");
@@ -121,9 +156,10 @@ try {
     observedRef: true,
     actionResultStatus: acted.value.status,
     effectVerified,
-    containmentOutcome,
-    containmentBoundaryEnforced: true,
-    deniedDestinationRequests: 0,
+    refBudgetRecycled: true,
+    refBudgetCycles: 4,
+    crossOriginNavigation: "completed",
+    destinationApplicationRequests: 1,
     stopped: true,
     remainingSessions: 0,
   };
@@ -138,7 +174,7 @@ try {
     process.exitCode = 1;
   }
   await new Promise((resolve) => fixture.close(resolve));
-  await new Promise((resolve) => denied.close(resolve));
+  await new Promise((resolve) => destination.close(resolve));
   if (cleanupConfirmed) {
     try { removeRunRoot(runOwnership); } catch {
       terminalFailure = Object.assign(new Error("direct_runtime_temp_cleanup_refused"), { code: "direct_runtime_temp_cleanup_refused" });
@@ -223,8 +259,10 @@ function safeDirectRuntimeFailure(candidate) {
     "direct_active_status_invalid",
     "direct_button_ref_missing",
     "direct_cleanup_failed",
-    "direct_containment_outcome_invalid",
-    "direct_containment_request_leaked",
+    "direct_cross_origin_action_failed",
+    "direct_cross_origin_navigation_failed",
+    "direct_cross_origin_ref_missing",
+    "direct_cross_origin_request_missing",
     "direct_effect_unverified",
     "direct_host_unavailable",
     "direct_mcp_result_invalid",
@@ -234,15 +272,6 @@ function safeDirectRuntimeFailure(candidate) {
     "direct_stop_failed",
     "direct_verify_failed",
   ]).has(candidate) ? candidate : safeDirectStartFailure({ errorCode: candidate });
-}
-
-function closedContainmentResult(result) {
-  const value = result?.value;
-  if (result?.envelope?.isError === true) return "unexpected_error";
-  if (value?.outcome !== "completed") return "outcome_other";
-  if (value?.retrySafe !== false) return "retry_other";
-  if (value?.status !== "verified") return `status_${["blocked", "dispatched_unverified", "failed"].includes(value?.status) ? value.status : "other"}`;
-  return "valid";
 }
 
 function createRunRoot(parent) {

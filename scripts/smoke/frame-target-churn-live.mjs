@@ -14,14 +14,10 @@ const browserFamily = resolveLiveBrowserFamily();
 let fixture;
 let host;
 let directRoot;
-let expectedCrossSiteOrigin = "";
-let expectedThirdOrigin = "";
 
 try {
   fixture = await startFixtureServers({ port: fixturePort, crossOriginPort: fixturePort + 1, thirdOriginPort: fixturePort + 2 });
   const crossSiteOrigin = fixture.crossOrigin;
-  expectedCrossSiteOrigin = crossSiteOrigin;
-  expectedThirdOrigin = fixture.thirdOrigin;
   directRoot = createDirectRoot();
   const executable = discoverBrowserExecutable({ family: browserFamily, env: process.env });
   if (!executable) throw new Error("direct_browser_unavailable");
@@ -33,17 +29,7 @@ try {
   });
   log("frame_churn_servers_ready", { browserFamily });
 
-  const restrictedSession = await startSession([], "frame-excluded-provenance", crossSiteOrigin, fixture.thirdOrigin);
-  const restricted = await observeUntil(restrictedSession, (observation) => hasName(observation, "Same-origin frame button"), "restricted same-origin frame observation");
-  log("restricted_same_origin_ready");
-  log(`restricted_excluded_${excludedProvenanceCategory(restricted, crossSiteOrigin)}`);
-  assert(hasName(restricted, "Same-origin frame button"), "same-origin frame was not observable", restricted);
-  assert(!hasName(restricted, "Granted-OOPIF-1 frame button"), "ungranted OOPIF nodes escaped containment", restricted);
-  assert((restricted.excludedFrames ?? []).some((frame) => frame.frameOrigin === crossSiteOrigin && frame.reason === "origin_not_granted"), "excluded OOPIF provenance missing", restricted);
-  log("excluded_frame_provenance_ok");
-  await stopSession(restrictedSession);
-
-  const sameProcessSession = await startSession([], "frame-same-process", fixture.origin, fixture.origin);
+  const sameProcessSession = await startSession(fixture.origin, fixture.origin);
   const sameProcessObserved = await observeUntil(sameProcessSession, (observation) => hasName(observation, "Nested-OOPIF frame button"), "same-process nested frame observation");
   const sameProcessButton = (sameProcessObserved.nodes ?? []).find((node) => String(node.name ?? "").trim() === "Nested-OOPIF frame button");
   assert(typeof sameProcessButton?.ref === "string", "missing same-process nested frame button", sameProcessObserved);
@@ -54,27 +40,27 @@ try {
   log("same_process_nested_route_ok");
   await stopSession(sameProcessSession);
 
-  const allowedSession = await startSession([crossSiteOrigin, fixture.thirdOrigin], "frame-allowed-provenance", crossSiteOrigin, fixture.thirdOrigin);
-  let observed = await observeUntil(allowedSession, (observation) => hasName(observation, "Granted-OOPIF-1 frame button")
+  const crossSiteSession = await startSession(crossSiteOrigin, fixture.thirdOrigin);
+  let observed = await observeUntil(crossSiteSession, (observation) => hasName(observation, "Cross-site-OOPIF-1 frame button")
     && hasName(observation, "Nested-OOPIF frame button"), "allowed nested OOPIF observation");
   log("oopif_nodes_ready");
-  const crossButton = nodeByNameAndOrigin(observed, "Granted-OOPIF-1 frame button", crossSiteOrigin);
+  const crossButton = nodeByNameAndOrigin(observed, "Cross-site-OOPIF-1 frame button", crossSiteOrigin);
   log("oopif_cross_node_resolved");
   const nestedButton = nodeByNameAndOrigin(observed, "Nested-OOPIF frame button", fixture.thirdOrigin);
   log("oopif_nested_node_resolved");
   assert(/^d\d+:f\d+:e\d+$/.test(crossButton.ref), "OOPIF ref was not frame-qualified", crossButton);
   assert(/^d\d+:f\d+:e\d+$/.test(nestedButton.ref), "nested OOPIF ref was not frame-qualified", nestedButton);
   log("oopif_refs_qualified");
-  const nestedClickEnvelope = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: nestedButton.ref } });
+  const nestedClickEnvelope = await mcp("browser.act", { sessionId: crossSiteSession, action: { kind: "click", ref: nestedButton.ref } });
   log("oopif_action_returned");
   const nestedClick = nestedClickEnvelope;
   logActionFailure("cross_site_nested_click", nestedClick);
   assertActionDispatched(nestedClick, "nested OOPIF click");
   log(`cross_site_nested_action_${statusOf(nestedClick) === "verified" ? "verified" : "dispatched_unverified"}`);
   try {
-    observed = await observeUntil(allowedSession, (observation) => hasName(observation, "Nested-OOPIF frame button clicked"), "cross-site nested frame click effect");
+    observed = await observeUntil(crossSiteSession, (observation) => hasName(observation, "Nested-OOPIF frame button clicked"), "cross-site nested frame click effect");
   } catch (error) {
-    const clickDiagnostic = resultOf(await mcp("browser.observe", { sessionId: allowedSession, format: "json", maxNodes: 240 }));
+    const clickDiagnostic = resultOf(await mcp("browser.observe", { sessionId: crossSiteSession, format: "json", maxNodes: 240 }));
     log(classifyInputBreadcrumb(clickDiagnostic, "cross_site_click"));
     throw error;
   }
@@ -82,7 +68,7 @@ try {
 
   const staleTarget = nodeByNameAndOrigin(observed, "Frame stale target", crossSiteOrigin);
   const rerender = nodeByNameAndOrigin(observed, "Rerender frame target", crossSiteOrigin);
-  const rerenderClick = resultOf(await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: rerender.ref } }));
+  const rerenderClick = resultOf(await mcp("browser.act", { sessionId: crossSiteSession, action: { kind: "click", ref: rerender.ref } }));
   const rerenderClickStatus = statusOf(rerenderClick);
   if (!["verified", "dispatched_unverified"].includes(rerenderClickStatus)) {
     const safeStatus = ["target_moved", "stale_target", "frame_detached", "target_gone", "blocked", "not_found"]
@@ -91,37 +77,37 @@ try {
   }
   assertActionDispatched(rerenderClick, "child-frame rerender click");
   const rerenderWait = resultOf(await mcp("browser.act", {
-    sessionId: allowedSession,
+    sessionId: crossSiteSession,
     action: { kind: "wait_for", waitFor: { name: "Frame fresh target", timeoutMs: 20_000 } },
   }));
   assert(statusOf(rerenderWait) === "verified", "child-frame rerender was not observed", { status: statusOf(rerenderWait) ?? "missing" });
   log("frame_rerender_observation_ok");
-  const staleResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: staleTarget.ref } });
+  const staleResult = await mcp("browser.act", { sessionId: crossSiteSession, action: { kind: "click", ref: staleTarget.ref } });
   assertStale(staleResult, "rerendered child-frame ref");
   log("frame_rerender_stale_ref_ok", { ref: staleTarget.ref, status: statusOf(staleResult) });
 
-  observed = resultOf(await mcp("browser.observe", { sessionId: allowedSession, format: "json", maxNodes: 240 }));
-  const beforeReplace = nodeByNameAndOrigin(observed, "Granted-OOPIF-1 frame button", crossSiteOrigin);
+  observed = resultOf(await mcp("browser.observe", { sessionId: crossSiteSession, format: "json", maxNodes: 240 }));
+  const beforeReplace = nodeByNameAndOrigin(observed, "Cross-site-OOPIF-1 frame button", crossSiteOrigin);
   const nestedBeforeReplace = nodeByNameAndOrigin(observed, "Nested-OOPIF frame button clicked", fixture.thirdOrigin);
-  await actThenWait(allowedSession, { kind: "click", role: "button", name: "Replace OOPIF target", exact: true }, { text: "oopif-replaced:2" }, "OOPIF target replacement");
-  const replacedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: beforeReplace.ref } });
+  await actThenWait(crossSiteSession, { kind: "click", role: "button", name: "Replace OOPIF target", exact: true }, { text: "oopif-replaced:2" }, "OOPIF target replacement");
+  const replacedResult = await mcp("browser.act", { sessionId: crossSiteSession, action: { kind: "click", ref: beforeReplace.ref } });
   assertStale(replacedResult, "replaced OOPIF ref");
-  const nestedReplacedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: nestedBeforeReplace.ref } });
+  const nestedReplacedResult = await mcp("browser.act", { sessionId: crossSiteSession, action: { kind: "click", ref: nestedBeforeReplace.ref } });
   assertStale(nestedReplacedResult, "replaced nested OOPIF ref");
-  const afterReplaceObservation = await observeUntil(allowedSession, (observation) => hasName(observation, "Granted-OOPIF-2 frame button") && hasName(observation, "Nested-OOPIF frame button"), "replacement nested OOPIF observation");
-  const afterReplace = nodeByNameAndOrigin(afterReplaceObservation, "Granted-OOPIF-2 frame button", crossSiteOrigin);
+  const afterReplaceObservation = await observeUntil(crossSiteSession, (observation) => hasName(observation, "Cross-site-OOPIF-2 frame button") && hasName(observation, "Nested-OOPIF frame button"), "replacement nested OOPIF observation");
+  const afterReplace = nodeByNameAndOrigin(afterReplaceObservation, "Cross-site-OOPIF-2 frame button", crossSiteOrigin);
   const nestedAfterReplace = nodeByNameAndOrigin(afterReplaceObservation, "Nested-OOPIF frame button", fixture.thirdOrigin);
   assert(afterReplace.ref !== beforeReplace.ref, "replacement reused a retired OOPIF ref", { beforeReplace, afterReplace });
   assert(nestedAfterReplace.ref !== nestedBeforeReplace.ref, "replacement reused a retired nested OOPIF ref", { nestedBeforeReplace, nestedAfterReplace });
   log("oopif_target_replacement_ok", { before: beforeReplace.ref, after: afterReplace.ref, nestedBefore: nestedBeforeReplace.ref, nestedAfter: nestedAfterReplace.ref, staleStatus: statusOf(replacedResult) });
 
-  await actThenWait(allowedSession, { kind: "click", role: "button", name: "Detach OOPIF target", exact: true }, { text: "oopif-detached:2" }, "OOPIF target detach");
-  const detachedResult = await mcp("browser.act", { sessionId: allowedSession, action: { kind: "click", ref: afterReplace.ref } });
+  await actThenWait(crossSiteSession, { kind: "click", role: "button", name: "Detach OOPIF target", exact: true }, { text: "oopif-detached:2" }, "OOPIF target detach");
+  const detachedResult = await mcp("browser.act", { sessionId: crossSiteSession, action: { kind: "click", ref: afterReplace.ref } });
   assertStale(detachedResult, "detached OOPIF ref");
   log("oopif_detach_ok", { ref: afterReplace.ref, status: statusOf(detachedResult) });
 
-  await stopSession(allowedSession);
-  log("frame_target_churn_live_pass", { sameProcessNested: true, crossSiteNested: true, staleRefs: true, allowedAndExcludedProvenance: true });
+  await stopSession(crossSiteSession);
+  log("frame_target_churn_live_pass", { sameProcessNested: true, crossSiteNested: true, staleRefs: true, normalCrossOriginFrames: true });
 } catch (error) {
   log("frame_target_churn_live_fail", boundedFailure(error));
   process.exitCode = 1;
@@ -135,7 +121,6 @@ try {
   try { await fixture?.close(); } catch {}
   if (directRoot && directCleanupConfirmed) removeDirectRoot(directRoot);
 }
-
 function createDirectRoot() {
   const parent = fs.realpathSync.native(os.tmpdir());
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(parent, "newton-direct-frame-live-")));
@@ -159,14 +144,11 @@ function removeDirectRoot(owned) {
   fs.rmSync(resolved, { recursive: true, force: true });
 }
 
-async function startSession(allowedOrigins, scenario, oopifOrigin, nestedOrigin) {
+async function startSession(oopifOrigin, nestedOrigin) {
   const started = await mcp("browser.session.start", {
     origin: fixture.origin,
-    allowedOrigins,
   });
   assert(started.sessionId, "frame session did not start", started);
-  const restrictedPhase = scenario === "frame-excluded-provenance";
-  if (restrictedPhase) log("restricted_session_started");
   const navigation = await mcp("browser.act", {
     sessionId: started.sessionId,
     action: {
@@ -174,11 +156,6 @@ async function startSession(allowedOrigins, scenario, oopifOrigin, nestedOrigin)
       url: `${fixture.origin}/index.html?oopifOrigin=${encodeURIComponent(oopifOrigin)}&nestedOrigin=${encodeURIComponent(nestedOrigin)}`,
     },
   });
-  if (restrictedPhase) {
-    log(`restricted_navigate_outcome_${closedOutcome(navigation)}`);
-    log(`restricted_navigate_status_${closedActionStatus(navigation)}`);
-    log(`restricted_navigate_error_${closedErrorCode(navigation)}`);
-  }
   resultOf(navigation);
   await waitFor(async () => {
     const listed = await mcp("browser.sessions.list", {});
@@ -201,31 +178,13 @@ async function observeUntil(sessionId, predicate, label) {
       return predicate(observation) ? observation : null;
     }, label, 20_000);
   } catch (error) {
-    const requests = fixture?.containment?.snapshot?.().entries ?? [];
     log("frame_observe_timeout_facts", {
-      firstOopif: hasName(lastObservation, "Granted-OOPIF-1 frame button"),
+      firstOopif: hasName(lastObservation, "Cross-site-OOPIF-1 frame button"),
       nestedOopif: hasName(lastObservation, "Nested-OOPIF frame button"),
-      excludedFrames: Math.min(64, Array.isArray(lastObservation?.excludedFrames) ? lastObservation.excludedFrames.length : 0),
-      nullOriginExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
-        ? lastObservation.excludedFrames.filter((frame) => frame?.frameOrigin == null || frame.frameOrigin === "").length
+      nodeCount: Math.min(240, Array.isArray(lastObservation?.nodes) ? lastObservation.nodes.length : 0),
+      frameQualifiedCount: Math.min(240, Array.isArray(lastObservation?.nodes)
+        ? lastObservation.nodes.filter((node) => typeof node?.frameOrigin === "string").length
         : 0),
-      originNotGrantedExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
-        ? lastObservation.excludedFrames.filter((frame) => frame?.reason === "origin_not_granted").length
-        : 0),
-      expectedCrossSiteExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
-        ? lastObservation.excludedFrames.filter((frame) => frame?.frameOrigin === expectedCrossSiteOrigin).length
-        : 0),
-      expectedThirdSiteExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
-        ? lastObservation.excludedFrames.filter((frame) => frame?.frameOrigin === expectedThirdOrigin).length
-        : 0),
-      fixtureMainExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
-        ? lastObservation.excludedFrames.filter((frame) => frame?.frameOrigin === fixture?.origin).length
-        : 0),
-      fixtureCrossExclusions: Math.min(64, Array.isArray(lastObservation?.excludedFrames)
-        ? lastObservation.excludedFrames.filter((frame) => frame?.frameOrigin === fixture?.crossOrigin).length
-        : 0),
-      destinationFrameRequests: Math.min(64, requests.filter((entry) => entry?.originRole === "destination" && entry?.pathname === "/frame.html").length),
-      thirdFrameRequests: Math.min(64, requests.filter((entry) => entry?.originRole === "third" && entry?.pathname === "/frame.html").length),
     });
     throw error;
   }
@@ -272,36 +231,11 @@ function hasName(observation, name) {
   return (observation?.nodes ?? []).some((node) => String(node.name ?? "").trim() === name);
 }
 
-function excludedProvenanceCategory(observation, expectedOrigin) {
-  const frames = Array.isArray(observation?.excludedFrames) ? observation.excludedFrames : [];
-  if (frames.length === 0) return "none";
-  if (frames.some((frame) => frame?.frameOrigin === expectedOrigin)) return "exact_origin";
-  if (frames.some((frame) => frame?.frameOrigin == null || frame.frameOrigin === "")) return "null_origin";
-  return "other";
-}
-
-function closedOutcome(value) {
-  const outcome = value?.outcome;
-  return ["completed", "prevented", "not_started", "outcome_unknown"].includes(outcome) ? outcome : "other";
-}
-
-function closedActionStatus(value) {
-  const status = statusOf(value);
-  return ["verified", "dispatched_unverified", "blocked", "not_found", "ambiguous", "stale_target", "timed_out", "failed"].includes(status) ? status : "other";
-}
-
-function closedErrorCode(value) {
-  const code = value?.errorCode ?? value?.reason;
-  return ["ungranted_navigation", "ungranted_mutation", "ungranted_connection", "unsupported_ungranted_request", "ungranted_target"].includes(code)
-    ? code
-    : "other";
-}
-
 function classifyInputBreadcrumb(observation, prefix) {
   if (hasName(observation, "Nested-OOPIF click frame-button")) return `${prefix}_nested_click_event`;
   if (hasName(observation, "Nested-OOPIF mouseup frame-button")) return `${prefix}_nested_mouseup_event`;
   if (hasName(observation, "Nested-OOPIF mousedown frame-button")) return `${prefix}_nested_mousedown_event`;
-  if (hasName(observation, "Granted-OOPIF-1 click other")) return `${prefix}_hit_parent_document`;
+  if (hasName(observation, "Cross-site-OOPIF-1 click other")) return `${prefix}_hit_parent_document`;
   if (hasName(observation, "main click oopif-churn-frame")) return `${prefix}_hit_root_owner`;
   return `${prefix}_no_frame_event`;
 }

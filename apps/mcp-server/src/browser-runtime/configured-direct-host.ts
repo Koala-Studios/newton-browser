@@ -22,6 +22,7 @@ import {
   type ProfileStore,
 } from "./profile-store.ts";
 import type { BrowserHostPolicyManifest } from "@newton-browser/core";
+import type { IdentityBinding } from "../config.ts";
 
 type DiscoverBrowser = (input: BrowserDiscoveryInput) => BrowserExecutable | null;
 type LaunchRuntime = (options: LaunchOwnedBrowserRuntimeOptions) => Promise<DirectOwnedRuntime>;
@@ -45,6 +46,7 @@ export type ConfiguredDirectBrowserHostOptions = Readonly<{
   maxQueueItems?: number;
   maxQueueBytes?: number;
   hostPolicies?: readonly BrowserHostPolicyManifest[];
+  identityBindings?: readonly IdentityBinding[];
 }>;
 
 export class ConfiguredDirectHostError extends Error {
@@ -74,6 +76,7 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
   const listIdentities = options.listIdentities ?? listNewtonIdentities;
   const removeIdentity = options.removeIdentity ?? removeNewtonIdentity;
   const launchRuntime = options.launchRuntime ?? launchOwnedBrowserRuntime;
+  const identityBindings = exactIdentityBindings(options.identityBindings ?? []);
   const configuredFamily = configuredOptional("family", options.browserFamily, env.NEWTON_BROWSER_BROWSER);
   const defaultFamily = exactFamily(configuredFamily);
   const explicitPath = configuredOptional("path", options.executablePath, env.NEWTON_BROWSER_BROWSER_EXECUTABLE);
@@ -82,7 +85,7 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
   const persistentReservations = new Set<string>();
 
   const launchOwnedRuntime: DirectBrowserHostOptions["launchOwnedRuntime"] = async ({ init }) => {
-    const requestedIdentityId = init.identityId;
+    const requestedIdentityId = init.identityId ?? identityBindings.get(init.origin);
     const persistentIdentity = requestedIdentityId === undefined
       ? null
       : findPersistentIdentity(store, requestedIdentityId, listIdentities);
@@ -116,7 +119,6 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
         browserFamily: identity.browserFamily,
         profileStore: store,
         identityId: identity.id,
-        allowedOrigins: init.allowedOrigins,
         ephemeralIdentity: ephemeral,
         ...(options.headless === undefined ? {} : { headless: options.headless }),
         ...(options.platform === undefined ? {} : { platform: options.platform }),
@@ -149,6 +151,29 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
     ...(options.maxQueueBytes === undefined ? {} : { maxQueueBytes: options.maxQueueBytes }),
     ...(options.hostPolicies === undefined ? {} : { hostPolicies: options.hostPolicies }),
   });
+}
+
+function exactIdentityBindings(bindings: readonly IdentityBinding[]): ReadonlyMap<string, string> {
+  if (!Array.isArray(bindings) || bindings.length > 64) throw configuredError("configured_identity_bindings_invalid");
+  const result = new Map<string, string>();
+  for (const binding of bindings) {
+    if (!binding || typeof binding !== "object" || Object.keys(binding).some((key) => key !== "origin" && key !== "identityId")
+      || Object.keys(binding).length !== 2
+      || typeof binding.origin !== "string" || binding.origin.length > 512 || binding.origin !== binding.origin.trim()
+      || typeof binding.identityId !== "string" || !/^nbi_[a-f0-9]{32}$/u.test(binding.identityId)) {
+      throw configuredError("configured_identity_bindings_invalid");
+    }
+    let origin = "";
+    try {
+      const parsed = new URL(binding.origin);
+      origin = (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.origin === binding.origin
+        ? binding.origin
+        : "";
+    } catch { /* invalid below */ }
+    if (!origin || result.has(origin)) throw configuredError("configured_identity_bindings_invalid");
+    result.set(origin, binding.identityId);
+  }
+  return result;
 }
 
 function reservePersistentIdentity(reservations: Set<string>, id: string): void {
@@ -212,7 +237,7 @@ function wrapRuntime(runtime: DirectOwnedRuntime, cleanup: IdentityCleanup): Dir
   return Object.freeze({
     receipt: runtime.receipt,
     unavailable: runtime.unavailable,
-    claimDriverBootstrap: (allowedOrigins: readonly string[]) => runtime.claimDriverBootstrap(allowedOrigins),
+    claimDriverBootstrap: () => runtime.claimDriverBootstrap(),
     cleanupState: () => state === "ready" ? runtime.cleanupState() : state,
     close,
   });

@@ -21,16 +21,16 @@ class FakeRuntime implements DirectOwnedRuntime {
   readonly receipt = { status: "ready" as const, identityId: "nbi_fake", browserFamily: "chrome" as const, pid: 1234 };
   private readonly unavailableSignal = deferred();
   readonly unavailable = this.unavailableSignal.promise;
-  readonly claimCalls: readonly string[][] = [] as string[][];
+  claimCalls = 0;
   closeCalls = 0;
   closeFailures = 0;
   private claimed = false;
   private state: "ready" | "closing" | "cleanup_uncertain" | "closed" = "ready";
 
-  claimDriverBootstrap(allowedOrigins: readonly string[]) {
+  claimDriverBootstrap() {
     if (this.claimed || this.state !== "ready") throw Object.assign(new Error("bootstrap_unavailable"), { code: "bootstrap_unavailable" });
     this.claimed = true;
-    (this.claimCalls as string[][]).push([...allowedOrigins]);
+    this.claimCalls += 1;
     return { transport: inertTransport(), rootTargetId: "root-target" };
   }
 
@@ -86,10 +86,7 @@ class FakeSession implements DirectHostSession {
 }
 
 function validInit(origin = "https://example.com"): BrowserSessionInit {
-  return {
-    origin,
-    allowedOrigins: [origin, "https://assets.example.com"],
-  };
+  return { origin };
 }
 
 function harness(overrides: {
@@ -122,7 +119,7 @@ function harness(overrides: {
   return { host, runtime, session, launchCalls, startCalls };
 }
 
-test("provisions exact grants through one bootstrap claim and exposes direct-native status", async () => {
+test("provisions one initial URL through one bootstrap claim and exposes direct-native status", async () => {
   const current = harness();
   assert.equal(current.host.getStatus().configured, true);
   assert.equal(current.host.getStatus().runtimeReady, false);
@@ -130,9 +127,7 @@ test("provisions exact grants through one bootstrap claim and exposes direct-nat
   const ready = await current.host.waitForSessionReady(created.sessionId);
   assert.equal(ready.origin, "https://example.com");
   assert.equal(ready.lifecycleState, "active");
-  assert.deepEqual(current.runtime.claimCalls, [["https://example.com", "https://assets.example.com"]]);
-  assert.equal(current.startCalls[0]!.primaryOrigin, "https://example.com");
-  assert.deepEqual(current.startCalls[0]!.allowedOrigins, ["https://assets.example.com"]);
+  assert.equal(current.runtime.claimCalls, 1);
   assert.equal(current.startCalls[0]!.initialUrl, "https://example.com/");
   assert.deepEqual(current.startCalls[0]!.pump, { maxItems: 32, maxBytes: 1024 * 1024 });
   const status = current.host.getStatus();
@@ -152,22 +147,20 @@ test("stop during browser launch aborts provisioning before bootstrap, attach, o
   const stopping = current.host.stopSession(created.sessionId);
   pending.resolve(runtime);
   await stopping;
-  assert.equal(runtime.claimCalls.length, 0);
+  assert.equal(runtime.claimCalls, 0);
   assert.equal(current.startCalls.length, 0);
   assert.equal(runtime.closeCalls, 1);
   assert.deepEqual(current.host.listSessions(), []);
 });
 
-test("rejects invalid/current grants and enforces the bounded session cap", async () => {
+test("rejects invalid session fields and enforces the bounded session cap", async () => {
   const pending = deferred<DirectOwnedRuntime>();
   const current = harness({ maxSessions: 1, launch: () => pending.promise });
   assert.throws(() => current.host.createSession(null as never), /direct_session_invalid_configuration/u);
   assert.throws(() => current.host.createSession({ ...validInit(), browserFamily: "brave" as never }), /invalid_browser_family/u);
   assert.throws(() => current.host.createSession({ ...validInit(), identityId: "operator-name" }), /invalid_identity_id/u);
   assert.throws(() => current.host.createSession({ ...validInit(), origin: "https://example.com/" }), /invalid_origin/u);
-  assert.throws(() => current.host.createSession({ ...validInit(), allowedOrigins: ["https://user@example.com"] }), /invalid_origin/u);
-  assert.throws(() => current.host.createSession({ ...validInit(), allowedOrigins: ["https://assets.example.com"] }), /invalid_origin/u);
-  assert.throws(() => current.host.createSession({ ...validInit(), allowedOrigins: ["https://example.com", "https://example.com"] }), /invalid_origin/u);
+  assert.throws(() => current.host.createSession({ ...validInit(), allowedOrigins: [] } as never), /direct_session_invalid_configuration/u);
   assert.throws(
     () => current.host.createSession({ ...validInit(), retiredCompatibilityField: true } as never),
     /direct_session_invalid_configuration/u,
@@ -175,20 +168,6 @@ test("rejects invalid/current grants and enforces the bounded session cap", asyn
   current.host.createSession(validInit());
   assert.throws(() => current.host.createSession(validInit("https://other.test")), /session_limit/u);
   pending.resolve(current.runtime);
-  await current.host.close();
-});
-
-test("accepts the exact 32-origin session bound and rejects a 33rd origin", async () => {
-  const current = harness();
-  const origin = "https://primary.example";
-  const maximum = [origin, ...Array.from({ length: 31 }, (_, index) => `https://origin-${index}.example`)];
-  const created = current.host.createSession({ origin, allowedOrigins: maximum });
-  await current.host.waitForSessionReady(created.sessionId);
-  assert.deepEqual(current.runtime.claimCalls, [maximum]);
-  assert.throws(
-    () => current.host.createSession({ origin, allowedOrigins: [...maximum, "https://overflow.example"] }),
-    /invalid_origin/u,
-  );
   await current.host.close();
 });
 
@@ -214,7 +193,7 @@ test("uses DirectDriverSession FIFO within one session and permits cross-session
       return startDirectDriverSession({
         ...options,
         driverFactory: () => ({
-          async attach() {}, async detach() {}, async navigateInitialGranted() {},
+          async attach() {}, async detach() {}, async navigateInitial() {},
           async executeAction(action: BrowserAction) {
             const key = action.keys?.[0] ?? action.kind;
             execution.push(`start:${index}:${key}`);
@@ -246,19 +225,10 @@ test("uses DirectDriverSession FIFO within one session and permits cross-session
   await current.host.close();
 });
 
-test("normalizes containment prevention and uncertain driver failures into honest command outcomes", async () => {
+test("normalizes uncertain driver failures into honest command outcomes", async () => {
   const current = harness();
   const sessionId = current.host.createSession(validInit()).sessionId;
   await current.host.waitForSessionReady(sessionId);
-  current.session.executeHandler = async () => ({
-    status: "blocked",
-    reason: "ungranted_mutation",
-    changed: { containmentPrevention: "ungranted_mutation" },
-  });
-  const prevented = await current.host.dispatch(sessionId, { kind: "click", selector: "#save" });
-  assert.equal(prevented.ok, false);
-  assert.equal(prevented.outcome, "prevented");
-  if (!prevented.ok) assert.equal(prevented.errorCode, "ungranted_mutation");
   current.session.executeHandler = async () => { throw new Error("PAGE_SECRET_failure"); };
   const uncertain = await current.host.dispatch(sessionId, { kind: "click", selector: "#save" });
   assert.equal(uncertain.ok, false);
@@ -300,9 +270,8 @@ test("does not report incomplete driver statuses as completed actions", async ()
   await current.host.close();
 });
 
-test("ignores temporally scoped proxy results and relies on causal driver prevention evidence", async () => {
+test("normal browser actions are not rewritten by an external network policy", async () => {
   const current = harness();
-  assert.equal("beginContainmentCommand" in current.runtime, false);
   const sessionId = current.host.createSession(validInit()).sessionId;
   await current.host.waitForSessionReady(sessionId);
 
@@ -319,7 +288,7 @@ test("ignores temporally scoped proxy results and relies on causal driver preven
   await current.host.close();
 });
 
-test("proxy scope failures cannot block direct actions or rewrite driver uncertainty", async () => {
+test("driver uncertainty remains honest after completed normal-browser actions", async () => {
   const current = harness();
   const sessionId = current.host.createSession(validInit()).sessionId;
   await current.host.waitForSessionReady(sessionId);
@@ -384,7 +353,7 @@ test("binds an immutable host-policy snapshot to the direct host", async () => {
   await current.host.close();
 });
 
-test("renderer uncertainty is never rewritten as prevention by an unrelated proxy event", async () => {
+test("renderer uncertainty is never rewritten as prevention", async () => {
   const current = harness();
   current.session.executeHandler = async () => {
     throw Object.assign(new Error("Renderer stalled."), { code: "renderer_unresponsive", detail: "cdp_timeout_Input.dispatchMouseEvent" });
@@ -463,6 +432,22 @@ test("joins exact idempotent dispatches and rejects conflicting reuse", async ()
   gate.resolve({ status: "verified" });
   assert.equal((await first).ok, true);
   assert.equal(current.session.executeCalls.length, 1);
+  await current.host.close();
+});
+
+test("a driver blocked result after admission is uncertainty and never retry-safe prevention", async () => {
+  const current = harness();
+  current.session.executeHandler = async () => ({ status: "blocked", reason: "post_dispatch_claim" });
+  const sessionId = current.host.createSession(validInit()).sessionId;
+  await current.host.waitForSessionReady(sessionId);
+
+  const result = await current.host.dispatch(sessionId, { kind: "click", selector: "#continue" });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "dispatched_unverified");
+  assert.equal(result.outcome, "outcome_unknown");
+  assert.equal(result.retrySafe, false);
+  if (!result.ok) assert.equal(result.errorCode, "driver_blocked_after_admission");
+  assert.equal(current.session.executeHandlerCalls, 1);
   await current.host.close();
 });
 

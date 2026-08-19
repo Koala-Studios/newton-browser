@@ -22,7 +22,6 @@ type ProjectedNode = {
   href?: string; elementType?: string; frameOrigin?: string;
   geometry?: { x: number; y: number; width: number; height: number };
 };
-type ProjectedExcludedFrame = { frameOrigin?: string; reason: string };
 
 const OBSERVATION_QUERY_LIMIT = 120;
 const OBSERVATION_ROLE_LIMIT = 12;
@@ -62,7 +61,6 @@ type ObservationProjectionBase = {
   reason?: string;
   changed?: Record<string, unknown>;
   title?: string;
-  excludedFrames?: ProjectedExcludedFrame[];
 };
 type ObservationBudget = { nodesScanned: number; nodesReturned: number; nodesOmitted: number; truncated: boolean; continuation?: ObservationBudgetContinuation };
 type ObservationBudgetContinuation = {
@@ -181,23 +179,9 @@ function normalizeChanged(value: unknown): Record<string, unknown> | undefined {
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
-function normalizeExcludedFrames(value: unknown): ProjectedExcludedFrame[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const frames = value.flatMap((entry) => {
-    if (!isObjectRecord(entry)) return [];
-    const reason = asSafeBoundedText(entry.reason, 80).trim();
-    if (!reason) return [];
-    const frameOrigin = asSafeString(redactBrowserOrigin(entry.frameOrigin), 160).trim();
-    return [{ ...(frameOrigin ? { frameOrigin } : {}), reason }];
-  }).slice(0, 64);
-  const unique = frames.filter((frame, index, list) => list.findIndex((candidate) => candidate.reason === frame.reason && candidate.frameOrigin === frame.frameOrigin) === index);
-  return unique.length > 0 ? unique : undefined;
-}
-
 function normalizeObservationBase(result: Record<string, unknown>): ObservationProjectionBase {
   const reason = asSafeBoundedText(result.reason, OBS_REASON_CAP);
   const changed = normalizeChanged(result.changed);
-  const excludedFrames = normalizeExcludedFrames(result.excludedFrames);
   return {
     trust: "untrusted_page_content",
     origin: asSafeBoundedText(redactBrowserOrigin(result.origin), OBS_NODE_TEXT_CAP) || "about:blank",
@@ -207,7 +191,6 @@ function normalizeObservationBase(result: Record<string, unknown>): ObservationP
     ...(reason ? { reason } : {}),
     ...(changed ? { changed } : {}),
     ...(typeof result.title === "string" ? { title: asSafeBoundedText(result.title, OBS_NODE_TEXT_CAP) } : {}),
-    ...(excludedFrames ? { excludedFrames } : {}),
   };
 }
 
@@ -573,7 +556,6 @@ export function normalizeAgentActionResult(raw: unknown): AgentActionResultProje
   const normalizedOutcome: AgentActionOutcome = invalid || !outcome ? "outcome_unknown" : outcome;
   const provenance = parseActionProvenance(redacted.provenance);
   const delta = parseActionDelta(redacted.delta);
-
   return {
     ok: !invalid && normalizedOutcome === "completed" && !errorCode,
     status: diagnosticStatus ?? "failed",

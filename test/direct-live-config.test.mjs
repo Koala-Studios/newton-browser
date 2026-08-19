@@ -15,7 +15,7 @@ test("release and live suites use only the direct owned-browser runtime", () => 
     assert.doesNotMatch(source, /extension:|apps\/extension|build-extension|extension_legacy|NEWTON_BROWSER_RUNTIME_MODE/u, file);
   }
   assert.match(suite, /direct_runtime/u);
-  assert.match(suite, /direct_origin_containment/u);
+  assert.match(suite, /direct_setup/u);
   assert.match(suite, /direct_input/u);
   assert.match(complete, /eval:direct-live/u);
   assert.doesNotMatch(complete, /eval:real-sites/u);
@@ -28,7 +28,6 @@ test("shared live fixtures construct a direct host and clean it", () => {
   for (const file of [
     "test/fixtures/input-reliability/live-harness.mjs",
     "scripts/smoke/frame-target-churn-live.mjs",
-    "scripts/smoke/origin-containment-live.mjs",
   ]) {
     const source = read(file);
     assert.match(source, /create(?:Default|Configured)DirectBrowserHost/u, file);
@@ -36,9 +35,6 @@ test("shared live fixtures construct a direct host and clean it", () => {
     assert.match(source, /await host\??\.close|await host\.close/u, file);
     assert.doesNotMatch(source, /extension|NEWTON_BROWSER_RUNTIME_MODE/u, file);
   }
-  const containment = read("scripts/smoke/origin-containment-live.mjs");
-  assert.match(containment, /errorCode === "direct_cleanup_uncertain"/u);
-  assert.match(containment, /stopped = await mcp\("browser\.session\.stop"/u);
 });
 
 test("real-site QA covers seven logged-out production surfaces and trusted masking on the storefront", () => {
@@ -92,4 +88,21 @@ test("primary live receipts are emitted only after authoritative cleanup", () =>
     assert.match(source, /terminalFailure/u, file);
   }
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /fs\.realpathSync\.native\(os\.tmpdir\(\)\)/u);
+  assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_ref_budget_recycled/u);
+  assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /maxNodes: 250/u);
+});
+
+test("agent skill requires the immutable 0.6.2 entrypoint and rejects stale live CLIs", () => {
+  const skill = read("skills/newton-browser/SKILL.md");
+  const setup = read("skills/newton-browser/references/setup-and-troubleshooting.md");
+  const reference = read("skills/newton-browser/references/tool-reference.md");
+  assert.match(skill, /immutable entrypoint configured in/u);
+  assert.match(skill, /require `0\.6\.2`/u);
+  assert.match(skill, /`prevented` means Newton proved the action was refused before input dispatch/u);
+  assert.match(skill, /retain and re-observe the same\s+session/u);
+  assert.match(skill, /Never run a repository\/worktree/u);
+  assert.match(setup, /Never execute `apps\/mcp-server\/dist\/index\.js` from a repository or Codex worktree/u);
+  assert.match(setup, /Do\s+not pass `--allow-origin`, `allowedOrigins`/u);
+  assert.match(reference, /repository\/worktree build, global command, or older cached package must not be/u);
+  assert.doesNotMatch(skill, /at most 31|origin_not_granted|blockedOrigin|policyDecision/u);
 });

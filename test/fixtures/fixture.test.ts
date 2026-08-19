@@ -22,7 +22,7 @@ test("fixture app contains every required release interaction class", async () =
     assert.match(frameHtml, /Same-origin frame button/);
     assert.match(frameHtml, /requestAnimationFrame\(\(\) => requestAnimationFrame/);
     assert.match(frameHtml, /pointerdown.*mousedown.*mouseup.*click/s);
-    assert.match(await (await fetch(`${servers.crossOrigin}/cross-origin.html`)).text(), /Cross-origin denied target/);
+    assert.match(await (await fetch(`${servers.crossOrigin}/cross-origin.html`)).text(), /Cross-origin destination target/);
     assert.equal((await fetch(`${servers.origin}/write`, { method: "POST" })).status, 204);
     assert.match((await fetch(`${servers.origin}/download`)).headers.get("content-disposition") ?? "", /attachment/);
     const redirected = await fetch(`${servers.origin}/redirect-cross`, { redirect: "manual" });

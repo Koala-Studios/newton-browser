@@ -4,7 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { configDirectory, ensureConfigDirectory, loadDirectConfiguration, loadHostPolicies, profileStoreDirectory, resolveConfigDirectory, writeBrowserPreference } from "../src/config.ts";
+import {
+  configDirectory,
+  ensureConfigDirectory,
+  loadDirectConfiguration,
+  loadHostPolicies,
+  profileStoreDirectory,
+  removeIdentityBinding,
+  resolveConfigDirectory,
+  writeBrowserPreference,
+  writeIdentityBinding,
+} from "../src/config.ts";
 
 function withConfig(t: test.TestContext, value: unknown): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-policy-config-"));
@@ -39,7 +49,7 @@ test("host policy rejects removed labels, route classes, and permissive defaults
   }
 });
 
-test("host policy rejects ambiguous sensitive zones and non-origin grants", (t) => {
+test("host policy rejects ambiguous sensitive zones and malformed origins", (t) => {
   const ambiguous = withConfig(t, { hostPolicies: [{ origins: ["https://example.com"], sensitiveZones: [{ selector: "#x", label: "x" }] }] });
   assert.throws(() => loadHostPolicies({ directory: ambiguous }), /invalid sensitive zone/u);
   const pathGrant = withConfig(t, { hostPolicies: [{ origins: ["https://example.com/path"] }] });
@@ -59,8 +69,64 @@ test("direct configuration returns one validated browser and policy snapshot", (
   const configuration = loadDirectConfiguration({ directory, env: {} });
   assert.equal(configuration.browser, "edge");
   assert.deepEqual(configuration.hostPolicies, [{ origins: ["https://example.com"] }]);
+  assert.deepEqual(configuration.identityBindings, []);
   assert.equal(Object.isFrozen(configuration), true);
   assert.equal(Object.isFrozen(configuration.hostPolicies), true);
+  assert.equal(Object.isFrozen(configuration.identityBindings), true);
+});
+
+test("operator identity bindings are exact-origin scoped, durable, and preserved by browser setup", (t) => {
+  const directory = withConfig(t, { browser: "chrome", hostPolicies: [{ origins: ["https://example.com"] }] });
+  const first = writeIdentityBinding({
+    directory,
+    origin: "https://accounts.example.com",
+    identityId: "nbi_0123456789abcdef0123456789abcdef",
+  });
+  assert.deepEqual(first, {
+    origin: "https://accounts.example.com",
+    identityId: "nbi_0123456789abcdef0123456789abcdef",
+  });
+  writeIdentityBinding({
+    directory,
+    origin: "https://shop.example.com",
+    identityId: "nbi_fedcba9876543210fedcba9876543210",
+  });
+  writeBrowserPreference({ directory, browser: "edge" });
+  assert.deepEqual(loadDirectConfiguration({ directory, env: {} }).identityBindings, [
+    { origin: "https://accounts.example.com", identityId: "nbi_0123456789abcdef0123456789abcdef" },
+    { origin: "https://shop.example.com", identityId: "nbi_fedcba9876543210fedcba9876543210" },
+  ]);
+  assert.deepEqual(removeIdentityBinding({ directory, origin: "https://accounts.example.com" }), {
+    origin: "https://accounts.example.com",
+    removed: true,
+  });
+  assert.deepEqual(removeIdentityBinding({ directory, origin: "https://accounts.example.com" }), {
+    origin: "https://accounts.example.com",
+    removed: false,
+  });
+  const final = loadDirectConfiguration({ directory, env: {} });
+  assert.equal(final.browser, "edge");
+  assert.deepEqual(final.hostPolicies, [{ origins: ["https://example.com"] }]);
+  assert.deepEqual(final.identityBindings, [
+    { origin: "https://shop.example.com", identityId: "nbi_fedcba9876543210fedcba9876543210" },
+  ]);
+});
+
+test("identity bindings reject wildcards, paths, duplicate origins, unknown fields, and malformed IDs", (t) => {
+  const duplicate = withConfig(t, { identityBindings: [
+    { origin: "https://example.com", identityId: "nbi_0123456789abcdef0123456789abcdef" },
+    { origin: "https://example.com", identityId: "nbi_fedcba9876543210fedcba9876543210" },
+  ] });
+  assert.throws(() => loadDirectConfiguration({ directory: duplicate, env: {} }), /duplicate origin/u);
+  for (const binding of [
+    { origin: "https://*.example.com", identityId: "nbi_0123456789abcdef0123456789abcdef" },
+    { origin: "https://example.com/path", identityId: "nbi_0123456789abcdef0123456789abcdef" },
+    { origin: "https://example.com", identityId: "bad" },
+    { origin: "https://example.com", identityId: "nbi_0123456789abcdef0123456789abcdef", label: "legacy" },
+  ]) {
+    const directory = withConfig(t, { identityBindings: [binding] });
+    assert.throws(() => loadDirectConfiguration({ directory, env: {} }), /identityBindings/u);
+  }
 });
 
 test("browser setup refuses to preserve invalid policy state", (t) => {

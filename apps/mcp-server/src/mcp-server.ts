@@ -151,12 +151,10 @@ async function callTool(host: BrowserHost, name: string, args: Record<string, un
 
   if (name === "browser.session.start") {
     const origin = requiredHttpOrigin(args.origin);
-    const allowedOrigins = normalizeAllowedOrigins(args.allowedOrigins, origin);
     const identityId = args.identityId === undefined ? undefined : requiredIdentityId(args.identityId);
     const browserFamily = args.browser === undefined ? undefined : requiredBrowserFamily(args.browser);
     const created = host.createSession({
       origin,
-      allowedOrigins,
       ...(identityId ? { identityId } : {}),
       ...(browserFamily ? { browserFamily } : {}),
     });
@@ -520,15 +518,8 @@ export function toolList(): Array<Record<string, unknown>> {
   };
   cachedToolCatalog = [
     tool("browser.status", "Report readiness; detail defaults to compact.", { detail: { type: "string", enum: ["compact", "full"] } }),
-    tool("browser.session.start", "Start an isolated origin-scoped browser session; optionally select a browser and opaque identity.", {
+    tool("browser.session.start", "Start a headless isolated browser session at an HTTP(S) URL; normal browser networking is enabled.", {
       origin: { type: "string", minLength: 8, maxLength: ORIGIN_CAP },
-      allowedOrigins: {
-        type: "array",
-        maxItems: 31,
-        uniqueItems: true,
-        description: "Additional exact HTTP(S) origins; do not repeat the primary origin.",
-        items: { type: "string", minLength: 8, maxLength: ORIGIN_CAP },
-      },
       identityId: { type: "string", pattern: "^nbi_[a-f0-9]{32}$" },
       browser: { type: "string", enum: ["chrome", "edge"] },
       observe: {
@@ -538,7 +529,7 @@ export function toolList(): Array<Record<string, unknown>> {
         ],
       },
     }, ["origin"]),
-    tool("browser.observe", "Observe a session page; compact geometry-free output is default.", { sessionId: sessionIdSchema(), ...observationOutput }, ["sessionId"]),
+    tool("browser.observe", "Observe a session page; each full/diff result replaces the bounded ref snapshot, while text uses no refs.", { sessionId: sessionIdSchema(), ...observationOutput }, ["sessionId"]),
     tool("browser.act", "Run one typed browser action and return its floor decision.", {
       sessionId: sessionIdSchema(),
       action: BROWSER_ACT_JSON_SCHEMA,
@@ -568,7 +559,7 @@ export function toolList(): Array<Record<string, unknown>> {
     tool("browser.console", "Read or filter buffered console text.", {
       sessionId: sessionIdSchema(), level: { type: "string", enum: ["log", "info", "warn", "error", "debug"] }, pattern: { type: "string", minLength: 1, maxLength: 240 }, limit: { type: "integer", minimum: 1, maximum: 500 },
     }, ["sessionId"]),
-    tool("browser.network", "List request metadata or fetch one granted-origin text body; never returns headers or opaque bodies.", {
+    tool("browser.network", "List request metadata or fetch one current-page-origin text body; never returns headers or opaque bodies.", {
       sessionId: sessionIdSchema(), urlPattern: { type: "string", minLength: 1, maxLength: 500 }, requestId: { type: "string", minLength: 1, maxLength: 240 }, limit: { type: "integer", minimum: 1, maximum: 500 },
     }, ["sessionId"]),
     tool("browser.sessions.list", "List this host's local sessions.", {}),
@@ -612,9 +603,8 @@ function validateToolArguments(name: string, args: Record<string, unknown>): voi
     return;
   }
   if (name === "browser.session.start") {
-    exact(["origin", "allowedOrigins", "identityId", "browser", "observe"]);
+    exact(["origin", "identityId", "browser", "observe"]);
     requiredHttpOrigin(args.origin);
-    normalizeAllowedOrigins(args.allowedOrigins, requiredHttpOrigin(args.origin));
     if (args.identityId !== undefined) requiredIdentityId(args.identityId);
     if (args.browser !== undefined) requiredBrowserFamily(args.browser);
     if (args.observe !== undefined && args.observe !== false) {
@@ -891,15 +881,6 @@ async function withAbort<T>(operation: Promise<T>, signal: AbortSignal, cleanup:
   });
 }
 
-function normalizeAllowedOrigins(value: unknown, origin: string): string[] {
-  if (value === undefined) return [origin];
-  if (!Array.isArray(value)) throw new Error("invalid_origin");
-  if (value.length + 1 > 32) throw new Error("invalid_origin");
-  const secondary = value.map(requiredHttpOrigin);
-  if (secondary.includes(origin) || new Set(secondary).size !== secondary.length) throw new Error("invalid_origin");
-  return [origin, ...secondary];
-}
-
 function requiredHttpOrigin(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("origin_required");
   if (value.length > ORIGIN_CAP || /[\u0000-\u001f\u007f]/u.test(value)) throw new Error("invalid_origin");
@@ -943,5 +924,5 @@ function publicErrorMessage(code: string): string {
   if (code === "invalid_identity_id") return "The identity ID is invalid.";
   if (code === "invalid_browser_family") return "The browser must be Chrome or Edge.";
   if (code === "direct_cleanup_uncertain") return "Browser cleanup could not be confirmed.";
-  return "Newton Browser rejected the request.";
+  return "Newton Browser could not complete the request.";
 }

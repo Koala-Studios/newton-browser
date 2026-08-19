@@ -47,7 +47,7 @@ try {
   if (doctor?.configured !== true || doctor?.runtimeVerified !== true
     || doctor?.cleanupConfirmed !== true || doctor?.browserFamily !== args.browser
     || doctor?.transport !== "private_cdp_pipe"
-    || doctor?.containment !== "enabled_before_navigation") {
+    || doctor?.networking !== "normal_browser") {
     throw new Error("direct_setup_doctor_failed");
   }
   cleanupConfirmed = true;
@@ -142,7 +142,7 @@ function awaitLogin(child, identityId, browserFamily) {
         try { receipt = JSON.parse(line); } catch { failLogin("direct_setup_login_invalid_receipt"); return; }
         if (!ready) {
           if (receipt?.status !== "ready" || receipt?.identityId !== identityId
-            || receipt?.browserFamily !== browserFamily || receipt?.grantedOriginCount !== 1) {
+            || receipt?.browserFamily !== browserFamily) {
             failLogin("direct_setup_login_not_ready"); return;
           }
           ready = true;
@@ -153,7 +153,7 @@ function awaitLogin(child, identityId, browserFamily) {
     child.stderr.on("data", (chunk) => { stderrBytes = Math.min(256 * 1024 + 1, stderrBytes + chunk.length); });
     child.once("error", () => reject(new Error("direct_setup_login_failed")));
     child.once("close", (code) => {
-      if (!ready || code !== 0 || stderrBytes > 256 * 1024) reject(new Error("direct_setup_login_failed"));
+      if (!ready || finalReceipt?.status !== "closed" || code !== 0 || stderrBytes > 256 * 1024) reject(new Error("direct_setup_login_failed"));
       else resolve(finalReceipt);
     });
   });

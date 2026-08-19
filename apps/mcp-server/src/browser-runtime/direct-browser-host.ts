@@ -27,17 +27,9 @@ const DEFAULT_MAX_QUEUE_ITEMS = 32;
 const DEFAULT_MAX_QUEUE_BYTES = 1024 * 1024;
 const MAX_IDEMPOTENCY_ENTRIES = 256;
 const IDEMPOTENCY_TTL_MS = 10 * 60 * 1_000;
-const CONTAINMENT_REASONS = new Set([
-  "ungranted_navigation",
-  "ungranted_mutation",
-  "ungranted_connection",
-  "unsupported_ungranted_request",
-  "ungranted_target",
-]);
-
 export type DirectOwnedRuntime = Readonly<{
   receipt: Readonly<{ identityId: string; browserFamily: OwnedBrowserFamily; pid: number; status: "ready" }>;
-  claimDriverBootstrap(allowedOrigins: readonly string[]): OwnedDriverBootstrap;
+  claimDriverBootstrap(): OwnedDriverBootstrap;
   cleanupState(): "ready" | "closing" | "cleanup_uncertain" | "closed";
   unavailable: Promise<void>;
   close(): Promise<void>;
@@ -118,7 +110,6 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
         info: {
           sessionId,
           origin: configuration.origin,
-          allowedOrigins: configuration.allowedOrigins,
           lifecycleState: "starting_runtime",
         },
         sequence: 0,
@@ -270,12 +261,10 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
       record.runtime = runtime;
       observeRuntimeAvailability(record, runtime);
       throwIfProvisioningStopped(record);
-      const bootstrap = runtime.claimDriverBootstrap(record.info.allowedOrigins);
+      const bootstrap = runtime.claimDriverBootstrap();
       record.info = { ...record.info, lifecycleState: "attaching_cdp" };
       const driver = await sessionFactory({
         bootstrap,
-        primaryOrigin: record.info.origin,
-        allowedOrigins: record.info.allowedOrigins.filter((origin) => origin !== record.info.origin),
         initialUrl: `${record.info.origin}/`,
         signal: record.provisioningAbort.signal,
         pump: { maxItems: maxQueueItems, maxBytes: maxQueueBytes },
@@ -351,8 +340,6 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
           }
         : undefined;
       const delta = await record.driver.execute(action, { commandId }, timeoutMs, signal, guard);
-      const prevention = containmentPrevention(delta);
-      if (prevention) return failure(commandId, sequence, "prevented", prevention, decision);
       if (!record.runtime || record.runtime.cleanupState() !== "ready" || record.info.lifecycleState !== "active") {
         record.cleanupRetained = true;
         record.info = { ...record.info, lifecycleState: "degraded" };
@@ -438,26 +425,20 @@ export function createDirectBrowserHost(options: DirectBrowserHostOptions) {
   return api;
 }
 
-function validateSessionInit(init: BrowserSessionInit): { origin: string; allowedOrigins: string[]; init: BrowserSessionInit } {
+function validateSessionInit(init: BrowserSessionInit): { origin: string; init: BrowserSessionInit } {
   if (!init || typeof init !== "object" || Object.keys(init).some((key) =>
-    !["origin", "allowedOrigins", "identityId", "browserFamily"].includes(key))) {
+    !["origin", "identityId", "browserFamily"].includes(key))) {
     throw hostError("direct_session_invalid_configuration");
   }
   const origin = exactOrigin(init.origin);
-  if (!origin || !Array.isArray(init.allowedOrigins) || init.allowedOrigins.length === 0 || init.allowedOrigins.length > 32) {
-    throw hostError("invalid_origin");
-  }
-  const allowedOrigins = init.allowedOrigins.map(exactOrigin);
-  if (allowedOrigins.some((value) => !value) || allowedOrigins[0] !== origin
-    || new Set(allowedOrigins).size !== allowedOrigins.length) throw hostError("invalid_origin");
+  if (!origin) throw hostError("invalid_origin");
   if (init.identityId !== undefined && !/^nbi_[a-f0-9]{32}$/u.test(init.identityId)) throw hostError("invalid_identity_id");
   if (init.browserFamily !== undefined && init.browserFamily !== "chrome" && init.browserFamily !== "edge") {
     throw hostError("invalid_browser_family");
   }
   return {
     origin,
-    allowedOrigins,
-    init: { ...init, origin, allowedOrigins: [...allowedOrigins] },
+    init: { ...init, origin },
   };
 }
 
@@ -470,11 +451,11 @@ function exactOrigin(value: unknown): string {
 }
 
 function cloneInit(init: BrowserSessionInit): BrowserSessionInit {
-  return { ...init, allowedOrigins: [...init.allowedOrigins] };
+  return { ...init };
 }
 
 function cloneInfo(info: BrowserSessionInfo): BrowserSessionInfo {
-  return { ...info, allowedOrigins: [...info.allowedOrigins] };
+  return { ...info };
 }
 
 function parseDispatchOptions(value: BrowserDispatchOptions | undefined):
@@ -586,12 +567,6 @@ function failure(
   };
 }
 
-function containmentPrevention(delta: Record<string, unknown>): string | null {
-  if (delta.status !== "blocked" || typeof delta.reason !== "string" || !CONTAINMENT_REASONS.has(delta.reason)) return null;
-  const changed = isRecord(delta.changed) ? delta.changed : null;
-  return changed?.containmentPrevention === delta.reason ? delta.reason : null;
-}
-
 function incompleteAction(delta: Record<string, unknown>, kind: string): { outcome: "prevented" | "not_started" | "outcome_unknown"; errorCode: string } | null {
   const status = typeof delta.status === "string" ? delta.status : "";
   if (status === "verified" || status === "dispatched_unverified") return null;
@@ -599,9 +574,11 @@ function incompleteAction(delta: Record<string, unknown>, kind: string): { outco
   if (status === "not_found" || status === "ambiguous" || status === "stale_target") {
     return { outcome: "not_started", errorCode: status };
   }
-  if (status === "blocked") {
-    return { outcome: "prevented", errorCode: reason || status };
-  }
+  // Driver execution has already been admitted when this function runs. A
+  // driver-level `blocked` result therefore cannot honestly mean prevention:
+  // input may already have been dispatched. Preserve uncertainty and forbid a
+  // retry instead of manufacturing a pre-dispatch guarantee.
+  if (status === "blocked") return { outcome: "outcome_unknown", errorCode: "driver_blocked_after_admission" };
   if (status === "timed_out") {
     return { outcome: kind === "wait_for" ? "not_started" : "outcome_unknown", errorCode: "timed_out" };
   }
@@ -666,18 +643,14 @@ function normalizeResolvedFloorEvidence(evidence: Record<string, unknown>): {
     if (origin !== undefined) resolved.origin = origin;
   }
   const booleanSignal = (key: keyof BrowserSignals): boolean => rawSignals?.[key] === true;
-  const containmentPrevention = boundedString(rawSignals?.containmentPrevention, 80);
   const signals: BrowserSignals | undefined = rawSignals
     ? {
         ...(booleanSignal("formSubmit") ? { formSubmit: true } : {}),
         ...(booleanSignal("navigation") ? { navigation: true } : {}),
-        ...(booleanSignal("networkWrite") ? { networkWrite: true } : {}),
         ...(booleanSignal("dialog") ? { dialog: true } : {}),
         ...(booleanSignal("download") ? { download: true } : {}),
-        ...(booleanSignal("crossOrigin") ? { crossOrigin: true } : {}),
         ...(booleanSignal("newTarget") ? { newTarget: true } : {}),
         ...(booleanSignal("secretField") ? { secretField: true } : {}),
-        ...(containmentPrevention ? { containmentPrevention } : {}),
       }
     : undefined;
   return {

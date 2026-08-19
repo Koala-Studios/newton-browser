@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import type { Readable, Writable } from "node:stream";
 
 import { CdpPipeTransport, type PrivateCdpTransport } from "./cdp-pipe.ts";
-import { policyProxyLaunchConfiguration, type PolicyProxy } from "./policy-proxy.ts";
 import type { GuardianProfileCleanupPlan } from "./profile-store.ts";
 import { ProcessCleanupError, ProcessSupervisor, type SupervisedChild } from "./process-supervisor.ts";
 
@@ -15,12 +14,6 @@ const SAFE_CHROMIUM_ARGS = [
   "--remote-debugging-pipe",
   "--no-first-run",
   "--no-default-browser-check",
-  "--disable-background-networking",
-  "--disable-component-update",
-  "--disable-default-apps",
-  "--disable-extensions",
-  "--disable-sync",
-  "--site-per-process",
   "--profile-directory=Default",
   "--no-startup-window",
 ] as const;
@@ -71,7 +64,6 @@ export type ChromiumLaunchOptions = Readonly<{
   validateOwnedProfileLease?: (directory: string, lease: unknown) => boolean;
   killTree?: (pid: number, platform: NodeJS.Platform) => Promise<void>;
   platform?: NodeJS.Platform;
-  policyProxy?: PolicyProxy;
   guardianProfileCleanup?: GuardianProfileCleanupPlan;
 }>;
 
@@ -216,13 +208,11 @@ function monitorProcessExit(child: ChildProcess): ProcessExitState {
   return state;
 }
 
-export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "policyProxy">): readonly string[] {
+export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless">): readonly string[] {
   const directory = path.resolve(options.userDataDir);
-  const proxyArgs = options.policyProxy ? policyProxyLaunchConfiguration(options.policyProxy).args : [];
   const args = [
     ...SAFE_CHROMIUM_ARGS,
     `--user-data-dir=${directory}`,
-    ...proxyArgs,
     ...(options.headless === false ? [] : ["--headless=new"]),
   ];
   return Object.freeze(args);

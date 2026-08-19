@@ -7,6 +7,8 @@
 > `ROADMAP.md` references below are historical; current status is `docs/PROGRESS_LEDGER.md`.
 > Every present-tense implementation claim below describes the pinned 2026-08-08 revision,
 > not the modern direct-runtime working tree.
+> The containment recommendation was later implemented and retired on 2026-08-19 after
+> real-site evidence showed that it broke ordinary authentication, rendering, and controls.
 
 - Date: 2026-08-08
 - Newton Browser revision: `a6ff3066caaaad915a06cdb5c85cfd71f0c8e56a` (`0.4.5`)

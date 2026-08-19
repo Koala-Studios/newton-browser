@@ -9,8 +9,6 @@ import {
   type BrowserAction,
 } from "../src/index.ts";
 
-const youtubePolicy = { allowedOrigins: ["https://www.youtube.com"] };
-
 test("core session-origin normalization rejects paths, credentials, and wildcard hosts", () => {
   assert.equal(normalizeHttpOrigin("https://example.com:443"), "https://example.com");
   assert.equal(normalizeHttpOrigin("https://api.example.com:8443/"), "https://api.example.com:8443");
@@ -18,7 +16,6 @@ test("core session-origin normalization rejects paths, credentials, and wildcard
     assert.equal(normalizeHttpOrigin(value), "");
   }
 });
-
 test("per-kind target descriptors are preserved without leaking fill values", () => {
   const action: BrowserAction = {
     kind: "fill",
@@ -38,7 +35,6 @@ test("new target descriptors feed the safety floor", () => {
   const decision = evaluateBrowserFloor({
     action: { kind: "click", role: "button", name: "Like" },
     origin: "https://www.youtube.com",
-    policy: youtubePolicy,
   });
   assert.equal(decision.class, "agentic");
   assert.equal(decision.commitBoundary, "external_effect");
@@ -70,14 +66,11 @@ test("compact observations accept driver bbox arrays but do not expose raw DOM",
   assert.equal("rawHtml" in (result.nodes[0] as Record<string, unknown>), false);
 });
 
-test("frame provenance and excluded frames survive redaction with strict bounds", () => {
+test("frame provenance survives redaction without exposing internal routing fields", () => {
   const result = redactBrowserResult({
     kind: "observation", mode: "cdp", origin: "https://example.com", title: "Frames",
     nodes: [{ ref: "d2:f1:e7", role: "button", documentEpoch: 2, frameId: "child", frameOrigin: "https://child.test" }],
-    excludedFrames: [
-      { frameId: "denied", frameOrigin: "https://denied.test/path?secret=x", reason: "origin_not_granted" },
-      { frameId: "ignored", frameOrigin: "https://ignored.test", reason: "invented" },
-    ],
+    internalFrameRouting: { sessionId: "secret-session" },
     nodeCount: 1, truncated: false, capturedAt: "2026-08-09T00:00:00.000Z",
   });
   assert.equal(result?.kind, "observation");
@@ -85,7 +78,7 @@ test("frame provenance and excluded frames survive redaction with strict bounds"
   assert.deepEqual(result.nodes[0], {
     ref: "d2:f1:e7", role: "button", documentEpoch: 2, frameId: "child", frameOrigin: "https://child.test",
   });
-  assert.deepEqual(result.excludedFrames, [{ frameId: "denied", frameOrigin: "https://denied.test", reason: "origin_not_granted" }]);
+  assert.equal("internalFrameRouting" in result, false);
 });
 
 test("a pending dialog is surfaced on observations with its message secret-masked", () => {

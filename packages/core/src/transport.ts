@@ -42,7 +42,6 @@ export type BrowserDispatchOptions = {
 
 export type BrowserSessionInit = {
   origin: string;
-  allowedOrigins: string[];
   // This opaque operator-created identity selects one
   // exclusive Newton profile without exposing its filesystem path.
   identityId?: string;
@@ -54,6 +53,5 @@ export type BrowserSessionInit = {
 export type BrowserSessionInfo = {
   sessionId: string;
   origin: string;
-  allowedOrigins: string[];
   lifecycleState: BrowserSessionLifecycleState;
 };

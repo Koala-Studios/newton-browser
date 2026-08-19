@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,27 @@ export const INSTALL_CLIENTS: InstallClient[] = ["codex", "generic"];
 
 export const SERVER_KEY = "newton-browser";
 
-export type ServerInvocation = { command: string; args: string[] };
+const CODEX_PROTOCOL_VERSION = "2026-07-28";
+const REQUIRED_BROWSER_TOOLS = Object.freeze([
+  "browser.status",
+  "browser.session.start",
+  "browser.observe",
+  "browser.act",
+  "browser.screenshot",
+  "browser.console",
+  "browser.network",
+  "browser.sessions.list",
+  "browser.session.stop",
+  "browser.stop_all",
+] as const);
+
+export type ServerInvocation = { command: string; args: string[]; version: string };
+export type CodexCandidateReceipt = Readonly<{
+  compatible: true;
+  protocolVersion: typeof CODEX_PROTOCOL_VERSION;
+  version: string;
+  requiredToolCount: number;
+}>;
 
 // The single source of truth for how a client launches the host.
 export function serverInvocation(input: { entryPath?: string; execPath?: string } = {}): ServerInvocation {
@@ -19,7 +40,165 @@ export function serverInvocation(input: { entryPath?: string; execPath?: string 
     || rawEntry.includes("\0") || rawExec.includes("\0")) throw new Error("server_invocation_unavailable");
   const entry = exactInvocationFile(rawEntry, false);
   const command = exactInvocationFile(rawExec, true);
-  return { command, args: [entry] };
+  return { command, args: [entry], version: invocationPackageVersion(entry) };
+}
+
+function invocationPackageVersion(entry: string): string {
+  const manifestPath = path.resolve(path.dirname(entry), "..", "package.json");
+  const manifest = exactInvocationFile(manifestPath, false);
+  let parsed: unknown;
+  try { parsed = JSON.parse(fs.readFileSync(manifest, "utf8")); } catch { throw new Error("server_invocation_unavailable"); }
+  const version = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>).version
+    : undefined;
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) {
+    throw new Error("server_invocation_unavailable");
+  }
+  return version;
+}
+
+export function verifyCodexCandidate(invocation: ServerInvocation): CodexCandidateReceipt {
+  const metadata = {
+    "io.modelcontextprotocol/protocolVersion": CODEX_PROTOCOL_VERSION,
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": { name: "newton-browser-installer", version: invocation.version },
+  };
+  const requests = [
+    { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: metadata } },
+    { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: metadata } },
+  ].map((value) => JSON.stringify(value)).join("\n") + "\n";
+  const probeDirectory = createCodexProbeDirectory();
+  let result: ReturnType<typeof spawnSync>;
+  try {
+    result = spawnSync(process.execPath, [
+      "-e",
+      CODEX_CANDIDATE_PROBE,
+      invocation.command,
+      ...invocation.args,
+    ], {
+      input: requests,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+      env: {
+        ...process.env,
+        NEWTON_BROWSER_CONFIG_DIR: probeDirectory.path,
+        NEWTON_BROWSER_EXPECTED_VERSION: invocation.version,
+        CODEX_MCP_PROTOCOL_VERSION: CODEX_PROTOCOL_VERSION,
+      },
+    });
+  } finally {
+    removeCodexProbeDirectory(probeDirectory);
+  }
+  if (result.error || result.status !== 0 || result.signal || typeof result.stdout !== "string") {
+    throw new Error("codex_mcp_candidate_incompatible");
+  }
+  let frames: unknown[];
+  try {
+    frames = result.stdout.split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
+  } catch { throw new Error("codex_mcp_candidate_incompatible"); }
+  const initialized = responseResult(frames, 1);
+  const listed = responseResult(frames, 2);
+  const supportedVersions = Array.isArray(initialized?.supportedVersions) ? initialized.supportedVersions : [];
+  const discoveryMeta = record(initialized?._meta);
+  const serverInfo = record(discoveryMeta?.["io.modelcontextprotocol/serverInfo"]);
+  const tools = Array.isArray(listed?.tools) ? listed.tools : [];
+  const names = new Set(tools.map((tool) => record(tool)?.name).filter((name): name is string => typeof name === "string"));
+  if (!supportedVersions.includes(CODEX_PROTOCOL_VERSION) || serverInfo?.name !== "newton-browser"
+    || serverInfo.version !== invocation.version || REQUIRED_BROWSER_TOOLS.some((name) => !names.has(name))) {
+    throw new Error("codex_mcp_candidate_incompatible");
+  }
+  return Object.freeze({
+    compatible: true,
+    protocolVersion: CODEX_PROTOCOL_VERSION,
+    version: invocation.version,
+    requiredToolCount: REQUIRED_BROWSER_TOOLS.length,
+  });
+}
+
+const CODEX_CANDIDATE_PROBE = String.raw`
+const { spawn } = require("node:child_process");
+const command = process.argv[1];
+const args = process.argv.slice(2);
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const child = spawn(command, args, { env: process.env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+  let output = "";
+  let settled = false;
+  let receivedAll = false;
+  const finish = (code) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (code === 0 && receivedAll) process.stdout.write(output);
+    process.exitCode = code;
+  };
+  const timer = setTimeout(() => { child.kill(); finish(1); }, 8000);
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+    if (Buffer.byteLength(output) > 1024 * 1024) { child.kill(); finish(1); return; }
+    const ids = new Set();
+    try {
+      for (const line of output.split(/\r?\n/).filter(Boolean)) {
+        const frame = JSON.parse(line);
+        if (frame && (frame.id === 1 || frame.id === 2)) ids.add(frame.id);
+      }
+    } catch { return; }
+    if (ids.has(1) && ids.has(2) && !receivedAll) {
+      receivedAll = true;
+      child.stdin.end();
+    }
+  });
+  child.once("error", () => finish(1));
+  child.once("exit", (code, signal) => finish(code === 0 && !signal && receivedAll ? 0 : 1));
+  child.stdin.write(input);
+});
+`;
+
+type CodexProbeDirectory = Readonly<{
+  path: string;
+  tempRoot: string;
+  dev: number;
+  ino: number;
+}>;
+
+function createCodexProbeDirectory(): CodexProbeDirectory {
+  const tempRoot = fs.realpathSync.native(os.tmpdir());
+  const created = fs.mkdtempSync(path.join(tempRoot, "newton-codex-mcp-probe-"));
+  const resolved = fs.realpathSync.native(created);
+  const stat = fs.lstatSync(resolved);
+  if (resolved !== created || path.dirname(resolved) !== tempRoot
+    || !path.basename(resolved).startsWith("newton-codex-mcp-probe-")
+    || !stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("codex_mcp_candidate_incompatible");
+  }
+  return Object.freeze({ path: resolved, tempRoot, dev: stat.dev, ino: stat.ino });
+}
+
+function removeCodexProbeDirectory(directory: CodexProbeDirectory): void {
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(directory.path); } catch { throw new Error("codex_mcp_candidate_incompatible"); }
+  let resolved: string;
+  try { resolved = fs.realpathSync.native(directory.path); } catch { throw new Error("codex_mcp_candidate_incompatible"); }
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== directory.dev || stat.ino !== directory.ino
+    || resolved !== directory.path || path.dirname(resolved) !== directory.tempRoot
+    || !path.basename(resolved).startsWith("newton-codex-mcp-probe-")) {
+    throw new Error("codex_mcp_candidate_incompatible");
+  }
+  fs.rmSync(directory.path, { recursive: true });
+}
+
+function responseResult(frames: readonly unknown[], id: number): Record<string, unknown> | null {
+  const response = frames.map(record).find((frame) => frame?.id === id);
+  return record(response?.result);
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function exactInvocationFile(value: string, executable: boolean): string {
@@ -108,7 +287,12 @@ export function planClientInstall(input: {
   };
 }
 
-export type InstallResult = InstallPlan & { backupPath?: string; wrote: boolean };
+export type InstallResult = InstallPlan & {
+  backupPath?: string;
+  wrote: boolean;
+  candidateVersion?: string;
+  compatibilityVerified?: true;
+};
 
 // Apply a plan to disk. Always writes a timestamped `.bak` before overwriting an
 // existing file. `dryRun` computes and returns the plan without touching disk.
@@ -119,6 +303,7 @@ export function runInstall(input: {
   force?: boolean;
   dryRun?: boolean;
   invocation?: ServerInvocation;
+  verifyCandidate?: (invocation: ServerInvocation) => CodexCandidateReceipt;
 }): InstallResult {
   const env = input.env ?? process.env;
   const invocation = input.invocation ?? serverInvocation();
@@ -136,8 +321,18 @@ export function runInstall(input: {
     existing = undefined;
   }
   const plan = planClientInstall({ ...input, env, ...(existing === undefined ? {} : { existing }) });
-  if (input.dryRun || plan.action === "conflict" || plan.action === "noop" || plan.nextContent === undefined) {
+  if (input.dryRun || plan.action === "conflict" || plan.nextContent === undefined) {
     return { ...plan, wrote: false };
+  }
+  const compatibility = input.client === "codex"
+    ? (input.verifyCandidate ?? verifyCodexCandidate)(invocation)
+    : null;
+  if (plan.action === "noop") {
+    return {
+      ...plan,
+      wrote: false,
+      ...(compatibility ? { candidateVersion: compatibility.version, compatibilityVerified: true as const } : {}),
+    };
   }
   const targetDirectory = path.dirname(target.path);
   fs.mkdirSync(targetDirectory, { recursive: true, mode: 0o700 });
@@ -148,7 +343,12 @@ export function runInstall(input: {
     fs.writeFileSync(backupPath, existing, { encoding: "utf8", flag: "wx", mode: 0o600 });
   }
   atomicWriteConfig(target.path, plan.nextContent);
-  return { ...plan, ...(backupPath === undefined ? {} : { backupPath }), wrote: true };
+  return {
+    ...plan,
+    ...(backupPath === undefined ? {} : { backupPath }),
+    wrote: true,
+    ...(compatibility ? { candidateVersion: compatibility.version, compatibilityVerified: true as const } : {}),
+  };
 }
 
 function ensureSafeConfigTarget(file: string): void {
@@ -221,6 +421,7 @@ function mergeCodexToml(existing: string | undefined, invocation: ServerInvocati
     header,
     `command = ${JSON.stringify(invocation.command)}`,
     `args = [${invocation.args.map((value) => JSON.stringify(value)).join(", ")}]`,
+    `env = { NEWTON_BROWSER_EXPECTED_VERSION = ${JSON.stringify(invocation.version)}, CODEX_MCP_PROTOCOL_VERSION = ${JSON.stringify(CODEX_PROTOCOL_VERSION)} }`,
   ].join("\n");
   const body = existing ?? "";
   const entryExists = body.split(/\r?\n/).some((line) => line.trim() === header);
@@ -238,6 +439,7 @@ function mergeCodexToml(existing: string | undefined, invocation: ServerInvocati
   } else {
     nextContent = replaceTomlTable(body, header, block);
   }
+  nextContent = enableModernCodexFeature(nextContent);
   return {
     action: entryExists ? "update" : "create",
     entryExists,
@@ -261,5 +463,33 @@ function replaceTomlTable(body: string, header: string, block: string): string {
 }
 
 function renderGenericConfig(invocation: ServerInvocation): string {
-  return JSON.stringify({ command: invocation.command, args: invocation.args }, null, 2);
+  return JSON.stringify({
+    command: invocation.command,
+    args: invocation.args,
+    env: { NEWTON_BROWSER_EXPECTED_VERSION: invocation.version },
+  }, null, 2);
+}
+
+function enableModernCodexFeature(body: string): string {
+  const lines = body.split(/\r?\n/u);
+  const headers = lines.reduce<number[]>((indexes, line, index) => {
+    if (line.trim() === "[features]") indexes.push(index);
+    return indexes;
+  }, []);
+  if (headers.length > 1) throw new Error("unsafe_client_config_path");
+  if (headers.length === 0) {
+    const prefix = body.trimEnd();
+    return `${prefix}${prefix ? "\n\n" : ""}[features]\nmcp_2026_07_28 = true\n`;
+  }
+  const start = headers[0]!;
+  let end = start + 1;
+  while (end < lines.length && !/^\s*\[/u.test(lines[end]!)) end += 1;
+  const keys: number[] = [];
+  for (let index = start + 1; index < end; index += 1) {
+    if (/^\s*mcp_2026_07_28\s*=/u.test(lines[index]!)) keys.push(index);
+  }
+  if (keys.length > 1) throw new Error("unsafe_client_config_path");
+  if (keys.length === 1) lines[keys[0]!] = "mcp_2026_07_28 = true";
+  else lines.splice(end, 0, "mcp_2026_07_28 = true");
+  return `${lines.join("\n").replace(/\n+$/u, "")}\n`;
 }

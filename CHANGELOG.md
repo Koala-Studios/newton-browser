@@ -7,6 +7,88 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-19
+
+### Fixed
+
+- Bound interactive refs to the latest observation cycle instead of retaining every ref
+  ever seen during a same-document SPA lifetime. A fresh interactive observation now
+  recovers its own bounded ref budget without navigation, reload, or session replacement.
+- Stop invisible, filtered, duplicate, and otherwise non-emitted observation candidates
+  from consuming ref capacity. Text observations remain ref-free and do not invalidate the
+  current interactive snapshot.
+
+## [0.6.1] - 2026-08-19
+
+### Fixed
+
+- Removed every post-action blocking path. Normal POST, GraphQL, telemetry, navigation,
+  dialog, popup, and download activity can no longer retroactively turn dispatched input
+  into `outcome: prevented` or a retry-safe result.
+- Hardened the direct host so a driver-level blocked result after command admission is
+  classified as `outcome_unknown` and never retry-safe.
+- Made operator closure of the visible identity-login browser a normal completion path;
+  the command still reports success only after exact runtime and identity-lease cleanup.
+- Updated agent recovery guidance to retain and re-observe the same session after an
+  uncertain or unverified dispatch instead of restarting authentication.
+
+## [0.6.0] - Unreleased
+
+### Changed
+
+- Removed the exact-origin policy proxy, origin-grant configuration, CDP Fetch
+  interception, request denial, and blocked-origin result fields. Owned Chrome and Edge
+  now use ordinary Chromium networking for redirects, subresources, frames, workers,
+  popups, and browser background dependencies.
+- Removed network-altering launch flags that disabled extensions, sync, component
+  updates, default apps, and background networking. Newton still launches a dedicated
+  isolated process and profile over a private CDP pipe.
+- Removed page-altering focus emulation, persistent mutation observers, and screenshot
+  script/animation freezing. Observation uses non-mutating reads and sensitive pixels are
+  masked after capture in trusted Node code.
+- Simplified session start to one initial HTTP(S) URL. `allowedOrigins`, `originGrants`,
+  origin-grant CLI commands, containment receipts, and their compatibility paths no
+  longer exist.
+- Reworked real-site QA to require usable rendered pages across video, community,
+  commerce, advertising, reference, and standards sites, and to reject browser-generated
+  blocked/error pages or leaked icon ligatures.
+- Corrected `wait_for` so attached, visible, hidden, detached, checked, unchecked, and
+  value states retain distinct semantics instead of treating every selector as visible.
+- Made selector targeting tolerate hidden responsive duplicates while retaining
+  fail-closed visible ambiguity, and added bounded fresh-target recovery before a
+  selector/semantic fill has dispatched any input.
+- Agent MCP sessions remain headless for deterministic trusted input; the separate
+  operator `identity login` browser is visible. Both now use the same unrestricted normal
+  Chromium network behavior.
+
+> The 0.5.1 and 0.5.2 entries below describe the historical implementation shipped in
+> those versions. Their origin-grant behavior is not part of the current contract.
+
+## [0.5.2] - 2026-08-18
+
+### Changed
+
+- Add durable operator-approved exact-origin grant policies that are merged
+  automatically into matching MCP sessions and visible identity-login runs.
+- Allow `identity login --origin <primary>` to resolve the operator-bound identity,
+  removing the need for agents to remember opaque identity IDs or repeat reviewed
+  redirect grants.
+- Return the exact canonical `blockedOrigin` for an authoritatively denied main-frame
+  navigation while continuing to reject automatic page-authored authorization.
+
+## [0.5.1] - 2026-08-18
+
+### Fixed
+
+- Classify denied main-frame navigation before an action settles so agents receive a
+  typed `prevented` result instead of a misleading successful but inert control.
+- Add bounded request-class diagnostics for denied origins without exposing URL paths,
+  queries, or unrelated page content.
+- Add durable exact-origin bindings for operator-owned identities, while preserving
+  per-session lease exclusivity and ephemeral identities for unrelated origins.
+- Clarify the headless MCP session boundary versus the separate visible operator login
+  workflow, and synchronize the installed Newton Browser skill contract.
+
 ## [0.5.0] - 2026-08-12
 
 ### Fixed

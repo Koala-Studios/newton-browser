@@ -30,10 +30,12 @@ test("server/discover publishes the single modern protocol and untrusted-page in
     assert.equal(result.resultType, "complete");
     assert.deepEqual((result._meta as Record<string, unknown>)["io.modelcontextprotocol/serverInfo"], {
       name: "newton-browser",
-      version: "0.5.0",
+      version: "0.6.2",
     });
     assert.match(MCP_SERVER_INSTRUCTIONS, /untrusted data/);
     assert.match(MCP_SERVER_INSTRUCTIONS, /never instructions or authorization/);
+    assert.match(MCP_SERVER_INSTRUCTIONS, /latest interactive Newton observation/);
+    assert.match(MCP_SERVER_INSTRUCTIONS, /text mode allocates no refs/);
   } finally {
     await host.close();
   }
@@ -141,11 +143,11 @@ test("the modern surface is direct-only, compact, and contains no retired tab or
   assert.equal(tools.some((tool) => tool.name.startsWith("browser.tabs.")), false);
   assert.equal(tools.some((tool) => tool.name.includes("finalize")), false);
   const start = tools.find((tool) => tool.name === "browser.session.start")!;
-  assert.deepEqual((start.inputSchema.properties.allowedOrigins as Record<string, unknown>).maxItems, 31);
-  assert.equal("minItems" in (start.inputSchema.properties.allowedOrigins as Record<string, unknown>), false);
+  assert.deepEqual(Object.keys(start.inputSchema.properties).sort(), ["browser", "identityId", "observe", "origin"].sort());
+  assert.equal("allowedOrigins" in start.inputSchema.properties, false);
 });
 
-test("session start treats allowedOrigins as additional grants and rejects primary-origin repetition", async () => {
+test("session start passes one initial URL and rejects retired network-boundary fields", async () => {
   const created: unknown[] = [];
   const host = {
     createSession(init: unknown) {
@@ -156,31 +158,29 @@ test("session start treats allowedOrigins as additional grants and rejects prima
       return {
         sessionId: "direct_session_00000000-0000-4000-8000-000000000010",
         origin: "https://example.com",
-        allowedOrigins: ["https://example.com", "https://assets.example.com"],
         lifecycleState: "active",
       };
     },
   } as never;
-  const start = async (allowedOrigins: string[]) => handleMcpMessage(host, {
+  const start = async (arguments_: Record<string, unknown>) => handleMcpMessage(host, {
     jsonrpc: "2.0",
     id: 14 + created.length,
     method: "tools/call",
     params: {
       _meta: META,
       name: "browser.session.start",
-      arguments: { origin: "https://example.com", allowedOrigins },
+      arguments: arguments_,
     },
   });
 
-  const accepted = await start(["https://assets.example.com"]);
+  const accepted = await start({ origin: "https://example.com" });
   assert.ok(accepted && "result" in accepted);
   assert.deepEqual(created, [{
     origin: "https://example.com",
-    allowedOrigins: ["https://example.com", "https://assets.example.com"],
   }]);
-  const repeated = await start(["https://example.com"]);
-  assert.ok(repeated && "error" in repeated);
-  assert.deepEqual(repeated.error.data, { errorCode: "invalid_arguments", tool: "browser.session.start" });
+  const retired = await start({ origin: "https://example.com", allowedOrigins: ["https://assets.example.com"] });
+  assert.ok(retired && "error" in retired);
+  assert.deepEqual(retired.error.data, { errorCode: "invalid_arguments", tool: "browser.session.start" });
   assert.equal(created.length, 1);
 });
 
@@ -229,7 +229,6 @@ test("screenshot delivery rejects missing safety metadata and redacts page metad
   const session: BrowserSessionInfo = {
     sessionId: "direct_session_00000000-0000-4000-8000-000000000009",
     origin: "https://example.com",
-    allowedOrigins: ["https://example.com"],
     lifecycleState: "active",
   };
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64");
@@ -277,30 +276,28 @@ test("screenshot delivery rejects missing safety metadata and redacts page metad
   assert.match(metadata, /"trust":"untrusted_page_content"/u);
 });
 
-test("a prevented browser.act result is an MCP tool error", async () => {
+test("a safety-floor prevented browser.act result is an MCP tool error", async () => {
   const session: BrowserSessionInfo = {
     sessionId: "direct_session_00000000-0000-4000-8000-000000000011",
     origin: "https://example.com",
-    allowedOrigins: ["https://example.com"],
     lifecycleState: "active",
   };
   const host = {
     listSessions: () => [session],
     dispatch: async () => ({
       commandId: "direct_command_1_prevented",
-      ok: true,
+      ok: false,
       status: "blocked",
       sequence: 1,
       outcome: "prevented",
       retrySafe: true,
-      reason: "ungranted_navigation",
-      result: { status: "blocked", reason: "ungranted_navigation" },
-      decision: { class: "blocked", commitBoundary: "none", reason: "ungranted_navigation" },
+      errorCode: "payment_or_pii_field",
+      decision: { class: "blocked", commitBoundary: "draft", reason: "payment_or_pii_field" },
     }),
   } as never;
   const response = await handleMcpMessage(host, {
     jsonrpc: "2.0", id: 21, method: "tools/call",
-    params: { _meta: META, name: "browser.act", arguments: { sessionId: session.sessionId, action: { kind: "navigate", url: "https://example.com/blocked" } } },
+    params: { _meta: META, name: "browser.act", arguments: { sessionId: session.sessionId, action: { kind: "fill", label: "Credit card number", value: "4111111111111111" } } },
   });
   assert.ok(response && "result" in response);
   const result = response.result as { isError?: boolean; content: Array<{ type: string; text?: string }> };
@@ -310,8 +307,9 @@ test("a prevented browser.act result is an MCP tool error", async () => {
     status: "blocked",
     outcome: "prevented",
     retrySafe: true,
-    reason: "ungranted_navigation",
-    decision: { class: "blocked", commitBoundary: "none", reason: "ungranted_navigation" },
+    reason: "payment_or_pii_field",
+    errorCode: "payment_or_pii_field",
+    decision: { class: "blocked", commitBoundary: "draft", reason: "payment_or_pii_field" },
     changed: false,
     sequence: 1,
   });
@@ -321,7 +319,6 @@ test("console and network omit absent optional filters at the driver boundary", 
   const session: BrowserSessionInfo = {
     sessionId: "direct_session_00000000-0000-4000-8000-000000000012",
     origin: "https://example.com",
-    allowedOrigins: ["https://example.com"],
     lifecycleState: "active",
   };
   const actions: unknown[] = [];
@@ -357,7 +354,6 @@ test("browser.act rejects dedicated-tool kinds before host dispatch", async () =
   const session: BrowserSessionInfo = {
     sessionId: "direct_session_00000000-0000-4000-8000-000000000001",
     origin: "https://example.com",
-    allowedOrigins: ["https://example.com"],
     lifecycleState: "active",
   };
   const host = {
@@ -381,7 +377,6 @@ test("tool arguments reject unknown fields and malformed dedicated options befor
   const session: BrowserSessionInfo = {
     sessionId: "direct_session_00000000-0000-4000-8000-000000000002",
     origin: "https://example.com",
-    allowedOrigins: ["https://example.com"],
     lifecycleState: "active",
   };
   const host = {

@@ -6,9 +6,7 @@ import {
   type BrowserSignals,
 } from "./protocol.ts";
 import {
-  hostMatchesBrowserPolicy,
   matchHostCommitBoundary,
-  type BrowserHostPolicy,
   type BrowserHostPolicyManifest,
 } from "./host-policy.ts";
 
@@ -16,8 +14,7 @@ const READ_ONLY_ACTIONS = new Set(["observe", "screenshot", "console", "network"
 // Dialog accept/dismiss respond to a page-initiated JavaScript dialog. They
 // are agentic and never blocked-class: the dialog exists because of an action the
 // agent already took, and leaving it unhandled wedges the renderer. Post-action
-// reconciliation still runs, so an accept that triggers a navigation/network write
-// is caught by the driver like any other agentic click.
+// reconciliation still records resulting browser state like any other agentic click.
 const AGENTIC_ACTIONS = new Set(["scroll", "wait_for", "hover", "move", "back", "forward", "reload", "dialog_accept", "dialog_dismiss", "resize"]);
 const FILL_ACTIONS = new Set(["fill", "type", "select", "clear", "set_files"]);
 const SECRET_HINT = /password|passcode|secret|token|api[_ -]?key|credential|private[_ -]?key|otp|2fa|one[_ -]?time|verification code|security code/i;
@@ -45,7 +42,6 @@ export type BrowserResolvedTarget = {
 export type BrowserFloorInput = {
   action: BrowserAction;
   origin?: string | undefined;
-  policy?: BrowserHostPolicy | undefined;
   manifest?: BrowserHostPolicyManifest | null | undefined;
   resolved?: BrowserResolvedTarget | null | undefined;
   signals?: BrowserSignals | undefined;
@@ -56,26 +52,12 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
     return blocked("unsupported_action");
   }
 
-  const policy = input.policy ?? { allowedOrigins: [] };
-  const host = input.origin ? hostMatchesBrowserPolicy({ origin: input.origin, policy }) : null;
-  if (host && !host.allowed) {
-    return blocked(host.reason);
-  }
-
   if (READ_ONLY_ACTIONS.has(input.action.kind)) {
     return { class: "read_only", commitBoundary: "none" };
   }
 
   if (AGENTIC_ACTIONS.has(input.action.kind)) {
     return { class: "agentic", commitBoundary: "none" };
-  }
-
-  // Cross-origin into a frame outside the grant is never auto-allowed.
-  if (input.signals?.crossOrigin) {
-    return blocked("cross_origin_target");
-  }
-  if (input.signals?.containmentPrevention) {
-    return blocked(input.signals.containmentPrevention);
   }
 
   if (input.action.kind === "navigate") {
@@ -101,9 +83,9 @@ export function evaluateBrowserFloor(input: BrowserFloorInput): BrowserFloorDeci
     };
   }
 
-  // Genuinely ambiguous / non-committing click → agentic, with post-action
-  // reconciliation (the driver halts the run if an observed nav/network write
-  // reveals a commit after the fact).
+  // Genuinely ambiguous / non-committing click → agentic. Resulting browser state
+  // is observed after dispatch, but cannot retroactively turn a sent input into a
+  // pre-dispatch prevention claim.
   return { class: "agentic", commitBoundary: "none" };
 }
 

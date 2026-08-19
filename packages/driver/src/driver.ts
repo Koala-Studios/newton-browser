@@ -10,7 +10,6 @@
 // every action is funneled through the typed contract.
 
 import { TargetRegistry, TARGET_REGISTRY_ERROR_CODES } from "./target-registry.js";
-import { compileOriginGrant, decidePausedRequest, decidePausedTarget } from "./origin-containment.js";
 import { DialogTracker, InputDispatcher } from "./input-dispatcher.js";
 import { RendererLiveness } from "./renderer-liveness.js";
 import { maskCapturedPng } from "./raster-mask.js";
@@ -34,7 +33,6 @@ import type {
   DriverObservationNode,
   DriverRecord,
   FullObservation,
-  HeldTarget,
   NetworkEntry,
   NormalizedTarget,
   NormalizedWait,
@@ -79,7 +77,6 @@ const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays p
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
 const MASK_REGION_PADDING_CSS = 3;
 const INITIAL_NAVIGATION_COMMIT_CAP = 32;
-const RELATED_LAUNCH_TICKET_CAP = 64;
 const CHILD_TARGET_FILTER = [
   { type: "iframe", exclude: false },
   { type: "worker", exclude: false },
@@ -93,8 +90,8 @@ const OWNED_BROWSER_TARGET_FILTER = [
 ];
 const PRESERVED_ATTACH_FAILURE_CODES = new Set<string>([
   ...Object.values(TARGET_REGISTRY_ERROR_CODES),
-  "origin_containment_unavailable",
-  "containment_fence_failed",
+  "browser_control_unavailable",
+  "browser_control_failed",
   "debugger_conflict",
   "shutdown_detach_failed",
   "renderer_unresponsive",
@@ -127,27 +124,10 @@ type InitialNavigationState = {
   commits: InitialNavigationCommit[];
   commitOverflow: boolean;
   commitResolved: boolean;
-  prevention: { frameId: string | null; reason: string } | null;
   resolve(value: InitialNavigationCommit): void;
   reject(error: unknown): void;
   promise: Promise<InitialNavigationCommit>;
   timer: ReturnType<typeof setTimeout>;
-};
-type RelatedLaunchPhase = "paused_setup" | "paused_unknown" | "waiting_document" | "closing" | "settled";
-type RelatedLaunchTicket = {
-  targetId: string;
-  sessionId: string;
-  browserSessionId: string;
-  generation: number;
-  commandToken: number | null;
-  phase: RelatedLaunchPhase;
-  documentContinued: boolean;
-  prevention: string | null;
-  closed: boolean;
-  resolve(): void;
-  reject(error: unknown): void;
-  promise: Promise<void>;
-  timer: ReturnType<typeof setTimeout> | null;
 };
 
 export function createNewtonBrowserDriver(options: BrowserDriverOptions) {
@@ -173,16 +153,13 @@ class NewtonBrowserDriver {
   networkBuffer: Map<string, NetworkEntry>;
   networkDropped: number;
   networkInFlight: Set<string>;
-  allowedOrigins: string[];
   targetRegistry: TargetRegistry;
   mainTargetId: string | null;
   mainFrameId: string | null;
   mainLoaderId: string | null;
   actionabilityFailure: string | null;
   framedPointProof: FramedPointProof | null;
-  containment: ReturnType<typeof compileOriginGrant> | null;
-  containmentReady: boolean;
-  heldTargets: Map<string, HeldTarget>;
+  browserControlReady: boolean;
   inputDispatcher: InputDispatcher;
   dialogTracker: DialogTracker;
   rendererLiveness: RendererLiveness;
@@ -194,28 +171,14 @@ class NewtonBrowserDriver {
   protocolEventTail: Promise<void>;
   protocolGeneration: number;
   protocolEventFailure: unknown | null;
-  commandContainmentPrevention: string | null;
-  commandContainmentActive: boolean;
   activeCommandKind: DriverAction["kind"] | null;
   initialNavigation: InitialNavigationState | null;
-  relatedLaunchTickets: Map<string, RelatedLaunchTicket>;
-  proxyGuardedRelatedPages: Map<string, { sessionId: string; browserSessionId: string }>;
-  pendingOwnedChildTargets: Map<string, { source: CdpRecord; params: CdpRecord; generation: number }>;
-  processingOwnedChildTargets: boolean;
-  relatedCommandFailures: Map<number, DriverError>;
-  commandTokenCounter: number;
-  activeCommandToken: number | null;
   closing: boolean;
-  unresolvedRelatedClose: { targetId: string; browserSessionId: string } | null;
-  unresolvedRelatedCloseOverflow: boolean;
   relationshipCleanupComplete: boolean;
   debuggerPort: DebuggerPort;
   debuggerEventUnsubscribe: (() => void) | null;
 
   constructor(options: BrowserDriverOptions) {
-    if (!Array.isArray(options.allowedOrigins) || options.allowedOrigins.length === 0) {
-      throw typedDriverError("origin_grant_required");
-    }
     this.attached = false;
     this.refIndex = new Map(); // ref -> immutable target route
     this.devicePixelRatio = 1;
@@ -244,17 +207,13 @@ class NewtonBrowserDriver {
     this.networkBuffer = new Map(); // requestId -> entry (insertion-ordered)
     this.networkDropped = 0;
     this.networkInFlight = new Set();
-    // Session origin grant, set by the controller. Gates network-body fetches.
-    this.allowedOrigins = [...options.allowedOrigins];
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
     this.mainFrameId = null;
     this.mainLoaderId = null;
     this.actionabilityFailure = null;
     this.framedPointProof = null;
-    this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
-    this.containmentReady = false;
-    this.heldTargets = new Map();
+    this.browserControlReady = false;
     this.inputDispatcher = new InputDispatcher((method: string, params: CdpRecord, route: CdpRoute) => this.cdp(method, params, route));
     this.dialogTracker = new DialogTracker();
     this.rendererLiveness = new RendererLiveness();
@@ -267,20 +226,9 @@ class NewtonBrowserDriver {
     this.protocolEventTail = Promise.resolve();
     this.protocolGeneration = 0;
     this.protocolEventFailure = null;
-    this.commandContainmentPrevention = null;
-    this.commandContainmentActive = false;
     this.activeCommandKind = null;
     this.initialNavigation = null;
-    this.relatedLaunchTickets = new Map();
-    this.proxyGuardedRelatedPages = new Map();
-    this.pendingOwnedChildTargets = new Map();
-    this.processingOwnedChildTargets = false;
-    this.relatedCommandFailures = new Map();
-    this.commandTokenCounter = 0;
-    this.activeCommandToken = null;
     this.closing = false;
-    this.unresolvedRelatedClose = null;
-    this.unresolvedRelatedCloseOverflow = false;
     this.relationshipCleanupComplete = false;
     this.debuggerPort = options.debuggerPort;
     this.debuggerEventUnsubscribe = null;
@@ -288,7 +236,6 @@ class NewtonBrowserDriver {
 
   async attach(): Promise<void> {
     if (this.attached) return;
-    this.containment = compileOriginGrant(this.allowedOrigins[0], this.allowedOrigins.slice(1));
     this.protocolGeneration += 1;
     try {
       await attachStage("root_debugger_attach_failed", async () => {
@@ -311,17 +258,13 @@ class NewtonBrowserDriver {
         for (const domain of CDP_DOMAINS) {
           await this.cdp(`${domain}.enable`, {});
         }
-        await this.installContainment({});
-        // The isolated process may remain in the background. Focus emulation
-        // keeps trusted input delivery deterministic without activating it.
-        await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });
       });
     // Child frames / popups attach to the same session (§7.5).
       const browserAttachResult = await attachStage("browser_control_attach_failed", () => this.cdp("Target.attachToBrowserTarget", {}));
       const browserSessionId = typeof browserAttachResult.sessionId === "string" && browserAttachResult.sessionId
         ? browserAttachResult.sessionId
         : null;
-      if (!browserSessionId || !this.mainTargetId) throw typedDriverError("origin_containment_unavailable");
+      if (!browserSessionId || !this.mainTargetId) throw typedDriverError("browser_control_unavailable");
       this.browserControlSessionId = browserSessionId;
       await attachStage("browser_page_autoattach_failed", () => this.cdp("Target.setAutoAttach", {
           autoAttach: true,
@@ -342,7 +285,7 @@ class NewtonBrowserDriver {
       if (this.sessionViewport) {
         await this.cdp("Emulation.setDeviceMetricsOverride", { width: this.sessionViewport.width, height: this.sessionViewport.height, deviceScaleFactor: 1, mobile: false }).catch(() => {});
       }
-      this.containmentReady = true;
+      this.browserControlReady = true;
       this.reconcileRenderer("root");
     } catch (error) {
       await this.detach();
@@ -353,17 +296,15 @@ class NewtonBrowserDriver {
   async detach(): Promise<void> {
     if (!this.attached) return;
     this.closing = true;
-    this.containmentReady = false;
+    this.browserControlReady = false;
     this.rejectInitialNavigation(typedDriverError("debugger_conflict"));
     if (!this.relationshipCleanupComplete) {
       const browserControlSessionId = this.browserControlSessionId;
       try {
         await this.drainProtocolEventQueue();
-        await this.closeOutstandingRelatedLaunches();
         if (browserControlSessionId && this.mainTargetId) {
           await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId }, { sessionId: browserControlSessionId });
           await this.drainProtocolEventQueue();
-          await this.closeOutstandingRelatedLaunches();
           if (this.browserPageAutoAttachActive) {
             await this.cdp("Target.setAutoAttach", {
               autoAttach: false,
@@ -372,11 +313,10 @@ class NewtonBrowserDriver {
             }, { sessionId: browserControlSessionId });
           }
           await this.drainProtocolEventQueue();
-          await this.closeOutstandingRelatedLaunches();
           await this.cdp("Target.detachFromTarget", { sessionId: browserControlSessionId });
         }
       } catch {
-        throw this.containmentFenceFailure("related_cleanup_failed");
+        throw this.browserControlFailure("browser_control_cleanup_failed");
       }
       this.relationshipCleanupComplete = true;
       this.protocolGeneration += 1;
@@ -384,26 +324,20 @@ class NewtonBrowserDriver {
       this.browserRootSessionId = null;
       this.browserPageAutoAttachActive = false;
     }
-    await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
     try {
       await this.debuggerPort.detach();
     } catch {
       throw typedDriverError("shutdown_detach_failed");
     }
     this.unsubscribeDebuggerEvents();
-    this.commandContainmentPrevention = null;
-    this.commandContainmentActive = false;
     this.activeCommandKind = null;
-    this.activeCommandToken = null;
     this.attached = false;
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
     this.mainFrameId = null;
     this.mainLoaderId = null;
-    this.containment = null;
-    this.containmentReady = false;
-    this.heldTargets.clear();
+    this.browserControlReady = false;
     this.networkInFlight.clear();
     this.pendingDialogs.clear();
     this.pendingDialog = null;
@@ -411,15 +345,7 @@ class NewtonBrowserDriver {
     this.dialogTracker = new DialogTracker();
     this.protocolEventTail = Promise.resolve();
     this.protocolEventFailure = null;
-    for (const ticket of this.relatedLaunchTickets.values()) if (ticket.timer !== null) clearTimeout(ticket.timer);
-    this.relatedLaunchTickets.clear();
-    this.proxyGuardedRelatedPages.clear();
-    this.pendingOwnedChildTargets.clear();
-    this.processingOwnedChildTargets = false;
-    this.relatedCommandFailures.clear();
     this.closing = false;
-    this.unresolvedRelatedClose = null;
-    this.unresolvedRelatedCloseOverflow = false;
     this.relationshipCleanupComplete = false;
     this.browserPageAutoAttachActive = false;
     this.rendererLiveness.remove("root", "driver_detached");
@@ -437,31 +363,18 @@ class NewtonBrowserDriver {
     this.browserControlSessionId = null;
     this.browserRootSessionId = null;
     this.browserPageAutoAttachActive = false;
-    this.commandContainmentPrevention = null;
-    this.commandContainmentActive = false;
     this.activeCommandKind = null;
     this.rejectInitialNavigation(typedDriverError("debugger_conflict"));
     this.protocolEventTail = Promise.resolve();
     this.protocolEventFailure = null;
-    for (const ticket of this.relatedLaunchTickets.values()) if (ticket.timer !== null) clearTimeout(ticket.timer);
-    this.relatedLaunchTickets.clear();
-    this.proxyGuardedRelatedPages.clear();
-    this.pendingOwnedChildTargets.clear();
-    this.processingOwnedChildTargets = false;
-    this.relatedCommandFailures.clear();
-    this.activeCommandToken = null;
     this.closing = false;
-    this.unresolvedRelatedClose = null;
-    this.unresolvedRelatedCloseOverflow = false;
     this.relationshipCleanupComplete = false;
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
     this.mainFrameId = null;
     this.mainLoaderId = null;
-    this.containment = null;
-    this.containmentReady = false;
-    this.heldTargets.clear();
+    this.browserControlReady = false;
     this.networkInFlight.clear();
     this.pendingDialogs.clear();
     this.pendingDialog = null;
@@ -548,7 +461,7 @@ class NewtonBrowserDriver {
     const generation = this.protocolGeneration;
     const work = this.protocolEventTail.then(async () => {
       if (generation !== this.protocolGeneration) return;
-      await this.recordTargetEventNow(source, method, params, generation);
+      await this.recordTargetEventNow(source, method, params);
       if (!authenticatedAtReceipt && this.isAuthenticatedEventSource(source)) {
         this.recordDebuggerSideEffects(source, method, params);
       }
@@ -604,7 +517,8 @@ class NewtonBrowserDriver {
         if (typeof oldest === "string") this.networkInFlight.delete(oldest);
       }
       this.networkInFlight.add(String(params.requestId));
-      this.pushNetwork(params.requestId, { requestId: params.requestId, method: String(params.request?.method ?? "GET"), url: String(params.request?.url ?? ""), resourceType: params.type, at: new Date().toISOString() });
+      const networkEntry: NetworkEntry = { requestId: params.requestId, method: String(params.request?.method ?? "GET"), url: String(params.request?.url ?? ""), resourceType: params.type, at: new Date().toISOString() };
+      this.pushNetwork(params.requestId, networkEntry);
     }
     if (method === "Network.responseReceived" && params?.requestId) {
       this.updateNetwork(params.requestId, { status: params.response?.status, mimeType: params.response?.mimeType, resourceType: params.type });
@@ -619,9 +533,6 @@ class NewtonBrowserDriver {
     }
     const signals = this.activeActionSignals;
     if (!signals) return;
-    if (method === "Network.requestWillBeSent" && isNetworkWrite(params?.request)) {
-      signals.networkWrite = true;
-    }
     if (method === "Page.frameNavigated" && params?.frame && !params.frame.parentId) {
       signals.navigation = true;
     }
@@ -693,7 +604,7 @@ class NewtonBrowserDriver {
     const response = await this.cdp("Target.getTargetInfo", {}).catch(() => null);
     const info = response?.targetInfo;
     const targetId = typeof info?.targetId === "string" && info.targetId ? info.targetId : null;
-    if (!targetId) throw typedDriverError("origin_containment_unavailable");
+    if (!targetId) throw typedDriverError("browser_control_unavailable");
     this.mainTargetId = targetId;
     this.targetRegistry.registerTarget({
       targetId,
@@ -707,7 +618,7 @@ class NewtonBrowserDriver {
     const generation = this.protocolGeneration;
     const work = this.protocolEventTail.then(async () => {
       if (generation !== this.protocolGeneration) return;
-      await this.recordTargetEventNow(source, method, params, generation);
+      await this.recordTargetEventNow(source, method, params);
     });
     this.protocolEventTail = work.catch((error: unknown) => {
       if (generation === this.protocolGeneration) this.protocolEventFailure = error;
@@ -715,7 +626,7 @@ class NewtonBrowserDriver {
     return work;
   }
 
-  async recordTargetEventNow(source: CdpRecord, method: string, params: CdpRecord, generation: number): Promise<void> {
+  async recordTargetEventNow(source: CdpRecord, method: string, params: CdpRecord): Promise<void> {
     const sourceSessionId = typeof source?.sessionId === "string" ? source.sessionId : null;
     if (method !== "Target.attachedToTarget" && sourceSessionId && !this.isAuthenticatedEventSource(source)) return;
     if (method === "Target.attachedToTarget" && params?.targetInfo && typeof params.sessionId === "string") {
@@ -734,28 +645,6 @@ class NewtonBrowserDriver {
       }
       if (type === "page" && !fromBrowserControl) return;
       if (fromBrowserControl && type !== "page") return;
-      if (type === "worker" && params.waitingForDebugger !== true) {
-        // The owned runtime's launch-time proxy is already the pre-network
-        // boundary. Workers are not exposed as actionable/observable targets,
-        // and retrofitting domains after an unpaused worker starts races its
-        // short lifecycle without adding agent capability.
-        return;
-      }
-      if (fromBrowserControl && params.waitingForDebugger !== true) {
-        await this.trackProxyGuardedRelatedPage(info, params.sessionId, sourceSessionId!, generation);
-        return;
-      }
-      if (!fromBrowserControl
-        && params.waitingForDebugger !== true
-        && this.activeCommandToken !== null
-        && !this.processingOwnedChildTargets) {
-        if (!this.pendingOwnedChildTargets.has(params.sessionId)
-          && this.pendingOwnedChildTargets.size >= RELATED_LAUNCH_TICKET_CAP) {
-          throw this.containmentFenceFailure("owned_child_target_capacity_exceeded");
-        }
-        this.pendingOwnedChildTargets.set(params.sessionId, { source, params, generation });
-        return;
-      }
       if (sourceSessionId && !fromBrowserControl && !this.targetRegistry.targetForSession(sourceSessionId)) return;
       const sourceTarget = sourceSessionId ? this.targetRegistry.targetForSession(sourceSessionId) : null;
       const parentTargetId = type === "page"
@@ -764,43 +653,7 @@ class NewtonBrowserDriver {
       const hostFrameId = type === "iframe"
         ? (typeof info.openerFrameId === "string" ? info.openerFrameId : targetId)
         : null;
-      const commandScopedWorker = type === "worker"
-        && this.activeCommandToken !== null
-        && this.browserControlSessionId !== null;
-      const relatedTicket = fromBrowserControl || commandScopedWorker
-        ? await this.createRelatedLaunchTicket(
-            targetId,
-            params.sessionId,
-            fromBrowserControl ? sourceSessionId! : this.browserControlSessionId!,
-            generation,
-            fromBrowserControl
-              ? (typeof info.openerId === "string" ? info.openerId : null)
-              : parentTargetId,
-          )
-        : null;
-      let relatedSetupStage: "admission" | "registry" | "autoattach" | "domains" | "fetch" | "resume" = "admission";
       try {
-        if (relatedTicket && this.closing) {
-          await this.closeRelatedLaunchTicket(relatedTicket);
-          this.settleRelatedLaunchTicket(relatedTicket, null);
-          return;
-        }
-        const parent = parentTargetId
-          ? this.targetRegistry.listObservationRoutes().find((candidate) => candidate.targetId === parentTargetId)
-          : null;
-        const targetDecision = !safeOrigin(info.url)
-          ? { action: "hold" as const, reason: "target_origin_pending", granted: false }
-          : decidePausedTarget({ url: info.url, initiatorUrl: parent?.origin }, this.containment!);
-        if (targetDecision.action === "block" && relatedTicket) {
-          await this.closeRelatedLaunchTicket(relatedTicket);
-          this.settleRelatedLaunchTicket(relatedTicket, "ungranted_target");
-          return;
-        }
-        if (targetDecision.action === "block" && type === "worker" && this.browserControlSessionId) {
-          await this.closeUntrackedRelatedTarget(targetId, this.browserControlSessionId, "worker_close_not_acknowledged");
-          return;
-        }
-        relatedSetupStage = "registry";
         this.targetRegistry.registerTarget({
           targetId,
           type,
@@ -809,62 +662,23 @@ class NewtonBrowserDriver {
           sessionId: params.sessionId,
           origin: safeOrigin(info.url),
         });
-        relatedSetupStage = "autoattach";
         await this.cdp(
           "Target.setAutoAttach",
-          { autoAttach: true, flatten: true, waitForDebuggerOnStart: true, filter: CHILD_TARGET_FILTER },
+          { autoAttach: true, flatten: true, waitForDebuggerOnStart: false, filter: CHILD_TARGET_FILTER },
           { sessionId: params.sessionId },
         );
         const domains = type === "worker"
           ? ["Runtime", "Network", "Log"]
-          : relatedTicket && type === "page" ? ["Runtime"] : CDP_DOMAINS;
-        relatedSetupStage = "domains";
+          : type === "page" ? ["Page", "Runtime", "Network", "Log"] : CDP_DOMAINS;
         for (const domain of domains) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
-        const route = { sessionId: params.sessionId };
-        relatedSetupStage = "fetch";
-        await this.installContainment(route);
-        if (relatedTicket && isInheritedBlankTarget(info.url)) {
-          // Chromium commonly reports a newly opened page as about:blank while
-          // the triggering Input.dispatchMouseEvent is still in flight. Closing
-          // that paused target can deadlock the input acknowledgement. Resume it
-          // only after recursive target controls and request-stage Fetch are
-          // installed, then keep the originating command open until its first
-          // Document is either granted+committed or denied+closed with ACK.
-          relatedSetupStage = "resume";
-          await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
-          relatedTicket.phase = "waiting_document";
-          this.armRelatedLaunchDeadline(relatedTicket);
-          return;
-        }
-        if (targetDecision.action === "resume") {
-          this.heldTargets.delete(targetId);
-          if (params.waitingForDebugger === true) {
-            relatedSetupStage = "resume";
-            await this.cdp("Runtime.runIfWaitingForDebugger", {}, route);
-          }
-          if (relatedTicket) {
-            if (type === "worker") this.settleRelatedLaunchTicket(relatedTicket, null);
-            else {
-              relatedTicket.phase = "waiting_document";
-              this.armRelatedLaunchDeadline(relatedTicket);
-            }
-          }
-        } else {
-          this.heldTargets.set(targetId, { targetId, sessionId: params.sessionId, type, reason: targetDecision.reason });
-          if (relatedTicket) {
-            relatedTicket.phase = "paused_unknown";
-            this.armRelatedLaunchDeadline(relatedTicket);
-          }
+        if (params.waitingForDebugger === true) {
+          await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: params.sessionId });
         }
       } catch (error) {
-        if (params.waitingForDebugger !== true && !relatedTicket && this.browserControlSessionId) {
-          // An unpaused OOPIF/worker can disappear while its recursive domains
-          // are being installed (common on production pages with short-lived ad
-          // and analytics frames). The launch-time proxy remains the preventive
-          // network boundary for the owned process. Retire this unactionable
-          // route and detach its exact transient session instead of poisoning the
-          // main page's containment fence. A later attachment is admitted as a
-          // fresh route and must complete the normal setup before observation.
+        if (params.waitingForDebugger !== true && this.browserControlSessionId) {
+          // Short-lived frames and workers can disappear while their optional
+          // observation domains are enabled. Retire the transient route without
+          // affecting the main page; a later attachment is a fresh route.
           try {
             await this.cdp(
               "Target.detachFromTarget",
@@ -875,129 +689,21 @@ class NewtonBrowserDriver {
           try { this.targetRegistry.detachTarget(targetId, params.sessionId); } catch { /* already retired */ }
           return;
         }
-        if (!relatedTicket || relatedTicket.phase === "settled") throw error;
-        if (relatedTicket.phase !== "closing") {
-          try {
-            await this.closeRelatedLaunchTicket(relatedTicket);
-            relatedTicket.phase = "settled";
-          } catch {
-            throw this.failRelatedLaunchTicket(relatedTicket, "related_setup_close_failed");
-          }
-        }
-        throw this.failRelatedLaunchTicket(relatedTicket, `related_target_setup_failed_${relatedSetupStage}`);
+        throw error;
       }
       return;
     }
     if (method === "Target.targetInfoChanged" && params?.targetInfo?.targetId) {
-      const proxyGuarded = sourceSessionId === this.browserControlSessionId
-        ? this.proxyGuardedRelatedPages.get(params.targetInfo.targetId)
-        : undefined;
-      if (proxyGuarded) {
-        const guardedOrigin = safeOrigin(params.targetInfo.url);
-        if (guardedOrigin) {
-          const guardedDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment!);
-          if (guardedDecision.action === "block") {
-            await this.closeUntrackedRelatedTarget(
-              params.targetInfo.targetId,
-              proxyGuarded.browserSessionId,
-              "proxy_guarded_page_close_failed",
-            );
-            this.proxyGuardedRelatedPages.delete(params.targetInfo.targetId);
-            this.recordAuthoritativePrevention("ungranted_target", generation);
-          }
-        }
-        return;
-      }
-      const relatedPageTicket = sourceSessionId === this.browserControlSessionId
-        ? this.relatedLaunchTickets.get(params.targetInfo.targetId)
-        : undefined;
-      if (relatedPageTicket?.phase === "waiting_document" && relatedPageTicket.documentContinued) {
-        const committedOrigin = safeOrigin(params.targetInfo.url);
-        if (committedOrigin && this.containment?.contains(params.targetInfo.url)) {
-          this.settleRelatedLaunchTicket(relatedPageTicket, null);
-          return;
-        }
-      }
-      const held = this.heldTargets.get(params.targetInfo.targetId);
-      if (!held) return;
-      if (held.type === "page" && sourceSessionId !== this.browserControlSessionId) return;
-      const ticket = this.relatedLaunchTickets.get(held.targetId);
-      const targetDecision = decidePausedTarget({ url: params.targetInfo.url }, this.containment!);
-      if (targetDecision.action === "resume") {
-        this.heldTargets.delete(held.targetId);
-        if (ticket) {
-          await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: ticket.sessionId });
-          ticket.phase = "waiting_document";
-          this.armRelatedLaunchDeadline(ticket);
-        }
-      } else if (targetDecision.action === "block" && held.type === "page" && this.browserControlSessionId) {
-        if (!ticket) throw this.containmentFenceFailure("related_ticket_missing");
-        await this.closeRelatedLaunchTicket(ticket);
-        this.heldTargets.delete(held.targetId);
-        this.settleRelatedLaunchTicket(ticket, "ungranted_target");
-      }
-      return;
-    }
-    if (method === "Fetch.requestPaused" && typeof params?.requestId === "string") {
-      if (sourceSessionId && !this.targetRegistry.targetForSession(sourceSessionId)) return;
-      const decision = decidePausedRequest(params, this.containment!);
-      const route = sourceSessionId ? { sessionId: sourceSessionId } : {};
-      const relatedTicket = sourceSessionId ? this.relatedLaunchTicketForSession(sourceSessionId) : undefined;
-      if (decision.action === "fail") {
-        if (params.resourceType === "Document" && typeof params.frameId === "string" && params.frameId !== this.mainFrameId) {
-          const sourceTargetId = sourceSessionId
-            ? this.targetRegistry.targetForSession(sourceSessionId)?.targetId
-            : this.mainTargetId;
-          const blockedOrigin = safeOrigin(params.request?.url);
-          if (sourceTargetId && blockedOrigin) {
-            try {
-              this.targetRegistry.recordBlockedFrameOrigin({
-                frameId: params.frameId,
-                sourceTargetId,
-                sourceSessionId,
-                origin: blockedOrigin,
-              });
-            } catch {
-              // Provenance is optional metadata. Containment remains fail-closed
-              // and the request is still failed when registry identity rejects it.
-            }
-          }
-        }
-        try {
-          await this.cdp("Fetch.failRequest", { requestId: params.requestId, errorReason: "BlockedByClient" }, route);
-        } catch (error) {
-          // A production page can cancel a paused request before CDP acknowledges
-          // fail/continue. The owned runtime's launch-time proxy remains the
-          // authoritative origin boundary, so a vanished request cannot escape
-          // the grant. Do not author a driver prevention without an ACK.
-          return;
-        }
-        this.noteInitialNavigationPrevention(sourceSessionId, params, decision.reason);
-        if (relatedTicket && params.resourceType === "Document") {
-          const launchPending = relatedTicket.phase !== "settled";
-          await this.closeRelatedLaunchTicket(relatedTicket);
-          if (launchPending) this.settleRelatedLaunchTicket(relatedTicket, decision.reason);
-          else this.relatedLaunchTickets.delete(relatedTicket.targetId);
-        } else if (!relatedTicket && this.activeCommandKind === "navigate"
-          && params.resourceType === "Document"
-          && typeof params.frameId === "string"
-          && typeof this.mainFrameId === "string"
-          && params.frameId === this.mainFrameId) {
-          // Fetch interception proves prevention, but it does not prove that an
-          // arbitrary page-owned request was caused by the temporally overlapping
-          // input command. Attribute only the exact main-frame Document navigation
-          // (or a related-target ticket above). Background requests remain denied
-          // and visible in containment diagnostics without poisoning an unrelated
-          // click, scroll, wait, or observation.
-          this.recordAuthoritativePrevention(decision.reason, generation);
-        }
-      } else {
-        try {
-          await this.cdp("Fetch.continueRequest", { requestId: params.requestId }, route);
-        } catch (error) {
-          return;
-        }
-        if (relatedTicket && params.resourceType === "Document") relatedTicket.documentContinued = true;
+      const existing = this.targetRegistry.targetForSession(sourceSessionId ?? "");
+      if (existing && existing.targetId === params.targetInfo.targetId) {
+        this.targetRegistry.registerTarget({
+          targetId: existing.targetId,
+          type: existing.type,
+          ...(existing.parentTargetId ? { parentTargetId: existing.parentTargetId } : {}),
+          ...(existing.hostFrameId ? { hostFrameId: existing.hostFrameId } : {}),
+          ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
+          origin: safeOrigin(params.targetInfo.url),
+        });
       }
       return;
     }
@@ -1006,8 +712,8 @@ class NewtonBrowserDriver {
         this.browserControlSessionId = null;
         this.browserRootSessionId = null;
         this.browserPageAutoAttachActive = false;
-        this.containmentReady = false;
-        this.protocolEventFailure = typedDriverError("containment_fence_failed");
+        this.browserControlReady = false;
+        this.protocolEventFailure = typedDriverError("browser_control_failed");
         return;
       }
       if (sourceSessionId === this.browserControlSessionId && params?.sessionId === this.browserRootSessionId) {
@@ -1017,25 +723,8 @@ class NewtonBrowserDriver {
       const target = typeof params?.sessionId === "string"
         ? this.targetRegistry.targetForSession(params.sessionId)
         : undefined;
-      const guardedTargetId = typeof params?.sessionId === "string"
-        ? [...this.proxyGuardedRelatedPages.entries()].find(([, guarded]) => guarded.sessionId === params.sessionId)?.[0]
-        : undefined;
-      const targetId = typeof params?.targetId === "string" ? params.targetId : target?.targetId ?? guardedTargetId;
+      const targetId = typeof params?.targetId === "string" ? params.targetId : target?.targetId;
       if (targetId) {
-        this.proxyGuardedRelatedPages.delete(targetId);
-        const relatedTicket = this.relatedLaunchTickets.get(targetId);
-        if (relatedTicket && (typeof params?.sessionId !== "string" || relatedTicket.sessionId === params.sessionId)) {
-          relatedTicket.closed = true;
-          if (relatedTicket.phase !== "settled") {
-            this.failRelatedLaunchTicket(relatedTicket, "related_target_detached_before_commit");
-          } else {
-            this.relatedLaunchTickets.delete(targetId);
-          }
-        }
-        const held = this.heldTargets.get(targetId);
-        if (held && (typeof params?.sessionId !== "string" || held.sessionId === params.sessionId)) {
-          this.heldTargets.delete(targetId);
-        }
         this.targetRegistry.detachTarget(
           targetId,
           typeof params?.sessionId === "string" ? params.sessionId : undefined,
@@ -1056,13 +745,6 @@ class NewtonBrowserDriver {
     }
     if (method !== "Page.frameNavigated" || !params?.frame || typeof params.frame.id !== "string") return;
     const frame = params.frame;
-    if (sourceSessionId && !frame.parentId) {
-      const ticket = [...this.relatedLaunchTickets.values()].find((candidate) => candidate.sessionId === sourceSessionId && candidate.phase === "waiting_document");
-      const committedOrigin = safeOrigin(frame.url);
-      if (ticket && ticket.documentContinued && committedOrigin && this.containment?.contains(frame.url)) {
-        this.settleRelatedLaunchTicket(ticket, null);
-      }
-    }
     if (!frame.parentId && !sourceSessionId) {
       if (!this.mainTargetId) return;
       this.reconcileTopLevelDocument(frame, safeOrigin(frame.url), true);
@@ -1098,197 +780,6 @@ class NewtonBrowserDriver {
     });
   }
 
-  installContainment(route: CdpRoute): Promise<CdpRecord> {
-    return this.cdp("Fetch.enable", {
-      patterns: [{ urlPattern: "*", requestStage: "Request" }],
-      handleAuthRequests: false,
-    }, route);
-  }
-
-  async trackProxyGuardedRelatedPage(
-    info: CdpRecord,
-    sessionId: string,
-    browserSessionId: string,
-    generation: number,
-  ): Promise<void> {
-    const targetId = typeof info.targetId === "string" ? info.targetId : "";
-    if (!targetId) return;
-    if (!this.proxyGuardedRelatedPages.has(targetId) && this.proxyGuardedRelatedPages.size >= RELATED_LAUNCH_TICKET_CAP) {
-      await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "proxy_guarded_page_capacity_close_failed");
-      throw this.containmentFenceFailure("proxy_guarded_page_capacity_exceeded");
-    }
-    const origin = safeOrigin(info.url);
-    if (origin) {
-      const decision = decidePausedTarget({ url: info.url }, this.containment!);
-      if (decision.action === "block") {
-        await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "proxy_guarded_page_close_failed");
-        this.proxyGuardedRelatedPages.delete(targetId);
-        this.recordAuthoritativePrevention("ungranted_target", generation);
-        return;
-      }
-    }
-    this.proxyGuardedRelatedPages.set(targetId, { sessionId, browserSessionId });
-  }
-
-  async flushPendingOwnedChildTargets(): Promise<void> {
-    if (this.processingOwnedChildTargets || this.pendingOwnedChildTargets.size === 0) return;
-    this.processingOwnedChildTargets = true;
-    try {
-      while (this.pendingOwnedChildTargets.size > 0) {
-        const pending = [...this.pendingOwnedChildTargets.values()];
-        this.pendingOwnedChildTargets.clear();
-        for (const entry of pending) {
-          if (entry.generation !== this.protocolGeneration) continue;
-          await this.recordTargetEventNow(entry.source, "Target.attachedToTarget", entry.params, entry.generation);
-        }
-      }
-    } finally {
-      this.processingOwnedChildTargets = false;
-    }
-  }
-
-  async createRelatedLaunchTicket(targetId: string, sessionId: string, browserSessionId: string, generation: number, openerId: string | null): Promise<RelatedLaunchTicket> {
-    if (this.relatedLaunchTickets.size >= RELATED_LAUNCH_TICKET_CAP) {
-      await this.closeUntrackedRelatedTarget(targetId, browserSessionId, "related_ticket_capacity_close_failed");
-      throw this.containmentFenceFailure("related_ticket_capacity_exceeded");
-    }
-    const parentTicket = openerId ? this.relatedLaunchTickets.get(openerId) : undefined;
-    let resolve!: () => void;
-    let reject!: (error: unknown) => void;
-    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
-    promise.catch(() => {});
-    const ticket: RelatedLaunchTicket = {
-      targetId,
-      sessionId,
-      browserSessionId,
-      generation,
-      commandToken: parentTicket?.commandToken ?? this.activeCommandToken ?? null,
-      phase: "paused_setup",
-      documentContinued: false,
-      prevention: null,
-      closed: false,
-      resolve,
-      reject,
-      promise,
-      timer: null,
-    };
-    this.relatedLaunchTickets.set(targetId, ticket);
-    return ticket;
-  }
-
-  relatedLaunchTicketForSession(sessionId: string): RelatedLaunchTicket | undefined {
-    const direct = [...this.relatedLaunchTickets.values()].find((ticket) => ticket.sessionId === sessionId);
-    if (direct) return direct;
-    const ancestor = this.targetRegistry.relatedPageAncestorForSession(sessionId);
-    return ancestor ? this.relatedLaunchTickets.get(ancestor.targetId) : undefined;
-  }
-
-  async closeUntrackedRelatedTarget(targetId: string, browserSessionId: string, detail: string): Promise<void> {
-    try {
-      const closed = await this.cdp("Target.closeTarget", { targetId }, { sessionId: browserSessionId });
-      if (closed.success === true) return;
-    } catch {
-      // Retain exact cleanup identity below.
-    }
-    if (this.unresolvedRelatedClose && (
-      this.unresolvedRelatedClose.targetId !== targetId
-      || this.unresolvedRelatedClose.browserSessionId !== browserSessionId
-    )) {
-      this.unresolvedRelatedCloseOverflow = true;
-    } else {
-      this.unresolvedRelatedClose = { targetId, browserSessionId };
-    }
-    throw this.containmentFenceFailure(detail);
-  }
-
-  async expireRelatedLaunchTicket(ticket: RelatedLaunchTicket): Promise<void> {
-    if (ticket.phase === "settled" || this.relatedLaunchTickets.get(ticket.targetId) !== ticket) return;
-    try {
-      await this.closeRelatedLaunchTicket(ticket);
-    } catch {
-      // The unresolved ticket remains durable and blocks teardown.
-    }
-    this.failRelatedLaunchTicket(ticket, "related_ticket_deadline");
-  }
-
-  armRelatedLaunchDeadline(ticket: RelatedLaunchTicket): void {
-    if (ticket.timer !== null || ticket.phase === "settled") return;
-    ticket.timer = setTimeout(() => {
-      void this.expireRelatedLaunchTicket(ticket);
-    }, CDP_TIMEOUT_MS);
-  }
-
-  async closeRelatedLaunchTicket(ticket: RelatedLaunchTicket): Promise<void> {
-    ticket.phase = "closing";
-    const closed = await this.cdp("Target.closeTarget", { targetId: ticket.targetId }, { sessionId: ticket.browserSessionId });
-    if (closed.success !== true) throw this.containmentFenceFailure("popup_close_not_acknowledged");
-    ticket.closed = true;
-    try {
-      this.targetRegistry.detachTarget(ticket.targetId, ticket.sessionId);
-    } catch {
-      // The target may have detached concurrently after the affirmative close.
-    }
-  }
-
-  settleRelatedLaunchTicket(ticket: RelatedLaunchTicket, prevention: string | null): void {
-    if (ticket.phase === "settled") return;
-    if (ticket.timer !== null) clearTimeout(ticket.timer);
-    ticket.timer = null;
-    ticket.phase = "settled";
-    ticket.prevention = prevention;
-    ticket.resolve();
-    if (ticket.commandToken === null && ticket.closed) this.relatedLaunchTickets.delete(ticket.targetId);
-  }
-
-  failRelatedLaunchTicket(ticket: RelatedLaunchTicket, detail: string): DriverError {
-    if (ticket.timer !== null) clearTimeout(ticket.timer);
-    ticket.timer = null;
-    const error = this.containmentFenceFailure(detail);
-    if (ticket.commandToken !== null && !this.relatedCommandFailures.has(ticket.commandToken)) {
-      this.relatedCommandFailures.set(ticket.commandToken, error);
-    }
-    ticket.reject(error);
-    if (ticket.closed) this.relatedLaunchTickets.delete(ticket.targetId);
-    return error;
-  }
-
-  async awaitRelatedLaunches(commandToken: number): Promise<string | null> {
-    while (true) {
-      this.consumeRelatedCommandFailure(commandToken);
-      await this.fenceBrowserProtocolEvents();
-      this.consumeRelatedCommandFailure(commandToken);
-      const tickets = [...this.relatedLaunchTickets.values()].filter((ticket) => ticket.commandToken === commandToken);
-      await Promise.all(tickets.map((ticket) => ticket.promise));
-      this.consumeRelatedCommandFailure(commandToken);
-      await this.fenceBrowserProtocolEvents();
-      this.consumeRelatedCommandFailure(commandToken);
-      const stable = [...this.relatedLaunchTickets.values()].filter((ticket) => ticket.commandToken === commandToken);
-      if (stable.length !== tickets.length || stable.some((ticket, index) => ticket !== tickets[index])) continue;
-      const prevention = stable.map((ticket) => ticket.prevention).find((reason): reason is string => typeof reason === "string") ?? null;
-      for (const ticket of stable) if (ticket.closed) this.relatedLaunchTickets.delete(ticket.targetId);
-      return prevention;
-    }
-  }
-
-  async settleRelatedEffectsBeforePostAction(): Promise<string | null> {
-    const commandToken = this.activeCommandToken;
-    if (!this.containmentReady || commandToken === null) return null;
-    await this.fenceBrowserProtocolEvents();
-    const ticketPrevention = await this.awaitRelatedLaunches(commandToken);
-    return ticketPrevention ?? this.commandContainmentPrevention;
-  }
-
-  consumeRelatedCommandFailure(commandToken: number): void {
-    const error = this.relatedCommandFailures.get(commandToken);
-    if (error) {
-      this.relatedCommandFailures.delete(commandToken);
-      throw error;
-    }
-  }
-
   async drainProtocolEventQueue(): Promise<void> {
     while (true) {
       const tail = this.protocolEventTail;
@@ -1297,37 +788,15 @@ class NewtonBrowserDriver {
     }
   }
 
-  async closeOutstandingRelatedLaunches(): Promise<void> {
-    if (this.unresolvedRelatedClose) {
-      const pending = this.unresolvedRelatedClose;
-      await this.closeUntrackedRelatedTarget(pending.targetId, pending.browserSessionId, "related_cleanup_close_failed");
-      this.unresolvedRelatedClose = null;
-    }
-    if (this.unresolvedRelatedCloseOverflow) throw this.containmentFenceFailure("related_cleanup_identity_overflow");
-    for (const ticket of [...this.relatedLaunchTickets.values()]) {
-      if (!ticket.closed) {
-        await this.closeRelatedLaunchTicket(ticket);
-      }
-      if (ticket.phase !== "settled") this.settleRelatedLaunchTicket(ticket, ticket.prevention);
-      this.relatedLaunchTickets.delete(ticket.targetId);
-    }
-  }
-
-  recordAuthoritativePrevention(reason: string, generation: number): void {
-    if (generation !== this.protocolGeneration) return;
-    if (this.activeActionSignals) this.activeActionSignals.containmentPrevention = reason;
-    if (this.commandContainmentActive) this.commandContainmentPrevention = reason;
-  }
-
   async fenceBrowserProtocolEvents(attachFailureCode: string | null = null): Promise<void> {
     const sessionId = this.browserControlSessionId;
     if (this.protocolEventFailure) {
       if (isPreservedAttachFailure(this.protocolEventFailure)) throw this.protocolEventFailure;
-      throw this.containmentFenceFailure("popup_protocol_event_failed");
+      throw this.browserControlFailure("browser_protocol_event_failed");
     }
     if (!sessionId || !this.mainTargetId) {
-      if (this.commandContainmentActive || this.containmentReady) {
-        throw this.containmentFenceFailure("browser_control_session_missing");
+      if (this.browserControlReady) {
+        throw this.browserControlFailure("browser_control_session_missing");
       }
       return;
     }
@@ -1344,25 +813,25 @@ class NewtonBrowserDriver {
     } catch (error) {
       if (isPreservedAttachFailure(error)) throw error;
       if (attachFailureCode && !isPreservedAttachFailure(error)) {
-        this.containmentReady = false;
+        this.browserControlReady = false;
         throw typedDriverError(attachFailureCode);
       }
-      throw this.containmentFenceFailure("popup_protocol_fence_failed");
+      throw this.browserControlFailure("browser_protocol_fence_failed");
     }
   }
 
-  containmentFenceFailure(detail: string): DriverError {
-    this.containmentReady = false;
-    const error = typedDriverError("containment_fence_failed");
+  browserControlFailure(detail: string): DriverError {
+    this.browserControlReady = false;
+    const error = typedDriverError("browser_control_failed");
     error.detail = detail;
     return error;
   }
 
-  async navigateInitialGranted(url: string): Promise<InitialNavigationCommit> {
-    if (!this.attached || !this.containmentReady || !this.containment) {
-      throw typedDriverError("origin_containment_unavailable");
+  async navigateInitial(url: string): Promise<InitialNavigationCommit> {
+    if (!this.attached || !this.browserControlReady) {
+      throw typedDriverError("browser_control_unavailable");
     }
-    if (!this.containment.contains(url)) throw typedDriverError("ungranted_navigation");
+    requireHttpNavigationUrl(url);
     if (this.initialNavigation) throw typedDriverError("initial_navigation_conflict");
     const browserSessionId = this.browserControlSessionId;
 
@@ -1380,7 +849,6 @@ class NewtonBrowserDriver {
       commits: [],
       commitOverflow: false,
       commitResolved: false,
-      prevention: null,
       resolve,
       reject,
       promise,
@@ -1407,14 +875,11 @@ class NewtonBrowserDriver {
       if (
         state.generation !== this.protocolGeneration
         || !this.attached
-        || !this.containmentReady
+        || !this.browserControlReady
         || !browserSessionId
         || this.browserControlSessionId !== browserSessionId
       ) throw typedDriverError("debugger_conflict");
       if (state.commitOverflow) throw typedDriverError("initial_navigation_event_overflow");
-      if (state.prevention && (!state.prevention.frameId || state.prevention.frameId === state.expectedFrameId)) {
-        throw typedDriverError(state.prevention.reason);
-      }
       return commit;
     } catch (error) {
       if (this.initialNavigation === state) {
@@ -1442,14 +907,6 @@ class NewtonBrowserDriver {
     this.reconcileInitialNavigation(state);
   }
 
-  noteInitialNavigationPrevention(sourceSessionId: string | null, params: CdpRecord, reason: string): void {
-    const state = this.initialNavigation;
-    if (!state || state.generation !== this.protocolGeneration || sourceSessionId) return;
-    if (params?.resourceType !== "Document" || reason !== "ungranted_navigation") return;
-    state.prevention = { frameId: typeof params.frameId === "string" ? params.frameId : null, reason };
-    this.reconcileInitialNavigation(state);
-  }
-
   reconcileInitialNavigation(state: InitialNavigationState): void {
     if (this.initialNavigation !== state || !state.expectedFrameId || !state.expectedLoaderId) return;
     if (state.commitOverflow) {
@@ -1459,22 +916,9 @@ class NewtonBrowserDriver {
       state.reject(typedDriverError("initial_navigation_event_overflow"));
       return;
     }
-    if (state.prevention && (!state.prevention.frameId || state.prevention.frameId === state.expectedFrameId)) {
-      if (state.commitResolved) return;
-      this.initialNavigation = null;
-      clearTimeout(state.timer);
-      state.reject(typedDriverError(state.prevention.reason));
-      return;
-    }
     const commit = state.commits.find((candidate) =>
       candidate.frameId === state.expectedFrameId && candidate.loaderId === state.expectedLoaderId);
     if (!commit) return;
-    if (!this.containment?.contains(commit.url)) {
-      this.initialNavigation = null;
-      clearTimeout(state.timer);
-      state.reject(typedDriverError("ungranted_navigation"));
-      return;
-    }
     clearTimeout(state.timer);
     if (!state.commitResolved) {
       state.commitResolved = true;
@@ -1491,10 +935,8 @@ class NewtonBrowserDriver {
   }
 
   preflightAction(action: DriverAction): Promise<void> | void {
-    if (!this.containmentReady || !this.containment) throw Object.assign(new Error("origin_containment_unavailable"), { code: "origin_containment_unavailable" });
-    if (action?.kind === "navigate" && !this.containment.contains(action.url)) {
-      throw Object.assign(new Error("ungranted_navigation"), { code: "ungranted_navigation" });
-    }
+    if (!this.browserControlReady) throw typedDriverError("browser_control_unavailable");
+    if (action?.kind === "navigate") requireHttpNavigationUrl(action.url);
     const selector = selectorFromAction(action);
     if (selector) return this.validateSelector(selector);
   }
@@ -1530,6 +972,11 @@ class NewtonBrowserDriver {
   async observe(options?: DriverObserveOptions): Promise<DriverObservation>;
   async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars }: DriverObserveOptions = {}): Promise<DriverObservation> {
     if (mode === "text") return this.observeText(maxChars === undefined ? {} : { maxChars });
+    // Interactive refs belong to one bounded observation cycle, not the
+    // lifetime of a long-running SPA document. Reset synchronously before any
+    // CDP work so a saturated prior snapshot can always recover by observing.
+    this.targetRegistry.resetObservationRefs();
+    this.refIndex.clear();
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
     const url = await this.evalString("location.href");
     // A navigation invalidates the diff baseline and document-scoped node facts.
@@ -1543,12 +990,11 @@ class NewtonBrowserDriver {
     const scrollY = (await this.evalNumber("window.scrollY")) || 0;
     const reuseBboxes = Math.abs(scrollY - (this.lastScrollY || 0)) < 1;
     const frameObservation = await this.accessibilityTreesForOrigin(safeOrigin(url));
-    const trees = Array.isArray(frameObservation) ? frameObservation : frameObservation.trees;
-    const excludedFrames = Array.isArray(frameObservation) ? [] : frameObservation.excludedFrames;
+    const trees = frameObservation.trees;
     const filterText = typeof query === "string" ? query.toLowerCase() : "";
     const requestedRoles = new Set(Array.isArray(roles) ? roles.map((value) => String(value).toLowerCase()).slice(0, 12) : []);
     const nodes = [];
-    this.refIndex.clear();
+    const observedRefs = new Set<string>();
     let truncated = false;
     for (const tree of trees) for (const axNode of tree.nodes ?? []) {
       if (nodes.length >= cap) { truncated = true; break; }
@@ -1569,25 +1015,33 @@ class NewtonBrowserDriver {
       // page has not scrolled — skipping the per-node measurement round-trips
       // (J45). Targeting still re-measures its own element before any click.
       const ref = this.targetRegistry.createRef(route.targetId, backendNodeId, route.frameId ? { frameId: route.frameId } : {});
-      const prev = this.lastNodes.get(ref);
-      let bbox;
-      if (reuseBboxes && prev && prev.bbox && prev.role === role && prev.name === name && prev.value === value) {
-        bbox = prev.bbox;
-      } else {
-        const measured = await this.boxFor(backendNodeId, route);
-        if (!measured) continue; // not laid out / not visible
-        bbox = [Math.round(measured.x), Math.round(measured.y), Math.round(measured.width), Math.round(measured.height)];
+      if (observedRefs.has(ref)) continue;
+      let retained = false;
+      try {
+        const prev = this.lastNodes.get(ref);
+        let bbox;
+        if (reuseBboxes && prev && prev.bbox && prev.role === role && prev.name === name && prev.value === value) {
+          bbox = prev.bbox;
+        } else {
+          const measured = await this.boxFor(backendNodeId, route);
+          if (!measured) continue; // not laid out / not visible
+          bbox = [Math.round(measured.x), Math.round(measured.y), Math.round(measured.width), Math.round(measured.height)];
+        }
+        const resolvedRoute = this.targetRegistry.resolveRef(ref);
+        this.refIndex.set(ref, resolvedRoute);
+        observedRefs.add(ref);
+        nodes.push({
+          ref, role, name, ...(value ? { value } : {}), ...states, ...publicNodeFacts(nodeFacts, route.origin), bbox,
+          documentEpoch: resolvedRoute.documentEpoch,
+          ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
+        });
+        retained = true;
+      } finally {
+        if (!retained) this.targetRegistry.discardObservationRef(ref);
       }
-      const resolvedRoute = this.targetRegistry.resolveRef(ref);
-      this.refIndex.set(ref, resolvedRoute);
-      nodes.push({
-        ref, role, name, ...(value ? { value } : {}), ...states, ...publicNodeFacts(nodeFacts, route.origin), bbox,
-        documentEpoch: resolvedRoute.documentEpoch,
-        ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
-      });
     }
     if (includeInteractive && nodes.length < cap) {
-      const discovered = await this.interactiveObservationNodes(cap - nodes.length, new Set(nodes.map((node) => node.ref)), { requestedRoles, filterText });
+      const discovered = await this.interactiveObservationNodes(cap - nodes.length, observedRefs, { requestedRoles, filterText });
       for (const node of discovered) {
         if (!node.route) continue;
         this.refIndex.set(node.ref, node.route);
@@ -1607,7 +1061,7 @@ class NewtonBrowserDriver {
     const title = await this.evalString("document.title");
     const origin = safeOrigin(url);
     const capturedAt = new Date().toISOString();
-    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
+    const full = { kind: "observation", mode: "cdp", origin, title, nodes, nodeCount: nodes.length, truncated, capturedAt };
     // D6: emit a compact diff when asked (and a baseline exists, and the read is
     // not query-filtered). If the page churned heavily, fall back to a full snapshot.
     const canDiff = mode === "diff" && !filterText && this.lastNodes.size > 0;
@@ -1617,7 +1071,7 @@ class NewtonBrowserDriver {
       const delta = computeObservationDelta(baseline, nodes);
       const churn = delta.added.length + delta.removed.length + delta.updated.length;
       if (churn <= Math.max(8, Math.round(nodes.length * 0.6))) {
-        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, ...(excludedFrames.length ? { excludedFrames } : {}), capturedAt };
+        return { kind: "observation_delta", mode: "cdp", origin, title, added: delta.added, removed: delta.removed, updated: delta.updated, nodeCount: nodes.length, capturedAt };
       }
     }
     return full;
@@ -1648,32 +1102,26 @@ class NewtonBrowserDriver {
   async accessibilityTreesForOrigin(origin: string): Promise<CdpRecord> {
     const page = await this.cdp("Page.getFrameTree", {}).catch(() => null);
     this.reconcileFrameTree(page?.frameTree, origin);
-    const allowed = new Set([...this.allowedOrigins, origin].filter(Boolean));
     const trees = [];
-    const excludedFrames = [];
     for (const route of this.targetRegistry.listObservationRoutes()) {
-      if (route.frameId && (!route.origin || !allowed.has(route.origin))) {
-        excludedFrames.push({ frameId: route.frameId, frameOrigin: route.origin || null, reason: "origin_not_granted" });
-        continue;
-      }
       const params = route.frameId ? { frameId: route.frameId } : {};
       const tree = await this.cdp("Accessibility.getFullAXTree", params, route).catch(() => ({ nodes: [] }));
       trees.push({ ...tree, route });
     }
-    return { trees, excludedFrames: excludedFrames.slice(0, 64) };
+    return { trees };
   }
 
   reconcileFrameTree(frameTree: CdpRecord | undefined, origin: string): void {
     if (!this.mainTargetId) {
-      throw typedDriverError("origin_containment_unavailable");
+      throw typedDriverError("browser_control_unavailable");
     }
     const topFrame = frameTree?.frame;
     if (topFrame) this.reconcileTopLevelDocument(topFrame, origin, false);
     const known = new Set(this.targetRegistry.listObservationRoutes().map((route) => route.frameId).filter(Boolean));
-    const blocked = new Set<string>();
+    const targetBoundaries = new Set<string>();
     for (const frame of childFrameRecords(frameTree)) {
-      if (frame.parentFrameId && blocked.has(frame.parentFrameId)) {
-        blocked.add(frame.frameId);
+      if (frame.parentFrameId && targetBoundaries.has(frame.parentFrameId)) {
+        targetBoundaries.add(frame.frameId);
         continue;
       }
       const identity = this.targetRegistry.frameIdentity(frame.frameId);
@@ -1681,7 +1129,7 @@ class NewtonBrowserDriver {
         if ((identity.state === "active" || identity.state === "pending") && identity.targetId === this.mainTargetId) {
           known.add(frame.frameId);
         } else {
-          blocked.add(frame.frameId);
+          targetBoundaries.add(frame.frameId);
         }
         continue;
       }
@@ -1745,15 +1193,10 @@ class NewtonBrowserDriver {
     let maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable" = masksConfigured
       ? "mask_applied"
       : "mask_not_configured";
-    let resumeRasterMask: (() => Promise<void>) | null = null;
-    try {
+    {
       let targets: TargetResolution[] = [];
       if (masksConfigured) {
         targets = await this.resolveMaskTargets(sensitiveZones);
-        // Freeze every actionable target before deriving scroll, clip, or geometry.
-        // Otherwise an untrusted page could move a sensitive element between the
-        // measurement and the trusted raster operation.
-        resumeRasterMask = await this.pauseForRasterMask();
       }
       const { params, truncated } = await this.screenshotCapturePlan({
         imageFormat,
@@ -1783,11 +1226,6 @@ class NewtonBrowserDriver {
         rasterHeight = masked.height;
         maskDisposition = masked.appliedRegions > 0 ? "mask_applied" : "mask_not_applicable";
       }
-      if (resumeRasterMask) {
-        const resume = resumeRasterMask;
-        resumeRasterMask = null;
-        await resume();
-      }
       const url = await this.evalString("location.href");
       const title = await this.evalString("document.title");
       const scale = captureClip?.scale || 1;
@@ -1809,8 +1247,6 @@ class NewtonBrowserDriver {
         ...(dataUrl ? { dataUrl } : {}),
         capturedAt: new Date().toISOString(),
       };
-    } finally {
-      if (resumeRasterMask) await resumeRasterMask();
     }
   }
 
@@ -1864,31 +1300,11 @@ class NewtonBrowserDriver {
     const kind = action.kind;
     this.assertRendererLive("root", kind);
     this.activeCommandId = typeof context?.commandId === "string" ? context.commandId : null;
-    this.commandContainmentPrevention = null;
-    this.commandContainmentActive = isContainmentAttributableAction(action);
     this.activeCommandKind = kind;
-    const requiresProtocolFence = this.containmentReady;
-    this.commandTokenCounter = this.commandTokenCounter >= Number.MAX_SAFE_INTEGER ? 1 : this.commandTokenCounter + 1;
-    const commandToken = this.commandTokenCounter;
-    this.activeCommandToken = commandToken;
     try {
-      const result = await this.executeActionNow(action);
-      await this.flushPendingOwnedChildTargets();
-      let ticketPrevention: string | null = null;
-      if (this.commandContainmentActive && requiresProtocolFence) {
-        await this.fenceBrowserProtocolEvents();
-        ticketPrevention = await this.awaitRelatedLaunches(commandToken);
-      }
-      const prevention = ticketPrevention ?? this.commandContainmentPrevention;
-      if (!prevention) return result;
-      const changed = isRecord(result.changed) ? result.changed : {};
-      return { ...result, status: "blocked", reason: prevention, changed: { ...changed, containmentPrevention: prevention } };
+      return await this.executeActionNow(action);
     } finally {
-      this.relatedCommandFailures.delete(commandToken);
-      this.commandContainmentPrevention = null;
-      this.commandContainmentActive = false;
       this.activeCommandKind = null;
-      this.activeCommandToken = null;
       this.activeCommandId = null;
     }
   }
@@ -1983,14 +1399,15 @@ class NewtonBrowserDriver {
     return { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries, count: entries.length, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
   }
 
-  // Fetch one response body — only when its URL origin is within the session grant.
+  // Fetch one response body only when it belongs to the currently visible origin.
   // Response HEADERS are never returned. Bodies are capped; over-cap is truncated.
   async getNetworkBody(requestId: string): Promise<DriverRecord> {
     const entry = this.networkBuffer.get(requestId);
     const base = { kind: "network_log", origin: safeOrigin(this.lastObserveUrl || ""), entries: [], count: 0, dropped: this.networkDropped, capturedAt: new Date().toISOString() };
     if (!entry) return { ...base, body: null, reason: "unknown_request_id" };
-    if (this.allowedOrigins.length > 0 && !this.allowedOrigins.includes(safeOrigin(entry.url))) {
-      return { ...base, body: null, bodyDisposition: "origin_not_granted", reason: "origin_not_granted" };
+    const currentOrigin = safeOrigin(this.lastObserveUrl || "");
+    if (!currentOrigin || currentOrigin !== safeOrigin(entry.url)) {
+      return { ...base, body: null, bodyDisposition: "cross_origin_body_not_returned", reason: "cross_origin_body_not_returned" };
     }
     const response = await this.cdp("Network.getResponseBody", { requestId }).catch(() => null);
     if (!response) return { ...base, body: null, bodyDisposition: "body_unavailable", reason: "body_unavailable" };
@@ -2145,7 +1562,6 @@ class NewtonBrowserDriver {
           throw error;
           }
         }
-        await this.flushPendingOwnedChildTargets();
         if (!dispatched) {
           if (framedTarget) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
           const blocker = await this.blockingElementEvidence(point, target);
@@ -2153,29 +1569,18 @@ class NewtonBrowserDriver {
           const observation = await this.observe({});
           return this.withObservationMeta("stale_target", { blocker }, observation, "click_intercepted");
         }
-      const relatedPrevention = await this.settleRelatedEffectsBeforePostAction();
-      if (relatedPrevention) {
-        const signals = signalWindow.finish();
-        return {
-          status: "blocked",
-          reason: relatedPrevention,
-          changed: {
-            ...reconciliationChanges(signals),
-            containmentPrevention: relatedPrevention,
-          },
-        };
-      }
       await this.settleShort();
       if (releaseAcknowledgementUncertain) this.reconcileRenderer(inputTargetKey(target));
       const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
       const signals = signalWindow.finish();
       const after = await this.pageSignature();
       const afterState = target.backendNodeId ? await this.elementState(target.backendNodeId, target).catch(() => ({})) : {};
-      const changed = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...reconciliationChanges(signals), ...(waitResult?.matched ? { waitedFor: true } : {}), ...(releaseAcknowledgementUncertain ? { inputReleaseAcknowledgement: "unacknowledged" } : {}) };
+      const verifiedChanges = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...(waitResult?.matched ? { waitedFor: true } : {}) };
+      const changed = { ...verifiedChanges, ...reconciliationChanges(signals), ...(releaseAcknowledgementUncertain ? { inputReleaseAcknowledgement: "unacknowledged" } : {}) };
       const observation = await this.observeDelta();
-      const reconciliation = reconcilePostActionSignals(signals);
-      if (reconciliation) return this.withObservationMeta("blocked", changed, observation, reconciliation);
-      const verified = waitResult ? waitResult.matched : Object.keys(changed).length > 0;
+      const verified = waitResult
+        ? waitResult.matched
+        : Object.keys(verifiedChanges).length > 0 || hasDirectlyObservableEffect(signals);
       return this.withObservationMeta(
         releaseAcknowledgementUncertain ? "dispatched_unverified" : verified ? "verified" : "dispatched_unverified",
         changed,
@@ -2188,14 +1593,30 @@ class NewtonBrowserDriver {
   }
 
   async fill(action: DriverAction): Promise<DriverRecord> {
-    const target = await this.resolveTarget(action);
+    let target = await this.resolveTarget(action);
     if (!target?.backendNodeId) return this.targetMoved("not_found");
-    const backendNodeId = target.backendNodeId;
-    const framedTarget = typeof target.frameId === "string" && target.frameId.length > 0;
+    let backendNodeId = target.backendNodeId;
     await this.cdp("DOM.focus", { backendNodeId }, target).catch(() => {});
-    const point = await this.actionablePoint(backendNodeId, target);
+    const explicitRef = typeof normalizedTarget(action)?.ref === "string";
+    if (!explicitRef) {
+      const refreshedTarget = await this.resolveTarget(action);
+      if (!refreshedTarget?.backendNodeId) return this.targetMoved("stale_target");
+      target = refreshedTarget;
+      backendNodeId = refreshedTarget.backendNodeId;
+    }
+    let point = await this.actionablePoint(backendNodeId, target);
+    if (!point && !explicitRef) {
+      const refreshedTarget = await this.resolveTarget(action);
+      if (refreshedTarget?.backendNodeId) {
+        target = refreshedTarget;
+        backendNodeId = refreshedTarget.backendNodeId;
+        point = await this.actionablePoint(backendNodeId, target);
+      }
+    }
     if (!point) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
-    const pointerRoute = this.pointerInputRoute(target, point);
+    const inputPoint = point;
+    const framedTarget = typeof target.frameId === "string" && target.frameId.length > 0;
+    const pointerRoute = this.pointerInputRoute(target, inputPoint);
     if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
     const beforeState = await this.elementState(backendNodeId, target);
     let dispatched: boolean;
@@ -2203,7 +1624,7 @@ class NewtonBrowserDriver {
     try {
       dispatched = await this.dispatchInput(target, async (input) => {
         await input.pointerMove(pointerRoute.point);
-        if (framedTarget && !(await this.verifyFramedPoint(backendNodeId, target, point))) return false;
+        if (framedTarget && !(await this.verifyFramedPoint(backendNodeId, target, inputPoint))) return false;
         committingInputStarted = true;
         await input.mouseDown("left");
         await input.mouseUp("left");
@@ -2296,11 +1717,9 @@ class NewtonBrowserDriver {
   async interactiveObservationNodes(limit: number, existingRefs: Set<string> = new Set(), filters: InteractiveFilters = {}): Promise<DriverObservationNode[]> {
     if (limit <= 0) return [];
     const output = [];
-    const allowed = new Set(this.allowedOrigins);
     const selector = "a[href],button,input,select,textarea,[role],[tabindex]";
     for (const route of this.targetRegistry.listObservationRoutes()) {
       if (output.length >= limit) break;
-      if (route.origin && !allowed.has(route.origin)) continue;
       const document = await this.cdp("DOM.getDocument", { depth: 0, pierce: true }, route).catch(() => null);
       if (!document?.root?.nodeId) continue;
       const queried = await this.cdp("DOM.querySelectorAll", { nodeId: document.root.nodeId, selector }, route).catch(() => null);
@@ -2311,31 +1730,37 @@ class NewtonBrowserDriver {
         if (!Number.isInteger(backendNodeId)) continue;
         const ref = this.targetRegistry.createRef(route.targetId, backendNodeId, route.frameId ? { frameId: route.frameId } : {});
         if (existingRefs.has(ref)) continue;
-        const [facts, name, bbox, nodeFacts] = await Promise.all([
-          this.elementFacts(backendNodeId, route),
-          this.axNameFor(backendNodeId, route),
-          this.boxFor(backendNodeId, route),
-          this.describedNodeFactsCached(backendNodeId, route),
-        ]);
-        if (!bbox || !facts.role) continue;
-        const role = String(facts.role).toLowerCase();
-        const accessibleName = String(name || facts.accessibleName || "").slice(0, 240);
-        if (filters.requestedRoles && filters.requestedRoles.size > 0 && !filters.requestedRoles.has(role)) continue;
-        if (filters.filterText && !`${role} ${accessibleName}`.toLowerCase().includes(filters.filterText)) continue;
-        const resolvedRoute = this.targetRegistry.resolveRef(ref);
-        existingRefs.add(ref);
-        output.push({
-          ref,
-          role: role.slice(0, 80),
-          name: accessibleName,
-          ...(typeof facts.disabled === "boolean" ? { disabled: facts.disabled } : {}),
-          ...(typeof facts.checked === "boolean" ? { checked: facts.checked } : {}),
-          ...publicNodeFacts(nodeFacts, route.origin),
-          bbox: [Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.width), Math.round(bbox.height)],
-          documentEpoch: resolvedRoute.documentEpoch,
-          ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
-          route: resolvedRoute,
-        });
+        let retained = false;
+        try {
+          const [facts, name, bbox, nodeFacts] = await Promise.all([
+            this.elementFacts(backendNodeId, route),
+            this.axNameFor(backendNodeId, route),
+            this.boxFor(backendNodeId, route),
+            this.describedNodeFactsCached(backendNodeId, route),
+          ]);
+          if (!bbox || !facts.role) continue;
+          const role = String(facts.role).toLowerCase();
+          const accessibleName = String(name || facts.accessibleName || "").slice(0, 240);
+          if (filters.requestedRoles && filters.requestedRoles.size > 0 && !filters.requestedRoles.has(role)) continue;
+          if (filters.filterText && !`${role} ${accessibleName}`.toLowerCase().includes(filters.filterText)) continue;
+          const resolvedRoute = this.targetRegistry.resolveRef(ref);
+          existingRefs.add(ref);
+          output.push({
+            ref,
+            role: role.slice(0, 80),
+            name: accessibleName,
+            ...(typeof facts.disabled === "boolean" ? { disabled: facts.disabled } : {}),
+            ...(typeof facts.checked === "boolean" ? { checked: facts.checked } : {}),
+            ...publicNodeFacts(nodeFacts, route.origin),
+            bbox: [Math.round(bbox.x), Math.round(bbox.y), Math.round(bbox.width), Math.round(bbox.height)],
+            documentEpoch: resolvedRoute.documentEpoch,
+            ...(resolvedRoute.frameId ? { frameId: resolvedRoute.frameId, frameOrigin: resolvedRoute.origin } : {}),
+            route: resolvedRoute,
+          });
+          retained = true;
+        } finally {
+          if (!retained) this.targetRegistry.discardObservationRef(ref);
+        }
       }
     }
     return output;
@@ -2502,8 +1927,6 @@ class NewtonBrowserDriver {
       const signals = signalWindow.finish();
       const observation = await this.observeDelta();
       const changed = { ...reconciliationChanges(signals), ...(waitResult?.matched ? { waitedFor: true } : {}) };
-      const reconciliation = reconcilePostActionSignals(signals);
-      if (reconciliation) return this.withObservationMeta("blocked", changed, observation, reconciliation);
       return this.withObservationMeta(waitResult ? (waitResult.matched ? "verified" : "timed_out") : "dispatched_unverified", changed, observation, waitResult && !waitResult.matched ? waitResult.reason : undefined);
     } finally {
       signalWindow.finish();
@@ -2683,10 +2106,35 @@ class NewtonBrowserDriver {
       throw error;
     }
     const nodeIds = Array.isArray(found?.nodeIds) ? found.nodeIds : [];
-    if (nodeIds.length > 1) throw new Error("ambiguous");
     if (nodeIds.length === 0) return null;
-    const described = await this.cdp("DOM.describeNode", { nodeId: nodeIds[0] }).catch(() => null);
-    return described?.node?.backendNodeId ?? null;
+    if (nodeIds.length > 64) throw new Error("ambiguous");
+    const visibleBackendNodeIds: number[] = [];
+    for (const nodeId of nodeIds) {
+      const described = await this.cdp("DOM.describeNode", { nodeId }).catch(() => null);
+      const backendNodeId = described?.node?.backendNodeId;
+      if (!Number.isSafeInteger(backendNodeId) || backendNodeId <= 0) continue;
+      if (await this.selectorCandidateVisible(backendNodeId)) {
+        visibleBackendNodeIds.push(backendNodeId);
+        if (visibleBackendNodeIds.length > 1) throw new Error("ambiguous");
+      }
+    }
+    return visibleBackendNodeIds[0] ?? null;
+  }
+
+  async selectorCandidateVisible(backendNodeId: number): Promise<boolean> {
+    const objectId = await this.objectIdFor(backendNodeId);
+    if (!objectId) return false;
+    const result = await this.cdp("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function () {
+        if (this.isConnected !== true) return false;
+        const style = getComputedStyle(this);
+        const rect = this.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0 && rect.width > 0 && rect.height > 0;
+      }`,
+      returnByValue: true,
+    }).catch(() => null);
+    return result?.result?.value === true;
   }
 
   async backendNodeIdFromElementExpression(functionDeclaration: string, args: unknown[]): Promise<number | null> {
@@ -3424,51 +2872,6 @@ class NewtonBrowserDriver {
     return { x: value.x, y: value.y, width: value.width, height: value.height };
   }
 
-  async pauseForRasterMask(): Promise<() => Promise<void>> {
-    const routes: CdpRoute[] = [{}];
-    const sessionIds = new Set<string>();
-    for (const route of this.targetRegistry.listObservationRoutes()) {
-      if (!route.sessionId || sessionIds.has(route.sessionId)) continue;
-      sessionIds.add(route.sessionId);
-      routes.push({ sessionId: route.sessionId });
-    }
-    const prepared: CdpRoute[] = [];
-    try {
-      for (const route of routes) {
-        prepared.push(route);
-        await this.cdp("Animation.enable", {}, route);
-        await this.cdp("Animation.setPlaybackRate", { playbackRate: 0 }, route);
-        // Disabling script execution freezes page-authored DOM movement without putting
-        // the renderer into Debugger.paused, a state in which Chromium can refuse or
-        // hang Page.captureScreenshot. Animation playback is frozen separately above.
-        await this.cdp("Emulation.setScriptExecutionDisabled", { value: true }, route);
-      }
-    } catch {
-      await this.resumeRasterMaskRoutes(prepared).catch(() => {});
-      throw new Error("mask_page_freeze_failed");
-    }
-    let resumed = false;
-    return async () => {
-      if (resumed) return;
-      resumed = true;
-      await this.resumeRasterMaskRoutes(prepared);
-    };
-  }
-
-  async resumeRasterMaskRoutes(routes: readonly CdpRoute[]): Promise<void> {
-    let failed = false;
-    for (const route of [...routes].reverse()) {
-      for (const [method, params] of [
-        ["Emulation.setScriptExecutionDisabled", { value: false }],
-        ["Animation.setPlaybackRate", { playbackRate: 1 }],
-        ["Animation.disable", {}],
-      ] as const) {
-        try { await this.cdp(method, params, route); } catch { failed = true; }
-      }
-    }
-    if (failed) throw new Error("mask_page_resume_failed");
-  }
-
   async waitForSettle(timeoutMs = SETTLE_TIMEOUT_MS) {
     const boundedTimeout = Math.max(100, Math.min(Number(timeoutMs) || SETTLE_TIMEOUT_MS, SETTLE_TIMEOUT_MS));
     const deadline = Date.now() + boundedTimeout;
@@ -3477,17 +2880,7 @@ class NewtonBrowserDriver {
     while (Date.now() < deadline) {
       const fingerprint = await this.evalString(
         `(() => {
-          const key = "__newtonBrowserDocumentSignal";
-          let signal = globalThis[key];
-          if (!signal || signal.document !== document) {
-            signal = { document, revision: 0 };
-            const bump = () => { signal.revision = Math.min(Number.MAX_SAFE_INTEGER, signal.revision + 1); };
-            new MutationObserver(bump).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
-            document.addEventListener("input", bump, true);
-            document.addEventListener("change", bump, true);
-            globalThis[key] = signal;
-          }
-          return document.readyState + ":" + signal.revision + ":" + location.href;
+          return document.readyState + ":" + location.href + ":" + document.documentElement.childElementCount;
         })()`,
       );
       if (fingerprint.startsWith("complete") && this.networkInFlight.size === 0 && fingerprint === last) {
@@ -3549,39 +2942,43 @@ class NewtonBrowserDriver {
       return wait.state === "hidden" || wait.state === "detached" ? !found : found;
     }
     if (wait.selector) {
-      const visible = await this.selectorVisible(wait.selector);
-      if (wait.state === "hidden" || wait.state === "detached") return !visible;
-      if (visible) return true;
+      const selectorState = await this.selectorState(wait.selector);
+      if (wait.state === "detached") return !selectorState.attached;
+      if (wait.state === "hidden") return !selectorState.visible;
+      if (wait.state === "attached") return selectorState.attached;
+      if ((wait.state === undefined || wait.state === "visible") && wait.value === undefined) {
+        return selectorState.visible;
+      }
     }
-    if (wait.ref || wait.role || wait.name) {
+    if (wait.ref || wait.role || wait.name || wait.selector) {
       const target = await this.resolveTarget({
         kind: "wait_for",
-        ...(wait.ref ? { ref: wait.ref } : { role: wait.role ?? "", ...(wait.name !== undefined ? { name: wait.name } : {}) }),
+        ...(wait.selector ? { selector: wait.selector }
+          : wait.ref ? { ref: wait.ref }
+            : { role: wait.role ?? "", ...(wait.name !== undefined ? { name: wait.name } : {}) }),
       });
-      if (target) return true;
-    }
-    if (wait.value) {
-      const waitTarget = wait.selector ? { selector: wait.selector }
-        : wait.ref ? { ref: wait.ref }
-          : wait.role ? { role: wait.role, ...(wait.name !== undefined ? { name: wait.name } : {}) }
-            : undefined;
-      const target = await this.resolveTarget({ kind: "wait_for", ...waitTarget });
       if (target?.backendNodeId) {
         const state = await this.elementState(target.backendNodeId, target);
-        if (String(state.value ?? "").includes(wait.value)) return true;
+        if (wait.state === "checked") return state.checked === true;
+        if (wait.state === "unchecked") return state.checked === false;
+        if (wait.value !== undefined) return String(state.value ?? "").includes(wait.value);
+        return true;
       }
     }
     return false;
   }
 
-  async selectorVisible(selector: string): Promise<boolean> {
+  async selectorState(selector: string): Promise<{ attached: boolean; visible: boolean }> {
     const result = await this.cdp("Runtime.evaluate", {
       expression: `(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
-        if (!element) return false;
+        if (!element) return { attached: false, visible: false };
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
-        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+        return {
+          attached: element.isConnected === true,
+          visible: style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0 && rect.width > 0 && rect.height > 0,
+        };
       })()`,
       returnByValue: true,
     });
@@ -3590,7 +2987,11 @@ class NewtonBrowserDriver {
       if (isInvalidSelectorError(detail)) throw typedDriverError("invalid_selector");
       throw typedDriverError("target_resolution_failed");
     }
-    return Boolean(result?.result?.value);
+    const value = result?.result?.value;
+    return {
+      attached: value?.attached === true,
+      visible: value?.visible === true,
+    };
   }
 
   async pageSignature(): Promise<PageSignature> {
@@ -3747,33 +3148,17 @@ function safeOrigin(url: unknown): string {
   }
 }
 
-function isInheritedBlankTarget(url: unknown): boolean {
-  return url === "" || url === "about:blank";
-}
-
-function isRecord(value: unknown): value is CdpRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isMutatingAction(kind: DriverAction["kind"]): boolean {
-  return !["observe", "screenshot", "wait_for", "console", "network"].includes(kind);
-}
-
-function isContainmentAttributableAction(action: DriverAction): boolean {
-  if (!isMutatingAction(action.kind)) return false;
-  if (["scroll", "hover", "move", "resize"].includes(action.kind)) return false;
-  if (action.kind === "press") {
-    const targeted = typeof action.ref === "string"
-      || typeof action.role === "string"
-      || typeof action.name === "string"
-      || typeof action.label === "string"
-      || typeof action.placeholder === "string"
-      || typeof action.testId === "string"
-      || typeof action.selector === "string";
-    if (!targeted && Array.isArray(action.keys)
-      && action.keys.every((key) => ["PAGEDOWN", "PAGEUP", "HOME", "END", "ARROWDOWN", "ARROWUP", "ARROWLEFT", "ARROWRIGHT"].includes(key.toUpperCase()))) return false;
+function requireHttpNavigationUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 8192 || value !== value.trim()) {
+    throw typedDriverError("invalid_navigation_url");
   }
-  return true;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error();
+    return parsed.href;
+  } catch {
+    throw typedDriverError("invalid_navigation_url");
+  }
 }
 
 function safeLoaderId(value: unknown): string | null {
@@ -3950,11 +3335,6 @@ function diffElement(before: CdpRecord, after: CdpRecord): ChangeRecord {
   return changed;
 }
 
-function isNetworkWrite(request: CdpRecord | undefined): boolean {
-  const method = String(request?.method ?? "").toUpperCase();
-  return Boolean(method && !["GET", "HEAD", "OPTIONS"].includes(method));
-}
-
 // Map a CDP console/log type to a bounded level enum.
 function consoleLevelFor(type: unknown): string {
   const t = String(type ?? "log");
@@ -4037,20 +3417,14 @@ function isInvalidSelectorError(error: unknown): boolean {
 
 function reconciliationChanges(signals: ActiveActionSignals | null | undefined): ChangeRecord {
   const changed: ChangeRecord = {};
-  for (const key of ["navigation", "networkWrite", "dialog", "download", "newTarget"] as const) {
+  for (const key of ["navigation", "dialog", "download", "newTarget"] as const) {
     if (signals?.[key]) changed[key] = true;
   }
-  if (signals?.containmentPrevention) changed.containmentPrevention = signals.containmentPrevention;
   return changed;
 }
 
-function reconcilePostActionSignals(signals: ActiveActionSignals | null | undefined): string | null {
-  if (signals?.containmentPrevention) return signals.containmentPrevention;
-  if (signals?.networkWrite) return "post_action_network_write";
-  if (signals?.download) return "post_action_download";
-  if (signals?.newTarget) return "post_action_new_target";
-  if (signals?.dialog) return "post_action_dialog";
-  return null;
+function hasDirectlyObservableEffect(signals: ActiveActionSignals | null | undefined): boolean {
+  return Boolean(signals?.navigation || signals?.dialog || signals?.download || signals?.newTarget);
 }
 
 function findByTestIdSource(): string {

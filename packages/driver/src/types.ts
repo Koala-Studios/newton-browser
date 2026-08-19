@@ -3,7 +3,6 @@ import type { BrowserAction, BrowserActionKind, BrowserPendingDialog, BrowserWai
 export type { BrowserAction, BrowserPendingDialog, BrowserWaitFor };
 
 export type BrowserDriverOptions = {
-  allowedOrigins: string[];
   debuggerPort: DebuggerPort;
 };
 
@@ -106,21 +105,28 @@ export type NormalizedWait = {
 
 export type ActiveActionSignals = {
   navigation?: boolean;
-  networkWrite?: boolean;
   dialog?: boolean;
   download?: boolean;
   newTarget?: boolean;
-  containmentPrevention?: string | null;
 };
 
 export type PendingDialogRoute = CdpRoute & { targetKey?: string };
-export type HeldTarget = { targetId: string; sessionId: string; type: string; reason: string };
 export type Viewport = { width: number; height: number };
 export type Point = { x: number; y: number };
 export type Box = Point & { width: number; height: number };
 export type ObservationNodeSnapshot = Record<string, unknown> & { ref?: string; role?: string; name?: string; value?: string; bbox?: number[]; state?: DriverRecord };
 export type ConsoleEntry = { level?: string; text?: string; source?: string; at?: string };
-export type NetworkEntry = { requestId?: string; method?: string; url?: string; status?: number; resourceType?: string; mimeType?: string; bytes?: number; failed?: boolean; at?: string };
+export type NetworkEntry = {
+  requestId?: string;
+  method?: string;
+  url?: string;
+  status?: number;
+  resourceType?: string;
+  mimeType?: string;
+  bytes?: number;
+  failed?: boolean;
+  at?: string;
+};
 export type TargetRoute = CdpRoute & {
   targetId?: string;
   frameId?: string | null;

@@ -86,107 +86,6 @@ test("origin enrichment is allowed but known conflicts are atomic", () => {
   assert.deepEqual(registry.getSnapshot(), before);
 });
 
-test("blocked Document provenance enriches only an exact existing parent or child-session frame", () => {
-  const parent = mainRegistry();
-  parent.registerFrame({ frameId: "restricted", targetId: "main" });
-  assert.equal(parent.recordBlockedFrameOrigin({
-    frameId: "restricted",
-    sourceTargetId: "main",
-    sourceSessionId: null,
-    origin: "https://denied.test",
-  }), true);
-  assert.equal(parent.listObservationRoutes().find((route) => route.frameId === "restricted")?.origin, "https://denied.test");
-
-  const child = mainRegistry();
-  child.registerTarget({
-    targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "child-session",
-  });
-  child.registerFrame({ frameId: "nested", targetId: "child" });
-  assert.equal(child.recordBlockedFrameOrigin({
-    frameId: "nested",
-    sourceTargetId: "child",
-    sourceSessionId: "child-session",
-    origin: "https://nested-denied.test",
-  }), true);
-  assert.equal(child.listObservationRoutes().find((route) => route.frameId === "nested")?.origin, "https://nested-denied.test");
-});
-
-test("blocked Document provenance queues bounded metadata without creating a frame", () => {
-  const registry = mainRegistry({ maxFrames: 1 });
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "late-frame",
-    sourceTargetId: "main",
-    sourceSessionId: null,
-    origin: "https://denied.test",
-  }), true);
-  assert.equal(registry.frameIdentity("late-frame"), null);
-  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 0, waiting: 1, detached: 0 });
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "over-cap",
-    sourceTargetId: "main",
-    sourceSessionId: null,
-    origin: "https://other.test",
-  }), false);
-
-  registry.registerFrame({ frameId: "late-frame", targetId: "main" });
-  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "late-frame")?.origin, "https://denied.test");
-  assert.deepEqual(registry.getSnapshot().counts.frames, { active: 1, waiting: 0, detached: 0 });
-});
-
-test("blocked Document provenance rejects conflicts, stale ownership, popup pages, and detached ids", () => {
-  const registry = mainRegistry();
-  registry.registerFrame({ frameId: "known", targetId: "main", origin: "https://known.test" });
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "known", sourceTargetId: "main", sourceSessionId: null, origin: "https://denied.test",
-  }), false);
-  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "known")?.origin, "https://known.test");
-
-  registry.registerTarget({
-    targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "child-session",
-  });
-  registry.registerFrame({ frameId: "child-frame", targetId: "child" });
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "child-frame", sourceTargetId: "main", sourceSessionId: null, origin: "https://denied.test",
-  }), false);
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "child-frame", sourceTargetId: "child", sourceSessionId: "stale-session", origin: "https://denied.test",
-  }), false);
-
-  registry.registerTarget({ targetId: "popup", type: "page", parentTargetId: "main", sessionId: "popup-session" });
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "popup-frame", sourceTargetId: "popup", sourceSessionId: "popup-session", origin: "https://popup.test",
-  }), false);
-  registry.detachFrame("removed");
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "removed", sourceTargetId: "main", sourceSessionId: null, origin: "https://denied.test",
-  }), false);
-});
-
-test("queued blocked provenance is fenced by session replacement, detach, and document commit", () => {
-  const registry = mainRegistry();
-  registry.registerTarget({
-    targetId: "child", type: "iframe", parentTargetId: "main", hostFrameId: "host", sessionId: "old-session",
-  });
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "late-child", sourceTargetId: "child", sourceSessionId: "old-session", origin: "https://denied.test",
-  }), true);
-  registry.registerSession("child", "new-session");
-  registry.registerFrame({ frameId: "late-child", targetId: "child" });
-  assert.equal(registry.listObservationRoutes().find((route) => route.frameId === "late-child")?.origin, "");
-
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "removed", sourceTargetId: "main", sourceSessionId: null, origin: "https://removed.test",
-  }), true);
-  registry.detachFrame("removed");
-  assert.equal(registry.getSnapshot().counts.frames.waiting, 0);
-
-  assert.equal(registry.recordBlockedFrameOrigin({
-    frameId: "next-document", sourceTargetId: "main", sourceSessionId: null, origin: "https://next.test",
-  }), true);
-  registry.commitTopLevelDocument("main");
-  assert.equal(registry.getSnapshot().counts.frames.waiting, 0);
-});
-
 test("refs require a committed document and main routing survives commits", () => {
   const registry = new TargetRegistry();
   registry.registerTarget({ targetId: "main", type: "page", sessionId: "root-session" });
@@ -829,7 +728,7 @@ test("dedicated and module workers are tracked but excluded from observation and
   assert.equal(registry.getSnapshot().counts.targets.active, 3);
 });
 
-test("related page target subtrees remain containment-only and non-actionable", () => {
+test("related page target subtrees remain isolated from the owned action target", () => {
   const registry = mainRegistry();
   registry.registerTarget({
     targetId: "popup", type: "page", parentTargetId: "main", sessionId: "popup-session", origin: "https://example.test",
@@ -846,9 +745,6 @@ test("related page target subtrees remain containment-only and non-actionable", 
   });
 
   assert.deepEqual(registry.listObservationRoutes().map((route) => route.targetId), ["main"]);
-  assert.equal(registry.relatedPageAncestorForSession("popup-session")?.targetId, "popup");
-  assert.equal(registry.relatedPageAncestorForSession("popup-oopif-session")?.targetId, "popup");
-  assert.equal(registry.relatedPageAncestorForSession("popup-worker-session")?.targetId, "popup");
   throwsCode(() => registry.createRef("popup", 1, { frameId: "popup-root" }), CODES.NON_ACTIONABLE_TARGET);
   throwsCode(() => registry.createRef("popup-oopif", 2, { frameId: "popup-oopif-root" }), CODES.NON_ACTIONABLE_TARGET);
   throwsCode(() => registry.frameOwnerRoutes("popup-oopif-root"), CODES.FRAME_CONFLICT);
@@ -866,6 +762,28 @@ test("ref storage is exact, bounded, and cannot resurrect a retired ref", () => 
   framed.detachFrame("frame");
   throwsCode(() => framed.resolveRef(ref), CODES.FRAME_DETACHED);
   throwsCode(() => framed.createRef("main", 2), CODES.MAX_REFS_EXCEEDED);
+});
+
+test("a new observation cycle releases active and terminal refs without advancing the document", () => {
+  const registry = mainRegistry({ maxRefs: 2 });
+  registry.registerFrame({ frameId: "frame", targetId: "main", backendNodeId: 10 });
+  const activeRef = registry.createRef("main", 1);
+  const terminalRef = registry.createRef("main", 2, { frameId: "frame" });
+  registry.detachFrame("frame");
+  throwsCode(() => registry.resolveRef(terminalRef), CODES.FRAME_DETACHED);
+  assert.deepEqual(registry.getSnapshot().counts.refs, { active: 1, terminal: 1 });
+
+  registry.resetObservationRefs();
+  assert.equal(registry.getSnapshot().documentEpoch, 1);
+  assert.deepEqual(registry.getSnapshot().counts.refs, { active: 0, terminal: 0 });
+  throwsCode(() => registry.resolveRef(activeRef), CODES.STALE_TARGET);
+  throwsCode(() => registry.resolveRef(terminalRef), CODES.STALE_TARGET);
+
+  const discarded = registry.createRef("main", 3);
+  registry.discardObservationRef(discarded);
+  throwsCode(() => registry.resolveRef(discarded), CODES.STALE_TARGET);
+  assert.equal(registry.createRef("main", 4), "d1:e4");
+  assert.equal(registry.createRef("main", 5), "d1:e5");
 });
 
 test("snapshot exposes bounded immutable metadata only", () => {

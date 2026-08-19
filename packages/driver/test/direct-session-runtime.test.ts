@@ -19,12 +19,10 @@ function deferred<T = void>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-test("real direct composition attaches, installs containment, commits initial navigation, and uses no extension globals", async () => {
+test("real direct composition attaches, commits initial navigation, and installs no network interception", async () => {
   const transport = new FakeBrowserTransport();
   const runtime = await startDirectDriverSession({
       bootstrap: { transport, rootTargetId: "root-target" },
-      primaryOrigin: "https://example.com",
-      allowedOrigins: ["https://assets.example.com"],
       initialUrl: "https://example.com/start?direct=1",
     });
 
@@ -39,8 +37,8 @@ test("real direct composition attaches, installs containment, commits initial na
     assert.equal(JSON.stringify(runtime), "{}", "transport and driver identities are not enumerable runtime state");
     const methods = transport.calls.map((call) => call.method);
     assert.equal(methods[0], "Target.attachToTarget");
-    assert.ok(methods.indexOf("Fetch.enable") > methods.indexOf("Target.attachToTarget"));
-    assert.ok(methods.indexOf("Page.navigate") > methods.indexOf("Fetch.enable"));
+    assert.equal(methods.includes("Fetch.enable"), false);
+    assert.ok(methods.indexOf("Page.navigate") > methods.indexOf("Target.attachToTarget"));
     const browserAutoAttach = transport.calls.find((call) => call.method === "Target.setAutoAttach"
       && call.sessionId === null && Array.isArray(call.params.filter));
     assert.deepEqual(browserAutoAttach?.params.filter, [
@@ -138,7 +136,7 @@ test("aborting provisioning after attach starts prevents initial navigation and 
   const driver = stubDriver({
     async attach() { attachStarted.resolve(); await releaseAttach.promise; },
     async detach() { detaches += 1; },
-    async navigateInitialGranted() { navigations += 1; return {}; },
+    async navigateInitial() { navigations += 1; return {}; },
   });
   const starting = startDirectDriverSession({
     ...validOptions(),
@@ -210,7 +208,7 @@ test("start rollback detaches and surfaces cleanup uncertainty instead of the se
   const cleanupError = Object.assign(new Error("shutdown_detach_failed"), { code: "shutdown_detach_failed" });
   let detachCalls = 0;
   const cleanupFails = stubDriver({
-    async navigateInitialGranted() { throw setupError; },
+    async navigateInitial() { throw setupError; },
     async detach() { detachCalls += 1; throw cleanupError; },
   });
   await assert.rejects(
@@ -220,7 +218,7 @@ test("start rollback detaches and surfaces cleanup uncertainty instead of the se
   assert.equal(detachCalls, 1);
 
   const cleanupSucceeds = stubDriver({
-    async navigateInitialGranted() { throw setupError; },
+    async navigateInitial() { throw setupError; },
     async detach() { detachCalls += 1; },
   });
   await assert.rejects(
@@ -272,30 +270,19 @@ test("stop fences queued work, awaits the running command, and retries an uncert
   assert.equal(runtime.snapshot().state, "stopped");
 });
 
-test("direct session validates exact bootstrap, normalized unique grants, and initial URL origin", async () => {
+test("direct session validates exact bootstrap and requires an HTTP(S) initial URL", async () => {
   const base = validOptions();
   await assert.rejects(
     startDirectDriverSession({ ...base, bootstrap: { ...base.bootstrap, extra: true } } as never),
     (error) => error?.code === "direct_session_invalid_bootstrap",
   );
   await assert.rejects(
-    startDirectDriverSession({ ...base, allowedOrigins: [base.primaryOrigin] }),
-    (error) => error?.code === "direct_session_invalid_origin_grant",
-  );
-  await assert.rejects(
-    startDirectDriverSession({ ...base, primaryOrigin: "https://example.com/" }),
-    (error) => error?.code === "direct_session_invalid_origin_grant",
-  );
-  await assert.rejects(
-    startDirectDriverSession({ ...base, initialUrl: "https://outside.test/" }),
+    startDirectDriverSession({ ...base, initialUrl: "file:///tmp/private" }),
     (error) => error?.code === "direct_session_invalid_initial_url",
   );
   await assert.rejects(
-    startDirectDriverSession({
-      ...base,
-      allowedOrigins: Array.from({ length: 32 }, (_, index) => `https://origin-${index}.example`),
-    }),
-    (error) => error?.code === "direct_session_invalid_origin_grant",
+    startDirectDriverSession({ ...base, initialUrl: "javascript:alert(1)" }),
+    (error) => error?.code === "direct_session_invalid_initial_url",
   );
 });
 
@@ -352,8 +339,6 @@ function validOptions(identity = 71) {
       transport: inertTransport(),
       rootTargetId: `root-${identity}`,
     },
-    primaryOrigin: "https://example.com",
-    allowedOrigins: ["https://assets.example.com"],
     initialUrl: "https://example.com/start",
   };
 }
@@ -369,7 +354,7 @@ function stubDriver(overrides: Record<string, unknown> = {}, order?: string[]) {
   return {
     async attach() { order?.push("attach"); },
     async detach() { order?.push("detach"); },
-    async navigateInitialGranted() { order?.push("navigate"); return {}; },
+    async navigateInitial() { order?.push("navigate"); return {}; },
     async executeAction() { return {}; },
     ...overrides,
   };

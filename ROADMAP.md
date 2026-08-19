@@ -9,8 +9,8 @@ removed from the active tree and remain available in Git history.
 
 - Per-session owned Chrome/Edge process, private CDP pipe, exact blank root, and a separate
   guardian that owns crash cleanup; Windows Job Object and Unix process-group loss evidence passed.
-- Per-session deny-by-default launch-time policy proxy with exact-origin grants and honest
-  prevented/unknown outcome semantics.
+- Ordinary Chromium networking inside each isolated owned browser. The retired
+  deny-by-default proxy and origin-grant model are not compatibility options.
 - Opaque Newton identities, exclusive leases, operator login, and fail-closed narrow opaque
   import from a closed stable profile.
 - Strict TypeScript driver, composite refs, same-process and OOPIF routing, dialogs,
@@ -38,8 +38,8 @@ three-pass receipts; local implementation completion is not publication authoriz
   silent stale-ref healing.
 - Consider element-target screenshots and session-start viewport convenience.
 - Consider broader Chromium-family support only after exact browser/process/security QA.
-- Consider multi-page workflows only with an explicit session/tab model and unchanged
-  containment guarantees.
+- Consider multi-page workflows only with an explicit owned-session/tab model and exact
+  lifecycle cleanup.
 
 ## Not planned without a new approved proposal
 
@@ -47,7 +47,7 @@ three-pass receipts; local implementation completion is not publication authoriz
 - Arbitrary JavaScript execution.
 - Hosted browser providers, telemetry, analytics, or remote service.
 - Cookie/storage/profile inspection or export.
-- Automatic mutation retry, global cross-session mutex, or hostname-only grants.
+- Automatic mutation retry or a global cross-session mutex.
 - Recording, HAR, PDF, GIF, broad provider stacks, or dozens of narrow MCP tools without
   measured agent-task benefit.
 - Firefox support under the current CDP architecture.

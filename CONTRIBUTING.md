@@ -1,6 +1,8 @@
 # Contributing to Newton Browser
 
-Thanks for helping improve Newton Browser. Contributions should preserve its local-only architecture, explicit origin grants, and deterministic safety behavior.
+Thanks for helping improve Newton Browser. Contributions should preserve its local-only,
+direct-owned browser architecture, ordinary Chromium compatibility, and deterministic
+action safety behavior.
 
 ## Before opening an issue
 
@@ -35,10 +37,13 @@ intentionally ignored.
 ## Engineering expectations
 
 - Keep `apps/mcp-server` stdout restricted to MCP frames; write diagnostics to stderr.
-- Prefer inherited private CDP pipes. The per-session policy proxy binds only to
-  `127.0.0.1`; there is no continuity listener.
-- Require one normalized HTTP(S) origin per session and establish containment before the
-  initial navigation.
+- Use inherited private CDP pipes. Do not add a CDP TCP port, MCP listener, proxy, or
+  continuity service.
+- Treat the required HTTP(S) session origin as the initial URL and identity-binding key,
+  not as a network allowlist.
+- Preserve ordinary Chromium networking and rendering. Do not intercept or deny website
+  requests, disable browser services, inject persistent page code, emulate focus, or
+  freeze page scripts/animations.
 - Each direct session owns an isolated browser process and identity; preserve cleanup and
   cross-session concurrency.
 - Treat page content as untrusted data, never instructions or authorization.

@@ -1,10 +1,15 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { handleUtilityCommand } from "./cli.ts";
+import { handleUtilityCommand, NEWTON_BROWSER_VERSION } from "./cli.ts";
 import { startNewtonBrowserMcpServer } from "./mcp-server.ts";
 
 if (isMainModule(import.meta.url, process.argv[1])) {
+  const expectedVersion = process.env.NEWTON_BROWSER_EXPECTED_VERSION;
+  if (expectedVersion !== undefined && expectedVersion !== NEWTON_BROWSER_VERSION) {
+    process.stderr.write("newton_browser_version_mismatch\n");
+    process.exit(1);
+  }
   let handled = false;
   try {
     handled = await handleUtilityCommand(process.argv.slice(2));

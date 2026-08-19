@@ -84,6 +84,7 @@ const identitySpecificTerms = [
 const identitySpecificQaFiles = new Set([
   "scripts/smoke/direct-real-sites-live.mjs",
   "test/direct-live-config.test.mjs",
+  "test/evidence/bugs.md",
 ]);
 const blockedExact = ["shared" + ".mjs", "newton_browser_host_" + "policies", "browser_" + "bridge_host_policies"];
 const retiredTransport = ["re", "mote"].join("");

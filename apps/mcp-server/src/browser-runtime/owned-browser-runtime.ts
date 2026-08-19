@@ -15,18 +15,11 @@ import {
   type NewtonIdentityLease,
   type ProfileStore,
 } from "./profile-store.ts";
-import {
-  startPolicyProxy,
-  type PolicyProxy,
-} from "./policy-proxy.ts";
-
 export type OwnedBrowserFamily = "chrome" | "edge";
 export type OwnedBrowserRuntimePhase =
-  | "proxy_start"
   | "identity_lease"
   | "browser_start"
   | "browser_cleanup"
-  | "proxy_cleanup"
   | "lease_release";
 
 export class OwnedBrowserRuntimeError extends Error {
@@ -72,7 +65,6 @@ export type LaunchOwnedBrowserRuntimeOptions = Readonly<{
   browserFamily: OwnedBrowserFamily;
   profileStore: ProfileStore;
   identityId: string;
-  allowedOrigins: readonly string[];
   headless?: boolean;
   readyDeadlineMs?: number;
   stderrDiagnosticBytes?: number;
@@ -81,35 +73,27 @@ export type LaunchOwnedBrowserRuntimeOptions = Readonly<{
   killTree?: ChromiumLaunchOptions["killTree"];
   platform?: NodeJS.Platform;
   ephemeralIdentity?: boolean;
-  startProxy?: typeof startPolicyProxy;
 }>;
 
 export class OwnedBrowserRuntime {
   readonly receipt: OwnedBrowserRuntimeReceipt;
   readonly unavailable: Promise<void>;
   private readonly process: ChromiumProcess;
-  private readonly proxy: PolicyProxy;
   private readonly lease: NewtonIdentityLease;
   private processClosed = false;
-  private proxyClosed = false;
   private leaseReleased = false;
   private state: "ready" | "closing" | "cleanup_uncertain" | "closed" = "ready";
   private closeOperation: Promise<void> | undefined;
   private readonly bootstrap: OwnedDriverBootstrap;
-  private readonly allowedOriginFingerprint: string;
   private bootstrapClaimed = false;
 
   constructor(capability: object, input: {
     process: ChromiumProcess;
-    proxy: PolicyProxy;
     lease: NewtonIdentityLease;
-    allowedOriginFingerprint: string;
   }) {
     if (capability !== OWNED_RUNTIME_CAPABILITY) throw new OwnedBrowserRuntimeError("browser_start");
     this.process = input.process;
-    this.proxy = input.proxy;
     this.lease = input.lease;
-    this.allowedOriginFingerprint = input.allowedOriginFingerprint;
     this.receipt = Object.freeze({
       status: "ready",
       identityId: input.lease.id,
@@ -120,8 +104,7 @@ export class OwnedBrowserRuntime {
       transport: input.process.transport,
       rootTargetId: input.process.rootTargetId,
     });
-    this.unavailable = Promise.race([input.process.exited, input.proxy.closed]).then(() => undefined);
-    void input.proxy.closed.then(() => this.handleUnexpectedProxyLoss());
+    this.unavailable = input.process.exited;
     void input.process.exited.then(() => this.handleUnexpectedProcessExit());
   }
 
@@ -129,14 +112,10 @@ export class OwnedBrowserRuntime {
     return this.state;
   }
 
-  claimDriverBootstrap(allowedOrigins: readonly string[]): OwnedDriverBootstrap {
+  claimDriverBootstrap(): OwnedDriverBootstrap {
     if (this.process.exitedConfirmed()) this.handleUnexpectedProcessExit();
     if (this.state !== "ready") throw new OwnedBrowserRuntimeError("browser_cleanup", this.state === "cleanup_uncertain");
-    let fingerprint: string;
-    try { fingerprint = normalizedOriginFingerprint(allowedOrigins); } catch { throw new OwnedBrowserRuntimeError("browser_start"); }
-    if (this.bootstrapClaimed || fingerprint !== this.allowedOriginFingerprint) {
-      throw new OwnedBrowserRuntimeError("browser_start");
-    }
+    if (this.bootstrapClaimed) throw new OwnedBrowserRuntimeError("browser_start");
     this.bootstrapClaimed = true;
     return this.bootstrap;
   }
@@ -161,13 +140,6 @@ export class OwnedBrowserRuntime {
       }
       this.processClosed = true;
     }
-    if (!this.proxyClosed) {
-      try { await this.proxy.close(); } catch {
-        this.state = "cleanup_uncertain";
-        throw new OwnedBrowserRuntimeError("proxy_cleanup", true);
-      }
-      this.proxyClosed = true;
-    }
     if (!this.leaseReleased) {
       try {
         if (this.process.guardianManagedProfileCleanup) acknowledgeGuardianProfileCleanup(this.lease);
@@ -179,17 +151,6 @@ export class OwnedBrowserRuntime {
       this.leaseReleased = true;
     }
     this.state = "closed";
-  }
-
-  private handleUnexpectedProxyLoss(): void {
-    if (this.state !== "ready") return;
-    this.proxyClosed = true;
-    this.state = "closing";
-    const operation = this.closeAttempt();
-    this.closeOperation = operation;
-    void operation.finally(() => {
-      if (this.closeOperation === operation) this.closeOperation = undefined;
-    }).catch(() => {});
   }
 
   private handleUnexpectedProcessExit(): void {
@@ -204,23 +165,13 @@ export class OwnedBrowserRuntime {
 }
 
 export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRuntimeOptions): Promise<OwnedBrowserRuntime> {
-  let allowedOriginFingerprint: string;
-  try { allowedOriginFingerprint = normalizedOriginFingerprint(options.allowedOrigins); } catch {
-    throw new OwnedBrowserRuntimeError("proxy_start");
-  }
-  let proxy: PolicyProxy;
-  try { proxy = await (options.startProxy ?? startPolicyProxy)({ allowedOrigins: options.allowedOrigins }); } catch {
-    throw new OwnedBrowserRuntimeError("proxy_start");
-  }
-
   let lease: NewtonIdentityLease;
   try { lease = acquireNewtonIdentityLease(options.profileStore, options.identityId); } catch {
-    await closeProxyAfterStartupFailure(proxy);
     throw new OwnedBrowserRuntimeError("identity_lease");
   }
 
   if (lease.browserFamily !== options.browserFamily) {
-    await rollbackLeaseAndProxy(lease, proxy);
+    await rollbackLease(lease);
     throw new OwnedBrowserRuntimeError("identity_lease");
   }
 
@@ -238,52 +189,31 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
       validateOwnedProfileLease: (directory, candidate) => candidate === lease && validateNewtonIdentityLease(lease, directory),
       ...(options.killTree === undefined ? {} : { killTree: options.killTree }),
       ...(options.platform === undefined ? {} : { platform: options.platform }),
-      policyProxy: proxy,
       guardianProfileCleanup: guardianProfileCleanupPlan(lease, options.ephemeralIdentity === true),
     });
   } catch (error) {
     if (error instanceof ChromiumLaunchError && error.cleanupUncertain) {
       const retry = async () => {
         await error.retryCleanup();
-        await rollbackLeaseAndProxy(lease, proxy, options.spawn === undefined);
+        await rollbackLease(lease, options.spawn === undefined);
       };
       throw new OwnedBrowserRuntimeError("browser_start", true, retry);
     }
-    await rollbackLeaseAndProxy(lease, proxy, options.spawn === undefined);
+    await rollbackLease(lease, options.spawn === undefined);
     throw new OwnedBrowserRuntimeError("browser_start");
   }
 
-  return new OwnedBrowserRuntime(OWNED_RUNTIME_CAPABILITY, { process, proxy, lease, allowedOriginFingerprint });
+  return new OwnedBrowserRuntime(OWNED_RUNTIME_CAPABILITY, { process, lease });
 }
 
-function normalizedOriginFingerprint(origins: readonly string[]): string {
-  if (!Array.isArray(origins) || origins.length < 1 || origins.length > 32) throw new Error("invalid_origin_grant");
-  const normalized = new Set<string>();
-  for (const value of origins) {
-    if (typeof value !== "string" || value.length < 1 || value.length > 512) throw new Error("invalid_origin_grant");
-    let parsed: URL;
-    try { parsed = new URL(value); } catch { throw new Error("invalid_origin_grant"); }
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password
-      || parsed.pathname !== "/" || parsed.search || parsed.hash) throw new Error("invalid_origin_grant");
-    normalized.add(parsed.origin);
-  }
-  return [...normalized].sort().join("\n");
-}
-
-async function rollbackLeaseAndProxy(
+async function rollbackLease(
   lease: NewtonIdentityLease,
-  proxy: PolicyProxy,
   guardianManaged = false,
 ): Promise<void> {
   let leaseReleased = false;
-  let proxyClosed = false;
   const retry = async (): Promise<void> => {
     let failedPhase: OwnedBrowserRuntimePhase | null = null;
-    if (!proxyClosed) {
-      try { await proxy.close(); proxyClosed = true; }
-      catch { failedPhase ??= "proxy_cleanup"; }
-    }
-    if (proxyClosed && !leaseReleased) {
+    if (!leaseReleased) {
       try {
         if (guardianManaged) acknowledgeGuardianProfileCleanup(lease);
         else releaseNewtonIdentityLease(lease);
@@ -292,14 +222,6 @@ async function rollbackLeaseAndProxy(
       catch { failedPhase ??= "lease_release"; }
     }
     if (failedPhase) throw new OwnedBrowserRuntimeError(failedPhase, true, retry);
-  };
-  await retry();
-}
-
-async function closeProxyAfterStartupFailure(proxy: PolicyProxy): Promise<void> {
-  const retry = async (): Promise<void> => {
-    try { await proxy.close(); }
-    catch { throw new OwnedBrowserRuntimeError("proxy_cleanup", true, retry); }
   };
   await retry();
 }

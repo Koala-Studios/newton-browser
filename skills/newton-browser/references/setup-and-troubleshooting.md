@@ -1,68 +1,63 @@
-# Setup and Troubleshooting
+# Setup and troubleshooting
 
-## Setup
+Ephemeral sessions work after the compiled MCP entrypoint is configured. Optional setup
+records a default browser:
 
-1. After configuring the compiled MCP entrypoint, ephemeral sessions work without a
-   setup command. Optional setup records only a default browser:
+```text
+newton-browser setup --browser chrome
+```
 
-   ```text
-   newton-browser setup --browser chrome
-   ```
+## Exact CLI provenance
 
-2. When authentication is needed, create an identity explicitly, then have the operator
-   sign in inside the visible owned browser and close it:
+Use the `command` plus leading entrypoint from Codex's active
+`[mcp_servers.newton-browser]` table for every setup, identity, doctor, or install
+operation. Run that exact entrypoint with `--version` first and require `0.6.2`.
 
-   ```text
-   newton-browser identity create --browser chrome
-   newton-browser identity login <identity-id> --origin https://example.com
-   ```
+Never execute `apps/mcp-server/dist/index.js` from a repository or Codex worktree, a
+global `newton-browser`, `npx`, or an older versioned package for live browser work. Do
+not pass `--allow-origin`, `allowedOrigins`, or any retired network-grant option. If the
+configured immutable entrypoint is missing or reports another version, repair the client
+configuration before opening a browser.
 
-   Add only exact redirect origins with `--allow-origin`.
-3. Run `newton-browser doctor --live` for an explicit disposable
-   process/CDP/proxy/cleanup check.
-4. Until an approved npm publication, build the checkout and configure the MCP client
-   with the absolute compiled `apps/mcp-server/dist/index.js`. Do not install an older
-   extension-era npm version.
-5. Restart the client. No extension, pairing key, debug port, or daemon is required.
+For authentication, use that exact immutable CLI entrypoint to create/bind an identity
+and let the operator sign in personally:
 
-Each MCP client starts one stateless stdio host. Each browser session owns an isolated
-browser process and identity. A persistent identity is exclusive.
+```text
+newton-browser identity create --browser chrome
+newton-browser identity bind --id <identity-id> --origin https://example.com
+newton-browser identity login --origin https://example.com
+```
 
-Operator `config.json` may contain only `browser` and `hostPolicies`. Host policies can
-raise commit classification for an exact origin and add screenshot masks, but never
-authorize work or lower the generic floor. See `docs/INSTALL.md` in the Newton Browser
-repository for the strict shape.
+The visible login browser and headless MCP sessions both use normal Chromium networking.
+There are no origin grants or `--allow-origin` flags. Newton never attaches to ordinary
+Chrome tabs. Run `newton-browser doctor --live` for a disposable process/CDP/cleanup check.
 
-## Typed failures
+Important failures:
 
 | Code | Response |
 | --- | --- |
-| `protocol_version_required` | Send protocol metadata on every request. |
-| MCP error `-32022` | Configure a client that sends MCP `2026-07-28`; Newton does not negotiate down. |
-| `client_capabilities_required` | Fix per-request `_meta`; do not add a handshake. |
-| `direct_runtime_unavailable` | Stop the exact session and run the live doctor. |
-| `configured_identity_busy` | Close the owner, choose another identity, or omit it. |
-| `profile_identity_lease_active` | Never override or delete the lease. |
-| `direct_cleanup_uncertain` | Do not retry effects; preserve the error and verify cleanup. |
-| `origin_required` / `invalid_origin` | Supply one exact normalized HTTP(S) origin. |
-| `origin_not_granted` | Restart with an explicitly authorized exact origin. |
-| `session_queue_full` | Stop issuing work until pending commands settle. |
-| `result_too_large` | Use JPEG/region, a smaller viewport, or a smaller observation. |
-| `command_timeout` | Inspect current state; never blindly repeat a commit-shaped action. |
-| `session_stopping` | Wait for cleanup or start a new session after it completes. |
+| `protocol_version_required` / MCP `-32022` | Send stateless MCP `2026-07-28` metadata on every request. |
+| `direct_runtime_unavailable` | Stop the session and run the live doctor. |
+| `configured_identity_busy` | Close the owner, use another identity, or omit it. |
+| `direct_cleanup_uncertain` | Do not retry effects; retry exact cleanup. |
+| `origin_required` / `invalid_origin` | Supply one normalized HTTP(S) initial origin. |
+| `session_queue_full` | Let pending work settle. |
+| `command_timeout` | Inspect state; do not blindly repeat a commit. |
 | `stale_target` / `not_found` / `ambiguous` | Re-observe and use a fresh narrower ref. |
-| `blocked_by_floor` | Do not bypass the floor; let the user complete sensitive input. |
-| `no_dialog_open` | Observe again; no dialog is awaiting a response. |
-| `fill_form_requires_fields` | Supply a non-empty ordered flat field list. |
-| `unknown_request_id` / `body_unavailable` | Re-list network requests and use a fresh id. |
+| `max_refs_exceeded` | On 0.6.2, make one fresh interactive observation; it starts a new bounded ref cycle without reload or navigation. On an older runtime, preserve the session and verify state with text/screenshot reads before upgrading. Never retry an uncertain effect. |
+| `blocked_by_floor` | Let the user complete sensitive input. |
 
-## Cleanup
+An action cannot be reported as `prevented` after input dispatch. Network requests,
+dialogs, popups, downloads, and navigation observed after a click are normal browser
+effects, not policy failures. Keep the same session open and re-observe before deciding
+that authentication or an application authorization did not persist.
 
-Stop every session explicitly and confirm `browser.sessions.list` is empty. Stop succeeds
-only after browser/proxy/lease cleanup is confirmed. After a confirmed crash, an operator
-may use `identity lease-inspect` then `identity lease-recover`; recovery requires all
-processes from that browser family to be closed. Never edit a lease file manually.
+If CSS, fonts, icons, or login redirects fail, confirm the exact Newton 0.6.2 entrypoint
+and close stale older processes. Newton does not proxy traffic, intercept Fetch, disable
+browser networking, inject styles/scripts, or freeze rendering. Any evidence that it does
+is a product defect, not a missing grant.
 
-If a page lacks a required third-party resource, restart with only that exact origin in
-`allowedOrigins`. This array contains additional origins only; never repeat the primary
-`origin`. Resource type never widens the grant.
+The visible identity-login command completes when the operator closes its owned Chrome
+window only after exact runtime and lease cleanup is confirmed. Stop each agent session
+and confirm `browser.sessions.list` is empty. Lease recovery is an operator action and
+refuses a live recorded browser process.

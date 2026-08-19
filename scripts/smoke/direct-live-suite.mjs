@@ -12,7 +12,6 @@ const stages = [
   ["direct_concurrency", "scripts/smoke/direct-concurrency-live.mjs"],
   ["direct_hard_crash", "scripts/smoke/direct-hard-crash-live.mjs"],
   ["direct_frame_target_churn", "scripts/smoke/frame-target-churn-live.mjs"],
-  ["direct_origin_containment", "scripts/smoke/origin-containment-live.mjs"],
   ["direct_input", "scripts/smoke/input-reliability-live.mjs"],
   ["direct_dialog_renderer", "scripts/smoke/dialog-renderer-live.mjs"],
 ];

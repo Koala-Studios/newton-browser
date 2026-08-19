@@ -34,7 +34,8 @@ step identifiers. Raw browser/page output is deleted with the identity-checked r
 The runner builds and packs Newton, starts Xvfb, then executes the agent-cost gate,
 the complete direct live suite, the public real-site suite, and an exact-tarball
 install/run of the packed Chrome runtime. Each test owns and
-cleans its browser process, private CDP pipe, policy proxy, identity, and lease.
+cleans its browser process, private CDP pipe, identity, and lease. Website traffic uses
+ordinary Chromium networking; the runner does not install a Newton proxy.
 Receipts record the source digest, browser/runtime versions, selected package versions,
 image identifier, and exact gate statuses. This narrows, rather than guarantees,
 reproducibility because transitive Debian and registry responses are not mirrored.

@@ -7,7 +7,7 @@ TCP port.
 
 ## Install the direct runtime
 
-Version 0.5.0 is a private local candidate and is not published to npm. From this
+Version 0.6.2 is a private local candidate and is not published to npm. From this
 checkout, build and run the exact compiled entrypoint:
 
 ```powershell
@@ -17,7 +17,7 @@ pnpm build
 
 The MCP server can immediately start ephemeral sessions using a discovered Chrome or
 Edge installation. Optional setup selects a default (`--browser edge` for Edge), writes
-only that browser preference, and never selects an identity implicitly.
+only that browser preference. Persistent identity selection is a separate operator action.
 
 ```powershell
 node apps/mcp-server/dist/index.js setup --browser chrome
@@ -27,13 +27,20 @@ Optional operator login:
 
 ```powershell
 node apps/mcp-server/dist/index.js identity create --browser chrome
-node apps/mcp-server/dist/index.js identity login nbi_<opaque-id> --origin https://example.com
+node apps/mcp-server/dist/index.js identity bind --id nbi_<opaque-id> --origin https://example.com
+node apps/mcp-server/dist/index.js identity login --origin https://example.com
 ```
 
-The operator enters credentials personally in the visible contained browser. Add only
-required exact redirect origins with repeated `--allow-origin`; never repeat the primary
-`--origin`. Close the browser after
-login so Newton can confirm process, proxy, and lease cleanup.
+The operator enters credentials personally in the visible browser. Login uses ordinary
+Chromium networking, including regional redirects and third-party resources; there is no
+origin-grant configuration. Close the browser after login so Newton can confirm process
+and lease cleanup.
+
+`identity bind` creates a durable exact-primary-origin mapping. Later sessions for that
+origin reuse the selected identity without relying on conversational memory; unrelated
+origins remain ephemeral. Inspect mappings with `identity bindings` and remove one with
+`identity unbind --origin https://example.com`. A bound identity is still exclusive and
+must be unbound before deletion.
 
 Optional live doctor:
 
@@ -61,6 +68,16 @@ Review the dry run, apply deliberately, and restart the client. Clients that do 
 support stateless MCP `2026-07-28` cannot use this release. See
 [`MCP_CLIENTS.md`](MCP_CLIENTS.md) for exact client shapes.
 
+For Codex 0.147.0 or newer, a non-dry-run install is transactional: before changing
+`config.toml`, Newton starts the exact candidate entrypoint with a fresh isolated Newton
+configuration, completes stateless `server/discover` and `tools/list`, requires the
+candidate's package version and all ten required `browser.*` tools, and confirms clean
+exit. It then enables Codex's `mcp_2026_07_28` feature and pins both
+`CODEX_MCP_PROTOCOL_VERSION=2026-07-28` and `NEWTON_BROWSER_EXPECTED_VERSION`. An
+incompatible candidate leaves the existing working entry untouched, and Newton refuses
+startup if an entrypoint and its configured version disagree. A higher version number
+alone is never treated as an upgrade.
+
 ## Install from source
 
 ```powershell
@@ -85,12 +102,12 @@ Rebuild after source changes.
 
 ## Install from a tarball
 
-Use `artifacts/newton-browser-0.5.0.tgz` only after verifying it was produced by the
+Use `artifacts/newton-browser-0.6.2.tgz` only after verifying it was produced by the
 current tree, or use a verified release asset:
 
 ```powershell
 $installRoot = Join-Path $env:LOCALAPPDATA "NewtonBrowser\package"
-npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.5.0.tgz"
+npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.6.2.tgz"
 node "$installRoot\node_modules\newton-browser\dist\index.js" install codex --dry-run
 ```
 
@@ -115,13 +132,17 @@ Configuration locations:
 - macOS: `~/Library/Application Support/NewtonBrowser`
 - Linux: `${XDG_CONFIG_HOME:-~/.config}/newton-browser`
 
-The optional `config.json` accepts only `browser` and `hostPolicies`. Host policies can
+The optional `config.json` accepts only `browser`, `hostPolicies`, and `identityBindings`.
+Host policies can
 raise the structural commit boundary for exact origins and can add screenshot masks; they
 cannot authorize an action or weaken the generic floor. For example:
 
 ```json
 {
   "browser": "chrome",
+  "identityBindings": [
+    { "origin": "https://example.com", "identityId": "nbi_0123456789abcdef0123456789abcdef" }
+  ],
   "hostPolicies": [
     {
       "origins": ["https://example.com"],
@@ -136,6 +157,8 @@ cannot authorize an action or weaken the generic floor. For example:
 
 Origins must be exact HTTP(S) origins. Commit rules and sensitive zones are bounded,
 strictly validated local operator configuration; page content cannot create them.
+Identity bindings are also operator-only, bounded, exact-origin mappings and never bypass
+the identity lease. They select a profile; they do not restrict browser networking.
 
 Continue with [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 

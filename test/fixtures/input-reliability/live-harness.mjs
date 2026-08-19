@@ -47,10 +47,7 @@ export async function runInputReliabilityLive(name, execute, options = {}) {
       NEWTON_BROWSER_CONFIG_DIR: directRoot.root,
       NEWTON_BROWSER_PROFILE_STORE_DIR: path.join(directRoot.root, "identities"),
     });
-    const started = await mcp("browser.session.start", {
-      origin,
-      allowedOrigins: [crossOrigin],
-    });
+    const started = await mcp("browser.session.start", { origin });
     sessionId = started.sessionId;
     assert(typeof sessionId === "string" && sessionId.length > 0, "session did not start", started);
     const navigated = await mcp("browser.act", {

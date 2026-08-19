@@ -33,7 +33,6 @@ const host = createConfiguredDirectBrowserHost({
 });
 const created = host.createSession({
   origin,
-  allowedOrigins: [origin],
 });
 await host.waitForSessionReady(created.sessionId, 30_000);
 if (!Number.isSafeInteger(browserPid) || browserPid <= 0 || !ephemeralIdentity) throw new Error("direct_hard_crash_pid_missing");

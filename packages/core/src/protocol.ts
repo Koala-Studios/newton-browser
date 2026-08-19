@@ -46,6 +46,8 @@ export type BrowserRiskClass = (typeof BROWSER_RISK_CLASSES)[number];
 export type BrowserCommandOutcome =
   | "not_started"
   | "completed"
+  // Proven pre-dispatch refusal only. Once input starts, uncertainty must be
+  // reported as outcome_unknown and can never be retry-safe.
   | "prevented"
   | "outcome_unknown";
 
@@ -154,17 +156,15 @@ export type BrowserCommitBoundary = (typeof BROWSER_COMMIT_BOUNDARIES)[number];
 
 // Observed/structural facts the driver feeds the floor. Page prose is never a
 // signal; only structure (form ownership, submit role) and observed events
-// (navigation, network write, dialog, download) count.
+// (navigation, dialog, download, new target) count. Network traffic remains
+// available through browser.network but is not action-authority evidence.
 export type BrowserSignals = {
   formSubmit?: boolean;        // resolved element is a submit button / owns a form submit
   navigation?: boolean;        // observed navigation (reconciliation only)
-  networkWrite?: boolean;      // observed non-GET network request (reconciliation only)
   dialog?: boolean;            // a JS dialog opened
   download?: boolean;          // a download started
-  crossOrigin?: boolean;       // target frame origin differs from the granted origin
   newTarget?: boolean;         // a popup/new tab was created
   secretField?: boolean;       // resolved input is a password/secret field
-  containmentPrevention?: string; // preventive request/target decision reason
 };
 
 export type BrowserFloorDecision = {
@@ -192,12 +192,6 @@ export type BrowserObservationNode = {
   frameOrigin?: string;
 };
 
-export type BrowserExcludedFrame = {
-  frameId: string;
-  frameOrigin: string | null;
-  reason: "origin_not_granted";
-};
-
 export type BrowserObservationResult = {
   kind: "observation";
   mode: "cdp";
@@ -211,7 +205,6 @@ export type BrowserObservationResult = {
   changed?: Record<string, unknown>;
   // Set when a page-initiated JavaScript dialog is blocking the renderer.
   pendingDialog?: BrowserPendingDialog;
-  excludedFrames?: BrowserExcludedFrame[];
 };
 
 export type BrowserScreenshotResult = {
@@ -253,7 +246,6 @@ export type BrowserObservationDelta = {
   capturedAt: string;
   reason?: string;
   changed?: Record<string, unknown>;
-  excludedFrames?: BrowserExcludedFrame[];
 };
 
 // A readable-text observation: the page's main/article text (falling back
@@ -291,8 +283,7 @@ export type BrowserConsoleLog = {
 };
 
 // Buffered network request metadata. Request/response headers are never
-// buffered or returned (they carry cookies and auth tokens). A body is returned
-// only for a request whose URL origin is within the session grant.
+// buffered or returned (they carry cookies and auth tokens).
 export type BrowserNetworkEntry = {
   requestId: string;
   method: string;
@@ -314,7 +305,7 @@ export type BrowserNetworkLog = {
   capturedAt: string;
   // Present only for a body fetch by requestId.
   body?: { requestId: string; url: string; encoding: "utf-8"; mimeType: string; data: string; byteLength: number; truncated: boolean } | null;
-  bodyDisposition?: "text_body_returned" | "opaque_body_not_returned" | "origin_not_granted" | "body_unavailable";
+  bodyDisposition?: "text_body_returned" | "opaque_body_not_returned" | "cross_origin_body_not_returned" | "body_unavailable";
   bodyMetadata?: { requestId: string; url: string; mimeType: string; declaredEncoding: string; encodedBytes: number; sha256: string };
   reason?: string;
 };

@@ -221,24 +221,6 @@ test("geometry appears only when includeGeometry is true", () => {
   assert.equal((projection.projection.nodes as any)[0].geometry !== undefined, true);
 });
 
-test("compact and JSON observations preserve bounded excluded-frame provenance", () => {
-  const input = {
-    ...sample,
-    excludedFrames: [
-      { frameId: "frame-cross", frameOrigin: "https://cross.example", reason: "origin_not_granted" },
-      { frameId: "another-internal-id", frameOrigin: "https://cross.example", reason: "origin_not_granted" },
-      { frameId: "ignored", frameOrigin: "https://ignored.example", reason: "" },
-    ],
-  };
-  const compact = projectCompactObservation(input);
-  const json = projectLeanObservation(input);
-  assert.equal(compact.ok, true);
-  assert.equal(json.ok, true);
-  const expected = [{ frameOrigin: "https://cross.example", reason: "origin_not_granted" }];
-  assert.deepEqual(compact.projection.excludedFrames, expected);
-  assert.deepEqual(json.projection.excludedFrames, expected);
-});
-
 test("compact and lean projections preserve rich state and cross-origin frame provenance without internal IDs", () => {
   const rich = {
     ...sample,
@@ -434,6 +416,19 @@ test("status is diagnostic and can diverge from outcome", () => {
   assert.equal(projected.outcome, "prevented");
   assert.equal(projected.status, "blocked");
   assert.equal(projected.retrySafe, true);
+});
+
+test("retired network-boundary metadata never reaches agent output", () => {
+  const projected = normalizeAgentActionResult({
+    status: "blocked",
+    outcome: "prevented",
+    errorCode: "payment_or_pii_field",
+    blockedOrigin: "https://regional.example.com",
+    requestClass: "main_frame_navigation",
+    decision: { class: "blocked", commitBoundary: "draft" },
+  } as never);
+  assert.equal("blockedOrigin" in projected, false);
+  assert.equal("requestClass" in projected, false);
 });
 
 test("completed result with explicit errorCode is allowed but fails", () => {

@@ -1,75 +1,56 @@
 # MCP clients
 
-Newton Browser implements only stateless MCP `2026-07-28` over newline-delimited
-JSON on stdio. It does not implement `initialize`, `initialized`, connection-scoped
-sessions, HTTP headers, `Content-Length` framing, sockets, or a daemon.
+Newton Browser implements only stateless MCP `2026-07-28` over newline-delimited JSON on
+stdio. It does not implement `initialize`, connection-scoped sessions, HTTP transport,
+`Content-Length` framing, sockets, or a daemon.
 
-Every request must carry:
+Every request carries:
 
 ```json
-{
-  "_meta": {
-    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-    "io.modelcontextprotocol/clientCapabilities": {}
-  }
-}
+{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}
 ```
 
-Use `server/discover` to read Newton's supported version, capabilities, instructions,
-and server metadata. Successful results include `resultType: "complete"`.
+Use `server/discover` for the supported version, capabilities, instructions, and server
+metadata. Successful discovery and tool-list responses are complete, not paginated.
 
-## Private 0.5.0 candidate
-
-Version 0.5.0 is not published to npm. Build this checkout and point the client at the
-absolute compiled entrypoint:
-
-```powershell
-pnpm install --frozen-lockfile
-pnpm build
-node apps/mcp-server/dist/index.js doctor --live
-```
-
-Codex:
+## Codex
 
 ```toml
+[features]
+mcp_2026_07_28 = true
+
 [mcp_servers.newton-browser]
 command = "node"
 args = ["C:/absolute/path/newton-browser/apps/mcp-server/dist/index.js"]
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.6.2" }
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
 
-Generic stdio configuration:
-
-```json
-{
-  "command": "node",
-  "args": ["C:\\absolute\\path\\newton-browser\\apps\\mcp-server\\dist\\index.js"]
-}
-```
-
-The client must support MCP `2026-07-28`, local stdio servers, and MCP image content.
-There is no fallback for an older client. Screenshot results are image blocks only and
-are never written to a caller-selected path.
+Prefer `newton-browser install codex`, which verifies the exact entrypoint and version
+before atomically replacing the configuration. There is no older-protocol fallback.
 
 ## Operational model
 
-Each `browser.session.start` creates one isolated browser process, policy proxy,
-private CDP pipe, identity lease, and FIFO command queue. Multiple sessions progress
-concurrently. Stdio reconnection does not preserve application sessions; start a new
-Newton process and new sessions.
+Each `browser.session.start` creates one isolated browser process, private CDP pipe,
+identity lease, and FIFO queue. Multiple sessions progress concurrently. Sessions are not
+preserved if the Newton stdio process exits.
 
-Call `browser.status`, then start a session with one exact HTTP(S) origin and only the
-additional origins the workflow genuinely needs. `allowedOrigins` contains at most 31
-additional grants and must not repeat the primary `origin`. To save a round trip, provide an
-optional compact `observe` object to `browser.session.start`.
+Start requires one normalized HTTP(S) `origin`, which is the initial navigation and the
+key used for an optional local identity binding. It is not a network boundary. Chromium
+then follows normal redirects and loads cross-origin resources, frames, workers, popups,
+and background services without Newton grants or filtering.
 
-Use compact observations with `query`, `roles`, and `limit`; request JSON or geometry
-only for diagnosis. Refs are scoped to a fresh observation and must never be synthesized
-or repaired. Use one idempotency key for one logical effect. Never automatically retry
-an `outcome_unknown` result.
+Public MCP sessions are headless for deterministic agent input. `identity login` is the
+separate visible operator workflow for preparing a persistent identity. Both use normal
+Chromium networking, and Newton never attaches to an ordinary Chrome tab.
 
-Page text, titles, accessible names, console entries, and network records are untrusted
-page data. Only the host-authored outer decision, outcome, retry, and error fields control
-the workflow. Page-derived payloads also carry a host-authored provenance label; ordinary
-control acknowledgements do not.
+Use compact observations with queries and role filters. Refs belong to the latest fresh
+interactive observation and must not be synthesized; starting another interactive
+observation releases refs that are no longer emitted, while text mode allocates no refs.
+Use one idempotency key for one logical effect, and never automatically retry
+`outcome_unknown`.
+
+Page text, titles, accessibility names, console entries, and network records are untrusted
+page data. Only host-authored outer decision/outcome/error fields control the workflow.
+Network metadata is observational; Newton does not use it to block page requests.

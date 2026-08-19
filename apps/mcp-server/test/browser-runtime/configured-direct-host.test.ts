@@ -99,6 +99,55 @@ test("persistent identities are used only when explicitly requested", async () =
   }
 });
 
+test("operator origin bindings reuse one persistent identity without affecting unrelated origins", async () => {
+  const fixture = configuredFixture();
+  try {
+    const persistent = createNewtonIdentity(fixture.store, { browserFamily: "edge" });
+    const runtimes: FakeOwnedRuntime[] = [];
+    const host = configuredHost(fixture, {
+      identityBindings: [{ origin: "https://bound.test", identityId: persistent.id }],
+      discoverBrowser: (input: { family: "chrome" | "edge" }) => ({ family: input.family, path: `${fixture.executablePath}-${input.family}`, source: "system" }),
+      async launchRuntime(options: { identityId: string; browserFamily: "chrome" | "edge" }) {
+        const runtime = new FakeOwnedRuntime(options.identityId, options.browserFamily);
+        runtimes.push(runtime);
+        return runtime;
+      },
+    });
+    const bound = host.createSession(validInit("https://bound.test")).sessionId;
+    await host.waitForSessionReady(bound);
+    assert.equal(runtimes[0]?.receipt.identityId, persistent.id);
+    assert.equal(runtimes[0]?.receipt.browserFamily, "edge");
+    const unrelated = host.createSession(validInit("https://unrelated.test")).sessionId;
+    await host.waitForSessionReady(unrelated);
+    assert.notEqual(runtimes[1]?.receipt.identityId, persistent.id);
+    assert.equal(runtimes[1]?.receipt.browserFamily, "chrome");
+    const busy = host.createSession(validInit("https://bound.test")).sessionId;
+    await assert.rejects(host.waitForSessionReady(busy), bounded("configured_identity_busy", fixture));
+    await Promise.all([host.stopSession(bound), host.stopSession(unrelated)]);
+    assert.deepEqual(listNewtonIdentities(fixture.store).map((identity) => identity.id), [persistent.id]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("configured host rejects malformed or duplicate identity bindings before discovery", () => {
+  const fixture = configuredFixture();
+  try {
+    for (const identityBindings of [
+      [{ origin: "https://example.test/path", identityId: "nbi_0123456789abcdef0123456789abcdef" }],
+      [{ origin: "https://example.test", identityId: "bad" }],
+      [
+        { origin: "https://example.test", identityId: "nbi_0123456789abcdef0123456789abcdef" },
+        { origin: "https://example.test", identityId: "nbi_fedcba9876543210fedcba9876543210" },
+      ],
+    ]) {
+      assert.throws(() => configuredHost(fixture, { identityBindings }), /configured_identity_bindings_invalid/u);
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("browser discovery failure is bounded and creates no ephemeral identity", () => {
   const fixture = configuredFixture();
   try {
@@ -488,10 +537,7 @@ function releaseSafeIdentity(store: ReturnType<typeof openProfileStore>, id: str
 }
 
 function validInit(origin = "https://example.com"): BrowserSessionInit {
-  return {
-    origin,
-    allowedOrigins: [origin, "https://assets.example.com"],
-  };
+  return { origin };
 }
 
 function inertTransport() {
