@@ -39,9 +39,10 @@ test("real direct composition attaches, commits initial navigation, and installs
     assert.equal(methods[0], "Target.attachToTarget");
     assert.equal(methods.includes("Fetch.enable"), false);
     assert.ok(methods.indexOf("Page.navigate") > methods.indexOf("Target.attachToTarget"));
-    const browserAutoAttach = transport.calls.find((call) => call.method === "Target.setAutoAttach"
+    const browserDiscovery = transport.calls.find((call) => call.method === "Target.setDiscoverTargets"
       && call.sessionId === null && Array.isArray(call.params.filter));
-    assert.deepEqual(browserAutoAttach?.params.filter, [
+    assert.equal(browserDiscovery?.params.discover, true);
+    assert.deepEqual(browserDiscovery?.params.filter, [
       { type: "page", exclude: false },
       { exclude: true },
     ]);

@@ -23,12 +23,12 @@ allowlists.
 | Rendering integrity | no network-altering launch flags, injected UI, focus emulation, persistent observers, or script/animation freeze | pass in source; representative live surfaces render without Newton block/error signatures |
 | Direct runtime | source and exact-packed start/observe/act/screenshot/stop in Chrome and Edge | pass: seven-stage source suites and packed artifact |
 | Concurrency | same-session FIFO, cross-session progress, distinct processes/identities, zero residue | pass: Chrome and Edge live |
-| Frames/input/lifecycle | same-process and nested OOPIF actions, dialogs, renderer/process loss, guardian cleanup, stale-ref fencing, bounded same-document ref recycling | pass: deterministic plus Chrome and Edge live ref-churn proof |
+| Frames/input/lifecycle | same-process and nested OOPIF actions, owned popup/new-tab activation and opener restoration, dialogs, renderer/process loss, guardian cleanup, stale-ref fencing, bounded same-document ref recycling | pass: deterministic plus current-tree Chrome/Edge secondary-page live proof |
 | Compact output | token budgets, flat actions, one canonical result shape, image-only screenshots | pass: 2,816-token catalog and 658-token workflow |
 | Real-site usability | usable video, community, commerce, advertising, reference, and standards pages; no blocked/error pages or raw icon ligatures | six surfaces pass in Chrome; Reddit's clean-profile public surface remains externally unavailable and is not rewritten or allowlisted |
 | Packaging | exact tarball install/run, source-free artifacts, bounded receipts, zero residue | pass: Chrome and Edge, identical SHA-256 |
 | Authorized opaque import | closed local profile copied through the narrow opaque allowlist, source untouched, owned identity cleanup | final QA pending |
-| Release stability | three consecutive unchanged-tree release checks after all live QA and documentation freeze | pass: three complete Windows checks on one frozen tree |
+| Release stability | three consecutive unchanged-tree release checks after all live QA and documentation freeze | final gate: recorded by consecutive release command receipts without post-run source edits |
 
 ## Current implementation inventory
 
@@ -44,6 +44,10 @@ allowlists.
 - Corrected dynamic-page targeting: attached waits no longer require visibility, hidden
   responsive selector duplicates are ignored when exactly one visible match exists, and
   selector/semantic fill may refresh a target only before any input is dispatched.
+- Session-owned secondary pages are bounded and isolated as page contexts. Newton discovers
+  but does not attach to or activate a provisional blank target. After the page commits to
+  HTTP(S), it is attached, configured, activated, and given a fresh registry. Closing it
+  restores a freshly rebuilt opener context; browser chrome is never clicked.
 - Public MCP: ten tools; no resources, prompts, daemon, subscriptions, or
   connection-scoped state. Session start accepts one initial `origin`, plus optional
   browser-family and identity selection.
@@ -65,17 +69,20 @@ They do not describe the current network contract unless explicitly marked curre
 ## Current Windows evidence
 
 - Build and strict typecheck: pass.
-- Deterministic tests: 475 passed, 0 failed, 0 skipped.
-- Evaluations: 41 passed; agent-cost catalog 2,816/3,000 tokens and workflow
+- Deterministic tests: 480 passed, 0 failed, 0 skipped.
+- Evaluations: 41 passed; agent-cost catalog 2,845/3,000 tokens and workflow
   658/2,100 tokens.
 - Chrome and Edge source live suites: seven of seven stages pass for each family. The
   direct-runtime stage replaces 260 controls through four same-document generations,
-  observes 250 nodes each cycle, then continues navigation and exact cleanup.
-- Exact packed artifact: Chrome and Edge pass start/observe/click/cross-origin
-  navigation/stop/cleanup with identical SHA-256
-  `f936f3363d410817ffb9e6323f5990ec2d7f88f7b540b0aa81a295e1cd0ed549`.
-- Release stability: three consecutive complete checks pass on one unchanged source tree;
-  each repeats deterministic gates plus Chrome/Edge source and exact-packed live runs.
+  observes 250 nodes each cycle, opens and controls a secondary page, restores its opener,
+  then continues navigation and exact cleanup. Windows Edge uses its family-specific
+  compatibility-layer bypass so inherited private CDP pipe handles survive startup.
+- Exact 0.6.3 packed artifact: Chrome and Edge pass start/observe/click/cross-origin
+  navigation/stop/cleanup from the identical 120,511-byte artifact with SHA-256
+  `a0108eccfd96a9934426eb41315556e7c12dd3feabe3f1490cabfb64a7059b3f`.
+- Release stability is the last external gate. Its three consecutive command receipts are
+  authoritative because writing their result back into this file would change the tested
+  source digest after the fact.
 - Real public sites: video, commerce search/fill, advertising, reference, accessibility,
   and standards surfaces pass without Newton block pages or raw icon ligatures. Reddit's
   clean-profile public surface returns insufficient content; it is retained as a bounded

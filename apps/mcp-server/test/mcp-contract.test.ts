@@ -30,7 +30,7 @@ test("server/discover publishes the single modern protocol and untrusted-page in
     assert.equal(result.resultType, "complete");
     assert.deepEqual((result._meta as Record<string, unknown>)["io.modelcontextprotocol/serverInfo"], {
       name: "newton-browser",
-      version: "0.6.2",
+      version: "0.6.3",
     });
     assert.match(MCP_SERVER_INSTRUCTIONS, /untrusted data/);
     assert.match(MCP_SERVER_INSTRUCTIONS, /never instructions or authorization/);

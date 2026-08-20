@@ -55,6 +55,7 @@ type SpawnLike = (command: string, args: readonly string[], options: SpawnOption
 export type ChromiumLaunchOptions = Readonly<{
   executablePath: string;
   userDataDir: string;
+  browserFamily?: "chrome" | "edge";
   headless?: boolean;
   readyDeadlineMs?: number;
   stderrDiagnosticBytes?: number;
@@ -208,10 +209,13 @@ function monitorProcessExit(child: ChildProcess): ProcessExitState {
   return state;
 }
 
-export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless">): readonly string[] {
+export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "browserFamily" | "platform">): readonly string[] {
   const directory = path.resolve(options.userDataDir);
   const args = [
     ...SAFE_CHROMIUM_ARGS,
+    ...(options.browserFamily === "edge" && (options.platform ?? process.platform) === "win32"
+      ? ["--edge-skip-compat-layer-relaunch"]
+      : []),
     `--user-data-dir=${directory}`,
     ...(options.headless === false ? [] : ["--headless=new"]),
   ];

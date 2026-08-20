@@ -10,7 +10,7 @@ hosted service, or model-provider integration.
 
 ## Status
 
-Version 0.6.2 is a private direct-runtime candidate. The former MV3 extension, pairing
+Version 0.6.3 is the current private direct runtime. The former MV3 extension, pairing
 plane, current-tab runtime, persistent MCP socket, and initialization-era MCP protocol
 have been removed. Publishing a package, remote, or browser-store artifact requires
 separate approval.
@@ -116,6 +116,14 @@ An acknowledged `browser.session.start` owns one isolated headless browser proce
 not claim that it opened a visible window or controls any pre-existing Chrome window.
 Ordinary POST, GraphQL, telemetry, navigation, dialog, popup, and download activity is
 normal browser behavior and never retroactively blocks an acknowledged action.
+
+When an acknowledged page action opens a session-owned popup or new tab, Newton leaves a
+provisional blank target untouched. After Chromium commits it to a real HTTP(S) page,
+Newton attaches, configures, and activates that page as the observation/action surface and
+invalidates refs from the former page. An explicitly attached waiting page is resumed
+before setup. When the secondary page closes, Newton rebuilds the opener context and
+returns control to it automatically. Agents never click browser chrome, a tab strip, or
+Chrome's debugger banner; they re-observe and continue through the same `sessionId`.
 
 Same-session commands execute FIFO. Independent sessions use independent browser
 processes and can progress concurrently. A persistent identity can be leased by only one

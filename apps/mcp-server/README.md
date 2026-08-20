@@ -40,6 +40,11 @@ command queue. Browser traffic is not proxied or filtered. Sessions progress con
 A guardian terminates the exact browser tree and releases only proven owned identity state
 if the MCP host dies. The MCP control plane is stateless newline-delimited stdio only.
 
+If a site opens an owned popup or authentication tab, Newton leaves its provisional blank
+target untouched and takes control after the page commits to HTTP(S). Re-observe through
+the same session to obtain fresh refs. Closing that page restores a fresh opener context.
+Clients must never click browser chrome, a tab strip, or a debugger banner.
+
 ## Identities
 
 Operator-only commands create, list, inspect, import, recover a stale lease, and delete

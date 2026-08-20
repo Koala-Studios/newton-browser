@@ -11,7 +11,7 @@ newton-browser setup --browser chrome
 
 Use the `command` plus leading entrypoint from Codex's active
 `[mcp_servers.newton-browser]` table for every setup, identity, doctor, or install
-operation. Run that exact entrypoint with `--version` first and require `0.6.2`.
+operation. Run that exact entrypoint with `--version` first and require `0.6.3`.
 
 Never execute `apps/mcp-server/dist/index.js` from a repository or Codex worktree, a
 global `newton-browser`, `npx`, or an older versioned package for live browser work. Do
@@ -44,7 +44,7 @@ Important failures:
 | `session_queue_full` | Let pending work settle. |
 | `command_timeout` | Inspect state; do not blindly repeat a commit. |
 | `stale_target` / `not_found` / `ambiguous` | Re-observe and use a fresh narrower ref. |
-| `max_refs_exceeded` | On 0.6.2, make one fresh interactive observation; it starts a new bounded ref cycle without reload or navigation. On an older runtime, preserve the session and verify state with text/screenshot reads before upgrading. Never retry an uncertain effect. |
+| `max_refs_exceeded` | On 0.6.3, make one fresh interactive observation; it starts a new bounded ref cycle without reload or navigation. On an older runtime, preserve the session and verify state with text/screenshot reads before upgrading. Never retry an uncertain effect. |
 | `blocked_by_floor` | Let the user complete sensitive input. |
 
 An action cannot be reported as `prevented` after input dispatch. Network requests,
@@ -52,7 +52,13 @@ dialogs, popups, downloads, and navigation observed after a click are normal bro
 effects, not policy failures. Keep the same session open and re-observe before deciding
 that authentication or an application authorization did not persist.
 
-If CSS, fonts, icons, or login redirects fail, confirm the exact Newton 0.6.2 entrypoint
+A popup or authentication tab is a session-owned page, not browser chrome. Newton 0.6.3
+leaves its provisional blank target untouched, then attaches and activates the committed
+HTTP(S) page automatically. Re-observe the same session to obtain fresh refs; when that
+page closes, re-observe again to continue on the rebuilt opener. Never click the tab strip
+or Chrome's debugger banner by coordinates.
+
+If CSS, fonts, icons, or login redirects fail, confirm the exact Newton 0.6.3 entrypoint
 and close stale older processes. Newton does not proxy traffic, intercept Fetch, disable
 browser networking, inject styles/scripts, or freeze rendering. Any evidence that it does
 is a product defect, not a missing grant.

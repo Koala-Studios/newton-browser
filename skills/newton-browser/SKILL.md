@@ -20,7 +20,7 @@ host still owns explicit browser sessions until they are stopped.
    surfaces without approval.
 4. For every Newton CLI operation, use only the immutable entrypoint configured in
    `[mcp_servers.newton-browser]`. Before visible login, run that exact entrypoint with
-   `--version` and require `0.6.2`. Never run a repository/worktree
+   `--version` and require `0.6.3`. Never run a repository/worktree
    `apps/mcp-server/dist/index.js`, a global `newton-browser`, `npx`, or an older cached
    package. Never pass retired `--allow-origin` or `allowedOrigins` arguments.
 
@@ -60,6 +60,11 @@ not attach to or hand off the operator's ordinary Chrome tabs.
 6. After `outcome_unknown` or `dispatched_unverified`, retain and re-observe the same
    session before retrying, stopping it, or requesting authentication. Never infer that
    an OAuth/application-authorization screen means the persistent identity was signed out.
+7. If an action opens a session-owned popup or new tab, do not click browser chrome or a
+   `Debugger paused in another tab` banner. Newton 0.6.3 leaves the provisional blank
+   target untouched, then attaches and activates the committed HTTP(S) page internally.
+   Make one fresh observation in the same session. When it closes, observe again and
+   Newton restores the opener automatically.
 
 ## Dialogs and diagnostics
 
@@ -69,7 +74,7 @@ not attach to or hand off the operator's ordinary Chrome tabs.
 - `browser.console` returns a bounded redacted console buffer.
 - `browser.network` returns bounded request metadata without headers. Response body
   access is limited to supported bounded text from the current visible origin.
-- Use the configured immutable 0.6.2 entrypoint for `identity login --origin <primary>`;
+- Use the configured immutable 0.6.3 entrypoint for `identity login --origin <primary>`;
   it selects the identity automatically and opens a visible browser with normal Chromium
   networking. A worktree or global CLI is not an acceptable substitute.
 

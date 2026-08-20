@@ -1,6 +1,6 @@
-# Newton Browser 0.6.2 tool reference
+# Newton Browser 0.6.3 tool reference
 
-This contract applies only to the immutable 0.6.2 entrypoint configured in the MCP
+This contract applies only to the immutable 0.6.3 entrypoint configured in the MCP
 client. A repository/worktree build, global command, or older cached package must not be
 used for live browser or identity-login work.
 
@@ -19,6 +19,11 @@ Actions are `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `s
 a fresh observation. Every interactive `full` or `diff` observation starts a new bounded
 ref cycle and releases refs not emitted by that snapshot, including on a same-document
 SPA. `text` mode allocates no refs and preserves the current interactive cycle.
+
+An owned popup or new tab is discovered while provisional and becomes the active page
+inside the same `sessionId` only after it commits to HTTP(S); its fresh observation
+replaces the opener's refs. Closing it restores a freshly rebuilt opener context. There
+is no browser-chrome click or public tab-management tool.
 
 Action results carry host-authored `status`, `outcome`, `retrySafe`, and `decision` fields.
 `prevented` is reserved for a refusal proven before input dispatch. Once input begins, an

@@ -180,6 +180,7 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
     process = await launchChromium({
       executablePath: options.executablePath,
       userDataDir: lease.path,
+      browserFamily: options.browserFamily,
       ...(options.headless === undefined ? {} : { headless: options.headless }),
       ...(options.readyDeadlineMs === undefined ? {} : { readyDeadlineMs: options.readyDeadlineMs }),
       ...(options.stderrDiagnosticBytes === undefined ? {} : { stderrDiagnosticBytes: options.stderrDiagnosticBytes }),

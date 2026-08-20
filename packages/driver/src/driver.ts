@@ -77,6 +77,7 @@ const FULLPAGE_MAX_PX = 6000;         // cap full-page height so capture stays p
 const FULLPAGE_MAX_WIDTH = 1440;      // downscale wide full-page captures
 const MASK_REGION_PADDING_CSS = 3;
 const INITIAL_NAVIGATION_COMMIT_CAP = 32;
+const OWNED_PAGE_TARGET_CAP = 16;
 const CHILD_TARGET_FILTER = [
   { type: "iframe", exclude: false },
   { type: "worker", exclude: false },
@@ -130,6 +131,18 @@ type InitialNavigationState = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type OwnedPageContext = Readonly<{
+  targetId: string;
+  sessionId: string | null;
+  openerTargetId: string | null;
+  origin: string;
+}>;
+type OwnedPageCommitWaiter = {
+  promise: Promise<boolean>;
+  resolve(committed: boolean): void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export function createNewtonBrowserDriver(options: BrowserDriverOptions) {
   return new NewtonBrowserDriver(options);
 }
@@ -155,6 +168,12 @@ class NewtonBrowserDriver {
   networkInFlight: Set<string>;
   targetRegistry: TargetRegistry;
   mainTargetId: string | null;
+  ownedRootTargetId: string | null;
+  activePageSessionId: string | null;
+  ownedPageContexts: Map<string, OwnedPageContext>;
+  discoveredOwnedPages: Map<string, CdpRecord>;
+  committedOwnedPageTargets: Set<string>;
+  ownedPageCommitWaiters: Map<string, OwnedPageCommitWaiter>;
   mainFrameId: string | null;
   mainLoaderId: string | null;
   actionabilityFailure: string | null;
@@ -167,7 +186,7 @@ class NewtonBrowserDriver {
   activeCommandId: string | null;
   browserControlSessionId: string | null;
   browserRootSessionId: string | null;
-  browserPageAutoAttachActive: boolean;
+  browserPageDiscoveryActive: boolean;
   protocolEventTail: Promise<void>;
   protocolGeneration: number;
   protocolEventFailure: unknown | null;
@@ -209,6 +228,12 @@ class NewtonBrowserDriver {
     this.networkInFlight = new Set();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.ownedRootTargetId = null;
+    this.activePageSessionId = null;
+    this.ownedPageContexts = new Map();
+    this.discoveredOwnedPages = new Map();
+    this.committedOwnedPageTargets = new Set();
+    this.ownedPageCommitWaiters = new Map();
     this.mainFrameId = null;
     this.mainLoaderId = null;
     this.actionabilityFailure = null;
@@ -222,7 +247,7 @@ class NewtonBrowserDriver {
     this.activeCommandId = null;
     this.browserControlSessionId = null;
     this.browserRootSessionId = null;
-    this.browserPageAutoAttachActive = false;
+    this.browserPageDiscoveryActive = false;
     this.protocolEventTail = Promise.resolve();
     this.protocolGeneration = 0;
     this.protocolEventFailure = null;
@@ -259,20 +284,19 @@ class NewtonBrowserDriver {
           await this.cdp(`${domain}.enable`, {});
         }
       });
-    // Child frames / popups attach to the same session (§7.5).
+    // Child frames and workers attach through the page session. Top-level pages are
+    // discovered separately so provisional popup documents are never paused or mutated.
       const browserAttachResult = await attachStage("browser_control_attach_failed", () => this.cdp("Target.attachToBrowserTarget", {}));
       const browserSessionId = typeof browserAttachResult.sessionId === "string" && browserAttachResult.sessionId
         ? browserAttachResult.sessionId
         : null;
       if (!browserSessionId || !this.mainTargetId) throw typedDriverError("browser_control_unavailable");
       this.browserControlSessionId = browserSessionId;
-      await attachStage("browser_page_autoattach_failed", () => this.cdp("Target.setAutoAttach", {
-          autoAttach: true,
-          flatten: true,
-          waitForDebuggerOnStart: false,
+      await attachStage("browser_page_discovery_failed", () => this.cdp("Target.setDiscoverTargets", {
+          discover: true,
           filter: OWNED_BROWSER_TARGET_FILTER,
         }, { sessionId: browserSessionId }));
-      this.browserPageAutoAttachActive = true;
+      this.browserPageDiscoveryActive = true;
       await this.fenceBrowserProtocolEvents("browser_control_fence_failed");
       await attachStage("root_autoattach_failed", () => this.cdp("Target.setAutoAttach", {
         autoAttach: true,
@@ -302,14 +326,12 @@ class NewtonBrowserDriver {
       const browserControlSessionId = this.browserControlSessionId;
       try {
         await this.drainProtocolEventQueue();
-        if (browserControlSessionId && this.mainTargetId) {
-          await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId }, { sessionId: browserControlSessionId });
+        if (browserControlSessionId && this.ownedRootTargetId) {
+          await this.cdp("Target.getTargetInfo", { targetId: this.ownedRootTargetId }, { sessionId: browserControlSessionId });
           await this.drainProtocolEventQueue();
-          if (this.browserPageAutoAttachActive) {
-            await this.cdp("Target.setAutoAttach", {
-              autoAttach: false,
-              flatten: true,
-              waitForDebuggerOnStart: false,
+          if (this.browserPageDiscoveryActive) {
+            await this.cdp("Target.setDiscoverTargets", {
+              discover: false,
             }, { sessionId: browserControlSessionId });
           }
           await this.drainProtocolEventQueue();
@@ -322,7 +344,7 @@ class NewtonBrowserDriver {
       this.protocolGeneration += 1;
       this.browserControlSessionId = null;
       this.browserRootSessionId = null;
-      this.browserPageAutoAttachActive = false;
+      this.browserPageDiscoveryActive = false;
     }
     try {
       await this.debuggerPort.detach();
@@ -335,6 +357,11 @@ class NewtonBrowserDriver {
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.ownedRootTargetId = null;
+    this.activePageSessionId = null;
+    this.ownedPageContexts.clear();
+    this.discoveredOwnedPages.clear();
+    this.clearOwnedPageCommitState();
     this.mainFrameId = null;
     this.mainLoaderId = null;
     this.browserControlReady = false;
@@ -347,7 +374,7 @@ class NewtonBrowserDriver {
     this.protocolEventFailure = null;
     this.closing = false;
     this.relationshipCleanupComplete = false;
-    this.browserPageAutoAttachActive = false;
+    this.browserPageDiscoveryActive = false;
     this.rendererLiveness.remove("root", "driver_detached");
   }
 
@@ -362,7 +389,7 @@ class NewtonBrowserDriver {
     this.protocolGeneration += 1;
     this.browserControlSessionId = null;
     this.browserRootSessionId = null;
-    this.browserPageAutoAttachActive = false;
+    this.browserPageDiscoveryActive = false;
     this.activeCommandKind = null;
     this.rejectInitialNavigation(typedDriverError("debugger_conflict"));
     this.protocolEventTail = Promise.resolve();
@@ -372,6 +399,11 @@ class NewtonBrowserDriver {
     this.refIndex.clear();
     this.targetRegistry = new TargetRegistry();
     this.mainTargetId = null;
+    this.ownedRootTargetId = null;
+    this.activePageSessionId = null;
+    this.ownedPageContexts.clear();
+    this.discoveredOwnedPages.clear();
+    this.clearOwnedPageCommitState();
     this.mainFrameId = null;
     this.mainLoaderId = null;
     this.browserControlReady = false;
@@ -477,6 +509,7 @@ class NewtonBrowserDriver {
     if (!sessionId) return true;
     return sessionId === this.browserControlSessionId
       || sessionId === this.browserRootSessionId
+      || [...this.ownedPageContexts.values()].some((context) => context.sessionId === sessionId)
       || Boolean(this.targetRegistry.targetForSession(sessionId));
   }
 
@@ -542,7 +575,7 @@ class NewtonBrowserDriver {
     if (method === "Page.downloadWillBegin" || method === "Browser.downloadWillBegin") {
       signals.download = true;
     }
-    if (method === "Target.targetCreated" && params?.targetInfo?.type === "page") {
+    if ((method === "Target.targetCreated" || method === "Target.attachedToTarget") && params?.targetInfo?.type === "page") {
       signals.newTarget = true;
     }
   }
@@ -569,7 +602,13 @@ class NewtonBrowserDriver {
     const timeoutMs = typeof routeOrTimeout === "number"
       ? routeOrTimeout
       : routeOrTimeout?.timeoutMs ?? CDP_TIMEOUT_MS;
-    const sessionId = typeof routeOrTimeout === "object" ? routeOrTimeout?.sessionId : null;
+    const hasExplicitSession = typeof routeOrTimeout === "object" && Object.hasOwn(routeOrTimeout, "sessionId");
+    const requestedSessionId = typeof routeOrTimeout === "object" ? routeOrTimeout?.sessionId : null;
+    const sessionId = hasExplicitSession
+      ? requestedSessionId
+      : this.activePageSessionId && isTargetScopedCdpMethod(method)
+        ? this.activePageSessionId
+        : null;
     return new Promise((resolve, reject) => {
       // Bound every CDP call: the debugger transport can hang indefinitely
       // (e.g. Page.captureScreenshot under device emulation on some pages). The
@@ -579,7 +618,7 @@ class NewtonBrowserDriver {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        this.failRenderer(inputTargetKey(routeOrTimeout), "unresponsive", `cdp_timeout_${method}`);
+        this.failRenderer(sessionId ? `session:${sessionId}` : inputTargetKey(routeOrTimeout), "unresponsive", `cdp_timeout_${method}`);
         const error = typedDriverError("renderer_unresponsive");
         error.detail = `cdp_timeout_${method}`;
         reject(error);
@@ -606,12 +645,261 @@ class NewtonBrowserDriver {
     const targetId = typeof info?.targetId === "string" && info.targetId ? info.targetId : null;
     if (!targetId) throw typedDriverError("browser_control_unavailable");
     this.mainTargetId = targetId;
+    this.ownedRootTargetId = targetId;
+    this.activePageSessionId = null;
+    this.ownedPageContexts.clear();
+    this.discoveredOwnedPages.clear();
+    this.clearOwnedPageCommitState();
     this.targetRegistry.registerTarget({
       targetId,
       type: "page",
       origin: safeOrigin(info?.url),
     });
     this.targetRegistry.commitTopLevelDocument(targetId);
+    this.ownedPageContexts.set(targetId, Object.freeze({
+      targetId,
+      sessionId: null,
+      openerTargetId: null,
+      origin: safeOrigin(info?.url),
+    }));
+  }
+
+  activeRendererKey(): string {
+    return this.activePageSessionId ? `session:${this.activePageSessionId}` : "root";
+  }
+
+  async configureCommittedOwnedPage(context: OwnedPageContext, pageEnabled = false): Promise<void> {
+    if (!context.sessionId || !this.ownedPageContexts.has(context.targetId)) {
+      throw this.browserControlFailure("owned_page_context_missing");
+    }
+    const pageRoute: CdpRoute = { sessionId: context.sessionId };
+    await this.cdp("Target.setAutoAttach", {
+      autoAttach: true,
+      flatten: true,
+      waitForDebuggerOnStart: false,
+      filter: CHILD_TARGET_FILTER,
+    }, pageRoute);
+    for (const domain of ["Page", "Runtime", "Network", "Log"]) {
+      if (domain === "Page" && pageEnabled) continue;
+      await this.cdp(`${domain}.enable`, {}, pageRoute);
+    }
+  }
+
+  async rememberDiscoveredOwnedPage(info: CdpRecord): Promise<void> {
+    const targetId = typeof info?.targetId === "string" ? info.targetId : "";
+    if (!targetId || info?.type !== "page" || targetId === this.ownedRootTargetId) return;
+    if (this.ownedPageContexts.has(targetId)) return;
+    const openerId = typeof info?.openerId === "string" ? info.openerId : "";
+    if (!openerId || !this.ownedPageContexts.has(openerId)) return;
+    if (this.ownedPageContexts.size + this.discoveredOwnedPages.size >= OWNED_PAGE_TARGET_CAP) {
+      const browserSessionId = this.browserControlSessionId;
+      if (!browserSessionId) throw this.browserControlFailure("owned_page_limit_close_failed");
+      const closed = await this.cdp("Target.closeTarget", { targetId }, { sessionId: browserSessionId });
+      if (closed?.success !== true) throw this.browserControlFailure("owned_page_limit_close_failed");
+      return;
+    }
+    if (this.activeActionSignals) this.activeActionSignals.newTarget = true;
+    this.discoveredOwnedPages.set(targetId, Object.freeze({ ...info }));
+    if (safeOrigin(info.url)) await this.attachDiscoveredOwnedPage(targetId);
+  }
+
+  async attachDiscoveredOwnedPage(targetId: string): Promise<void> {
+    if (this.ownedPageContexts.has(targetId)) {
+      this.discoveredOwnedPages.delete(targetId);
+      return;
+    }
+    const browserSessionId = this.browserControlSessionId;
+    const info = this.discoveredOwnedPages.get(targetId);
+    if (!browserSessionId || !info || !safeOrigin(info.url)) return;
+    const attached = await this.cdp(
+      "Target.attachToTarget",
+      { targetId, flatten: true },
+      { sessionId: browserSessionId },
+    );
+    if (typeof attached?.sessionId !== "string" || !attached.sessionId) {
+      throw this.browserControlFailure("owned_page_attach_failed");
+    }
+    await this.recordTargetEventNow(
+      { sessionId: browserSessionId },
+      "Target.attachedToTarget",
+      { sessionId: attached.sessionId, targetInfo: info, waitingForDebugger: false },
+    );
+  }
+
+  async activateOwnedPageContext(context: OwnedPageContext, rebindChildren = false): Promise<void> {
+    const browserSessionId = this.browserControlSessionId;
+    if (!browserSessionId || !this.ownedRootTargetId || !this.ownedPageContexts.has(context.targetId)) {
+      throw this.browserControlFailure("owned_page_context_missing");
+    }
+    const infoResult = await this.cdp(
+      "Target.getTargetInfo",
+      { targetId: context.targetId },
+      { sessionId: browserSessionId },
+    );
+    const info = infoResult?.targetInfo;
+    if (!info || info.targetId !== context.targetId || info.type !== "page") {
+      throw this.browserControlFailure("owned_page_target_invalid");
+    }
+    const origin = safeOrigin(info.url) || context.origin;
+    this.mainTargetId = context.targetId;
+    this.activePageSessionId = context.sessionId;
+    this.targetRegistry = new TargetRegistry();
+    this.targetRegistry.registerTarget({
+      targetId: context.targetId,
+      type: "page",
+      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      origin,
+    });
+    this.targetRegistry.commitTopLevelDocument(context.targetId, origin);
+    this.mainFrameId = null;
+    this.mainLoaderId = null;
+    this.refIndex.clear();
+    this.lastNodes.clear();
+    this.lastObserveUrl = null;
+    this.lastScrollY = 0;
+    this.nodeFactsCache.clear();
+    this.framedPointProof = null;
+    this.actionabilityFailure = null;
+    this.networkInFlight.clear();
+    this.reconcileRenderer("root");
+    this.reconcileRenderer(this.activeRendererKey());
+    this.refreshPendingDialog();
+    await this.cdp("Target.activateTarget", { targetId: context.targetId }, { sessionId: browserSessionId });
+    const pageRoute: CdpRoute = { sessionId: context.sessionId };
+    if (rebindChildren) {
+      await this.cdp("Target.setAutoAttach", {
+        autoAttach: false,
+        flatten: true,
+        waitForDebuggerOnStart: false,
+      }, pageRoute);
+      await this.cdp("Target.setAutoAttach", {
+        autoAttach: true,
+        flatten: true,
+        waitForDebuggerOnStart: false,
+        filter: CHILD_TARGET_FILTER,
+      }, pageRoute);
+    }
+    if (this.sessionViewport) {
+      await this.cdp("Emulation.setDeviceMetricsOverride", {
+        width: this.sessionViewport.width,
+        height: this.sessionViewport.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      }, pageRoute);
+    }
+    const frameTree = await this.cdp("Page.getFrameTree", {}, pageRoute);
+    this.reconcileFrameTree(frameTree?.frameTree, origin);
+    await this.calibrate();
+  }
+
+  async restoreOwnedOpener(closed: OwnedPageContext): Promise<void> {
+    const preferred = closed.openerTargetId ? this.ownedPageContexts.get(closed.openerTargetId) : undefined;
+    const root = this.ownedRootTargetId ? this.ownedPageContexts.get(this.ownedRootTargetId) : undefined;
+    const next = preferred ?? root;
+    if (!next) {
+      this.markTargetGone("root");
+      throw this.browserControlFailure("owned_page_opener_missing");
+    }
+    await this.activateOwnedPageContext(next, true);
+  }
+
+  clearOwnedPageCommitState(): void {
+    for (const waiter of this.ownedPageCommitWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(false);
+    }
+    this.ownedPageCommitWaiters.clear();
+    this.committedOwnedPageTargets.clear();
+  }
+
+  retireOwnedPageCommit(targetId: string): void {
+    this.committedOwnedPageTargets.delete(targetId);
+    const waiter = this.ownedPageCommitWaiters.get(targetId);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this.ownedPageCommitWaiters.delete(targetId);
+    waiter.resolve(false);
+  }
+
+  resolveOwnedPageCommit(targetId: string): void {
+    this.committedOwnedPageTargets.add(targetId);
+    const waiter = this.ownedPageCommitWaiters.get(targetId);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this.ownedPageCommitWaiters.delete(targetId);
+    waiter.resolve(true);
+  }
+
+  waitForOwnedPageCommit(targetId: string): Promise<boolean> {
+    if (this.committedOwnedPageTargets.has(targetId)) return Promise.resolve(true);
+    const existing = this.ownedPageCommitWaiters.get(targetId);
+    if (existing) return existing.promise;
+    let resolve!: (committed: boolean) => void;
+    const promise = new Promise<boolean>((resolvePromise) => { resolve = resolvePromise; });
+    const waiter: OwnedPageCommitWaiter = {
+      promise,
+      resolve,
+      timer: setTimeout(() => {
+        if (this.ownedPageCommitWaiters.get(targetId) !== waiter) return;
+        this.ownedPageCommitWaiters.delete(targetId);
+        resolve(false);
+      }, SETTLE_TIMEOUT_MS),
+    };
+    this.ownedPageCommitWaiters.set(targetId, waiter);
+    return promise;
+  }
+
+  async prepareActiveOwnedPage(): Promise<void> {
+    await this.drainProtocolEventQueue();
+    const ownedRootTargetId = this.ownedRootTargetId;
+    const active = this.mainTargetId ? this.ownedPageContexts.get(this.mainTargetId) : undefined;
+    if (!active || active.targetId === ownedRootTargetId || this.committedOwnedPageTargets.has(active.targetId)) return;
+    await this.waitForOwnedPageCommit(active.targetId);
+    await this.drainProtocolEventQueue();
+  }
+
+  async reconcileOwnedPagesAfterInput(sourceSessionId: string | null, previousTargetId: string | null): Promise<void> {
+    const browserSessionId = this.browserControlSessionId;
+    const ownedRootTargetId = this.ownedRootTargetId;
+    if (!browserSessionId || !ownedRootTargetId) return;
+
+    // Input acknowledgement only confirms that Chromium accepted the input command.
+    // A no-op round trip through the renderer orders the JavaScript event handler
+    // (including window.open) before the browser-level target snapshot below.
+    await this.cdp(
+      "Runtime.evaluate",
+      { expression: "0", returnByValue: false },
+      { sessionId: sourceSessionId },
+    ).catch(() => null);
+    const snapshot = await this.cdp(
+      "Target.getTargets",
+      { filter: OWNED_BROWSER_TARGET_FILTER },
+      { sessionId: browserSessionId },
+    );
+    const targetInfos = snapshot?.targetInfos;
+    if (!Array.isArray(targetInfos) || targetInfos.length > OWNED_PAGE_TARGET_CAP) {
+      throw this.browserControlFailure("owned_page_snapshot_invalid");
+    }
+    const missing = targetInfos.filter((candidate) => candidate?.type === "page"
+      && typeof candidate.targetId === "string"
+      && candidate.targetId !== ownedRootTargetId
+      && typeof candidate.openerId === "string"
+      && this.ownedPageContexts.has(candidate.openerId)
+      && !this.discoveredOwnedPages.has(candidate.targetId)
+      && !this.ownedPageContexts.has(candidate.targetId));
+    if (missing.filter((candidate) => safeOrigin(candidate.url)).length > 1) {
+      throw this.browserControlFailure("owned_page_activation_ambiguous");
+    }
+    for (const candidate of missing) await this.rememberDiscoveredOwnedPage(candidate);
+    await this.drainProtocolEventQueue();
+    const active = this.mainTargetId ? this.ownedPageContexts.get(this.mainTargetId) : undefined;
+    if (active && active.targetId !== ownedRootTargetId && !this.mainFrameId) {
+      await this.activateOwnedPageContext(active);
+    }
+    if (active && active.targetId !== previousTargetId && active.targetId !== ownedRootTargetId) {
+      await this.waitForOwnedPageCommit(active.targetId);
+      await this.drainProtocolEventQueue();
+    }
   }
 
   recordTargetEvent(source: CdpRecord, method: string, params: CdpRecord): Promise<void> {
@@ -629,6 +917,10 @@ class NewtonBrowserDriver {
   async recordTargetEventNow(source: CdpRecord, method: string, params: CdpRecord): Promise<void> {
     const sourceSessionId = typeof source?.sessionId === "string" ? source.sessionId : null;
     if (method !== "Target.attachedToTarget" && sourceSessionId && !this.isAuthenticatedEventSource(source)) return;
+    if (method === "Target.targetCreated" && sourceSessionId === this.browserControlSessionId && params?.targetInfo) {
+      await this.rememberDiscoveredOwnedPage(params.targetInfo);
+      return;
+    }
     if (method === "Target.attachedToTarget" && params?.targetInfo && typeof params.sessionId === "string") {
       const info = params.targetInfo;
       if (!["page", "iframe", "worker", "shared_worker", "service_worker"].includes(info.type)) return;
@@ -636,7 +928,7 @@ class NewtonBrowserDriver {
       const targetId = String(info.targetId ?? "");
       if (!targetId) return;
       const fromBrowserControl = sourceSessionId !== null && sourceSessionId === this.browserControlSessionId;
-      if (fromBrowserControl && targetId === this.mainTargetId) {
+      if (fromBrowserControl && targetId === this.ownedRootTargetId) {
         this.browserRootSessionId = params.sessionId;
         if (params.waitingForDebugger === true) {
           await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: params.sessionId });
@@ -645,11 +937,68 @@ class NewtonBrowserDriver {
       }
       if (type === "page" && !fromBrowserControl) return;
       if (fromBrowserControl && type !== "page") return;
+      if (type === "page") {
+        const existing = this.ownedPageContexts.get(targetId);
+        if (existing) {
+          if (params.waitingForDebugger === true) {
+            await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: params.sessionId });
+          }
+          if (existing.sessionId !== params.sessionId && this.browserControlSessionId) {
+            await this.cdp(
+              "Target.detachFromTarget",
+              { sessionId: params.sessionId },
+              { sessionId: this.browserControlSessionId },
+            );
+          }
+          return;
+        }
+        if (this.ownedPageContexts.size >= OWNED_PAGE_TARGET_CAP) {
+          const closed = await this.cdp("Target.closeTarget", { targetId }, { sessionId: this.browserControlSessionId });
+          if (closed?.success !== true) throw this.browserControlFailure("owned_page_limit_close_failed");
+          return;
+        }
+        const openerTargetId = typeof info.openerId === "string" && this.ownedPageContexts.has(info.openerId)
+          ? info.openerId
+          : this.mainTargetId && this.ownedPageContexts.has(this.mainTargetId)
+            ? this.mainTargetId
+            : this.ownedRootTargetId;
+        const context: OwnedPageContext = Object.freeze({
+          targetId,
+          sessionId: params.sessionId,
+          openerTargetId: openerTargetId ?? null,
+          origin: safeOrigin(info.url),
+        });
+        this.ownedPageContexts.set(targetId, context);
+        this.discoveredOwnedPages.delete(targetId);
+        try {
+          // Resume is the first command sent to a paused page. Target-domain or
+          // observation setup sent first can itself wait behind the debugger pause,
+          // leaving Chromium's "Debugger paused in another tab" interstitial active.
+          if (params.waitingForDebugger === true) {
+            await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: params.sessionId });
+          }
+          // A new window starts as a provisional about:blank document. Keep the
+          // opener active until the requested HTTP(S) document commits; activating
+          // or recursively instrumenting the provisional target can strand Chromium
+          // before that navigation. Page.enable is the only pre-commit setup.
+          await this.cdp("Page.enable", {}, { sessionId: params.sessionId });
+          if (context.origin) {
+            await this.configureCommittedOwnedPage(context, true);
+            await this.activateOwnedPageContext(context);
+          }
+        } catch (error) {
+          this.ownedPageContexts.delete(targetId);
+          this.retireOwnedPageCommit(targetId);
+          try {
+            await this.cdp("Target.closeTarget", { targetId }, { sessionId: this.browserControlSessionId });
+          } catch { /* browser-control failure is preserved by the original error */ }
+          throw error;
+        }
+        return;
+      }
       if (sourceSessionId && !fromBrowserControl && !this.targetRegistry.targetForSession(sourceSessionId)) return;
       const sourceTarget = sourceSessionId ? this.targetRegistry.targetForSession(sourceSessionId) : null;
-      const parentTargetId = type === "page"
-        ? (typeof info.openerId === "string" ? info.openerId : null)
-        : type === "iframe" || type === "worker" ? (sourceTarget?.targetId ?? this.mainTargetId) : null;
+      const parentTargetId = type === "iframe" || type === "worker" ? (sourceTarget?.targetId ?? this.mainTargetId) : null;
       const hostFrameId = type === "iframe"
         ? (typeof info.openerFrameId === "string" ? info.openerFrameId : targetId)
         : null;
@@ -667,13 +1016,11 @@ class NewtonBrowserDriver {
           { autoAttach: true, flatten: true, waitForDebuggerOnStart: false, filter: CHILD_TARGET_FILTER },
           { sessionId: params.sessionId },
         );
-        const domains = type === "worker"
-          ? ["Runtime", "Network", "Log"]
-          : type === "page" ? ["Page", "Runtime", "Network", "Log"] : CDP_DOMAINS;
-        for (const domain of domains) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
         if (params.waitingForDebugger === true) {
           await this.cdp("Runtime.runIfWaitingForDebugger", {}, { sessionId: params.sessionId });
         }
+        const domains = type === "worker" ? ["Runtime", "Network", "Log"] : CDP_DOMAINS;
+        for (const domain of domains) await this.cdp(`${domain}.enable`, {}, { sessionId: params.sessionId });
       } catch (error) {
         if (params.waitingForDebugger !== true && this.browserControlSessionId) {
           // Short-lived frames and workers can disappear while their optional
@@ -694,6 +1041,17 @@ class NewtonBrowserDriver {
       return;
     }
     if (method === "Target.targetInfoChanged" && params?.targetInfo?.targetId) {
+      if (sourceSessionId === this.browserControlSessionId) {
+        const page = this.ownedPageContexts.get(params.targetInfo.targetId);
+        if (page) {
+          const updated = Object.freeze({ ...page, origin: safeOrigin(params.targetInfo.url) || page.origin });
+          this.ownedPageContexts.set(page.targetId, updated);
+        } else {
+          const discovered = this.discoveredOwnedPages.get(params.targetInfo.targetId);
+          await this.rememberDiscoveredOwnedPage({ ...(discovered ?? {}), ...params.targetInfo });
+        }
+        return;
+      }
       const existing = this.targetRegistry.targetForSession(sourceSessionId ?? "");
       if (existing && existing.targetId === params.targetInfo.targetId) {
         this.targetRegistry.registerTarget({
@@ -711,13 +1069,26 @@ class NewtonBrowserDriver {
       if (typeof params?.sessionId === "string" && params.sessionId === this.browserControlSessionId) {
         this.browserControlSessionId = null;
         this.browserRootSessionId = null;
-        this.browserPageAutoAttachActive = false;
+        this.browserPageDiscoveryActive = false;
         this.browserControlReady = false;
         this.protocolEventFailure = typedDriverError("browser_control_failed");
         return;
       }
       if (sourceSessionId === this.browserControlSessionId && params?.sessionId === this.browserRootSessionId) {
         this.browserRootSessionId = null;
+        return;
+      }
+      const detachedPage = typeof params?.sessionId === "string"
+        ? [...this.ownedPageContexts.values()].find((context) => context.sessionId === params.sessionId)
+        : typeof params?.targetId === "string"
+          ? this.ownedPageContexts.get(params.targetId)
+          : undefined;
+      if (detachedPage && detachedPage.targetId !== this.ownedRootTargetId) {
+        this.ownedPageContexts.delete(detachedPage.targetId);
+        this.retireOwnedPageCommit(detachedPage.targetId);
+        if (!this.closing && detachedPage.targetId === this.mainTargetId) {
+          await this.restoreOwnedOpener(detachedPage);
+        }
         return;
       }
       const target = typeof params?.sessionId === "string"
@@ -743,13 +1114,45 @@ class NewtonBrowserDriver {
       }
       return;
     }
+    if (method === "Target.targetDestroyed" && sourceSessionId === this.browserControlSessionId && typeof params?.targetId === "string") {
+      if (this.discoveredOwnedPages.delete(params.targetId)) return;
+      const destroyed = this.ownedPageContexts.get(params.targetId);
+      if (!destroyed) return;
+      if (destroyed.targetId === this.ownedRootTargetId) {
+        this.ownedPageContexts.delete(destroyed.targetId);
+        this.retireOwnedPageCommit(destroyed.targetId);
+        this.markTargetGone("root");
+        return;
+      }
+      this.ownedPageContexts.delete(destroyed.targetId);
+      this.retireOwnedPageCommit(destroyed.targetId);
+      if (!this.closing && destroyed.targetId === this.mainTargetId) {
+        await this.restoreOwnedOpener(destroyed);
+      }
+      return;
+    }
     if (method !== "Page.frameNavigated" || !params?.frame || typeof params.frame.id !== "string") return;
     const frame = params.frame;
-    if (!frame.parentId && !sourceSessionId) {
+    const ownedPage = sourceSessionId
+      ? [...this.ownedPageContexts.values()].find((context) => context.sessionId === sourceSessionId)
+      : undefined;
+    const committedOrigin = safeOrigin(frame.url);
+    if (!frame.parentId && ownedPage && ownedPage.targetId !== this.mainTargetId && committedOrigin) {
+      const committed = Object.freeze({ ...ownedPage, origin: committedOrigin });
+      this.ownedPageContexts.set(committed.targetId, committed);
+      await this.configureCommittedOwnedPage(committed, true);
+      await this.activateOwnedPageContext(committed);
+      return;
+    }
+    const activeTopLevelSource = this.activePageSessionId
+      ? sourceSessionId === this.activePageSessionId
+      : sourceSessionId === null;
+    if (!frame.parentId && activeTopLevelSource) {
       if (!this.mainTargetId) return;
       this.reconcileTopLevelDocument(frame, safeOrigin(frame.url), true);
       return;
     }
+    if (!frame.parentId && !sourceSessionId) return;
     const target = sourceSessionId
       ? this.targetRegistry.targetForSession(sourceSessionId)
       : this.mainTargetId ? { targetId: this.mainTargetId } : undefined;
@@ -794,16 +1197,16 @@ class NewtonBrowserDriver {
       if (isPreservedAttachFailure(this.protocolEventFailure)) throw this.protocolEventFailure;
       throw this.browserControlFailure("browser_protocol_event_failed");
     }
-    if (!sessionId || !this.mainTargetId) {
+    if (!sessionId || !this.ownedRootTargetId) {
       if (this.browserControlReady) {
         throw this.browserControlFailure("browser_control_session_missing");
       }
       return;
     }
     try {
-      await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId });
+      await this.cdp("Target.getTargetInfo", { targetId: this.ownedRootTargetId });
       await this.drainProtocolEventQueue();
-      await this.cdp("Target.getTargetInfo", { targetId: this.mainTargetId }, { sessionId });
+      await this.cdp("Target.getTargetInfo", { targetId: this.ownedRootTargetId }, { sessionId });
       while (true) {
         const tail = this.protocolEventTail;
         await tail;
@@ -971,6 +1374,7 @@ class NewtonBrowserDriver {
   async observe(options: DriverObserveOptions & { mode: "diff" }): Promise<FullObservation | DeltaObservation>;
   async observe(options?: DriverObserveOptions): Promise<DriverObservation>;
   async observe({ maxNodes = NODE_CAP, query, roles, includeInteractive = false, mode = "full", maxChars }: DriverObserveOptions = {}): Promise<DriverObservation> {
+    await this.prepareActiveOwnedPage();
     if (mode === "text") return this.observeText(maxChars === undefined ? {} : { maxChars });
     // Interactive refs belong to one bounded observation cycle, not the
     // lifetime of a long-running SPA document. Reset synchronously before any
@@ -978,7 +1382,17 @@ class NewtonBrowserDriver {
     this.targetRegistry.resetObservationRefs();
     this.refIndex.clear();
     const cap = Math.max(1, Math.min(Number(maxNodes) || NODE_CAP, 250));
-    const url = await this.evalString("location.href");
+    let observationTargetId = this.mainTargetId;
+    let url = await this.evalString("location.href");
+    const activeAfterFirstRead = this.mainTargetId ? this.ownedPageContexts.get(this.mainTargetId) : undefined;
+    if (this.mainTargetId !== observationTargetId
+      || (activeAfterFirstRead
+        && activeAfterFirstRead.targetId !== this.ownedRootTargetId
+        && !this.committedOwnedPageTargets.has(activeAfterFirstRead.targetId))) {
+      await this.prepareActiveOwnedPage();
+      observationTargetId = this.mainTargetId;
+      url = await this.evalString("location.href");
+    }
     // A navigation invalidates the diff baseline and document-scoped node facts.
     if (url !== this.lastObserveUrl) {
       this.lastNodes.clear();
@@ -1145,6 +1559,11 @@ class NewtonBrowserDriver {
 
   reconcileTopLevelDocument(frame: CdpRecord, origin: string, commitWithoutLoader: boolean): void {
     if (!this.mainTargetId) return;
+    const page = this.ownedPageContexts.get(this.mainTargetId);
+    if (page && origin) {
+      this.ownedPageContexts.set(page.targetId, Object.freeze({ ...page, origin }));
+      this.resolveOwnedPageCommit(page.targetId);
+    }
     if (typeof frame.id === "string") this.mainFrameId = frame.id;
     const loaderId = safeLoaderId(frame.loaderId);
     if (loaderId !== null) {
@@ -1298,7 +1717,8 @@ class NewtonBrowserDriver {
   // ── Action execution (the write half) ──────────────────────────────────────
   async executeAction(action: DriverAction, context: DriverContext = {}): Promise<DriverRecord> {
     const kind = action.kind;
-    this.assertRendererLive("root", kind);
+    await this.prepareActiveOwnedPage();
+    this.assertRendererLive(this.activeRendererKey(), kind);
     this.activeCommandId = typeof context?.commandId === "string" ? context.commandId : null;
     this.activeCommandKind = kind;
     try {
@@ -1522,6 +1942,7 @@ class NewtonBrowserDriver {
     if (!point) return this.targetMoved("stale_target", this.actionabilityFailure ?? undefined);
     const pointerRoute = this.pointerInputRoute(target, point);
     if (!pointerRoute) return this.targetMoved("stale_target", this.actionabilityFailure ?? "frame_input_route_unavailable");
+    const actionPageSessionId = target.sessionId ?? this.activePageSessionId;
     const before = await this.pageSignature();
     const beforeState = target.backendNodeId ? await this.elementState(target.backendNodeId, target) : {};
       const signalWindow = this.beginActionSignals();
@@ -1569,24 +1990,32 @@ class NewtonBrowserDriver {
           const observation = await this.observe({});
           return this.withObservationMeta("stale_target", { blocker }, observation, "click_intercepted");
         }
-      await this.settleShort();
-      if (releaseAcknowledgementUncertain) this.reconcileRenderer(inputTargetKey(target));
-      const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
-      const signals = signalWindow.finish();
-      const after = await this.pageSignature();
-      const afterState = target.backendNodeId ? await this.elementState(target.backendNodeId, target).catch(() => ({})) : {};
-      const verifiedChanges = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...(waitResult?.matched ? { waitedFor: true } : {}) };
-      const changed = { ...verifiedChanges, ...reconciliationChanges(signals), ...(releaseAcknowledgementUncertain ? { inputReleaseAcknowledgement: "unacknowledged" } : {}) };
-      const observation = await this.observeDelta();
-      const verified = waitResult
-        ? waitResult.matched
-        : Object.keys(verifiedChanges).length > 0 || hasDirectlyObservableEffect(signals);
-      return this.withObservationMeta(
-        releaseAcknowledgementUncertain ? "dispatched_unverified" : verified ? "verified" : "dispatched_unverified",
-        changed,
-        observation,
-        releaseAcknowledgementUncertain ? "input_release_unacknowledged" : waitResult && !waitResult.matched ? waitResult.reason : undefined,
-      );
+        // A trusted click may create a page target after Chromium acknowledges the
+        // release. First settle the renderer task that handled the input, then
+        // reconcile the isolated browser's exact page snapshot before observing.
+        // If reconciliation activates a secondary page, settle that page once too.
+        const pageTargetBeforeInput = this.mainTargetId;
+        await this.fenceBrowserProtocolEvents();
+        await this.settleShort();
+        await this.reconcileOwnedPagesAfterInput(actionPageSessionId, pageTargetBeforeInput);
+        if (this.mainTargetId !== pageTargetBeforeInput) await this.settleShort();
+        if (releaseAcknowledgementUncertain) this.reconcileRenderer(inputTargetKey(target));
+        const waitResult = action.waitFor ? await this.waitForCondition(action.waitFor, action.timeoutMs) : null;
+        const signals = signalWindow.finish();
+        const after = await this.pageSignature();
+        const afterState = target.backendNodeId ? await this.elementState(target.backendNodeId, target).catch(() => ({})) : {};
+        const verifiedChanges = { ...diffPage(before, after), ...diffElement(beforeState, afterState), ...(waitResult?.matched ? { waitedFor: true } : {}) };
+        const changed = { ...verifiedChanges, ...reconciliationChanges(signals), ...(releaseAcknowledgementUncertain ? { inputReleaseAcknowledgement: "unacknowledged" } : {}) };
+        const observation = await this.observeDelta();
+        const verified = waitResult
+          ? waitResult.matched
+          : Object.keys(verifiedChanges).length > 0 || hasDirectlyObservableEffect(signals);
+        return this.withObservationMeta(
+          releaseAcknowledgementUncertain ? "dispatched_unverified" : verified ? "verified" : "dispatched_unverified",
+          changed,
+          observation,
+          releaseAcknowledgementUncertain ? "input_release_unacknowledged" : waitResult && !waitResult.matched ? waitResult.reason : undefined,
+        );
     } finally {
       signalWindow.finish();
     }
@@ -3056,7 +3485,11 @@ class NewtonBrowserDriver {
   }
 
   refreshPendingDialog(): void {
-    const latest = [...this.pendingDialogs.values()].at(-1) ?? null;
+    const activeTargetKey = this.activeRendererKey();
+    const dialogs = [...this.pendingDialogs.values()].reverse();
+    const latest = this.ownedPageContexts.size > 0
+      ? dialogs.find((entry) => entry.route?.targetKey === activeTargetKey) ?? null
+      : dialogs[0] ?? null;
     this.pendingDialog = latest?.dialog ?? null;
     this.pendingDialogRoute = latest?.route ?? null;
   }
@@ -3360,6 +3793,13 @@ function consoleArgsText(args: unknown): string {
 
 function inputTargetKey(route: CdpRoute | number | null | undefined = {}): string {
   return typeof route === "object" && typeof route?.sessionId === "string" && route.sessionId ? `session:${route.sessionId}` : "root";
+}
+
+function isTargetScopedCdpMethod(method: string): boolean {
+  return !method.startsWith("Target.")
+    && !method.startsWith("Browser.")
+    && !method.startsWith("SystemInfo.")
+    && !method.startsWith("Tethering.");
 }
 
 function finiteNumber(value: unknown): number | null {

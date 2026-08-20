@@ -26,10 +26,17 @@ const destination = http.createServer((request, response) => {
   response.end("<!doctype html><title>Cross-origin destination</title><main>destination-ready</main>");
 });
 let destinationUrl = "";
-const fixture = http.createServer((_request, response) => {
+const fixture = http.createServer((request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
+  if (request.url === "/secondary") {
+    response.end(`<!doctype html><title>Newton Secondary Page</title>
+      <main>secondary-page-ready</main>
+      <button onclick="window.close()">Close secondary page</button>`);
+    return;
+  }
   response.end(`<!doctype html><title>Newton Direct Live</title>
     <button onclick="this.textContent='Verified'">Direct action</button>
+    <button id="secondary-page" onclick="window.open('/secondary', '_blank')">Open secondary page</button>
     <button onclick="location.href='${destinationUrl}'">Cross-origin navigation</button>
     <button id="ref-churn" type="button">Churn refs</button>
     <section id="ref-churn-nodes"></section>
@@ -130,6 +137,62 @@ try {
   }
   logStep("direct_runtime_ref_budget_recycled");
 
+  const popupObservation = await tool("browser.observe", {
+    sessionId,
+    format: "json",
+    maxNodes: 20,
+    query: "Open secondary page",
+  });
+  requireSuccess(popupObservation, "direct_secondary_observe_failed");
+  const popupButton = observationNodes(popupObservation.value)
+    .find((node) => node.role === "button" && node.name === "Open secondary page");
+  if (typeof popupButton?.ref !== "string") fail("direct_secondary_ref_missing");
+  const openedSecondary = await tool("browser.act", {
+    sessionId,
+    action: { kind: "click", ref: popupButton.ref },
+  });
+  requireSuccess(openedSecondary, "direct_secondary_open_failed");
+  logStep(openedSecondary.value?.changed?.newTarget === true
+    ? "direct_runtime_secondary_target_observed"
+    : "direct_runtime_secondary_target_not_observed");
+  const secondaryObservation = await tool("browser.observe", {
+    sessionId,
+    format: "json",
+    maxNodes: 20,
+  });
+  requireSuccess(secondaryObservation, "direct_secondary_page_observe_failed");
+  const closeSecondary = observationNodes(secondaryObservation.value)
+    .find((node) => node.role === "button" && node.name === "Close secondary page");
+  if (typeof closeSecondary?.ref !== "string") {
+    const observedNodes = observationNodes(secondaryObservation.value);
+    const state = observedNodes.some((node) => node.role === "button" && node.name === "Open secondary page")
+      ? "opener"
+      : observedNodes.length === 0 ? "empty" : "other";
+    logStep(`direct_runtime_secondary_state_${state}`);
+    const titleState = secondaryObservation.value?.title === "Newton Secondary Page"
+      ? "secondary"
+      : secondaryObservation.value?.title === "Newton Direct Live"
+        ? "opener"
+        : secondaryObservation.value?.title ? "other" : "empty";
+    logStep(`direct_runtime_secondary_title_${titleState}`);
+    fail("direct_secondary_page_not_active");
+  }
+  requireSuccess(await tool("browser.act", {
+    sessionId,
+    action: { kind: "click", ref: closeSecondary.ref },
+  }), "direct_secondary_close_failed");
+  const restoredObservation = await tool("browser.observe", {
+    sessionId,
+    format: "json",
+    maxNodes: 20,
+    query: "Verified",
+  });
+  requireSuccess(restoredObservation, "direct_opener_restore_observe_failed");
+  if (!observationNodes(restoredObservation.value).some((node) => node.role === "button" && node.name === "Verified")) {
+    fail("direct_opener_not_restored");
+  }
+  logStep("direct_runtime_secondary_page_verified");
+
   const navigationObservation = await tool("browser.observe", {
     sessionId,
     format: "json",
@@ -158,6 +221,8 @@ try {
     effectVerified,
     refBudgetRecycled: true,
     refBudgetCycles: 4,
+    secondaryPageActivated: true,
+    openerRestoredAfterSecondaryClose: true,
     crossOriginNavigation: "completed",
     destinationApplicationRequests: 1,
     stopped: true,
@@ -267,6 +332,14 @@ function safeDirectRuntimeFailure(candidate) {
     "direct_host_unavailable",
     "direct_mcp_result_invalid",
     "direct_observe_failed",
+    "direct_opener_not_restored",
+    "direct_opener_restore_observe_failed",
+    "direct_secondary_close_failed",
+    "direct_secondary_observe_failed",
+    "direct_secondary_open_failed",
+    "direct_secondary_page_not_active",
+    "direct_secondary_page_observe_failed",
+    "direct_secondary_ref_missing",
     "direct_session_id_missing",
     "direct_session_start_failed",
     "direct_stop_failed",

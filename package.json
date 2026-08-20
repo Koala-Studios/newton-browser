@@ -1,6 +1,6 @@
 {
   "name": "newton-browser-workspace",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "license": "MIT",
   "private": true,
   "description": "Local-only MCP browser control using isolated owned Chrome or Edge processes over private CDP.",

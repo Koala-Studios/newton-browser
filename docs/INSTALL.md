@@ -7,7 +7,7 @@ TCP port.
 
 ## Install the direct runtime
 
-Version 0.6.2 is a private local candidate and is not published to npm. From this
+Version 0.6.3 is a private local candidate and is not published to npm. From this
 checkout, build and run the exact compiled entrypoint:
 
 ```powershell
@@ -102,12 +102,12 @@ Rebuild after source changes.
 
 ## Install from a tarball
 
-Use `artifacts/newton-browser-0.6.2.tgz` only after verifying it was produced by the
+Use `artifacts/newton-browser-0.6.3.tgz` only after verifying it was produced by the
 current tree, or use a verified release asset:
 
 ```powershell
 $installRoot = Join-Path $env:LOCALAPPDATA "NewtonBrowser\package"
-npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.6.2.tgz"
+npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.6.3.tgz"
 node "$installRoot\node_modules\newton-browser\dist\index.js" install codex --dry-run
 ```
 

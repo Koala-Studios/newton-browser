@@ -786,8 +786,13 @@ test("a same-process framed click skips root backend-id hit testing and dispatch
   driver.hitTestTarget = async () => { throw new Error("framed backend ids must not be root-hit-tested"); };
   driver.pageSignature = async () => ({ url: "http://localhost:3000", title: "Example" });
   driver.elementState = async () => ({});
-  driver.settleShort = async () => {};
-  driver.observeDelta = async () => ({ kind: "observation_delta", nodes: [], nodeCount: 0 });
+  driver.fenceBrowserProtocolEvents = async () => { calls.push({ method: "browser-event-fence" }); };
+  driver.reconcileOwnedPagesAfterInput = async () => { calls.push({ method: "owned-page-reconcile" }); };
+  driver.settleShort = async () => { calls.push({ method: "settle-short" }); };
+  driver.observeDelta = async () => {
+    calls.push({ method: "observe-delta" });
+    return { kind: "observation_delta", nodes: [], nodeCount: 0 };
+  };
   driver.paintCursorClick = () => {};
   driver.cdp = async (method, params, route) => { calls.push({ method, params, route }); return {}; };
 
@@ -802,6 +807,17 @@ test("a same-process framed click skips root backend-id hit testing and dispatch
     ["verify-framed-point", null],
     ["Input.dispatchMouseEvent", "mousePressed"],
     ["Input.dispatchMouseEvent", "mouseReleased"],
+  ]);
+  assert.deepEqual(calls.filter((call) => [
+    "browser-event-fence",
+    "owned-page-reconcile",
+    "settle-short",
+    "observe-delta",
+  ].includes(call.method)).map((call) => call.method), [
+    "browser-event-fence",
+    "settle-short",
+    "owned-page-reconcile",
+    "observe-delta",
   ]);
 });
 
@@ -1136,6 +1152,252 @@ test("owned root click reports a missing release acknowledgement once after caus
   assert.equal(result.reason, "input_release_unacknowledged");
   assert.equal(result.changed.inputReleaseAcknowledgement, "unacknowledged");
   assert.equal(result.changed.waitedFor, true);
+});
+
+test("driver routes implicit target-scoped CDP to the active owned page only", async () => {
+  const calls = [];
+  const driver = createNewtonBrowserDriver({
+    debuggerPort: {
+      async attach() {},
+      async detach() {},
+      async sendCommand(target, method, params) {
+        calls.push({ target, method, params });
+        return {};
+      },
+    },
+  });
+  driver.activePageSessionId = "popup-session";
+
+  await driver.cdp("Runtime.evaluate", { expression: "location.href" });
+  await driver.cdp("Target.getTargetInfo", { targetId: "root-target" });
+  await driver.cdp("Page.getFrameTree", {}, { sessionId: null });
+
+  assert.deepEqual(calls.map((call) => ({ target: call.target, method: call.method })), [
+    { target: { sessionId: "popup-session" }, method: "Runtime.evaluate" },
+    { target: {}, method: "Target.getTargetInfo" },
+    { target: {}, method: "Page.getFrameTree" },
+  ]);
+});
+
+test("driver reconciles a renderer-created page from the exact post-input browser snapshot", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.mainTargetId = "root-target";
+  driver.ownedRootTargetId = "root-target";
+  driver.browserControlSessionId = "browser-session";
+  driver.browserControlReady = true;
+  driver.targetRegistry.registerTarget({ targetId: "root-target", type: "page", origin: "https://root.test" });
+  driver.targetRegistry.commitTopLevelDocument("root-target", "https://root.test");
+  driver.ownedPageContexts.set("root-target", Object.freeze({
+    targetId: "root-target",
+    sessionId: null,
+    openerTargetId: null,
+    origin: "https://root.test",
+  }));
+  const popupInfo = {
+    targetId: "popup-target",
+    type: "page",
+    openerId: "root-target",
+    url: "https://auth.test/confirm",
+  };
+  driver.cdp = async (method, params = {}, route = {}) => {
+    calls.push({ method, params, route });
+    if (method === "Target.getTargets") return { targetInfos: [popupInfo] };
+    if (method === "Target.attachToTarget") return { sessionId: "popup-session" };
+    if (method === "Target.getTargetInfo") return { targetInfo: popupInfo };
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: {
+        id: "popup-frame",
+        loaderId: "popup-loader",
+        url: "https://auth.test/confirm",
+      } } };
+    }
+    if (method === "Page.getLayoutMetrics") return { visualViewport: { scale: 1 } };
+    if (method === "Runtime.evaluate") return { result: { value: 1 } };
+    return {};
+  };
+
+  const signals = driver.beginActionSignals();
+  await driver.reconcileOwnedPagesAfterInput(null, "root-target");
+
+  assert.deepEqual(calls.slice(0, 3).map((call) => [call.method, call.route?.sessionId ?? null]), [
+    ["Runtime.evaluate", null],
+    ["Target.getTargets", "browser-session"],
+    ["Target.attachToTarget", "browser-session"],
+  ]);
+  assert.equal(driver.mainTargetId, "popup-target");
+  assert.equal(driver.activePageSessionId, "popup-session");
+  assert.equal(driver.mainFrameId, "popup-frame");
+  assert.equal(driver.ownedPageContexts.has("popup-target"), true);
+  assert.equal(signals.finish().newTarget, true);
+});
+
+test("driver leaves a provisional discovered page untouched until its HTTP document is ready", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.mainTargetId = "root-target";
+  driver.ownedRootTargetId = "root-target";
+  driver.browserControlSessionId = "browser-session";
+  driver.browserControlReady = true;
+  driver.targetRegistry.registerTarget({ targetId: "root-target", type: "page", origin: "https://root.test" });
+  driver.targetRegistry.commitTopLevelDocument("root-target", "https://root.test");
+  driver.ownedPageContexts.set("root-target", Object.freeze({
+    targetId: "root-target",
+    sessionId: null,
+    openerTargetId: null,
+    origin: "https://root.test",
+  }));
+  driver.cdp = async (method, params = {}, route = {}) => {
+    calls.push({ method, params, route });
+    if (method === "Target.attachToTarget") return { sessionId: "popup-session" };
+    if (method === "Target.getTargetInfo") {
+      return { targetInfo: { targetId: "popup-target", type: "page", url: "https://auth.test/confirm" } };
+    }
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: {
+        id: "popup-frame",
+        loaderId: "popup-loader",
+        url: "https://auth.test/confirm",
+      } } };
+    }
+    if (method === "Page.getLayoutMetrics") return { visualViewport: { scale: 1 } };
+    if (method === "Runtime.evaluate") return { result: { value: 1 } };
+    return {};
+  };
+
+  await driver.recordDebuggerEvent({ sessionId: "browser-session" }, "Target.targetCreated", {
+    targetInfo: {
+      targetId: "popup-target",
+      type: "page",
+      openerId: "root-target",
+      url: "about:blank",
+    },
+  });
+  assert.equal(calls.some((call) => call.method === "Target.attachToTarget"), false);
+  assert.equal(driver.mainTargetId, "root-target");
+  assert.equal(driver.discoveredOwnedPages.has("popup-target"), true);
+
+  await driver.recordDebuggerEvent({ sessionId: "browser-session" }, "Target.targetInfoChanged", {
+    targetInfo: {
+      targetId: "popup-target",
+      type: "page",
+      openerId: "root-target",
+      url: "https://auth.test/confirm",
+    },
+  });
+  assert.equal(calls.some((call) => call.method === "Target.attachToTarget"), true);
+  assert.equal(driver.mainTargetId, "popup-target");
+  assert.equal(driver.activePageSessionId, "popup-session");
+  assert.equal(driver.mainFrameId, "popup-frame");
+  assert.equal(driver.discoveredOwnedPages.has("popup-target"), false);
+});
+
+test("driver activates a paused owned secondary page, routes it, and restores its opener on close", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.mainTargetId = "root-target";
+  driver.ownedRootTargetId = "root-target";
+  driver.browserControlSessionId = "browser-session";
+  driver.browserControlReady = true;
+  driver.targetRegistry.registerTarget({ targetId: "root-target", type: "page", origin: "https://root.test" });
+  driver.targetRegistry.commitTopLevelDocument("root-target", "https://root.test");
+  driver.ownedPageContexts.set("root-target", Object.freeze({
+    targetId: "root-target",
+    sessionId: null,
+    openerTargetId: null,
+    origin: "https://root.test",
+  }));
+  driver.cdp = async (method, params = {}, route = {}) => {
+    calls.push({ method, params, route });
+    if (method === "Target.getTargetInfo") {
+      const targetId = params.targetId;
+      return { targetInfo: {
+        targetId,
+        type: "page",
+        url: targetId === "popup-target" ? "https://auth.test/confirm" : "https://root.test/work",
+      } };
+    }
+    if (method === "Page.getFrameTree") {
+      const popup = route?.sessionId === "popup-session";
+      return { frameTree: { frame: {
+        id: popup ? "popup-frame" : "root-frame",
+        loaderId: popup ? "popup-loader" : "root-loader",
+        url: popup ? "https://auth.test/confirm" : "https://root.test/work",
+      } } };
+    }
+    if (method === "Page.getLayoutMetrics") return { visualViewport: { scale: 1 } };
+    if (method === "Runtime.evaluate") return { result: { value: 1 } };
+    return method === "Target.closeTarget" ? { success: true } : {};
+  };
+
+  await driver.recordDebuggerEvent({ sessionId: "browser-session" }, "Target.attachedToTarget", {
+    sessionId: "popup-session",
+    waitingForDebugger: true,
+    targetInfo: {
+      targetId: "popup-target",
+      type: "page",
+      openerId: "root-target",
+      url: "https://auth.test/confirm",
+    },
+  });
+
+  const resumeIndex = calls.findIndex((call) => call.method === "Runtime.runIfWaitingForDebugger");
+  const childAutoAttachIndex = calls.findIndex((call) => call.method === "Target.setAutoAttach" && call.route?.sessionId === "popup-session");
+  const pageEnableIndex = calls.findIndex((call) => call.method === "Page.enable");
+  assert.ok(resumeIndex >= 0 && pageEnableIndex > resumeIndex && childAutoAttachIndex > pageEnableIndex);
+  assert.equal(driver.mainTargetId, "popup-target");
+  assert.equal(driver.activePageSessionId, "popup-session");
+  assert.equal(driver.mainFrameId, "popup-frame");
+  assert.deepEqual(driver.targetRegistry.listObservationRoutes().map((route) => ({
+    targetId: route.targetId,
+    sessionId: route.sessionId,
+  })), [{ targetId: "popup-target", sessionId: "popup-session" }]);
+  assert.equal(calls.some((call) => call.method === "Target.activateTarget" && call.params.targetId === "popup-target"), true);
+
+  await driver.recordDebuggerEvent({}, "Page.frameNavigated", {
+    frame: { id: "inactive-root-frame", loaderId: "inactive-root-loader", url: "https://root.test/later" },
+  });
+  assert.equal(driver.mainFrameId, "popup-frame");
+
+  await driver.recordDebuggerEvent({ sessionId: "browser-session" }, "Target.detachedFromTarget", {
+    targetId: "popup-target",
+    sessionId: "popup-session",
+  });
+  assert.equal(driver.mainTargetId, "root-target");
+  assert.equal(driver.activePageSessionId, null);
+  assert.equal(driver.mainFrameId, "root-frame");
+  assert.equal(driver.ownedPageContexts.has("popup-target"), false);
+  assert.equal(calls.some((call) => call.method === "Target.activateTarget" && call.params.targetId === "root-target"), true);
+  assert.equal(calls.some((call) => call.method === "Target.setAutoAttach" && call.params.autoAttach === false && call.route?.sessionId === null), true);
+});
+
+test("driver closes an owned secondary page when setup cannot complete", async () => {
+  const driver = createNewtonBrowserDriver();
+  const calls = [];
+  driver.mainTargetId = "root-target";
+  driver.ownedRootTargetId = "root-target";
+  driver.browserControlSessionId = "browser-session";
+  driver.ownedPageContexts.set("root-target", Object.freeze({
+    targetId: "root-target",
+    sessionId: null,
+    openerTargetId: null,
+    origin: "https://root.test",
+  }));
+  driver.cdp = async (method, params, route) => {
+    calls.push({ method, params, route });
+    if (method === "Page.enable") throw Object.assign(new Error("setup failed"), { code: "direct_debugger_command_failed" });
+    if (method === "Target.closeTarget") return { success: true };
+    return {};
+  };
+
+  await assert.rejects(driver.recordDebuggerEvent({ sessionId: "browser-session" }, "Target.attachedToTarget", {
+    sessionId: "popup-session",
+    waitingForDebugger: false,
+    targetInfo: { targetId: "popup-target", type: "page", openerId: "root-target", url: "https://auth.test" },
+  }));
+  assert.equal(driver.ownedPageContexts.has("popup-target"), false);
+  assert.equal(calls.some((call) => call.method === "Target.closeTarget" && call.params.targetId === "popup-target"), true);
+  assert.equal(driver.mainTargetId, "root-target");
 });
 
 test("automatic target-session click keeps root and child dialogs session scoped", async () => {

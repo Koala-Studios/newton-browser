@@ -22,7 +22,7 @@ mcp_2026_07_28 = true
 [mcp_servers.newton-browser]
 command = "node"
 args = ["C:/absolute/path/newton-browser/apps/mcp-server/dist/index.js"]
-env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.6.2" }
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.6.3" }
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -35,6 +35,13 @@ before atomically replacing the configuration. There is no older-protocol fallba
 Each `browser.session.start` creates one isolated browser process, private CDP pipe,
 identity lease, and FIFO queue. Multiple sessions progress concurrently. Sessions are not
 preserved if the Newton stdio process exits.
+
+One session may contain a bounded stack of page targets created by ordinary site
+behavior. Newton discovers a provisional blank target without attaching to or activating
+it. Once that exact target commits to HTTP(S), it becomes the active MCP page and a fresh
+observation returns refs only for that page. Closing it restores and re-snapshots its
+opener. This is internal target routing, not a second MCP session or a browser-chrome
+control surface.
 
 Start requires one normalized HTTP(S) `origin`, which is the initial navigation and the
 key used for an optional local identity binding. It is not a network boundary. Chromium

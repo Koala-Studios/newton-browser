@@ -7,6 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-08-20
+
+### Fixed
+
+- Replaced browser-session page auto-attach with exact target discovery for owned popups
+  and new tabs. Newton leaves provisional blank targets untouched, attaches only after an
+  owned target commits to HTTP(S), routes subsequent page commands through that target,
+  and restores a freshly rebuilt opener context when the secondary page closes.
+- Added bounded post-input target reconciliation so a popup whose target event crosses the
+  action-signal boundary is available through the next same-session observation without a
+  browser-chrome click or a second MCP session.
+- Added the Windows Edge compatibility-layer bypass used to preserve inherited private
+  CDP pipe handles; it is never added to Chrome or non-Windows Edge.
+- Added deterministic provisional-target and routing regressions plus real Chrome and Edge
+  secondary-page/opener-restoration coverage to the complete release gate.
+
 ## [0.6.2] - 2026-08-19
 
 ### Fixed

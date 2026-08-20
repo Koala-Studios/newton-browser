@@ -90,6 +90,19 @@ test("builds a private pipe launch with an exact blank profile and no debug port
   assert.equal(args.some((arg) => arg.startsWith("--remote-debugging-port")), false);
   assert.ok(args.includes("--no-startup-window"));
   assert.equal(args.includes("about:blank"), false);
+  assert.equal(args.includes("--edge-skip-compat-layer-relaunch"), false);
+  assert.ok(chromiumLaunchArgs({
+    userDataDir,
+    headless: true,
+    browserFamily: "edge",
+    platform: "win32",
+  }).includes("--edge-skip-compat-layer-relaunch"));
+  assert.equal(chromiumLaunchArgs({
+    userDataDir,
+    headless: true,
+    browserFamily: "edge",
+    platform: "linux",
+  }).includes("--edge-skip-compat-layer-relaunch"), false);
 });
 
 test("proves readiness by Browser.getVersion and closes through the supervisor", async (t) => {

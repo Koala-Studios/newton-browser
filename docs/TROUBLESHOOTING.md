@@ -30,12 +30,12 @@
   families, then run `doctor --live`.
 - Origin errors: the initial value must be one normalized HTTP(S) origin. After startup,
   Newton uses normal Chromium networking and does not require additional origins.
-- Login button is inert or a site shows `ERR_BLOCKED_BY_CLIENT`: Newton 0.6.2 does not
+- Login button is inert or a site shows `ERR_BLOCKED_BY_CLIENT`: Newton 0.6.3 does not
   install a proxy or Fetch blocker. Confirm `browser.status` reports the expected version,
   close stale Newton/Chromium processes, and verify the configured entrypoint. Then test
   the same identity in `identity login`; browser/account/network policy outside Newton may
   still block the flow.
-- Page CSS, icons, fonts, or layout look corrupted: first verify the exact 0.6.2 entrypoint
+- Page CSS, icons, fonts, or layout look corrupted: first verify the exact 0.6.3 entrypoint
   is running. This release does not disable background networking, extensions, sync, or
   component updates and does not inject styles/scripts or freeze rendering. Capture a
   network log and screenshot; any Newton-originated `Fetch.failRequest`, proxy switch,
@@ -49,12 +49,19 @@
 - A click followed by POST/GraphQL/telemetry is ordinary browser behavior, not a blocked
   action. After `dispatched_unverified` or `outcome_unknown`, keep the same session open,
   observe current state, and never restart login or repeat the action blindly.
-- Target errors: re-observe and use a fresh narrower ref. Every 0.6.2 interactive
+- A site-owned popup or authentication tab does not require a coordinate click on the
+  tab strip or Chrome's `Debugger paused in another tab` banner. Newton leaves its
+  provisional blank target alone, then attaches and activates it after an HTTP(S) page
+  commits. Re-observe with the same session; when the page
+  closes, re-observe again and Newton returns to the opener. If a current release instead
+  leaves the banner visible or reports the opener as `renderer_unresponsive`, preserve
+  the session and report it as an owned-page routing defect—do not click browser chrome.
+- Target errors: re-observe and use a fresh narrower ref. Every 0.6.3 interactive
   observation starts a new bounded ref cycle, so long-lived same-document apps recover
   without reload or navigation. Text observations allocate no refs. Never synthesize refs.
 - `max_refs_exceeded` from 0.6.1 or earlier: do not retry an uncertain action, reload, or
   stop the session. Use bounded text observation and an unmasked screenshot only to verify
-  current state, safely complete or preserve the work, then upgrade to 0.6.2. Replacing the
+  current state, safely complete or preserve the work, then upgrade to 0.6.3. Replacing the
   private-pipe host necessarily closes its owned browser, so there is no honest hot swap.
 - `dialog_blocked`: use typed dialog handling after obtaining effect authorization.
 - Lifecycle errors such as `discarded`, `debugger_conflict`, `target_gone`, and

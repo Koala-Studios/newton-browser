@@ -2200,3 +2200,55 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   Exact-packed Chrome and Edge pass from the deterministic 117,455-byte artifact with
   SHA-256 `f936f3363d410817ffb9e6323f5990ec2d7f88f7b540b0aa81a295e1cd0ed549`.
 - Status: fixed and verified in the 0.6.2 release candidate.
+
+## BB-170 - A session-owned authentication tab stranded control on the opener
+
+- Found: 2026-08-20 in an authenticated Google Ads manager-link flow on 0.6.2. Preview
+  opened a separate `Confirm it's you` page. The confirmation click returned
+  `input_release_unacknowledged`; Newton kept observing the opener, Chrome displayed
+  `Debugger paused in another tab`, and a coordinate click on that browser-chrome banner
+  timed out and poisoned the opener as `renderer_unresponsive`. The manager-link Send
+  action was never dispatched.
+- Root cause: browser-session page auto-attach intercepted the provisional `about:blank`
+  popup and ran setup/activation before Chromium performed the opener-requested
+  navigation. That could strand the provisional page behind Chrome's debugger banner.
+  The driver also had no active-page context, so implicit page commands stayed on the
+  opener, and cross-session target delivery could occur after the click's first action
+  signal window. Browser chrome is not part of a page target, so a coordinate click could
+  never repair that state.
+- Fix: replace browser-session page auto-attach with browser target discovery. Record an
+  exact provisional target without attaching, configuring, or activating it. Only after
+  the same target commits to an HTTP(S) URL and its opener belongs to this Newton session
+  does Newton attach, configure, activate, and build its fresh page registry. Implicit
+  page-domain CDP and trusted input route through the active page session; exact post-input
+  snapshots reconcile a committed target that crosses the action-signal boundary. Closing
+  the secondary restores/rebuilds the opener. An explicitly attached waiting page is
+  resumed before setup. Setup failure closes the exact incoming page and capacity remains
+  bounded.
+- Regression/evidence: deterministic tests prove zero attach/setup/activation commands for
+  a provisional blank target, commit-gated activation, implicit-vs-browser CDP routing,
+  resume-before-enable ordering, active-page registry isolation, inactive event rejection,
+  exact opener restoration, setup-failure close, and click fence/settle/reconciliation
+  ordering. Real Chrome and Edge each open, observe, and click a secondary page, close it,
+  verify the opener through the same MCP session, continue cross-origin navigation, and
+  clean to zero residue.
+- Status: fixed and source/Chrome/Edge/exact-packed verified in the 0.6.3 candidate; final
+  consecutive release receipts are the remaining external gate.
+
+## BB-171 - Windows Edge relaunch discarded inherited private CDP pipe handles
+
+- Found: 2026-08-20 while running the BB-170 live matrix in Edge. The owned runtime failed
+  at `protocol_readiness` with no browser stderr or profile/policy error, while Chrome
+  passed the identical private-pipe flow.
+- Root cause: Windows Edge can relaunch through its compatibility layer and lose inherited
+  file descriptors, including Newton's private CDP pipe. Microsoft's Playwright Chromium
+  launcher documents the same Edge behavior and uses
+  `--edge-skip-compat-layer-relaunch` to keep the original process and descriptors.
+- Fix: add that one family-specific switch only for Edge on Windows. Chrome and non-Windows
+  Edge launch arguments remain unchanged; Newton did not add TCP debugging or a fallback
+  control plane.
+- Regression/evidence: launch-argument tests prove the flag is present only for Windows
+  Edge. A real installed Edge then passes process readiness, private CDP, secondary-page
+  control, opener restoration, cross-origin navigation, exact shutdown, and temp cleanup.
+- Status: fixed and source/Chrome/Edge/exact-packed verified in the 0.6.3 candidate; final
+  consecutive release receipts are the remaining external gate.
