@@ -1,5 +1,6 @@
 import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
 import { dispatchIdentityCommand } from "./browser-runtime/identity-cli.ts";
+import { createIdentityLeaseClosureVerifier } from "./browser-runtime/identity-lease-closure.ts";
 import { createProfileSourceClosureVerifier } from "./browser-runtime/profile-closure.ts";
 import { listNewtonIdentities, openProfileStore } from "./browser-runtime/profile-store.ts";
 import {
@@ -109,7 +110,7 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     const output = dispatchIdentityCommand({
       store: openProfileStore(profileStoreDirectory(process.env, identityDirectory)),
       ...(browserFamily ? { sourceClosureVerifier: createProfileSourceClosureVerifier({ browserFamily }) } : {}),
-      leaseRecoveryVerifier: (family) => createProfileSourceClosureVerifier({ browserFamily: family }),
+      leaseRecoveryVerifier: (family) => createIdentityLeaseClosureVerifier({ browserFamily: family }),
     }, identityArgs);
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     return true;

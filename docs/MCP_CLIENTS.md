@@ -22,7 +22,7 @@ mcp_2026_07_28 = true
 [mcp_servers.newton-browser]
 command = "node"
 args = ["C:/absolute/path/newton-browser/apps/mcp-server/dist/index.js"]
-env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.6.3" }
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.6.4" }
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -47,6 +47,11 @@ Start requires one normalized HTTP(S) `origin`, which is the initial navigation 
 key used for an optional local identity binding. It is not a network boundary. Chromium
 then follows normal redirects and loads cross-origin resources, frames, workers, popups,
 and background services without Newton grants or filtering.
+
+An optional combined initial observation is always nested under `observe`, for example
+`{ "origin": "https://example.com", "observe": { "mode": "full", "format": "compact" } }`.
+A bare `observe: "full"` or top-level observation fields are invalid; there is no legacy
+shape alias.
 
 Public MCP sessions are headless for deterministic agent input. `identity login` is the
 separate visible operator workflow for preparing a persistent identity. Both use normal

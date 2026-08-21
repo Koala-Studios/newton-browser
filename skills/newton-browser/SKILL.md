@@ -20,7 +20,7 @@ host still owns explicit browser sessions until they are stopped.
    surfaces without approval.
 4. For every Newton CLI operation, use only the immutable entrypoint configured in
    `[mcp_servers.newton-browser]`. Before visible login, run that exact entrypoint with
-   `--version` and require `0.6.3`. Never run a repository/worktree
+   `--version` and require `0.6.4`. Never run a repository/worktree
    `apps/mcp-server/dist/index.js`, a global `newton-browser`, `npx`, or an older cached
    package. Never pass retired `--allow-origin` or `allowedOrigins` arguments.
 
@@ -31,6 +31,9 @@ host still owns explicit browser sessions until they are stopped.
 2. Call `browser.session.start` with one normalized HTTP(S) `origin` and optionally
    `browser: "chrome"|"edge"`. This is the initial navigation, not an allowlist;
    redirects and cross-origin dependencies use normal Chromium networking.
+   For a combined initial observation, pass an object under `observe`, for example
+   `observe: { mode: "full", format: "compact" }`; never pass a bare mode or flatten
+   observation fields into the start call.
 3. Omit `identityId` by default. An operator-configured initial-origin binding selects the
    signed-in identity automatically; with no binding, Newton creates an ephemeral identity.
    Pass an explicit operator-provided ID only to override that selection. Use distinct
@@ -61,7 +64,7 @@ not attach to or hand off the operator's ordinary Chrome tabs.
    session before retrying, stopping it, or requesting authentication. Never infer that
    an OAuth/application-authorization screen means the persistent identity was signed out.
 7. If an action opens a session-owned popup or new tab, do not click browser chrome or a
-   `Debugger paused in another tab` banner. Newton 0.6.3 leaves the provisional blank
+   `Debugger paused in another tab` banner. Newton 0.6.4 leaves the provisional blank
    target untouched, then attaches and activates the committed HTTP(S) page internally.
    Make one fresh observation in the same session. When it closes, observe again and
    Newton restores the opener automatically.
@@ -74,7 +77,7 @@ not attach to or hand off the operator's ordinary Chrome tabs.
 - `browser.console` returns a bounded redacted console buffer.
 - `browser.network` returns bounded request metadata without headers. Response body
   access is limited to supported bounded text from the current visible origin.
-- Use the configured immutable 0.6.3 entrypoint for `identity login --origin <primary>`;
+- Use the configured immutable 0.6.4 entrypoint for `identity login --origin <primary>`;
   it selects the identity automatically and opens a visible browser with normal Chromium
   networking. A worktree or global CLI is not an acceptable substitute.
 
@@ -113,7 +116,10 @@ not attach to or hand off the operator's ordinary Chrome tabs.
   Retry exact cleanup; if uncertainty persists, report operator cleanup or
   `newton-browser doctor --live`.
 - A persistent identity is exclusive. Use another identity, omit it, or wait; never
-  override its lease.
+  override its lease. Newton automatically recovers a stale prior-host lease only when
+  exact process-tree, identity-path, and lock evidence proves the old owner is gone.
+  `configured_identity_busy` means a live owner; `configured_identity_recovery_unavailable`
+  or `configured_identity_recovery_failed` must be reported without manual lease deletion.
 - Stop each session with `browser.session.stop`. Use `browser.stop_all` only for explicit
   global cleanup, then confirm `browser.sessions.list` is empty.
 

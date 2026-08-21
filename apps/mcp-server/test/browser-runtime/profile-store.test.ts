@@ -361,6 +361,10 @@ test("stale lease recovery is explicit, exact, and refuses a live owner", () => 
       /profile_identity_lease_closure_unproved/,
     );
     assert.equal(inspectNewtonIdentityLease(store, identity.id), "active_or_stale");
+    const browserLock = path.join(identity.path, "SingletonLock");
+    fs.writeFileSync(browserLock, "owned");
+    assert.throws(() => recoverStaleNewtonIdentityLease(store, identity.id, () => true), /profile_source_locked/);
+    fs.rmSync(browserLock);
     assert.equal(recoverStaleNewtonIdentityLease(store, identity.id, () => true), "recovered");
     assert.equal(inspectNewtonIdentityLease(store, identity.id), "available");
     assert.equal(recoverStaleNewtonIdentityLease(store, identity.id, () => true), "available");

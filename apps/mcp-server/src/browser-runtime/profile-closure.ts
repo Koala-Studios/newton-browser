@@ -57,7 +57,8 @@ const systemProcessList: ProcessListProvider = (platform) => {
 function windowsProcessList(): readonly ProcessTableEntry[] {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -gt 0 } | Select-Object ProcessId,Name,ExecutablePath) | ConvertTo-Json -Compress -Depth 3",
+    "$items=@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -gt 0 } | Select-Object ProcessId,Name,ExecutablePath)",
+    "ConvertTo-Json -InputObject $items -Compress -Depth 3",
   ].join(";");
   const result = spawnSync("powershell.exe", [
     "-NoLogo",

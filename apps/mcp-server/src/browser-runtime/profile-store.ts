@@ -58,6 +58,11 @@ export type GuardianProfileCleanupPlan = Readonly<{
   removeIdentity: boolean;
 }>;
 export type SourceClosureVerifier = (source: Readonly<{ userDataRoot: string; profileDirectory: string }>) => boolean;
+export type IdentityLeaseClosureVerifier = (source: Readonly<{
+  userDataRoot: string;
+  profileDirectory: string;
+  recordedHostPid: number;
+}>) => boolean;
 export type OpaqueProfileSource = Readonly<{ browserFamily: "chrome" | "edge"; fileCount: number; totalBytes: number }>;
 
 type Marker = {
@@ -337,7 +342,7 @@ export function inspectNewtonIdentityLease(store: ProfileStore, id: string): New
 export function recoverStaleNewtonIdentityLease(
   store: ProfileStore,
   id: string,
-  verifyBrowserClosed: SourceClosureVerifier,
+  verifyBrowserClosed: IdentityLeaseClosureVerifier,
 ): NewtonIdentityLeaseRecovery {
   requireStore(store);
   const identityId = checkedIdentity(id);
@@ -351,9 +356,10 @@ export function recoverStaleNewtonIdentityLease(
     // The recorded host can be gone while its guardian/browser tree is still
     // cleaning up. Never infer profile closure from the host PID alone. The
     // independently supplied verifier is deliberately conservative and proves
-    // that no process from this identity's browser family is running before the
-    // exact stale lease is quarantined.
-    if (!closureProved(verifyBrowserClosed, identity.path, "Default")) {
+    // that no recorded owner descendant or Chromium process using this exact
+    // Newton identity remains before the exact stale lease is quarantined.
+    assertNoBrowserLocks(identity.path);
+    if (!identityLeaseClosureProved(verifyBrowserClosed, identity.path, "Default", metadata.pid)) {
       fail("profile_identity_lease_closure_unproved");
     }
     const fileIdentity = leaseFileIdentity(leasePath);
@@ -869,6 +875,23 @@ function checkedProfileDirectory(value: string): string {
 function closureProved(verifier: SourceClosureVerifier, userDataRoot: string, profileDirectory: string): boolean {
   try {
     return verifier(Object.freeze({ userDataRoot, profileDirectory })) === true;
+  } catch {
+    return false;
+  }
+}
+
+function identityLeaseClosureProved(
+  verifier: IdentityLeaseClosureVerifier,
+  userDataRoot: string,
+  profileDirectory: string,
+  recordedHostPid: number,
+): boolean {
+  try {
+    return typeof verifier === "function" && verifier(Object.freeze({
+      userDataRoot,
+      profileDirectory,
+      recordedHostPid,
+    })) === true;
   } catch {
     return false;
   }

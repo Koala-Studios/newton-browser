@@ -10,14 +10,18 @@ import {
   type DirectOwnedRuntime,
 } from "./direct-browser-host.ts";
 import {
+  OwnedBrowserRuntimeError,
   launchOwnedBrowserRuntime,
   type LaunchOwnedBrowserRuntimeOptions,
 } from "./owned-browser-runtime.ts";
 import {
   createNewtonIdentity,
+  inspectNewtonIdentityLease,
   listNewtonIdentities,
   openProfileStore,
+  recoverStaleNewtonIdentityLease,
   removeNewtonIdentity,
+  type IdentityLeaseClosureVerifier,
   type NewtonProfileIdentity,
   type ProfileStore,
 } from "./profile-store.ts";
@@ -41,6 +45,8 @@ export type ConfiguredDirectBrowserHostOptions = Readonly<{
   createIdentity?: typeof createNewtonIdentity;
   listIdentities?: typeof listNewtonIdentities;
   removeIdentity?: typeof removeNewtonIdentity;
+  recoverIdentityLease?: typeof recoverStaleNewtonIdentityLease;
+  identityLeaseRecoveryVerifier?: (browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier;
   startDriverSession?: DirectBrowserHostOptions["startDriverSession"];
   maxSessions?: number;
   maxQueueItems?: number;
@@ -75,6 +81,7 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
   const createIdentity = options.createIdentity ?? createNewtonIdentity;
   const listIdentities = options.listIdentities ?? listNewtonIdentities;
   const removeIdentity = options.removeIdentity ?? removeNewtonIdentity;
+  const recoverIdentityLease = options.recoverIdentityLease ?? recoverStaleNewtonIdentityLease;
   const launchRuntime = options.launchRuntime ?? launchOwnedBrowserRuntime;
   const identityBindings = exactIdentityBindings(options.identityBindings ?? []);
   const configuredFamily = configuredOptional("family", options.browserFamily, env.NEWTON_BROWSER_BROWSER);
@@ -106,6 +113,14 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
     };
     let identity: NewtonProfileIdentity;
     try {
+      if (persistentIdentity) {
+        preparePersistentIdentityLease({
+          store,
+          identity: persistentIdentity,
+          recoverIdentityLease,
+          verifierFactory: options.identityLeaseRecoveryVerifier,
+        });
+      }
       identity = persistentIdentity ?? createIdentity(store, { browserFamily: family });
     } catch (error) {
       releasePersistent();
@@ -151,6 +166,32 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
     ...(options.maxQueueBytes === undefined ? {} : { maxQueueBytes: options.maxQueueBytes }),
     ...(options.hostPolicies === undefined ? {} : { hostPolicies: options.hostPolicies }),
   });
+}
+
+function preparePersistentIdentityLease(input: Readonly<{
+  store: ProfileStore;
+  identity: NewtonProfileIdentity;
+  recoverIdentityLease: typeof recoverStaleNewtonIdentityLease;
+  verifierFactory: ((browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier) | undefined;
+}>): void {
+  let inspection: ReturnType<typeof inspectNewtonIdentityLease>;
+  try { inspection = inspectNewtonIdentityLease(input.store, input.identity.id); }
+  catch { throw configuredError("configured_identity_recovery_failed"); }
+  if (inspection === "available") return;
+  if (typeof input.verifierFactory !== "function") throw configuredError("configured_identity_busy");
+  try {
+    const verifier = input.verifierFactory(input.identity.browserFamily);
+    if (typeof verifier !== "function") throw configuredError("configured_identity_recovery_unavailable");
+    input.recoverIdentityLease(input.store, input.identity.id, verifier);
+  } catch (error) {
+    if (error instanceof ConfiguredDirectHostError) throw error;
+    const code = boundedErrorCode(error);
+    if (code === "profile_identity_lease_active") throw configuredError("configured_identity_busy");
+    if (code === "profile_identity_lease_closure_unproved" || code === "profile_source_locked") {
+      throw configuredError("configured_identity_recovery_unavailable");
+    }
+    throw configuredError("configured_identity_recovery_failed");
+  }
 }
 
 function exactIdentityBindings(bindings: readonly IdentityBinding[]): ReadonlyMap<string, string> {
@@ -253,6 +294,19 @@ type IdentityCleanup = Readonly<{
 }>;
 
 async function startupFailure(input: IdentityCleanup & { error: unknown }): Promise<ConfiguredDirectHostError> {
+  if (input.error instanceof OwnedBrowserRuntimeError && input.error.identityBusy) {
+    if (input.ephemeral) {
+      try { input.removeIdentity(input.store, input.identity.id); }
+      catch {
+        return configuredError("configured_identity_cleanup_uncertain", true, async () => {
+          input.removeIdentity(input.store, input.identity.id);
+        });
+      }
+    } else {
+      input.releasePersistent();
+    }
+    return configuredError("configured_identity_busy");
+  }
   const retry = cleanupRetry(input.error);
   if (retry) {
     return configuredError("configured_runtime_start_uncertain", true, async () => {
@@ -359,6 +413,13 @@ function boundedConfiguredError(error: unknown, fallback: string): ConfiguredDir
     ? error.code
     : fallback;
   return configuredError(code);
+}
+
+function boundedErrorCode(error: unknown): string {
+  const candidate = record(error) && typeof error.code === "string"
+    ? error.code
+    : error instanceof Error ? error.message : "";
+  return /^[a-z][a-z0-9_]{0,79}$/u.test(candidate) ? candidate : "";
 }
 
 function configuredError(

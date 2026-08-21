@@ -6,6 +6,8 @@ import { randomBytes } from "node:crypto";
 
 import { discoverBrowserExecutable } from "../../apps/mcp-server/src/browser-runtime/browser-discovery.ts";
 import { createDefaultDirectBrowserHost } from "../../apps/mcp-server/src/browser-runtime/default-direct-host.ts";
+import { createNewtonIdentity, openProfileStore } from "../../apps/mcp-server/src/browser-runtime/profile-store.ts";
+import { writeIdentityBinding } from "../../apps/mcp-server/src/config.ts";
 import { handleMcpMessage } from "../../apps/mcp-server/src/mcp-server.ts";
 
 const family = process.env.NEWTON_BROWSER_QA_BROWSER === "edge" ? "edge" : "chrome";
@@ -80,6 +82,11 @@ try {
   const address = fixture.address();
   if (!address || typeof address === "string") fail("direct_fixture_unavailable");
   origin = `http://127.0.0.1:${address.port}`;
+  const store = openProfileStore(path.join(runRoot, "identities"));
+  const persistentIdentity = createNewtonIdentity(store, { browserFamily: family });
+  writeStaleLease(persistentIdentity.path, persistentIdentity.id, family, absentProcessId());
+  writeIdentityBinding({ directory: runRoot, origin, identityId: persistentIdentity.id });
+  logStep("direct_runtime_stale_identity_prepared");
   host = createDefaultDirectBrowserHost({
     ...process.env,
     NEWTON_BROWSER_BROWSER: family,
@@ -106,6 +113,7 @@ try {
   const sessionId = started.value.sessionId;
   if (typeof sessionId !== "string") fail("direct_session_id_missing");
   logStep("direct_runtime_session_started");
+  logStep("direct_runtime_stale_identity_recovered");
   const activeStatus = await tool("browser.status", {});
   requireSuccess(activeStatus, "direct_active_status_failed");
   if (activeStatus.value.ready !== true || activeStatus.value.runtimeState !== "ready") fail("direct_active_status_invalid");
@@ -216,6 +224,7 @@ try {
     mode: status.value.mode,
     configuredIdle: true,
     runtimeReadyAfterStart: true,
+    staleIdentityLeaseRecovered: true,
     observedRef: true,
     actionResultStatus: acted.value.status,
     effectVerified,
@@ -297,6 +306,27 @@ function fail(code) {
   throw Object.assign(new Error(code), { code });
 }
 
+function writeStaleLease(identityPath, id, browserFamily, pid) {
+  fs.writeFileSync(path.join(identityPath, ".newton-browser-profile-lease"), `${JSON.stringify({
+    version: 1,
+    type: "identity_lease",
+    id,
+    browserFamily,
+    nonce: randomBytes(32).toString("hex"),
+    pid,
+    createdAt: new Date().toISOString(),
+  })}\n`, { flag: "wx", mode: 0o600 });
+}
+
+function absentProcessId() {
+  const pid = 2_147_483_647;
+  try { process.kill(pid, 0); }
+  catch (error) {
+    if (error?.code === "ESRCH") return pid;
+  }
+  fail("direct_absent_process_fixture_failed");
+}
+
 function logStep(step) {
   process.stdout.write(`${JSON.stringify({ step })}\n`);
 }
@@ -306,6 +336,9 @@ function safeDirectStartFailure(value) {
   return new Set([
     "configured_browser_unavailable",
     "configured_identity_create_failed",
+    "configured_identity_busy",
+    "configured_identity_recovery_failed",
+    "configured_identity_recovery_unavailable",
     "configured_identity_unavailable",
     "configured_profile_store_invalid",
     "configured_profile_store_required",
@@ -319,6 +352,7 @@ function safeDirectStartFailure(value) {
 
 function safeDirectRuntimeFailure(candidate) {
   return new Set([
+    "direct_absent_process_fixture_failed",
     "direct_action_failed",
     "direct_active_status_failed",
     "direct_active_status_invalid",

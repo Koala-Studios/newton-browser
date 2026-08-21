@@ -106,8 +106,13 @@ export async function handleMcpMessage(
     const args = isObject(params.arguments) ? params.arguments : {};
     try {
       validateToolArguments(name, args);
-    } catch {
-      return errorResponse(id, -32602, "Invalid tool arguments.", { errorCode: "invalid_arguments", tool: name });
+    } catch (error) {
+      const reason = argumentFailureReason(error);
+      return errorResponse(id, -32602, "Invalid tool arguments.", {
+        errorCode: "invalid_arguments",
+        tool: name,
+        ...(reason ? { reason } : {}),
+      });
     }
     try {
       context.signal.throwIfAborted();
@@ -523,6 +528,7 @@ export function toolList(): Array<Record<string, unknown>> {
       identityId: { type: "string", pattern: "^nbi_[a-f0-9]{32}$" },
       browser: { type: "string", enum: ["chrome", "edge"] },
       observe: {
+        description: "Set false for no initial observation, or pass an observation object such as {mode:'full',format:'compact'}. Observation fields are nested here, never top-level.",
         anyOf: [
           { type: "boolean", const: false },
           { type: "object", properties: observationOutput, additionalProperties: false },
@@ -608,8 +614,9 @@ function validateToolArguments(name: string, args: Record<string, unknown>): voi
     if (args.identityId !== undefined) requiredIdentityId(args.identityId);
     if (args.browser !== undefined) requiredBrowserFamily(args.browser);
     if (args.observe !== undefined && args.observe !== false) {
-      if (!isObject(args.observe)) throw new Error("invalid_arguments");
-      validateObservationArguments(args.observe);
+      if (!isObject(args.observe)) throw new Error("start_observe_object_required");
+      try { validateObservationArguments(args.observe); }
+      catch { throw new Error("start_observe_object_invalid"); }
     }
     return;
   }
@@ -923,6 +930,16 @@ function publicErrorMessage(code: string): string {
   if (code === "invalid_origin" || code === "origin_required") return "The request requires one exact HTTP(S) origin.";
   if (code === "invalid_identity_id") return "The identity ID is invalid.";
   if (code === "invalid_browser_family") return "The browser must be Chrome or Edge.";
+  if (code === "configured_identity_busy") return "The selected persistent identity is already owned by another live browser session.";
+  if (code === "configured_identity_recovery_unavailable") return "Newton could not prove that the selected identity's previous browser process is fully closed.";
+  if (code === "configured_identity_recovery_failed") return "Newton could not safely recover the selected identity's stale ownership lease.";
   if (code === "direct_cleanup_uncertain") return "Browser cleanup could not be confirmed.";
   return "Newton Browser could not complete the request.";
+}
+
+function argumentFailureReason(error: unknown): string | undefined {
+  const reason = error instanceof Error ? error.message : "";
+  return reason === "start_observe_object_required" || reason === "start_observe_object_invalid"
+    ? reason
+    : undefined;
 }

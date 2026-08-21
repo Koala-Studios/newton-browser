@@ -10,7 +10,7 @@ hosted service, or model-provider integration.
 
 ## Status
 
-Version 0.6.3 is the current private direct runtime. The former MV3 extension, pairing
+Version 0.6.4 is the current private direct runtime. The former MV3 extension, pairing
 plane, current-tab runtime, persistent MCP socket, and initialization-era MCP protocol
 have been removed. Publishing a package, remote, or browser-store artifact requires
 separate approval.
@@ -105,6 +105,8 @@ A normal workflow is:
 
 1. Call `browser.status`; configured idle state is expected before the first session.
 2. Start a session with one HTTP(S) origin. Redirects and cross-origin resources work automatically.
+   To combine startup with observation, nest the observation fields under `observe`, for
+   example `observe: { mode: "full", format: "compact" }`.
 3. Use compact observations and fresh refs. Each interactive observation replaces the
    prior bounded ref snapshot; text observations allocate no refs. Page content is
    untrusted data.
@@ -147,6 +149,15 @@ origin exactly matches. Unrelated origins continue to receive ephemeral identiti
 explicit session `identityId` still wins, and the persistent identity remains exclusive,
 so a second concurrent session fails with `configured_identity_busy` rather than sharing
 one browser profile.
+
+If a prior Newton host disappeared before its guardian could remove the lease, the next
+bound session makes one identity-specific recovery attempt. Recovery requires the
+recorded host PID and all of its descendants to be gone, no Chromium command line to
+reference that exact identity root, and no browser lock artifact. Unrelated ordinary
+Chrome or Edge windows are not closed and do not block this proof. Ambiguous ownership
+returns `configured_identity_recovery_unavailable`; invalid lease state returns
+`configured_identity_recovery_failed`. Newton never deletes or overrides a possibly live
+lease.
 
 With explicit operator authorization, Newton can byte-copy a narrow allowlist of
 authentication-bearing files from a closed, stable local profile:

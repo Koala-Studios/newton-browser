@@ -26,14 +26,21 @@ export class OwnedBrowserRuntimeError extends Error {
   readonly code = "owned_browser_runtime_failed";
   readonly phase: OwnedBrowserRuntimePhase;
   readonly cleanupUncertain: boolean;
+  readonly identityBusy: boolean;
   private readonly cleanupRetry: (() => Promise<void>) | undefined;
 
-  constructor(phase: OwnedBrowserRuntimePhase, cleanupUncertain = false, cleanupRetry?: () => Promise<void>) {
+  constructor(
+    phase: OwnedBrowserRuntimePhase,
+    cleanupUncertain = false,
+    cleanupRetry?: () => Promise<void>,
+    identityBusy = false,
+  ) {
     super("Owned browser runtime operation failed.");
     this.name = "OwnedBrowserRuntimeError";
     this.phase = phase;
     this.cleanupUncertain = cleanupUncertain;
     this.cleanupRetry = cleanupRetry;
+    this.identityBusy = identityBusy;
   }
 
   retryCleanup(): Promise<void> {
@@ -166,8 +173,11 @@ export class OwnedBrowserRuntime {
 
 export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRuntimeOptions): Promise<OwnedBrowserRuntime> {
   let lease: NewtonIdentityLease;
-  try { lease = acquireNewtonIdentityLease(options.profileStore, options.identityId); } catch {
-    throw new OwnedBrowserRuntimeError("identity_lease");
+  try { lease = acquireNewtonIdentityLease(options.profileStore, options.identityId); } catch (error) {
+    const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : error instanceof Error ? error.message : "";
+    throw new OwnedBrowserRuntimeError("identity_lease", false, undefined, code === "profile_identity_busy");
   }
 
   if (lease.browserFamily !== options.browserFamily) {

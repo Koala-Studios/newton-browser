@@ -30,7 +30,7 @@ test("server/discover publishes the single modern protocol and untrusted-page in
     assert.equal(result.resultType, "complete");
     assert.deepEqual((result._meta as Record<string, unknown>)["io.modelcontextprotocol/serverInfo"], {
       name: "newton-browser",
-      version: "0.6.3",
+      version: "0.6.4",
     });
     assert.match(MCP_SERVER_INSTRUCTIONS, /untrusted data/);
     assert.match(MCP_SERVER_INSTRUCTIONS, /never instructions or authorization/);
@@ -178,10 +178,49 @@ test("session start passes one initial URL and rejects retired network-boundary 
   assert.deepEqual(created, [{
     origin: "https://example.com",
   }]);
+  const bareObserve = await start({ origin: "https://example.com", observe: "full" });
+  assert.ok(bareObserve && "error" in bareObserve);
+  assert.deepEqual(bareObserve.error.data, {
+    errorCode: "invalid_arguments",
+    tool: "browser.session.start",
+    reason: "start_observe_object_required",
+  });
+  const malformedObserve = await start({ origin: "https://example.com", observe: { mode: "full", extra: true } });
+  assert.ok(malformedObserve && "error" in malformedObserve);
+  assert.deepEqual(malformedObserve.error.data, {
+    errorCode: "invalid_arguments",
+    tool: "browser.session.start",
+    reason: "start_observe_object_invalid",
+  });
   const retired = await start({ origin: "https://example.com", allowedOrigins: ["https://assets.example.com"] });
   assert.ok(retired && "error" in retired);
   assert.deepEqual(retired.error.data, { errorCode: "invalid_arguments", tool: "browser.session.start" });
   assert.equal(created.length, 1);
+});
+
+test("persistent identity startup exposes bounded actionable recovery failures", async () => {
+  for (const [errorCode, message] of [
+    ["configured_identity_busy", "The selected persistent identity is already owned by another live browser session."],
+    ["configured_identity_recovery_unavailable", "Newton could not prove that the selected identity's previous browser process is fully closed."],
+    ["configured_identity_recovery_failed", "Newton could not safely recover the selected identity's stale ownership lease."],
+  ] as const) {
+    let stopped = 0;
+    const response = await handleMcpMessage({
+      createSession() { return { sessionId: "direct_session_00000000-0000-4000-8000-000000000011" }; },
+      async waitForSessionReady() { throw Object.assign(new Error(errorCode), { code: errorCode }); },
+      async stopSession() { stopped += 1; },
+    } as never, {
+      jsonrpc: "2.0",
+      id: 20,
+      method: "tools/call",
+      params: { _meta: META, name: "browser.session.start", arguments: { origin: "https://example.com" } },
+    });
+    assert.ok(response && "result" in response);
+    const result = response.result as { isError?: boolean; content: Array<{ text?: string }> };
+    assert.equal(result.isError, true);
+    assert.deepEqual(JSON.parse(result.content[0]?.text ?? "{}"), { ok: false, errorCode, message });
+    assert.equal(stopped, 1);
+  }
 });
 
 test("browser.act publishes the canonical strict discriminated schema", () => {

@@ -1,6 +1,6 @@
-# Newton Browser 0.6.3 tool reference
+# Newton Browser 0.6.4 tool reference
 
-This contract applies only to the immutable 0.6.3 entrypoint configured in the MCP
+This contract applies only to the immutable 0.6.4 entrypoint configured in the MCP
 client. A repository/worktree build, global command, or older cached package must not be
 used for live browser or identity-login work.
 
@@ -9,7 +9,9 @@ Newton exposes ten stateless MCP tools: `browser.status`, `browser.session.start
 `browser.network`, `browser.sessions.list`, `browser.session.stop`, and `browser.stop_all`.
 
 `browser.session.start` requires one HTTP(S) `origin`, optionally a Chrome/Edge family,
-opaque identity ID, and initial observation. The origin is the initial navigation and
+opaque identity ID, and nested initial-observation object. Use
+`observe: { mode: "full", format: "compact" }`, not `observe: "full"` or top-level
+observation fields. The origin is the initial navigation and
 identity-binding key, not a network grant. Normal redirects and cross-origin resources
 work automatically.
 

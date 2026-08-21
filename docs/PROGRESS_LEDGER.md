@@ -24,8 +24,8 @@ allowlists.
 | Direct runtime | source and exact-packed start/observe/act/screenshot/stop in Chrome and Edge | pass: seven-stage source suites and packed artifact |
 | Concurrency | same-session FIFO, cross-session progress, distinct processes/identities, zero residue | pass: Chrome and Edge live |
 | Frames/input/lifecycle | same-process and nested OOPIF actions, owned popup/new-tab activation and opener restoration, dialogs, renderer/process loss, guardian cleanup, stale-ref fencing, bounded same-document ref recycling | pass: deterministic plus current-tree Chrome/Edge secondary-page live proof |
-| Compact output | token budgets, flat actions, one canonical result shape, image-only screenshots | pass: 2,816-token catalog and 658-token workflow |
-| Real-site usability | usable video, community, commerce, advertising, reference, and standards pages; no blocked/error pages or raw icon ligatures | six surfaces pass in Chrome; Reddit's clean-profile public surface remains externally unavailable and is not rewritten or allowlisted |
+| Compact output | token budgets, flat actions, one canonical result shape, image-only screenshots | pass: 2,881-token catalog and 658-token workflow |
+| Real-site usability | usable video, community, commerce, advertising, reference, and standards pages; no blocked/error pages or raw icon ligatures | seven logged-out production surfaces pass in Chrome |
 | Packaging | exact tarball install/run, source-free artifacts, bounded receipts, zero residue | pass: Chrome and Edge, identical SHA-256 |
 | Authorized opaque import | closed local profile copied through the narrow opaque allowlist, source untouched, owned identity cleanup | final QA pending |
 | Release stability | three consecutive unchanged-tree release checks after all live QA and documentation freeze | final gate: recorded by consecutive release command receipts without post-run source edits |
@@ -69,21 +69,22 @@ They do not describe the current network contract unless explicitly marked curre
 ## Current Windows evidence
 
 - Build and strict typecheck: pass.
-- Deterministic tests: 480 passed, 0 failed, 0 skipped.
-- Evaluations: 41 passed; agent-cost catalog 2,845/3,000 tokens and workflow
+- Deterministic tests: 490 passed, 0 failed, 0 skipped.
+- Evaluations: 41 passed; agent-cost catalog 2,881/3,000 tokens and workflow
   658/2,100 tokens.
 - Chrome and Edge source live suites: seven of seven stages pass for each family. The
-  direct-runtime stage replaces 260 controls through four same-document generations,
-  observes 250 nodes each cycle, opens and controls a secondary page, restores its opener,
-  then continues navigation and exact cleanup. Windows Edge uses its family-specific
-  compatibility-layer bypass so inherited private CDP pipe handles survive startup.
-- Exact 0.6.3 packed artifact: Chrome and Edge pass start/observe/click/cross-origin
-  navigation/stop/cleanup from the identical 120,511-byte artifact with SHA-256
-  `a0108eccfd96a9934426eb41315556e7c12dd3feabe3f1490cabfb64a7059b3f`.
+  direct-runtime stage first creates an exact stale lease on a bound persistent identity,
+  automatically recovers it while an unrelated ordinary Chrome window remains open, then
+  replaces 260 controls through four same-document generations, observes 250 nodes each
+  cycle, opens and controls a secondary page, restores its opener, and continues navigation
+  and exact cleanup. Windows Edge uses its family-specific compatibility-layer bypass so
+  inherited private CDP pipe handles survive startup.
+- Exact 0.6.4 packed-artifact verification is part of the frozen-candidate release gate
+  below; Chrome and Edge must produce one identical artifact hash.
 - Release stability is the last external gate. Its three consecutive command receipts are
   authoritative because writing their result back into this file would change the tested
   source digest after the fact.
-- Real public sites: video, commerce search/fill, advertising, reference, accessibility,
-  and standards surfaces pass without Newton block pages or raw icon ligatures. Reddit's
-  clean-profile public surface returns insufficient content; it is retained as a bounded
-  negative external-site receipt rather than weakened into a false pass.
+- Real public sites: RFC Editor, Wikipedia, YouTube, Reddit's public corporate surface,
+  Mercato di Bellina search/fill, W3C accessibility, and a public advertising surface all pass without Newton
+  block pages or raw icon ligatures. The commerce run also verifies trusted screenshot
+  masking. All sessions, identities, leases, and temporary roots are cleaned exactly.

@@ -7,14 +7,18 @@ import path from "node:path";
 import { configDirectory, ensureConfigDirectory, loadBrowserPreference, profileStoreDirectory, resolveConfigDirectory, writeBrowserPreference } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { createConfiguredDirectBrowserHost } from "./configured-direct-host.ts";
+import { createIdentityLeaseClosureVerifier } from "./identity-lease-closure.ts";
 import {
   launchOwnedBrowserRuntime,
   type LaunchOwnedBrowserRuntimeOptions,
   type OwnedBrowserRuntime,
 } from "./owned-browser-runtime.ts";
 import {
+  inspectNewtonIdentityLease,
   listNewtonIdentities,
   openProfileStore,
+  recoverStaleNewtonIdentityLease,
+  type IdentityLeaseClosureVerifier,
 } from "./profile-store.ts";
 
 const IDENTITY_PATTERN = /^nbi_[a-f0-9]{32}$/u;
@@ -80,6 +84,7 @@ export async function runDirectIdentityLogin(input: {
   onReady?(receipt: DirectIdentityLoginReceipt): void;
   discoverBrowser?: typeof discoverBrowserExecutable;
   launchRuntime?: SetupRuntimeLauncher;
+  identityLeaseRecoveryVerifier?: IdentityLeaseClosureVerifier;
   createTerminationSignal?: typeof terminationSignal;
 }): Promise<DirectIdentityLoginReceipt> {
   const env = input.env ?? process.env;
@@ -89,6 +94,12 @@ export async function runDirectIdentityLogin(input: {
   const store = openProfileStore(profileStoreDirectory(env, directory));
   const identity = listNewtonIdentities(store).find((candidate) => candidate.id === input.identityId);
   if (!identity) fail("identity_login_unavailable");
+  recoverIdentityForLogin(
+    store,
+    identity.id,
+    input.identityLeaseRecoveryVerifier
+      ?? createIdentityLeaseClosureVerifier({ browserFamily: identity.browserFamily }),
+  );
   const executable = discoverConfiguredBrowser(input.discoverBrowser, identity.browserFamily, env, "identity_login_browser_unavailable");
   let runtime: SetupOwnedRuntime;
   try {
@@ -143,6 +154,26 @@ async function cleanupLoginRuntime(
 ): Promise<boolean> {
   try { await runtime.close(); return true; } catch {
     try { await runtime.close(); return true; } catch { return false; }
+  }
+}
+
+function recoverIdentityForLogin(
+  store: ReturnType<typeof openProfileStore>,
+  identityId: string,
+  verifier: IdentityLeaseClosureVerifier,
+): void {
+  let inspection: ReturnType<typeof inspectNewtonIdentityLease>;
+  try { inspection = inspectNewtonIdentityLease(store, identityId); }
+  catch { fail("identity_login_identity_recovery_failed"); }
+  if (inspection === "available") return;
+  try { recoverStaleNewtonIdentityLease(store, identityId, verifier); }
+  catch (error) {
+    const code = boundedCode(error);
+    if (code === "profile_identity_lease_active") fail("identity_login_identity_busy");
+    if (code === "profile_identity_lease_closure_unproved" || code === "profile_source_locked") {
+      fail("identity_login_identity_recovery_unavailable");
+    }
+    fail("identity_login_identity_recovery_failed");
   }
 }
 
@@ -358,6 +389,13 @@ function bounded(error: unknown, fallback: string): Error & { code: string } {
     ? error.code
     : fallback;
   return Object.assign(new Error(code), { code });
+}
+
+function boundedCode(error: unknown): string {
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : error instanceof Error ? error.message : "";
+  return /^[a-z][a-z0-9_]{0,79}$/u.test(code) ? code : "";
 }
 
 function cleanupUncertain(error: unknown): boolean {

@@ -20,8 +20,15 @@
 - `direct_runtime_unavailable`: stop any retained session and run `doctor --live`.
 - `direct_cleanup_uncertain`: preserve the descriptor and retry `browser.session.stop`;
   do not start further effects until cleanup is confirmed.
-- `configured_identity_busy`: close the owning session or login. If the owner crashed,
-  inspect and explicitly recover the lease; recovery refuses a live recorded process.
+- `configured_identity_busy`: another live host owns the selected persistent identity;
+  close that owner, use another identity, or wait. Newton never steals a live lease.
+- `configured_identity_recovery_unavailable`: a prior owner disappeared but Newton could
+  not prove its exact browser tree and identity root are unused. Preserve the identity;
+  inspect it with `identity lease-inspect` and use explicit `lease-recover` only after
+  resolving the reported process ambiguity.
+- `configured_identity_recovery_failed`: the stale lease failed exact validation or
+  quarantine. Do not delete it manually; retain the identity and diagnose filesystem
+  ownership.
 - Bound identity is not reused: `identity bindings` must contain an exact match for the
   session's primary origin. Additional origins do not select a binding. The identity must
   still exist and be free; unbind it before deletion.
@@ -30,12 +37,12 @@
   families, then run `doctor --live`.
 - Origin errors: the initial value must be one normalized HTTP(S) origin. After startup,
   Newton uses normal Chromium networking and does not require additional origins.
-- Login button is inert or a site shows `ERR_BLOCKED_BY_CLIENT`: Newton 0.6.3 does not
+- Login button is inert or a site shows `ERR_BLOCKED_BY_CLIENT`: Newton 0.6.4 does not
   install a proxy or Fetch blocker. Confirm `browser.status` reports the expected version,
   close stale Newton/Chromium processes, and verify the configured entrypoint. Then test
   the same identity in `identity login`; browser/account/network policy outside Newton may
   still block the flow.
-- Page CSS, icons, fonts, or layout look corrupted: first verify the exact 0.6.3 entrypoint
+- Page CSS, icons, fonts, or layout look corrupted: first verify the exact 0.6.4 entrypoint
   is running. This release does not disable background networking, extensions, sync, or
   component updates and does not inject styles/scripts or freeze rendering. Capture a
   network log and screenshot; any Newton-originated `Fetch.failRequest`, proxy switch,
@@ -56,12 +63,12 @@
   closes, re-observe again and Newton returns to the opener. If a current release instead
   leaves the banner visible or reports the opener as `renderer_unresponsive`, preserve
   the session and report it as an owned-page routing defect—do not click browser chrome.
-- Target errors: re-observe and use a fresh narrower ref. Every 0.6.3 interactive
+- Target errors: re-observe and use a fresh narrower ref. Every 0.6.4 interactive
   observation starts a new bounded ref cycle, so long-lived same-document apps recover
   without reload or navigation. Text observations allocate no refs. Never synthesize refs.
 - `max_refs_exceeded` from 0.6.1 or earlier: do not retry an uncertain action, reload, or
   stop the session. Use bounded text observation and an unmasked screenshot only to verify
-  current state, safely complete or preserve the work, then upgrade to 0.6.3. Replacing the
+  current state, safely complete or preserve the work, then upgrade to 0.6.4. Replacing the
   private-pipe host necessarily closes its owned browser, so there is no honest hot swap.
 - `dialog_blocked`: use typed dialog handling after obtaining effect authorization.
 - Lifecycle errors such as `discarded`, `debugger_conflict`, `target_gone`, and

@@ -110,6 +110,63 @@ test("identity login treats operator browser-window exit as completion only afte
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("identity login recovers an exactly proven stale lease and preserves bounded refusal codes", async () => {
+  for (const proved of [true, false]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-direct-login-stale-"));
+    try {
+      const identity = createNewtonIdentity(openProfileStore(path.join(root, "identities")), { browserFamily: "chrome" });
+      fs.writeFileSync(path.join(identity.path, ".newton-browser-profile-lease"), `${JSON.stringify({
+        version: 1,
+        type: "identity_lease",
+        id: identity.id,
+        browserFamily: identity.browserFamily,
+        nonce: "b".repeat(64),
+        pid: 999_999_999,
+        createdAt: "2026-08-20T00:00:00.000Z",
+      })}\n`, { flag: "wx", mode: 0o600 });
+      let launches = 0;
+      const operation = runDirectIdentityLogin({
+        identityId: identity.id,
+        origin: "https://example.com",
+        directory: root,
+        env: {},
+        identityLeaseRecoveryVerifier: (facts) => {
+          assert.equal(facts.userDataRoot, identity.path);
+          assert.equal(facts.recordedHostPid, 999_999_999);
+          return proved;
+        },
+        discoverBrowser: () => ({ family: "chrome", path: "private-browser", source: "system" }),
+        async launchRuntime() {
+          launches += 1;
+          return {
+            receipt: { status: "ready", identityId: identity.id, browserFamily: "chrome", pid: 993 },
+            unavailable: new Promise<void>(() => {}),
+            claimDriverBootstrap() {
+              return {
+                rootTargetId: "root-target",
+                transport: {
+                  async send(method: string) { return method === "Target.attachToTarget" ? { sessionId: "page-session" } : {}; },
+                  onEvent() { return () => {}; },
+                },
+              };
+            },
+            async close() {},
+          } as never;
+        },
+        createTerminationSignal: () => ({ promise: Promise.resolve(), dispose() {} }),
+      });
+      if (proved) {
+        const receipt = await operation;
+        assert.equal(receipt.cleanupConfirmed, true);
+        assert.equal(launches, 1);
+      } else {
+        await assert.rejects(operation, /identity_login_identity_recovery_unavailable/u);
+        assert.equal(launches, 0);
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("identity login rejects non-origin URLs before browser discovery", async () => {
   await assert.rejects(runDirectIdentityLogin({
     identityId: "nbi_0123456789abcdef0123456789abcdef",

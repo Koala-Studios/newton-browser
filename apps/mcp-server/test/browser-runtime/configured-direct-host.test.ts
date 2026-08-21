@@ -8,6 +8,7 @@ import type { BrowserSessionInit, BrowserAction } from "@newton-browser/core";
 
 import { createConfiguredDirectBrowserHost } from "../../src/browser-runtime/configured-direct-host.ts";
 import type { DirectHostSession, DirectOwnedRuntime } from "../../src/browser-runtime/direct-browser-host.ts";
+import { OwnedBrowserRuntimeError } from "../../src/browser-runtime/owned-browser-runtime.ts";
 import {
   createNewtonIdentity,
   listNewtonIdentities,
@@ -125,6 +126,81 @@ test("operator origin bindings reuse one persistent identity without affecting u
     await assert.rejects(host.waitForSessionReady(busy), bounded("configured_identity_busy", fixture));
     await Promise.all([host.stopSession(bound), host.stopSession(unrelated)]);
     assert.deepEqual(listNewtonIdentities(fixture.store).map((identity) => identity.id), [persistent.id]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("a bound persistent identity automatically recovers one exactly proven stale lease", async () => {
+  const fixture = configuredFixture();
+  try {
+    const persistent = createNewtonIdentity(fixture.store, { browserFamily: "chrome" });
+    writeStaleLease(persistent.path, persistent.id, persistent.browserFamily);
+    let verifierCalls = 0;
+    let launches = 0;
+    const host = configuredHost(fixture, {
+      identityBindings: [{ origin: "https://bound.test", identityId: persistent.id }],
+      identityLeaseRecoveryVerifier: () => (facts: { userDataRoot: string; profileDirectory: string; recordedHostPid: number }) => {
+        verifierCalls += 1;
+        assert.equal(facts.userDataRoot, persistent.path);
+        assert.equal(facts.profileDirectory, "Default");
+        assert.equal(facts.recordedHostPid, 999_999_999);
+        return true;
+      },
+      async launchRuntime(options: { identityId: string; browserFamily: "chrome" | "edge" }) {
+        launches += 1;
+        return new FakeOwnedRuntime(options.identityId, options.browserFamily);
+      },
+    });
+    const sessionId = host.createSession(validInit("https://bound.test")).sessionId;
+    await host.waitForSessionReady(sessionId);
+    assert.equal(verifierCalls, 1);
+    assert.equal(launches, 1);
+    await host.stopSession(sessionId);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("persistent identity recovery remains fail-closed and returns actionable bounded codes", async () => {
+  for (const scenario of ["active", "unproved", "invalid"] as const) {
+    const fixture = configuredFixture();
+    try {
+      const persistent = createNewtonIdentity(fixture.store, { browserFamily: "chrome" });
+      let activeLease: ReturnType<typeof acquireNewtonIdentityLease> | null = null;
+      if (scenario === "active") activeLease = acquireNewtonIdentityLease(fixture.store, persistent.id);
+      else if (scenario === "unproved") writeStaleLease(persistent.path, persistent.id, persistent.browserFamily);
+      else fs.writeFileSync(path.join(persistent.path, ".newton-browser-profile-lease"), "{}\n", { flag: "wx" });
+      let launches = 0;
+      const host = configuredHost(fixture, {
+        identityBindings: [{ origin: "https://bound.test", identityId: persistent.id }],
+        identityLeaseRecoveryVerifier: () => () => false,
+        async launchRuntime() { launches += 1; throw new Error("must_not_launch"); },
+      });
+      const sessionId = host.createSession(validInit("https://bound.test")).sessionId;
+      const expected = scenario === "active"
+        ? "configured_identity_busy"
+        : scenario === "unproved" ? "configured_identity_recovery_unavailable" : "configured_identity_recovery_failed";
+      await assert.rejects(host.waitForSessionReady(sessionId), bounded(expected, fixture));
+      assert.equal(launches, 0);
+      if (activeLease) releaseNewtonIdentityLease(activeLease);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test("a cross-host lease race is reported as configured identity busy", async () => {
+  const fixture = configuredFixture();
+  try {
+    const persistent = createNewtonIdentity(fixture.store, { browserFamily: "chrome" });
+    const host = configuredHost(fixture, {
+      async launchRuntime() {
+        throw new OwnedBrowserRuntimeError("identity_lease", false, undefined, true);
+      },
+    });
+    const sessionId = host.createSession({ ...validInit(), identityId: persistent.id }).sessionId;
+    await assert.rejects(host.waitForSessionReady(sessionId), bounded("configured_identity_busy", fixture));
   } finally {
     fixture.cleanup();
   }
@@ -251,7 +327,7 @@ test("an externally leased identity never affects an unspecified ephemeral sessi
       ...validInit("https://explicit.test"),
       identityId: persistent.id,
     }).sessionId;
-    await assert.rejects(host.waitForSessionReady(explicit), bounded("configured_runtime_start_failed", fixture));
+    await assert.rejects(host.waitForSessionReady(explicit), bounded("configured_identity_busy", fixture));
     await host.stopSession(implicit);
   } finally {
     releaseNewtonIdentityLease(externalLease);
@@ -538,6 +614,18 @@ function releaseSafeIdentity(store: ReturnType<typeof openProfileStore>, id: str
 
 function validInit(origin = "https://example.com"): BrowserSessionInit {
   return { origin };
+}
+
+function writeStaleLease(identityPath: string, id: string, browserFamily: "chrome" | "edge"): void {
+  fs.writeFileSync(path.join(identityPath, ".newton-browser-profile-lease"), `${JSON.stringify({
+    version: 1,
+    type: "identity_lease",
+    id,
+    browserFamily,
+    nonce: "a".repeat(64),
+    pid: 999_999_999,
+    createdAt: "2026-08-20T00:00:00.000Z",
+  })}\n`, { flag: "wx", mode: 0o600 });
 }
 
 function inertTransport() {

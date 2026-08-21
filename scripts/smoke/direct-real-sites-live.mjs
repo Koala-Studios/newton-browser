@@ -68,8 +68,8 @@ try {
   })));
   receipts.push(await recordSite("reddit_public", () => runReadSite({
     id: "reddit_public",
-    origin: "https://www.reddit.com",
-    url: "https://www.reddit.com/r/webdev/.rss",
+    origin: "https://www.redditinc.com",
+    url: "https://www.redditinc.com/",
     readySelector: "body",
     titleOptional: true,
     ...(persistentIdentityId ? { identityId: persistentIdentityId } : {}),

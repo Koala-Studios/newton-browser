@@ -38,7 +38,10 @@ shutdown, and cleanup. Ordinary `doctor` is configuration-only.
 Each session owns an isolated browser process, private CDP pipe, identity lease, and FIFO
 command queue. Browser traffic is not proxied or filtered. Sessions progress concurrently.
 A guardian terminates the exact browser tree and releases only proven owned identity state
-if the MCP host dies. The MCP control plane is stateless newline-delimited stdio only.
+if the MCP host dies. If a hard client shutdown kills that guardian before it can finish,
+the next persistent-identity start performs one exact identity-specific stale-lease proof;
+unrelated browser windows do not block it, and ambiguous ownership stays fail-closed. The
+MCP control plane is stateless newline-delimited stdio only.
 
 If a site opens an owned popup or authentication tab, Newton leaves its provisional blank
 target untouched and takes control after the page commits to HTTP(S). Re-observe through

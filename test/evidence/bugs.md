@@ -2252,3 +2252,60 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   control, opener restoration, cross-origin navigation, exact shutdown, and temp cleanup.
 - Status: fixed and source/Chrome/Edge/exact-packed verified in the 0.6.3 candidate; final
   consecutive release receipts are the remaining external gate.
+
+## BB-172 - A hard MCP-client restart stranded a bound identity behind a stale lease
+
+- Found: 2026-08-21 after the operator fully restarted Codex to replace 0.6.2 task-local
+  MCP hosts with 0.6.3. `browser.status` correctly reported 0.6.3 idle, but the first
+  `browser.session.start` for the exact `https://ads.google.com` binding returned only
+  `owned_browser_runtime_failed`. The configured Google identity retained the old lease
+  while no Newton session existed; the disposable live doctor passed because it used a
+  fresh ephemeral identity.
+- Root cause: the detached guardian normally removes a persistent lease after host loss,
+  but a client-wide process-tree shutdown can terminate the host, guardian, and Chromium
+  together before the guardian's filesystem cleanup runs. Recovery existed only as an
+  operator CLI and conservatively required every same-family browser on the machine to be
+  closed. Normal Chrome windows therefore made the supported recovery path unnecessarily
+  disruptive, while runtime lease acquisition flattened the precise busy phase to a
+  generic error. The first source-live recovery attempt also found a second Windows edge
+  case: unrelated process command lines may legitimately contain CR/LF characters. The
+  initial process-table parser treated those rows as globally malformed, so recovery could
+  be refused merely because an unrelated Codex or PowerShell process was running.
+- Fix: before launching a persistent identity, make one automatic exact recovery attempt.
+  The recorded host PID must be absent; no live process may descend from it; no Chromium
+  command line may name the exact Newton identity root; and browser lock artifacts must be
+  absent. The fixed process-table commands never receive the identity path, receipts never
+  expose process arguments, and unrelated Chrome/Edge windows are ignored. A live owner
+  remains `configured_identity_busy`; ambiguous closure becomes
+  `configured_identity_recovery_unavailable`; malformed/quarantine failure becomes
+  `configured_identity_recovery_failed`. A cross-host acquisition race is also mapped to
+  the typed busy result. Bounded multiline command lines are parsed as process evidence;
+  NULs, oversize fields, malformed rows, missing Chromium command lines, live owners,
+  descendants, exact profile use, and browser lock artifacts still fail closed.
+- Regression/evidence: deterministic process-table cases cover an unrelated browser,
+  exact identity-path ownership, recorded owner, descendants, missing command lines,
+  malformed/cyclic tables, and private-path non-disclosure. Configured-host cases cover
+  successful one-shot recovery, all three typed failure classes, zero launch on refusal,
+  and a cross-host race. The real-browser direct-runtime gate now deliberately creates a
+  stale bound persistent lease before every Chrome and Edge run and requires automatic
+  recovery before start/observe/action/cleanup.
+- Status: deterministic and Chrome/Edge source-live verified for 0.6.4, including automatic
+  recovery with unrelated ordinary Chrome processes present and exact cleanup. Packed and
+  three-pass frozen-candidate verification are the remaining release gates.
+
+## BB-173 - Combined session-start observation failures did not identify the invalid shape
+
+- Found: 2026-08-21 in the same worker recovery. Two start attempts that described a
+  “full observe” returned MCP `-32602 invalid_arguments`; only a later minimal start
+  reached the actual stale-lease failure.
+- Root cause: the strict modern contract correctly required `observe` to be an object, but
+  the tool description did not show the nesting and the invalid-argument response erased
+  whether the mode was bare or the nested observation object was malformed.
+- Fix: keep one strict shape with no legacy alias. The catalog now states
+  `observe: { mode: "full", format: "compact" }`, and invalid starts return one of two
+  bounded reasons: `start_observe_object_required` or `start_observe_object_invalid`.
+- Regression/evidence: MCP contract tests cover both rejected shapes and ensure validation
+  happens before session creation; the repo, installed, and plugin-source skills show the
+  same canonical nested example.
+- Status: deterministic, catalog-budget, and source-live verified for 0.6.4. Packed and
+  three-pass frozen-candidate verification are the remaining release gates.

@@ -43,7 +43,7 @@ test("real-site QA covers seven logged-out production surfaces and trusted maski
   assert.match(source, /if \(site\.url\) \{/u);
   assert.match(source, /en\.wikipedia\.org/u);
   assert.match(source, /www\.youtube\.com/u);
-  assert.match(source, /www\.reddit\.com/u);
+  assert.match(source, /www\.redditinc\.com/u);
   assert.match(source, /mercatodibellina\.com/u);
   assert.match(source, /www\.w3\.org\/WAI/u);
   assert.match(source, /www\.facebook\.com\/business\/ads/u);
@@ -89,6 +89,9 @@ test("primary live receipts are emitted only after authoritative cleanup", () =>
   }
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /fs\.realpathSync\.native\(os\.tmpdir\(\)\)/u);
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_ref_budget_recycled/u);
+  assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_stale_identity_prepared/u);
+  assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_stale_identity_recovered/u);
+  assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /staleIdentityLeaseRecovered: true/u);
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_secondary_page_verified/u);
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_secondary_target_observed/u);
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /direct_runtime_secondary_state_\$\{state\}/u);
@@ -97,12 +100,14 @@ test("primary live receipts are emitted only after authoritative cleanup", () =>
   assert.match(read("scripts/smoke/direct-runtime-live.mjs"), /maxNodes: 250/u);
 });
 
-test("agent skill requires the immutable 0.6.3 entrypoint and rejects stale live CLIs", () => {
+test("agent skill requires the immutable 0.6.4 entrypoint and rejects stale live CLIs", () => {
   const skill = read("skills/newton-browser/SKILL.md");
   const setup = read("skills/newton-browser/references/setup-and-troubleshooting.md");
   const reference = read("skills/newton-browser/references/tool-reference.md");
   assert.match(skill, /immutable entrypoint configured in/u);
-  assert.match(skill, /require `0\.6\.3`/u);
+  assert.match(skill, /require `0\.6\.4`/u);
+  assert.match(skill, /observe: \{ mode: "full", format: "compact" \}/u);
+  assert.match(skill, /automatically recovers a stale prior-host lease/u);
   assert.match(skill, /`prevented` means Newton proved the action was refused before input dispatch/u);
   assert.match(skill, /retain and re-observe the same\s+session/u);
   assert.match(skill, /Never run a repository\/worktree/u);

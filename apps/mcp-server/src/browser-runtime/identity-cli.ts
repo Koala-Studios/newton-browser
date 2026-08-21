@@ -8,6 +8,7 @@ import {
   removeNewtonIdentity,
 } from "./profile-store.ts";
 import type {
+  IdentityLeaseClosureVerifier,
   IdentityManifest,
   ProfileStore,
   SourceClosureVerifier,
@@ -30,7 +31,7 @@ export type IdentityCliOutput =
 export type IdentityCliContext = Readonly<{
   store: ProfileStore;
   sourceClosureVerifier?: SourceClosureVerifier;
-  leaseRecoveryVerifier?: (browserFamily: BrowserFamily) => SourceClosureVerifier;
+  leaseRecoveryVerifier?: (browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier;
 }>;
 
 export function dispatchIdentityCommand(
