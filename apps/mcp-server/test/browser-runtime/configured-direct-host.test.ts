@@ -376,6 +376,24 @@ test("startup rollback removes an ephemeral identity and never exposes private l
   }
 });
 
+test("startup rollback accepts an ephemeral identity already removed by the guardian", async () => {
+  const fixture = configuredFixture();
+  try {
+    const host = configuredHost(fixture, {
+      async launchRuntime(options) {
+        fixture.removeIdentity(fixture.store, options.identityId);
+        throw new OwnedBrowserRuntimeError("browser_start");
+      },
+      removeIdentity() { assert.fail("guardian already removed this identity"); },
+    });
+    const sessionId = host.createSession(validInit()).sessionId;
+    await assert.rejects(host.waitForSessionReady(sessionId));
+    await host.stopSession(sessionId);
+    assert.equal(host.getStatus().cleanupUncertainCount, 0);
+    assert.deepEqual(listNewtonIdentities(fixture.store), []);
+  } finally { fixture.cleanup(); }
+});
+
 test("startup cleanup uncertainty without a real retry retains the identity and never claims cleanup", async () => {
   const fixture = configuredFixture();
   try {

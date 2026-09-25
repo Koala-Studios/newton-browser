@@ -121,9 +121,9 @@ export class CdpPipeTransport implements PrivateCdpTransport {
     this.maxListeners = boundedInteger(options.maxListeners, DEFAULT_CDP_MAX_LISTENERS, 64);
     readable.on("data", this.handleData);
     readable.once("end", this.handleEnd);
-    readable.once("error", this.handleError);
+    readable.on("error", this.handleError);
     readable.once("close", this.handleClose);
-    writable.once("error", this.handleError);
+    writable.on("error", this.handleError);
     writable.once("close", this.handleClose);
   }
 
@@ -333,9 +333,9 @@ export class CdpPipeTransport implements PrivateCdpTransport {
   private detachListeners(): void {
     this.readable.off("data", this.handleData);
     this.readable.off("end", this.handleEnd);
-    this.readable.off("error", this.handleError);
+    // Pipes can emit a final ECONNRESET after end/close. Keep the idempotent
+    // terminal handler until the stream is collected; never crash its owner.
     this.readable.off("close", this.handleClose);
-    this.writable.off("error", this.handleError);
     this.writable.off("close", this.handleClose);
   }
 }

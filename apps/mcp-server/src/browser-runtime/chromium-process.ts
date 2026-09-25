@@ -377,6 +377,9 @@ async function spawnGuardedChromium(
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe", "ipc"],
     windowsHide: true,
   });
+  // A failed browser may close its pipes before the guardian readiness reply.
+  // Readiness/exit still reject the launch; stream errors must not kill the host.
+  for (const stream of child.stdio.slice(2, 5)) stream?.on("error", () => {});
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => finish(null), timeoutMs);

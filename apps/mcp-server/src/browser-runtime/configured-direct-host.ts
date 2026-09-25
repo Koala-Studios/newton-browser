@@ -145,6 +145,7 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
         identity,
         ephemeral,
         removeIdentity,
+        identityExists: () => listIdentities(store).some((candidate) => candidate.id === identity.id),
         releasePersistent,
       });
     }
@@ -294,12 +295,17 @@ type IdentityCleanup = Readonly<{
 }>;
 
 async function startupFailure(input: IdentityCleanup & { error: unknown }): Promise<ConfiguredDirectHostError> {
+  // The guardian may already have removed an ephemeral identity after exit.
+  // Only inspect this after runtime cleanup is confirmed; uncertainty stays retained.
+  const removeIfPresent = () => {
+    if (input.identityExists?.() !== false) input.removeIdentity(input.store, input.identity.id);
+  };
   if (input.error instanceof OwnedBrowserRuntimeError && input.error.identityBusy) {
     if (input.ephemeral) {
-      try { input.removeIdentity(input.store, input.identity.id); }
+      try { removeIfPresent(); }
       catch {
         return configuredError("configured_identity_cleanup_uncertain", true, async () => {
-          input.removeIdentity(input.store, input.identity.id);
+          removeIfPresent();
         });
       }
     } else {
@@ -311,7 +317,7 @@ async function startupFailure(input: IdentityCleanup & { error: unknown }): Prom
   if (retry) {
     return configuredError("configured_runtime_start_uncertain", true, async () => {
       await retry();
-      if (input.ephemeral) input.removeIdentity(input.store, input.identity.id);
+      if (input.ephemeral) removeIfPresent();
       else input.releasePersistent();
     });
   }
@@ -322,9 +328,9 @@ async function startupFailure(input: IdentityCleanup & { error: unknown }): Prom
     return configuredError("configured_runtime_start_uncertain", true);
   }
   if (input.ephemeral) {
-    try { input.removeIdentity(input.store, input.identity.id); } catch {
+    try { removeIfPresent(); } catch {
       return configuredError("configured_identity_cleanup_uncertain", true, async () => {
-        input.removeIdentity(input.store, input.identity.id);
+        removeIfPresent();
       });
     }
   } else {
