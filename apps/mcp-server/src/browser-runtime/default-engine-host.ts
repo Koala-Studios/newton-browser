@@ -4,7 +4,7 @@ import { ensureConfigDirectory, configDirectory, loadDirectConfiguration, profil
 import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { openProfileStore } from "./profile-store.ts";
 import { LoginSource } from "./login-source.ts";
-import { EngineHost, ownedEngineConnection,type ExistingPageRequest } from "./engine-host.ts";
+import { EngineHost, ownedEngineConnection, engineConnectionFromRuntime, type ExistingPageRequest, type LoginMaintenance } from "./engine-host.ts";
 import type { BrowserDisplay } from "./chromium-process.ts";
 import { connectExistingTab,createExistingTab,discoverExistingBrowser,discoverExistingDirectory,nativeAdvertisements,existingConnectionId } from "../existing-connection.ts";
 
@@ -41,7 +41,19 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
     if(matches.length!==1)throw new Error(matches.length?'browser_connection_required':'browser_instance_changed');
     return input.tabId===undefined?createExistingTab(matches[0]!,input.instanceId):connectExistingTab(matches[0]!,input.tabId,input.instanceId);
   };
-  return new EngineHost(connect,connectExisting,advertisement?()=>discoverExistingBrowser(advertisement):()=>discoverExistingDirectory(connectionsDirectory));
+  // Sign-in for a shared login source runs as an ordinary session; Done publishes, anything else cancels.
+  const maintenance: LoginMaintenance = { async begin(sourceId, display) {
+    const family = resolveFamily(configuration.browser, env);
+    const executable = discoverBrowserExecutable({family,...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE?{explicitPath:env.NEWTON_BROWSER_BROWSER_EXECUTABLE}:{}),env});
+    if(!executable)throw new Error('configured_browser_unavailable');
+    const source = await LoginSource.open(store, sourceRoot, sourceId, family);
+    const runtime = await source.beginMaintenance(executable.path, true, display);
+    return { connection: engineConnectionFromRuntime(runtime), async finish(publish) {
+      if (!publish) { await source.cancelMaintenance(runtime); return undefined; }
+      return { generation: (await source.publish(runtime)).generation };
+    } };
+  } };
+  return new EngineHost(connect,connectExisting,advertisement?()=>discoverExistingBrowser(advertisement):()=>discoverExistingDirectory(connectionsDirectory),maintenance);
 }
 
 function resolveFamily(preference: "auto" | BrowserFamily, env: NodeJS.ProcessEnv): BrowserFamily {

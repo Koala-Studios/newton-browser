@@ -195,6 +195,7 @@ test("the session engine refuses unverifiable effects and preserves exact input 
     await new Promise(resolve => fixture.close(resolve));
     root.remove();
   }
-  fs.writeFileSync(new URL("../evidence/luna-engine-regression.json", import.meta.url), `${JSON.stringify({ browserFamily: "chrome", ...evidence }, null, 2)}\n`);
+  // Tests never write into the source tree; keep evidence only when asked to.
+  if (process.env.NEWTON_BROWSER_EVIDENCE_DIR) fs.writeFileSync(`${process.env.NEWTON_BROWSER_EVIDENCE_DIR}/luna-engine-regression.json`, `${JSON.stringify({ browserFamily: "chrome", ...evidence }, null, 2)}\n`);
   assert.equal(evidence.ok, true);
 });

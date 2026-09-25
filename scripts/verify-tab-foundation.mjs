@@ -14,7 +14,7 @@ const temp = temporaryRoot('tab-foundation');
 const packed=path.join(temp.root,'packed');await fs.mkdir(packed);
 await promisify(execFile)('tar',['-xf',path.resolve('artifacts/newton-browser-0.6.4.tgz'),'-C',packed],{windowsHide:true});
 const {unregisterNativeLocal}=await import(pathToFileURL(path.join(packed,'package/dist/native-install.js')).href);
-const candidate=pathToFileURL(path.join(packed,'package/dist/engine-candidate.js')).href;
+const candidate=pathToFileURL(path.join(packed,'package/dist/embedding.js')).href;
 const {connectNative,developmentUpdateControl,updateInstalledAdapter}=await import(candidate);
 const cli=path.join(packed,'package/dist/index.js');
 const cliCall=async(operation,...args)=>JSON.parse((await promisify(execFile)(process.execPath,[cli,'adapter',operation,...args],{windowsHide:true,env:{...process.env,NEWTON_BROWSER_CONFIG_DIR:temp.root}})).stdout);

@@ -5,7 +5,9 @@
   "license": "MIT",
   "type": "module",
   "description": "Chrome DevTools Protocol browser driver and transport-injected session runtime for Newton Browser.",
-  "engines": { "node": ">=24.0.0" },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "files": [
     "dist",
     "README.md",
@@ -21,6 +23,7 @@
     "./direct-session-runtime": "./dist/direct-session-runtime.js",
     "./session-engine": "./dist/session-engine.js",
     "./page-executor": "./dist/page-executor.js",
-    "./connection": "./dist/connection.js"
+    "./connection": "./dist/connection.js",
+    "./session-live": "./dist/session-live.js"
   }
 }

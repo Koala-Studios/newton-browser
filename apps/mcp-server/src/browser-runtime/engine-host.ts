@@ -3,13 +3,19 @@ import { EngineError, boundedInteger, boundedString, exactObject, normalizeEngin
 import { SessionEngine } from "@newton-browser/driver/session-engine";
 import { PageExecutor } from "@newton-browser/driver/page-executor";
 import type { EngineConnection } from "@newton-browser/driver/connection";
-import { launchOwnedBrowserRuntime, type LaunchOwnedBrowserRuntimeOptions } from "./owned-browser-runtime.ts";
+import type { EngineFrame, EngineFrameOptions, EngineOperatorInput, EngineSessionEvent, EngineWebAuthnCredential } from "@newton-browser/driver/session-live";
+import { launchOwnedBrowserRuntime, type LaunchOwnedBrowserRuntimeOptions, type OwnedBrowserRuntime } from "./owned-browser-runtime.ts";
 import type {ExistingDiscovery} from '../existing-connection.ts';
 import { DEFAULT_BROWSER_DISPLAY, type BrowserDisplay } from "./chromium-process.ts";
 export type ExistingPageRequest={connectionId?:string;tabId?:number;instanceId:string};
+/** Sign-in maintenance of a shared login source: an ordinary engine session whose closure can publish a new generation. */
+export type LoginMaintenance = { begin(sourceId: string, display: BrowserDisplay): Promise<{ connection: EngineConnection; finish(publish: boolean): Promise<{ generation: string } | undefined> }> };
 
 export async function ownedEngineConnection(options: LaunchOwnedBrowserRuntimeOptions): Promise<EngineConnection> {
-  const runtime = await launchOwnedBrowserRuntime({ ...options, headless: true });
+  return engineConnectionFromRuntime(await launchOwnedBrowserRuntime({ ...options, headless: true }));
+}
+
+export function engineConnectionFromRuntime(runtime: OwnedBrowserRuntime): EngineConnection {
   const bootstrap = runtime.claimDriverBootstrap();
   const controller = new AbortController();
   void runtime.unavailable.then(() => controller.abort());
@@ -19,6 +25,7 @@ export async function ownedEngineConnection(options: LaunchOwnedBrowserRuntimeOp
 /** Injectable replacement host until the full catalog cutover. No legacy result translation. */
 export class EngineHost {
   readonly kind = "session_engine";
+  static START_STOP_BOUND_MS = 15_000;
   private readonly connect: (sourceId?: string, display?: BrowserDisplay) => Promise<EngineConnection>;
   private readonly connectExisting: ((input: ExistingPageRequest) => Promise<EngineConnection>) | undefined;
   private readonly sessions = new Map<string, SessionEngine>();
@@ -26,15 +33,19 @@ export class EngineHost {
   private closing = false;
   private readonly starts = new Set<Promise<unknown>>();
   private readonly discoverExisting:(()=>Promise<ExistingDiscovery>)|undefined;
-  constructor(connect: (sourceId?: string, display?: BrowserDisplay) => Promise<EngineConnection>, connectExisting?: (input: ExistingPageRequest) => Promise<EngineConnection>,discoverExisting?:()=>Promise<ExistingDiscovery>) {
-    this.connect = connect; this.connectExisting = connectExisting;this.discoverExisting=discoverExisting;
+  private readonly maintenance: LoginMaintenance | undefined;
+  private readonly maintenanceFinish = new Map<string, (publish: boolean) => Promise<{ generation: string } | undefined>>();
+  constructor(connect: (sourceId?: string, display?: BrowserDisplay) => Promise<EngineConnection>, connectExisting?: (input: ExistingPageRequest) => Promise<EngineConnection>,discoverExisting?:()=>Promise<ExistingDiscovery>, maintenance?: LoginMaintenance) {
+    this.connect = connect; this.connectExisting = connectExisting;this.discoverExisting=discoverExisting;this.maintenance=maintenance;
   }
-  async start(raw: unknown) {
+  /** `host` options come only from the embedding process, never from model arguments. */
+  async start(raw: unknown, host: { authenticator?: readonly EngineWebAuthnCredential[]; onEvent?: (event: EngineSessionEvent) => void; maintenanceOf?: string } = {}) {
     const args = exactObject(raw, ["mode", "url", "sourceId", "target", "connectionId", "viewport", "locale", "timezone", "timeoutMs"]);
     const mode = args.mode === undefined ? "owned" : args.mode;
     let url: string | undefined;
     let connect: () => Promise<EngineConnection>;
     let display: BrowserDisplay | undefined;
+    let finish: ((publish: boolean) => Promise<{ generation: string } | undefined>) | undefined;
     let timezone: string | undefined;
     const timeoutMs = args.timeoutMs === undefined ? 30_000 : boundedInteger(args.timeoutMs, 1_000, 120_000);
     if (mode === "owned") {
@@ -50,7 +61,11 @@ export class EngineHost {
         if (!/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/u.test(timezone)) throw new EngineError("invalid_arguments");
       }
       const requested = display;
-      connect = () => this.connect(sourceId, requested);
+      if (host.maintenanceOf !== undefined) {
+        if (!this.maintenance || sourceId !== undefined) throw new EngineError("unsupported_capability");
+        const maintenance = this.maintenance, source = boundedString(host.maintenanceOf, 120);
+        connect = async () => { const begun = await maintenance.begin(source, requested); finish = begun.finish; return begun.connection; };
+      } else connect = () => this.connect(sourceId, requested);
     } else if (mode === "existing" && this.connectExisting) {
       exactObject(args, ["mode", "target", "connectionId"]);
       const target = exactObject(args.target, ["kind", "tabId", "instanceId", "url"]);
@@ -66,16 +81,18 @@ export class EngineHost {
     const start = (async () => {
       const connection = await connect();
       const executor = new PageExecutor(connection);
+      const unsubscribe = host.onEvent ? executor.subscribeEvents(host.onEvent) : undefined;
       try {
         if (this.closing) throw new EngineError("session_closed");
-        const observation = await executor.start(url, { timeoutMs, ...(display ? { viewport: { width: display.width, height: display.height } } : {}), ...(timezone ? { timezone } : {}) });
+        const observation = await executor.start(url, { timeoutMs, ...(host.authenticator ? { authenticator: host.authenticator } : {}), ...(display ? { viewport: { width: display.width, height: display.height } } : {}), ...(timezone ? { timezone } : {}) });
         if (this.closing) throw new EngineError("session_closed");
         const sessionId = `engine_${randomUUID()}`;
         const engine = new SessionEngine(sessionId, executor);
         this.sessions.set(sessionId, engine);
         this.executors.set(sessionId, executor);
+        if (finish) this.maintenanceFinish.set(sessionId, finish);
         return { sessionId, mode, capabilities: ["fill", "type", "clear", "edit", "click", "hover", "move", "click_at", "select", "press", "scroll", "navigate", "back", "forward", "reload", "wait_for", "dialog_accept", "dialog_dismiss", "set_files", ...(connection.ownsBrowser ? ['resize'] : []), "sequence", "records", "document", "screenshot"], nextCommandId: 1, page: executor.bindPage(), observation };
-      } catch (error) { await executor.close(); throw error; }
+      } catch (error) { unsubscribe?.(); await executor.close(); await finish?.(false).catch(() => undefined); throw error; }
     })();
     this.starts.add(start);
     try { return await start; } finally { this.starts.delete(start); }
@@ -93,6 +110,20 @@ export class EngineHost {
   }
   list() {
     return [...this.sessions.keys()].map(sessionId => ({ sessionId, state: this.sessions.get(sessionId)!.state, nextCommandId: this.sessions.get(sessionId)!.nextCommandId }));
+  }
+  private executor(id: unknown): PageExecutor {
+    const executor = this.executors.get(boundedString(id, 120));
+    if (!executor) throw new EngineError("session_closed");
+    return executor;
+  }
+  events(id: unknown, listener: (event: EngineSessionEvent) => void): () => void { return this.executor(id).subscribeEvents(listener); }
+  frames(id: unknown, listener: (frame: EngineFrame) => void | Promise<void>, options: EngineFrameOptions & { pageId?: string } = {}) { return this.executor(id).subscribeFrames(listener, options); }
+  /** Operator takeover: model actions fail with operator_control until resume; the page and sign-in state stay. */
+  async pause(id: unknown, reason: string): Promise<void> { await this.session(id).pause(reason); }
+  resume(id: unknown): void { this.session(id).resume(); }
+  async operatorInput(id: unknown, input: EngineOperatorInput, pageId?: string): Promise<void> {
+    if (this.session(id).operatorControl === undefined) throw new EngineError("operator_control");
+    await this.executor(id).operatorInput(input, pageId);
   }
   async existingStatus():Promise<ExistingDiscovery> {
     if(this.closing)throw new EngineError('session_closed');
@@ -114,12 +145,31 @@ export class EngineHost {
   screenshot(id: unknown, options: { pageId?: string; maxBytes?: number; timeoutMs?: number; options?: unknown }) {
     return this.session(id).screenshot(options);
   }
-  async stop(id: unknown): Promise<void> { const session = this.session(id); await session.stop(); this.sessions.delete(session.sessionId); this.executors.delete(session.sessionId); }
+  /** Close a sign-in maintenance session; publish makes its login state the source's new generation. */
+  async finishMaintenance(id: unknown, publish: boolean): Promise<{ generation: string } | undefined> {
+    const sessionId = boundedString(id, 120), finish = this.maintenanceFinish.get(sessionId);
+    if (!finish) throw new EngineError("session_closed");
+    this.maintenanceFinish.delete(sessionId);
+    try { await this.stop(sessionId); } catch (error) { await finish(false).catch(() => undefined); throw error; }
+    return finish(publish);
+  }
+  async stop(id: unknown): Promise<void> {
+    const session = this.session(id); await session.stop(); this.sessions.delete(session.sessionId); this.executors.delete(session.sessionId);
+    // Stopping a sign-in session any other way abandons that sign-in.
+    const finish = this.maintenanceFinish.get(session.sessionId);
+    if (finish) { this.maintenanceFinish.delete(session.sessionId); await finish(false); }
+  }
   async stopAll(): Promise<void> {
     this.closing = true;
-    const results = await Promise.allSettled([...this.sessions.values()].map(session => session.stop()));
-    await Promise.allSettled(this.starts);
-    if (results.some(result => result.status === "rejected")) throw new EngineError("cleanup_uncertain");
+    const results: PromiseSettledResult<unknown>[] = await Promise.allSettled([...this.sessions.values()].map(session => session.stop()));
+    const abandoned = [...this.maintenanceFinish.values()]; this.maintenanceFinish.clear();
+    results.push(...await Promise.allSettled(abandoned.map(finish => finish(false))));
+    // A start whose connection never resolves must not hold shutdown forever.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const startsSettled = await Promise.race([Promise.allSettled(this.starts).then(() => true),
+      new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), EngineHost.START_STOP_BOUND_MS); })]);
+    clearTimeout(timer);
+    if (!startsSettled || results.some(result => result.status === "rejected")) throw new EngineError("cleanup_uncertain");
     this.sessions.clear(); this.executors.clear();
   }
   close(): Promise<void> { return this.stopAll(); }

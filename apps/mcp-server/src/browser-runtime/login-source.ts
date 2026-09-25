@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { BrowserDisplay } from "./chromium-process.ts";
 import { createNewtonIdentity, inspectNewtonIdentityLease, recoverStaleNewtonIdentityLease, removeNewtonIdentity, type NewtonProfileIdentity, type ProfileStore } from "./profile-store.ts";
 import { OwnedBrowserRuntime, launchOwnedBrowserRuntime } from "./owned-browser-runtime.ts";
 import { recoverProfileTransaction } from "./profile-transaction-recovery.ts";
@@ -48,12 +49,12 @@ export class LoginSource {
     const current = await this.current();
     return Object.freeze({ sourceId: this.sourceId, browserFamily: this.family, generation: current?.generation ?? null, authentication: "unknown" });
   }
-  async beginMaintenance(executablePath: string, headless = true): Promise<OwnedBrowserRuntime> {
+  async beginMaintenance(executablePath: string, headless = true, display?: BrowserDisplay): Promise<OwnedBrowserRuntime> {
     const nonce = randomUUID(), filename = path.join(this.directory, "maintenance.lock");
     await durableWrite(filename, { version: 1, pid: process.pid, nonce });
     try {
       const { identity } = await this.clone();
-      const runtime = await launchOwnedBrowserRuntime({ executablePath, browserFamily: this.family, profileStore: this.store, identityId: identity.id, headless });
+      const runtime = await launchOwnedBrowserRuntime({ executablePath, browserFamily: this.family, profileStore: this.store, identityId: identity.id, headless, ...(display ? { display } : {}) });
       this.maintenance.add(runtime); this.maintenanceNonce.set(runtime, nonce);
       return runtime;
     } catch (error) {
@@ -64,6 +65,12 @@ export class LoginSource {
   async cancelMaintenance(runtime: OwnedBrowserRuntime): Promise<void> {
     if (!this.maintenance.has(runtime)) throw new Error("source_maintenance_invalid");
     await runtime.close(); await this.releaseMaintenance(runtime);
+    this.removeMaintenanceIdentity(runtime);
+  }
+  /** The maintenance clone is only a staging copy; once closed, only the published generation remains. */
+  private removeMaintenanceIdentity(runtime: OwnedBrowserRuntime): void {
+    if (runtime.cleanupState() !== "closed" || inspectNewtonIdentityLease(this.store, runtime.receipt.identityId) !== "available") return;
+    try { removeNewtonIdentity(this.store, runtime.receipt.identityId); } catch { /* collectRetired can remove it later */ }
   }
   /** Caller must supply the exact guardian-owned maintenance runtime; no boolean closure override. */
   async publish(runtime: OwnedBrowserRuntime, cutpoint?: (stage: string) => Promise<void>): Promise<Generation> {
@@ -94,6 +101,7 @@ export class LoginSource {
       if (currentLock.nonce !== nonce) throw new Error("source_lock_changed");
       await fs.unlink(lockPath);
       await this.releaseMaintenance(runtime);
+      if (this.closedMaintenance.has(runtime)) this.removeMaintenanceIdentity(runtime);
     }
   }
   /** Recover only a dead publisher's own metadata lock. Never guess profile closure from it. */

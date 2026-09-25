@@ -1,4 +1,4 @@
-const { createDefaultEngineHost, handleMcpMessage } = await import(process.env.NEWTON_ENGINE_CANDIDATE_ENTRY ?? new URL('../apps/mcp-server/src/engine-candidate.ts',import.meta.url).href);
+const { createDefaultEngineHost, handleMcpMessage } = await import(process.env.NEWTON_ENGINE_CANDIDATE_ENTRY ?? new URL('../apps/mcp-server/src/embedding.ts',import.meta.url).href);
 const [advertisement, tabId, instanceId] = process.argv.slice(2);
 const host = createDefaultEngineHost({...process.env,NEWTON_BROWSER_CONFIG_DIR:process.env.NEWTON_TAB_QA_CONFIG_ROOT,NEWTON_BROWSER_NATIVE_ADVERTISEMENT:undefined});
 let id = 0;

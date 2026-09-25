@@ -31,6 +31,7 @@ export class SessionEngine {
   private readonly store: CommandStore;
   private readonly queue: (QueueItem | ReadItem)[] = [];
   private bytes = 0;
+  private operator: string | undefined;
   private active: { item: QueueItem | ReadItem; context: CommandContext } | undefined;
   private admission: "open" | "closed" | "quarantined" = "open";
   private stopping: Promise<void> | undefined;
@@ -64,6 +65,8 @@ export class SessionEngine {
     const command = parseEngineCommand(raw);
     const existing = this.store.lookup(command);
     if (existing) return existing.result;
+    // An operator has the page; model actions wait for resume. The ID is not consumed.
+    if (this.operator !== undefined) throw new EngineError("operator_control");
     if (this.admission !== "open") throw new EngineError(this.admission === "closed" ? "session_closed" : "session_quarantined");
     const bytes = Buffer.byteLength(JSON.stringify(command));
     if (this.queue.length + (this.active ? 1 : 0) >= ENGINE_LIMITS.queueItems || this.bytes + bytes > ENGINE_LIMITS.queueBytes) throw new EngineError("queue_full");
@@ -269,6 +272,21 @@ export class SessionEngine {
       dispatch: "not_started", postcondition: { state: "not_requested" }, nextCommandId: this.store.nextId,
       page: item.page, steps: [], errorCode: "cancelled", observation: { state: "none" } };
   }
+  /** The operator takes the page: queued model actions are cancelled and an in-flight one finishes first. Reads continue. */
+  async pause(reason: string): Promise<void> {
+    if (this.admission !== "open") throw new EngineError("session_closed");
+    this.operator = reason.slice(0, 80);
+    for (let index = this.queue.length - 1; index >= 0; index--) {
+      const item = this.queue[index]!;
+      if (item.kind !== "command") continue;
+      this.queue.splice(index, 1); this.bytes -= item.bytes; item.context.cancel(); item.context.dispose();
+      item.record.complete({ ...this.cancelled(item), reason: "cancelled", errorCode: "operator_control" });
+    }
+    const active = this.active?.item;
+    if (active?.kind === "command") await active.record.result.catch(() => undefined);
+  }
+  resume(): void { this.operator = undefined; }
+  get operatorControl(): string | undefined { return this.operator; }
   private cancelQueued(): void {
     for (const item of this.queue.splice(0)) {
       this.bytes -= item.bytes; item.context.cancel(); item.context.dispose();

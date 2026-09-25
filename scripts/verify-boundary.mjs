@@ -120,7 +120,7 @@ for (const relative of removedArchitecturePaths) {
 }
 validateFlatCompiledOutput("packages/core/src", "packages/core/dist", { declarationOnly: new Set() });
 validateFlatCompiledOutput("packages/driver/src", "packages/driver/dist", { declarationOnly: new Set(["types"]) });
-validateExactFlatOutput("apps/mcp-server/dist", new Set(["browser-guardian.js", "index.js", "profile-copy-worker.js", "native-host.js", "native-install.js", "native-launcher.cjs", "engine-candidate.js"]),new Map([['tab-adapter',new Set(['manifest.json','setup.html','worker.js'])]]));
+validateExactFlatOutput("apps/mcp-server/dist", new Set(["browser-guardian.js", "index.js", "profile-copy-worker.js", "native-host.js", "native-install.js", "native-launcher.cjs", "embedding.js"]),new Map([['tab-adapter',new Set(['manifest.json','setup.html','worker.js'])]]));
 if (fs.existsSync(path.join(root, "server.json")) || hostPackage?.mcpName !== undefined) {
   failures.push("public MCP registry metadata requires separate publication approval");
 }

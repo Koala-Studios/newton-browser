@@ -32,7 +32,7 @@ await build({
   logLevel: "warning",
 });
 fs.chmodSync(path.join(outputDirectory, "index.js"), 0o755);
-for (const entry of ["native-install", "engine-candidate"]) await build({
+for (const entry of ["native-install", "embedding"]) await build({
   entryPoints: [path.join(root, "apps", "mcp-server", "src", `${entry}.ts`)],
   outfile: path.join(outputDirectory, `${entry}.js`), bundle: true, platform: "node", format: "esm", target: "node24", logLevel: "warning",
 });

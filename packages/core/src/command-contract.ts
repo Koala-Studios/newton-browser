@@ -6,7 +6,7 @@ export const ENGINE_ERRORS = [
   "navigation_failed", "connection_lost", "cleanup_uncertain", "unsupported_capability",
   "output_budget", "work_limit", "unknown_command", "unknown_page", "cursor_expired",
   "dialog_opened", "unsupported_structure", "invalid_file_path", "file_not_found", "symlink_not_allowed",
-  "file_too_large", "file_total_too_large", "file_type_not_allowed", "file_changed",
+  "file_too_large", "file_total_too_large", "file_type_not_allowed", "file_changed", "operator_control",
 ] as const;
 export type EngineErrorCode = typeof ENGINE_ERRORS[number];
 export class EngineError extends Error {

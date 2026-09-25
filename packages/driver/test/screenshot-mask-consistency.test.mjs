@@ -141,7 +141,7 @@ test('full-page recapture does not cross cancellation, navigation or pending fra
       const result=await send(...args);
       if(args[0]==='Page.captureScreenshot'){
         if(fault==='cancel')context.cancel();
-        if(fault==='pending')executor.pendingFrames.add('attaching-frame');
+        if(fault==='pending')executor.pendingFrames.set('attaching-frame',performance.now());
         if(fault==='navigate')executor.directory.navigate('root',{frameId:'root-frame',route:'root-route',loaderId:'new-document'});
       }
       return result;

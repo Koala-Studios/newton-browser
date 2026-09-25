@@ -66,7 +66,7 @@ export function packCheck() {
   });
   if (!fs.existsSync(tarball)) throw new Error(`missing packed artifact: ${tarball}`);
   const listing = run("tar", ["-tf", tarball], { capture: true }).stdout.trim().split(/\r?\n/);
-  for (const required of ["package/dist/index.js", "package/dist/browser-guardian.js", "package/dist/engine-candidate.js", "package/dist/native-host.js", "package/dist/native-install.js", "package/dist/native-launcher.cjs", "package/dist/profile-copy-worker.js", "package/package.json", "package/README.md"]) {
+  for (const required of ["package/dist/index.js", "package/dist/browser-guardian.js", "package/dist/embedding.js", "package/dist/native-host.js", "package/dist/native-install.js", "package/dist/native-launcher.cjs", "package/dist/profile-copy-worker.js", "package/package.json", "package/README.md"]) {
     if (!listing.includes(required)) throw new Error(`packed artifact missing ${required}`);
   }
   for (const file of listing) {

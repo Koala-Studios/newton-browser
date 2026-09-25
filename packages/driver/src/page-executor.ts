@@ -19,6 +19,7 @@ import type {EngineRecordShape,EngineFieldView} from '@newton-browser/core';
 import { maskCapturedPng, MAX_RASTER_PIXELS } from "./raster-mask.ts";
 import {nativeSensitiveRegions} from './native-sensitive-regions.ts';
 import type { EngineExecutor } from "./session-engine.ts";
+import { SessionLive, type EngineFrame, type EngineFrameOptions, type EngineOperatorInput, type EngineSessionEvent, type EngineWebAuthnCredential } from "./session-live.ts";
 
 type RecordValue = Record<string, unknown>;
 const DOCUMENT_WORK_CHARS = 262_144;
@@ -54,7 +55,10 @@ export class PageExecutor implements EngineExecutor {
   private readonly connection: EngineConnection;
   private readonly routes = new Map<string, string>();
   private readonly routeParents = new Map<string, string>();
-  private readonly pendingFrames = new Set<string>();
+  // Frames seen attaching but not yet committed, with when they were first seen.
+  private readonly pendingFrames = new Map<string, number>();
+  // Page/frame work skipped under limits or after a child attachment failure: observations say incomplete.
+  private degraded = false;
   private readonly pendingAttachments = new Set<Promise<void>>();
   private readonly actionPages=new WeakMap<CommandContext,Set<string>>();
   private readonly attachingPages = new Set<string>();
@@ -67,6 +71,7 @@ export class PageExecutor implements EngineExecutor {
   private localFileNames: readonly string[] | undefined;
   private readonly resolver: TargetResolver;
   private readonly readonlyWorlds:ReadonlyWorlds;
+  private readonly live:SessionLive;
   private readonly lifecycle = new Map<string, Set<string>>();
   private readonly lifecycleWaiters = new Set<() => void>();
   private readonly conditionWaiters = new Set<() => void>();
@@ -90,6 +95,7 @@ export class PageExecutor implements EngineExecutor {
     this.connection = connection;
     this.directory = new PageDirectory(connection.epoch, connection.claimGeneration);
     this.readonlyWorlds=new ReadonlyWorlds(this.directory,connection.wire);
+    this.live=new SessionLive(connection.wire,this.directory,connection.ownsBrowser===true);
     this.resolver = new TargetResolver({
       directory: this.directory,
       send: (binding, method, params) => this.send(binding, method, params),
@@ -98,17 +104,20 @@ export class PageExecutor implements EngineExecutor {
     });
     connection.signal.addEventListener("abort", () => { this.closed = true; this.unsubscribe?.(); }, { once: true });
   }
-  async start(url?: string, options: { timeoutMs?: number; viewport?: { width: number; height: number }; timezone?: string } = {}): Promise<EngineObservation> {
+  async start(url?: string, options: { timeoutMs?: number; viewport?: { width: number; height: number }; timezone?: string; authenticator?: readonly EngineWebAuthnCredential[] } = {}): Promise<EngineObservation> {
     this.timezone = options.timezone;
+    if (options.authenticator) this.live.useAuthenticator(options.authenticator);
     this.unsubscribe = this.connection.wire.onEvent(event => {
       // Do not return an async handler to a transport that serializes event delivery.
       try {
+        this.live.handle(event, route => this.routes.get(route));
         if (event.method === "Target.targetCreated" && (this.connection.ownsBrowser||this.connection.tracksOwnedPages)) {
           const info = object(event.params.targetInfo),pageId=string(info.targetId);
           if(info.type==='page'&&pageId&&pageId!==this.connection.rootTargetId&&!this.attachingPages.has(pageId)) {
-            if(this.attachingPages.size>=31)throw new EngineError('work_limit');
+            if(this.attachingPages.size>=31){this.degraded=true;return;}
             this.attachingPages.add(pageId);
             this.directory.addPage(pageId,string(info.openerId));
+            this.live.emit({type:'page_opened',pageId,...(string(info.openerId)?{openerPageId:string(info.openerId)}:{})});
             const attachment={controller:new AbortController(),route:undefined as string|undefined};
             this.pageAttachments.set(pageId,attachment);
             const operation=(async()=>{
@@ -123,7 +132,8 @@ export class PageExecutor implements EngineExecutor {
               attachment.controller.signal.addEventListener('abort',abort,{once:true});
               void operation.then(resolve,reject).finally(()=>attachment.controller.signal.removeEventListener('abort',abort));
             });
-            const settled=job.catch(error=>{if(this.attachingPages.has(pageId))this.fault=error;});
+            // A popup that cannot be attached is dropped; the session and its other pages continue.
+            const settled=job.catch(()=>{if(this.attachingPages.has(pageId)){this.attachingPages.delete(pageId);this.directory.removePage(pageId);this.degraded=true;}});
             // A popup that closes during attachment cannot poison the parent
             // observation or be resurrected by a late attachment response.
             this.pendingAttachments.add(settled);
@@ -147,7 +157,8 @@ export class PageExecutor implements EngineExecutor {
             if (pageId) {
               const job = this.attach(pageId, route, info.type === "page", string(info.parentFrameId));
               this.pendingAttachments.add(job);
-              void job.catch(error => { this.fault = error; }).finally(() => this.pendingAttachments.delete(job));
+              // Only the root page's own attachment is essential; a child frame or popup failing degrades the view.
+              void job.catch(error => { if (pageId === this.connection.rootTargetId && info.type === "page") this.fault = error; else this.degraded = true; }).finally(() => this.pendingAttachments.delete(job));
             }
           }
         } else if (event.method === "Page.lifecycleEvent") {
@@ -164,8 +175,9 @@ export class PageExecutor implements EngineExecutor {
           if(pageId&&this.pageAttachments.get(pageId)?.route===route){this.attachingPages.delete(pageId);this.pageAttachments.get(pageId)!.controller.abort();this.directory.removePage(pageId);}
           this.directory.detachRoute(route); this.routes.delete(route); this.routeParents.delete(route); this.dialogs.delete(route);
         } else if (event.method === "Page.frameAttached") {
-          if (this.pendingFrames.size >= 128) throw new EngineError("work_limit");
-          this.pendingFrames.add(string(event.params.frameId));
+          this.prunePendingFrames();
+          if (this.pendingFrames.size >= 128) { this.pendingFrames.delete(this.pendingFrames.keys().next().value!); this.degraded = true; }
+          this.pendingFrames.set(string(event.params.frameId), performance.now());
         } else if (event.method === "Page.frameRequestedNavigation" || event.method === "Page.frameStartedNavigating") {
           const pageId = this.routes.get(event.sessionId ?? "");
           const sameDocument = event.method === "Page.frameStartedNavigating" && /^(sameDocument|historySameDocument)$/u.test(string(event.params.navigationType));
@@ -177,7 +189,7 @@ export class PageExecutor implements EngineExecutor {
           if (pageId && event.params.frameId === pageId && this.pendingNavigations.delete(pageId)) this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Page.frameNavigated") {
           const pageId = this.routes.get(event.sessionId ?? "");
-          if (pageId && object(event.params.frame).id === pageId) this.pendingNavigations.delete(pageId);
+          if (pageId && object(event.params.frame).id === pageId) { this.pendingNavigations.delete(pageId); if (pageId === this.connection.rootTargetId) this.degraded = false; }
           if (pageId) this.frame(pageId, object(event.params.frame), event.sessionId!);
           this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Page.frameDetached") {
@@ -764,6 +776,19 @@ export class PageExecutor implements EngineExecutor {
     if(!budget.fits(view()))throw new EngineError('output_budget');
     return view();
   }
+  /** Host-only: events for the embedding process (never the model). */
+  subscribeEvents(listener: (event: EngineSessionEvent) => void): () => void { return this.live.subscribe(listener); }
+  /** Host-only: live JPEG frames of a page (the selected one by default). */
+  subscribeFrames(listener: (frame: EngineFrame) => void | Promise<void>, options: EngineFrameOptions & { pageId?: string } = {}): Promise<() => Promise<void>> {
+    if (this.closed) throw new EngineError("session_closed");
+    return this.live.subscribeFrames(this.bindPage(options.pageId).pageId, listener, options);
+  }
+  /** Host-only: operator input on the same page, used while the session is paused for the operator. */
+  async operatorInput(input: EngineOperatorInput, pageId?: string): Promise<void> {
+    if (this.closed) throw new EngineError("session_closed");
+    const page = this.bindPage(pageId);
+    await this.live.operatorInput(this.directory.route(this.directory.binding(page, 1)), input);
+  }
   async readyPage(context: CommandContext, page: EnginePageStamp): Promise<{ page: EnginePageStamp } | { observation: EngineObservation }> {
     if (!this.pendingNavigations.has(page.pageId)) return { page };
     const committed = await this.awaitCommittedNavigation(context, page);
@@ -883,7 +908,8 @@ export class PageExecutor implements EngineExecutor {
     if (this.pendingAttachments.size) await context.read(() => Promise.all([...this.pendingAttachments]));
     const scoped = scope ? await this.resolver.resolve(context, page, scope) : undefined;
     const candidates: { view: ReturnType<typeof readAXControls>["controls"][number]["view"]; binding: NodeBinding; primary: boolean }[] = [];
-    let incomplete = this.pendingAttachments.size > 0 || this.pendingFrames.size > 0;
+    this.prunePendingFrames();
+    let incomplete = this.pendingAttachments.size > 0 || this.pendingFrames.size > 0 || this.degraded;
     let readFailed=false;
     let visited = 0;
     // Lifecycle metadata belongs to this document even when its AX tree is not
@@ -1125,6 +1151,7 @@ export class PageExecutor implements EngineExecutor {
     const options = rawOptions && typeof rawOptions === "object" && !Array.isArray(rawOptions) ? rawOptions as Record<string, unknown> : {};
     const zones = Array.isArray(options.sensitiveZones) ? options.sensitiveZones : [];
     if(this.pendingAttachments.size)await context.read(()=>Promise.all([...this.pendingAttachments]));
+    this.prunePendingFrames();
     if(this.pendingFrames.size)throw new EngineError('evidence_unavailable');
     const root = this.directory.binding(page, 1);
     const spatial = await this.captureSpatialState(context, root);
@@ -1196,7 +1223,7 @@ export class PageExecutor implements EngineExecutor {
     return observation;
   }
   async close(): Promise<void> {
-    this.closed = true; this.unsubscribe?.();
+    this.closed = true; this.unsubscribe?.(); this.live.close();
     for(const pending of this.pageAttachments.values())pending.controller.abort();
     this.pageAttachments.clear();this.attachingPages.clear();
     this.readonlyWorlds.clear();
@@ -1224,6 +1251,7 @@ export class PageExecutor implements EngineExecutor {
     await send("Overlay.enable");
     await send("Page.setLifecycleEventsEnabled", { enabled: true });
     if (isPage && this.timezone) await send("Emulation.setTimezoneOverride", { timezoneId: this.timezone });
+    if (isPage) await this.live.attachPage(route, send);
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     const tree = await send("Page.getFrameTree");
     if(this.routes.get(route)!==pageId)return;
@@ -1237,6 +1265,11 @@ export class PageExecutor implements EngineExecutor {
     const parentId = string(frame.parentId) || this.routeParents.get(route) || "";
     this.directory.navigate(pageId, { frameId, loaderId, route, url:string(frame.url), ...(parentId ? { parentId } : {}) });
     this.pendingFrames.delete(frameId);
+  }
+  /** A frame that has not committed within ten seconds is treated as abandoned. */
+  private prunePendingFrames(): void {
+    const cutoff = performance.now() - 10_000;
+    for (const [frameId, seen] of this.pendingFrames) if (seen < cutoff) { this.pendingFrames.delete(frameId); this.degraded = true; }
   }
   private frameTree(pageId: string, tree: RecordValue, route: string): void {
     this.frame(pageId, object(tree.frame), route);
