@@ -74,17 +74,28 @@ export async function buildNativeRuntime(
   }
 }
 
+/**
+ * The executable the browser starts. Windows gets a single-executable build of the launcher (Node 25.5+).
+ * Linux and macOS get a shell script that runs the launcher on the installation's pinned runtime
+ * (`runtimePath`): no build step or code signing, and the launcher still verifies every digest.
+ */
 export async function buildNativeLauncher(
   root: string,
   sourceBytes: Buffer,
   launcherName: "native-launcher.exe" | "native-launcher",
+  runtimePath: string,
 ): Promise<string> {
   if (launcherName !== "native-launcher" && launcherName !== "native-launcher.exe") {
     throw new Error("native_install_arguments");
   }
   if (sourceBytes.length > MAX_BYTES) throw new Error("native_file_invalid");
   const canonicalRoot = await validateDirectory(root, "native_directory_invalid");
-  const sourceDigest = createHash("sha256").update(sourceBytes).digest("hex");
+  const script = process.platform !== "win32";
+  if (script && (!path.isAbsolute(runtimePath) || path.relative(path.join(canonicalRoot, "builds"), runtimePath).startsWith("..") || /['\n\0]/u.test(runtimePath))) {
+    throw new Error("native_install_arguments");
+  }
+  // A script launcher names its runtime, so the runtime is part of its identity.
+  const sourceDigest = createHash("sha256").update(sourceBytes).update(script ? `\0${runtimePath}` : "").digest("hex");
   const parent = path.join(canonicalRoot, "launchers");
   await fs.mkdir(parent, { recursive: true });
   const verifiedParent = await validateDirectory(parent, "native_directory_invalid");
@@ -100,6 +111,7 @@ export async function buildNativeLauncher(
       throw new Error("native_launcher_changed");
     }
     if (await hashNativeFile(path.join(directory, launcherName)) !== metadata.binaryDigest) throw new Error("native_launcher_changed");
+    if (script && await hashNativeFile(path.join(directory, "launcher.cjs")) !== createHash("sha256").update(sourceBytes).digest("hex")) throw new Error("native_launcher_changed");
   };
   let exists = true;
   try { await fs.lstat(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") exists = false; else throw error; }
@@ -107,7 +119,7 @@ export async function buildNativeLauncher(
     await verifyExisting();
     return path.join(directory, launcherName);
   }
-  validateNodeForSeaBuild();
+  if (!script) validateNodeForSeaBuild();
   const stage = await fs.mkdtemp(path.join(verifiedParent, ".stage-"));
   const identity = await fs.lstat(stage);
   try {
@@ -116,18 +128,21 @@ export async function buildNativeLauncher(
     const binaryPath = path.join(stage, launcherName);
     const metadataPath = path.join(stage, "launcher.json");
     await fs.writeFile(sourcePath, sourceBytes, { flag: "wx", mode: 0o600 });
-    await fs.writeFile(configPath, JSON.stringify({
-      main: sourcePath,
-      output: binaryPath,
-      disableExperimentalSEAWarning: true,
-      useCodeCache: false,
-      useSnapshot: false,
-    }) + "\n", { flag: "wx", mode: 0o600 });
-    await runSeaBuild(configPath);
-    const binaryDigest = await hashNativeFile(binaryPath);
-    if (process.platform === "linux") {
-      await fs.chmod(binaryPath, 0o700);
+    if (script) {
+      const launcherPath = path.join(directory, "launcher.cjs");
+      await fs.writeFile(binaryPath, `#!/bin/sh\nexec '${runtimePath}' '${launcherPath}' "$@"\n`, { flag: "wx", mode: 0o700 });
+    } else {
+      await fs.writeFile(configPath, JSON.stringify({
+        main: sourcePath,
+        output: binaryPath,
+        disableExperimentalSEAWarning: true,
+        useCodeCache: false,
+        useSnapshot: false,
+      }) + "\n", { flag: "wx", mode: 0o600 });
+      await runSeaBuild(configPath);
     }
+    const binaryDigest = await hashNativeFile(binaryPath);
+    if (process.platform !== "win32") await fs.chmod(binaryPath, 0o700);
     await fs.writeFile(metadataPath, JSON.stringify({ sourceDigest, binaryDigest }) + "\n", { flag: "wx", mode: 0o600 });
     try {
       await fs.rename(stage, directory);

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, realpath, rm, writeFile, chmod, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile, chmod, lstat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -55,8 +57,9 @@ test('native runtime publication refuses corrupt partial output and preserves an
   }
 });
 
-test('native launcher SEA build is immutable when the supported Node runtime is available', async t => {
+test('native launcher SEA build is immutable when the supported Node runtime is available (Windows)', async t => {
   const [major, minor] = process.versions.node.split('.').map(Number);
+  if (process.platform !== 'win32') { t.skip('script launcher on this platform'); return; }
   if (major < 25 || (major === 25 && minor < 5)) {
     t.diagnostic(`gap: Node ${process.versions.node} is below the required Node 25.5 SEA minimum`);
     return;
@@ -64,14 +67,36 @@ test('native launcher SEA build is immutable when the supported Node runtime is 
   const root = await tempDirectory('newton-batch02-launcher-');
   try {
     const source = Buffer.from('#!/usr/bin/env node\nprocess.stdout.write("ok\\n")\n');
-    const name = process.platform === 'win32' ? 'native-launcher.exe' : 'native-launcher';
-    const first = await buildNativeLauncher(root, source, name);
+    const runtime = path.join(root, 'builds', 'x', 'node.exe');
+    const first = await buildNativeLauncher(root, source, 'native-launcher.exe', runtime);
     const before = await readFile(first);
-    const second = await buildNativeLauncher(root, source, name);
+    const second = await buildNativeLauncher(root, source, 'native-launcher.exe', runtime);
     assert.equal(second, first);
     assert.deepEqual(await readFile(second), before);
-    const mode = (await lstat(first)).mode & 0o777;
-    if (process.platform === 'linux') assert.equal(mode & 0o111, 0o111);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('native launcher on Linux and macOS is an immutable script that runs the launcher on the pinned runtime', async t => {
+  if (process.platform === 'win32') { t.skip('SEA launcher on Windows'); return; }
+  const root = await realpath(await tempDirectory('newton-batch02-script-launcher-'));
+  try {
+    const runtime = path.join(root, 'builds', 'x', 'node');
+    await mkdir(path.dirname(runtime), { recursive: true });
+    await symlink(process.execPath, runtime);
+    const source = Buffer.from('process.stdout.write(JSON.stringify(process.argv.slice(2)))\n');
+    const first = await buildNativeLauncher(root, source, 'native-launcher', runtime);
+    assert.equal((await lstat(first)).mode & 0o777, 0o700);
+    const second = await buildNativeLauncher(root, source, 'native-launcher', runtime);
+    assert.equal(second, first);
+    const { stdout } = await promisify(execFile)(first, ['chrome-extension://abc/', "it's"]);
+    assert.deepEqual(JSON.parse(stdout), ['chrome-extension://abc/', "it's"]);
+    // Another runtime is another launcher; a changed launcher source is refused.
+    assert.notEqual(await buildNativeLauncher(root, source, 'native-launcher', path.join(root, 'builds', 'y', 'node')), first);
+    await writeFile(path.join(path.dirname(first), 'launcher.cjs'), 'process.exit(3)\n');
+    await assert.rejects(buildNativeLauncher(root, source, 'native-launcher', runtime), /native_launcher_changed/);
+    await assert.rejects(buildNativeLauncher(root, source, 'native-launcher', "/tmp/x'y/node"), /native_install_arguments/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

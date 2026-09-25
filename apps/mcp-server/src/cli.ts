@@ -70,7 +70,7 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     const setupFlags=parseUtilityFlags(args.slice(2),new Set(['--browser']));
     const browser=setupFlags.single('--browser')??'chrome';
     if(browser!=='chrome'&&browser!=='edge')throw utilityError('adapter_invalid_arguments');
-    if(operation==='setup'&&!['win32','linux'].includes(process.platform))throw utilityError('native_install_platform_unsupported');
+    if(operation==='setup'&&!['win32','linux','darwin'].includes(process.platform))throw utilityError('native_install_platform_unsupported');
     const installed=await prepareAdapterDirectory(directory,path.join(path.dirname(fileURLToPath(import.meta.url)),'tab-adapter'));
     if(operation==='setup')await installNativeLocal(path.join(configDirectory(),'tab-adapter-native'),installed.extensionId,{browser});
     process.stdout.write(JSON.stringify({state:operation==='setup'?'browser_install_required':'prepared',extensionId:installed.extensionId,directory:installed.directory,
@@ -188,7 +188,7 @@ function utilityHelp(): string {
     "",
     "Optional browser preference:",
     "  newton-browser adapter prepare [--browser chrome|edge]",
-    "  newton-browser adapter setup [--browser chrome|edge]  (Windows/Linux user-local native registration)",
+    "  newton-browser adapter setup [--browser chrome|edge]  (user-local native registration)",
     "  newton-browser adapter status",
     "  newton-browser adapter update [--from DIRECTORY] --connection ID --instance EPOCH --tab ID",
     "  newton-browser adapter recover --connection ID --instance EPOCH --tab ID",

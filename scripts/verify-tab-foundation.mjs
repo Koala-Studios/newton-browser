@@ -17,7 +17,45 @@ const {unregisterNativeLocal}=await import(pathToFileURL(path.join(packed,'packa
 const candidate=pathToFileURL(path.join(packed,'package/dist/embedding.js')).href;
 const {connectNative,developmentUpdateControl,updateInstalledAdapter}=await import(candidate);
 const cli=path.join(packed,'package/dist/index.js');
-const cliCall=async(operation,...args)=>JSON.parse((await promisify(execFile)(process.execPath,[cli,'adapter',operation,...args],{windowsHide:true,env:{...process.env,NEWTON_BROWSER_CONFIG_DIR:temp.root}})).stdout);
+// Linux and macOS register the host under HOME; an isolated HOME keeps the operator's own browser configuration untouched.
+const posix=process.platform!=='win32';
+const isolatedHome=path.join(temp.root,'home');
+const userConfig=process.platform==='darwin'?path.join(isolatedHome,'Library','Application Support'):path.join(isolatedHome,'.config');
+if(posix)await fs.mkdir(userConfig,{recursive:true,mode:0o700});
+const homeEnv=posix?{HOME:isolatedHome,XDG_CONFIG_HOME:undefined}:{};
+const runtimeName=posix?'node':'node.exe';
+// Test-only browser flags: extension debugging, unpacked loading in branded Chrome, and no keychain prompt on macOS.
+const qaBrowserArgs=['--enable-unsafe-extension-debugging','--disable-features=DisableLoadExtensionCommandLineSwitch',...(process.platform==='darwin'?['--use-mock-keychain']:[])];
+const cliCall=async(operation,...args)=>JSON.parse((await promisify(execFile)(process.execPath,[cli,'adapter',operation,...args],{windowsHide:true,env:{...process.env,...homeEnv,NEWTON_BROWSER_CONFIG_DIR:temp.root}})).stdout);
+async function withHome(run){
+  if(!posix)return run();
+  const previous=process.env.HOME;process.env.HOME=isolatedHome;
+  try{return await run();}finally{process.env.HOME=previous;}
+}
+async function defaultExecutable(){
+  if(process.platform==='win32')return path.join(process.env.LOCALAPPDATA,'ms-playwright/chromium-1234/chrome-win64/chrome.exe');
+  const cache=process.platform==='darwin'?path.join(process.env.HOME,'Library/Caches/ms-playwright'):path.join(process.env.HOME,'.cache/ms-playwright');
+  const builds=(await fs.readdir(cache)).filter(name=>/^chromium-\d+$/.test(name)).sort((a,b)=>Number(b.slice(9))-Number(a.slice(9)));
+  if(!builds.length)throw new Error('set NEWTON_BROWSER_PROTOTYPE_EXECUTABLE to a Chromium that can load unpacked extensions');
+  if(process.platform==='linux')return path.join(cache,builds[0],'chrome-linux','chrome');
+  const mac=path.join(cache,builds[0],(await fs.readdir(path.join(cache,builds[0]))).find(name=>name.startsWith('chrome-mac')));
+  const app=(await fs.readdir(mac)).find(name=>name.endsWith('.app'));
+  return path.join(mac,app,'Contents','MacOS',app.slice(0,-4));
+}
+/** Chromium and Chrome for Testing read their own NativeMessagingHosts directories; mirror the registered Chrome manifest there. */
+async function mirrorManifestForChromium(...profiles){
+  if(!posix)return;
+  const chrome=process.platform==='darwin'?path.join(userConfig,'Google','Chrome','NativeMessagingHosts'):path.join(userConfig,'google-chrome','NativeMessagingHosts');
+  const targets=process.platform==='darwin'
+    ?[path.join(userConfig,'Chromium','NativeMessagingHosts'),path.join(userConfig,'Google','Chrome for Testing','NativeMessagingHosts')]
+    :[path.join(userConfig,'chromium','NativeMessagingHosts'),path.join(userConfig,'google-chrome-for-testing','NativeMessagingHosts')];
+  // With --user-data-dir, Chromium also reads user-level hosts from that directory.
+  targets.push(...profiles.map(profile=>path.join(profile,'NativeMessagingHosts')));
+  for(const target of targets){
+    await fs.mkdir(target,{recursive:true,mode:0o700});
+    for(const name of await fs.readdir(chrome))await fs.copyFile(path.join(chrome,name),path.join(target,name));
+  }
+}
 const prepared=await cliCall('prepare'),extensionId=prepared.extensionId,adapter=prepared.directory;
 const built={digest:createHash('sha256').update(await fs.readFile(path.join(adapter,'worker.js'))).digest('hex')};
 let installation, browser,otherBrowser,otherClient; const clients = [];const oracles=new Map();const updateControls=[];
@@ -55,12 +93,14 @@ function message(client, type) {
 try {
   console.error('native foundation: install');
   const setups=await Promise.allSettled([cliCall('setup'),cliCall('setup')]);
-  if(setups.some(result=>result.status==='fulfilled'))installation={root:path.join(temp.root,'tab-adapter-native'),unregister:()=>unregisterNativeLocal(path.join(temp.root,'tab-adapter-native'),extensionId)};
+  if(setups.some(result=>result.status==='fulfilled'))installation={root:path.join(temp.root,'tab-adapter-native'),unregister:()=>withHome(()=>unregisterNativeLocal(path.join(temp.root,'tab-adapter-native'),extensionId))};
   for(const result of setups){if(result.status==='rejected')throw result.reason;assert.equal(result.value.state,'browser_install_required');assert.equal(result.value.extensionId,extensionId);}
   const profile = path.join(temp.root,'profile'); await fs.mkdir(profile);
-  const executablePath = process.env.NEWTON_BROWSER_PROTOTYPE_EXECUTABLE ?? path.join(process.env.LOCALAPPDATA, 'ms-playwright/chromium-1234/chrome-win64/chrome.exe');
+  const executablePath = process.env.NEWTON_BROWSER_PROTOTYPE_EXECUTABLE ?? await defaultExecutable();
+  await mirrorManifestForChromium();
   browser = await launchChromium({ executablePath, userDataDir: profile, browserFamily: 'chrome', headless: evidence.headless,
-    spawn: (exe,args,options) => spawn(exe,[...args,'--enable-unsafe-extension-debugging',`--load-extension=${adapter}`],options) });
+    spawn: (exe,args,options) => spawn(exe,[...args,...qaBrowserArgs,`--load-extension=${adapter}`],{...options,env:{...(options?.env??process.env),...homeEnv}}) });
+  await mirrorManifestForChromium(profile);
   console.error('native foundation: browser ready');
   const transport = browser.transport;
   const devTarget = await transport.send('Target.createTarget',{url:'about:blank'});
@@ -79,9 +119,9 @@ try {
   const helloReply = await deadline(control.send('Runtime.evaluate',{expression:"chrome.runtime.sendMessage({type:'status'})",awaitPromise:true,returnByValue:true}), 'bootstrap_status');
   const hello = helloReply.result?.value; assert.equal(hello?.digest,built.digest,JSON.stringify(helloReply));
   console.error('native foundation: bootstrap ready');
-  const runtimeBefore=await fs.stat(path.join(installation.root,'builds',(JSON.parse(await fs.readFile(path.join(installation.root,'launcher.json'),'utf8'))).digest,'node.exe'));
+  const runtimeBefore=await fs.stat(path.join(installation.root,'builds',(JSON.parse(await fs.readFile(path.join(installation.root,'launcher.json'),'utf8'))).digest,runtimeName));
   const repeatedSetups=await Promise.all([cliCall('setup'),cliCall('setup')]);for(const repeatedSetup of repeatedSetups)assert.equal(repeatedSetup.extensionId,extensionId);
-  const runtimeAfter=await fs.stat(path.join(installation.root,'builds',(JSON.parse(await fs.readFile(path.join(installation.root,'launcher.json'),'utf8'))).digest,'node.exe'));
+  const runtimeAfter=await fs.stat(path.join(installation.root,'builds',(JSON.parse(await fs.readFile(path.join(installation.root,'launcher.json'),'utf8'))).digest,runtimeName));
   assert.equal(runtimeAfter.ino,runtimeBefore.ino);assert.equal(runtimeAfter.mtimeMs,runtimeBefore.mtimeMs);assert.equal(runtimeAfter.ctimeMs,runtimeBefore.ctimeMs);
   evidence.checks.push('public setup repeated while native host is running preserves the immutable runtime');
   const connectionDir = path.join(installation.root,'connections');
@@ -197,7 +237,8 @@ try {
   // A valid new hello/digest from this browser must never satisfy the first update.
   const otherProfile=path.join(temp.root,'other-profile');await fs.mkdir(otherProfile);
   otherBrowser=await launchChromium({executablePath,userDataDir:otherProfile,browserFamily:'chrome',headless:evidence.headless,
-    spawn:(exe,args,options)=>spawn(exe,[...args,'--enable-unsafe-extension-debugging',`--load-extension=${adapter}`],options)});
+    spawn:(exe,args,options)=>spawn(exe,[...args,...qaBrowserArgs,`--load-extension=${adapter}`],{...options,env:{...(options?.env??process.env),...homeEnv}})});
+  await mirrorManifestForChromium(otherProfile);
   const otherTarget=await otherBrowser.transport.send('Target.createTarget',{url:'about:blank'});
   const otherPage=await pageConnection(otherBrowser.transport,otherTarget.targetId);await navigate(otherPage,`chrome-extension://${extensionId}/setup.html`);
   const otherHello=(await deadline(otherPage.send('Runtime.evaluate',{expression:"chrome.runtime.sendMessage({type:'status'})",awaitPromise:true,returnByValue:true}),'other_browser_bootstrap')).result.value;

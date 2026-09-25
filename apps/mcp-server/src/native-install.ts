@@ -10,7 +10,7 @@ import { buildNativeLauncher, buildNativeRuntime } from './native-artifacts.ts';
 import { hashNativeFile } from './native-file.ts';
 import { nativePlatformLayout } from './native-platform.ts';
 import type { NativeBrowserFamily } from './native-platform.ts';
-import { publishLinuxNativeRegistration, removeLinuxNativeRegistration } from './linux-native-registration.ts';
+import { publishNativeRegistrationFile, removeNativeRegistrationFile } from './native-registration-file.ts';
 
 const execute = promisify(execFile);
 type NativeLocalOptions = { browser?: NativeBrowserFamily };
@@ -23,13 +23,13 @@ export async function installNativeLocal(
   if (!/^[a-p]{32}$/.test(extensionId)) throw new Error('native_install_arguments');
   const browser = options.browser ?? 'chrome';
   const platform = process.platform;
-  const homeDirectory = platform === 'linux' ? os.homedir() : undefined;
+  const homeDirectory = platform === 'linux' || platform === 'darwin' ? os.homedir() : undefined;
   const hostName = `newton.browser.${extensionId}`;
   const layout = nativePlatformLayout({
     platform,
     browser,
     hostName,
-    ...(platform === 'linux' && homeDirectory ? {homeDirectory} : {}),
+    ...(homeDirectory ? {homeDirectory} : {}),
     ...(platform === 'linux' && process.env.XDG_CONFIG_HOME ? {configDirectory: process.env.XDG_CONFIG_HOME} : {}),
   });
   root = await ensureRootParent(path.resolve(root));
@@ -48,7 +48,8 @@ export async function installNativeLocal(
   const artifacts = path.dirname(fileURLToPath(import.meta.url));
   const entry = await fs.readFile(path.join(artifacts, 'native-host.js'));
   const { digest } = await buildNativeRuntime(root, entry, process.execPath, layout.runtimeName);
-  const launcher = await buildNativeLauncher(root, await fs.readFile(path.join(artifacts, 'native-launcher.cjs')), layout.launcherName);
+  const launcher = await buildNativeLauncher(root, await fs.readFile(path.join(artifacts, 'native-launcher.cjs')), layout.launcherName,
+    path.join(root, 'builds', digest, layout.runtimeName));
   await publishNativeJson(root, 'launcher.json', { digest });
   const manifest = path.join(root, 'manifest.json');
   await publishNativeJson(root, 'manifest.json', {
@@ -68,7 +69,7 @@ export async function installNativeLocal(
       unregister: () => unregisterNativeLocal(root, extensionId, { browser }),
     };
   }
-  await publishLinuxNativeRegistration(root, layout.registration.path);
+  await publishNativeRegistrationFile(root, layout.registration.path);
   return {
     root,
     digest,
@@ -86,7 +87,7 @@ export async function unregisterNativeLocal(root: string, extensionId: string, o
     platform,
     browser,
     hostName,
-    ...(platform === 'linux' ? {homeDirectory: os.homedir()} : {}),
+    ...(platform === 'linux' || platform === 'darwin' ? {homeDirectory: os.homedir()} : {}),
     ...(platform === 'linux' && process.env.XDG_CONFIG_HOME ? {configDirectory: process.env.XDG_CONFIG_HOME} : {}),
   });
   const canonical = await ensureDirectory(path.resolve(root), 'native_directory_invalid');
@@ -97,7 +98,7 @@ export async function unregisterNativeLocal(root: string, extensionId: string, o
     await execute('reg.exe', ['delete', layout.registration.key, '/f'], { windowsHide: true });
     return;
   }
-  await removeLinuxNativeRegistration(canonical, layout.registration.path);
+  await removeNativeRegistrationFile(canonical, layout.registration.path);
 }
 
 export function nativeRegistrationMatches(stdout: string, manifest: string): boolean {
@@ -149,7 +150,7 @@ async function ensureNativeOwner(root: string, extensionId: string): Promise<voi
     }
     return;
   }
-  if (process.platform === 'linux') {
+  if (process.platform === 'linux' || process.platform === 'darwin') {
     const uid = process.getuid?.();
     if (typeof uid !== 'number') throw new Error('native_owner_unknown');
     const filename = path.join(root, 'installation.json');
@@ -252,11 +253,11 @@ async function ensureDirectory(
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(errorCode);
   const canonical = await fs.realpath(resolved);
   if (canonical !== resolved) throw new Error(errorCode);
-  if (process.platform==='linux' && options.level !== undefined) {
+  if (process.platform !== 'win32' && options.level !== undefined) {
     const mask = options.level === 'private' ? 0o0077 : 0o0022;
     if ((stat.mode & mask) !== 0) throw new Error(errorCode);
   }
-  if (process.platform==='linux' && options.requireCurrentUser && stat.uid !== process.getuid?.()) throw new Error(errorCode);
+  if (process.platform !== 'win32' && options.requireCurrentUser && stat.uid !== process.getuid?.()) throw new Error(errorCode);
   return canonical;
 }
 

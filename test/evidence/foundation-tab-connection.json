@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-25T11:54:17.495Z",
+  "checks": [
+    "public setup repeated while native host is running preserves the immutable runtime",
+    "two independent MCP processes / two owned tabs / same-tab conflict / concurrent shared-engine native input",
+    "public MCP new_tab starts in the selected browser, navigates after ownership and supports independent worker input",
+    "packed borrowed hover / checkbox / prompt accept / document / records / container scroll / offscreen trusted click / stop with open prompt",
+    "both borrowed workers return masked PNG blocks using native sensitive search across closed shadow roots and cross-site frames",
+    "each borrowed worker lists and edits its own opener-attributed popup; selected parent remains unchanged; another connection cannot claim the popup",
+    "popup edit uses newPages from the preceding action receipt before any pages.list call",
+    "scoped document includes cross-site frame prose and excludes unrelated sibling iframe prose",
+    "scoped document excludes iframe text under hidden and autocomplete-excluded ancestors",
+    "ordinary document reading includes both visible frames while preserving ancestor exclusions",
+    "scoped controls include an actionable cross-site frame ref; filling that ref succeeds without exposing the outside sibling control",
+    "extracted packed installer, native helper, launcher and engine / private IPC / real Chrome Native Messaging / expected code digest",
+    "independent DOM effect oracle; stopping workers preserves browser and tabs",
+    "text-only global press returns one field with updated value; independent post-release DOM oracle confirms insertion",
+    "public packed CLI update commits verified metadata, preserves extension ID and reports ready afterward",
+    "packed durable transaction rolls back a forced bootstrap mismatch; second profile cannot prove marker; public recovery recognizes committed result",
+    "double bootstrap failure retains journal; public recovery rejects wrong live profile without changing evidence and restores original profile to ready",
+    "exact updater process killed after real code publication; kernel lock released without cleanup; public recovery restores verified previous code and ready status"
+  ],
+  "pass": true,
+  "headless": true,
+  "promptAfterDetach": "still_open",
+  "tabEffects": [
+    {
+      "visibility": "hidden",
+      "changes": [],
+      "wheel": [
+        {
+          "trusted": true,
+          "y": 100
+        }
+      ],
+      "scroll": 100
+    },
+    {
+      "visibility": "hidden",
+      "changes": [],
+      "wheel": [
+        {
+          "trusted": true,
+          "y": 100
+        }
+      ],
+      "scroll": 100
+    }
+  ],
+  "popupEffects": [
+    "child-of-2113428652",
+    "child-of-2113428653"
+  ],
+  "createdTabEffects": [
+    "created-by-2113428652-typed",
+    "created-by-2113428653-typed"
+  ]
+}

@@ -5,11 +5,13 @@ import {randomUUID} from 'node:crypto';
 type Manifest={name:string;description:string;path:string;type:'stdio';allowed_origins:string[]};
 const invalid=()=>new Error('native_registration_changed');
 
-/** User-local registration only. The caller holds the installation lock. No
+const filePlatform=()=>process.platform==='linux'||process.platform==='darwin';
+
+/** User-local manifest registration (Linux and macOS). The caller holds the installation lock. No
  * system registration, browser profile inspection or registration side effects
  * occur at import time. Existing unrelated registrations are never overwritten. */
-export async function publishLinuxNativeRegistration(root:string,destination:string):Promise<void>{
-  if(process.platform!=='linux')throw new Error('native_install_arguments');
+export async function publishNativeRegistrationFile(root:string,destination:string):Promise<void>{
+  if(!filePlatform())throw new Error('native_install_arguments');
   root=await ownedDirectory(root);
   const source=await readManifest(path.join(root,'manifest.json'));
   validateManifest(source.manifest,root);
@@ -36,8 +38,8 @@ export async function publishLinuxNativeRegistration(root:string,destination:str
   }
 }
 
-export async function removeLinuxNativeRegistration(root:string,destination:string):Promise<void>{
-  if(process.platform!=='linux')throw new Error('native_install_arguments');
+export async function removeNativeRegistrationFile(root:string,destination:string):Promise<void>{
+  if(!filePlatform())throw new Error('native_install_arguments');
   root=await ownedDirectory(root);
   const source=await readManifest(path.join(root,'manifest.json'));
   validateManifest(source.manifest,root);
@@ -61,12 +63,22 @@ async function ownedDirectory(directory:string):Promise<string>{
 async function ensureRegistrationDirectory(directory:string):Promise<string>{
   const absolute=path.resolve(directory);
   if(path.basename(absolute)!=='NativeMessagingHosts')throw invalid();
-  // Browser config may already exist. Only create the two explicit browser /
-  // NativeMessagingHosts components beneath an existing user config directory.
+  // Browser config may already exist. Only create the browser and
+  // NativeMessagingHosts components beneath an existing user directory.
   const browser=path.dirname(absolute);
-  if(!['google-chrome','microsoft-edge'].includes(path.basename(browser)))throw invalid();
-  await ownedDirectory(path.dirname(browser));
-  for(const item of [browser,absolute]){
+  let base:string,created:string[];
+  if(process.platform==='darwin'){
+    // ~/Library/Application Support/Google/Chrome or ~/Library/Application Support/Microsoft Edge
+    if(path.basename(browser)==='Chrome'&&path.basename(path.dirname(browser))==='Google'){base=path.dirname(path.dirname(browser));created=[path.dirname(browser),browser,absolute];}
+    else if(path.basename(browser)==='Microsoft Edge'){base=path.dirname(browser);created=[browser,absolute];}
+    else throw invalid();
+    if(path.basename(base)!=='Application Support')throw invalid();
+  }else{
+    if(!['google-chrome','microsoft-edge'].includes(path.basename(browser)))throw invalid();
+    base=path.dirname(browser);created=[browser,absolute];
+  }
+  await ownedDirectory(base);
+  for(const item of created){
     await fs.mkdir(item,{mode:0o700}).catch(error=>{if(error.code!=='EEXIST')throw error;});
     await ownedDirectory(item);
   }
