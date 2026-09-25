@@ -49,12 +49,12 @@ export class LoginSource {
     const current = await this.current();
     return Object.freeze({ sourceId: this.sourceId, browserFamily: this.family, generation: current?.generation ?? null, authentication: "unknown" });
   }
-  async beginMaintenance(executablePath: string, headless = true, display?: BrowserDisplay): Promise<OwnedBrowserRuntime> {
+  async beginMaintenance(executablePath: string, headless = true, display?: BrowserDisplay, proxyServer?: string): Promise<OwnedBrowserRuntime> {
     const nonce = randomUUID(), filename = path.join(this.directory, "maintenance.lock");
     await durableWrite(filename, { version: 1, pid: process.pid, nonce });
     try {
       const { identity } = await this.clone();
-      const runtime = await launchOwnedBrowserRuntime({ executablePath, browserFamily: this.family, profileStore: this.store, identityId: identity.id, headless, ...(display ? { display } : {}) });
+      const runtime = await launchOwnedBrowserRuntime({ executablePath, browserFamily: this.family, profileStore: this.store, identityId: identity.id, headless, ...(display ? { display } : {}), ...(proxyServer ? { proxyServer } : {}) });
       this.maintenance.add(runtime); this.maintenanceNonce.set(runtime, nonce);
       return runtime;
     } catch (error) {

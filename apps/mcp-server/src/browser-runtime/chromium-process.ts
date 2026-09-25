@@ -6,6 +6,7 @@ import type { Readable, Writable } from "node:stream";
 
 import { macApplicationExecutable } from "./browser-discovery.ts";
 import { CdpPipeTransport, type PrivateCdpTransport } from "./cdp-pipe.ts";
+import { egressProxyArgs } from "./egress-proxy.ts";
 import type { GuardianProfileCleanupPlan } from "./profile-store.ts";
 import { ProcessCleanupError, ProcessSupervisor, type SupervisedChild } from "./process-supervisor.ts";
 
@@ -54,6 +55,8 @@ export type ChromiumDiagnostics = Readonly<{
 type SpawnLike = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export type ChromiumLaunchOptions = Readonly<{
+  /** Route every browser connection through this loopback proxy (see egress-proxy.ts). */
+  proxyServer?: string;
   executablePath: string;
   userDataDir: string;
   browserFamily?: "chrome" | "edge";
@@ -215,12 +218,13 @@ function monitorProcessExit(child: ChildProcess): ProcessExitState {
 export type BrowserDisplay = Readonly<{ width: number; height: number; locale?: string }>;
 export const DEFAULT_BROWSER_DISPLAY: BrowserDisplay = Object.freeze({ width: 1280, height: 900 });
 
-export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "browserFamily" | "platform" | "display">): readonly string[] {
+export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "browserFamily" | "platform" | "display" | "proxyServer">): readonly string[] {
   const display = options.display ?? DEFAULT_BROWSER_DISPLAY;
   if (!Number.isSafeInteger(display.width) || !Number.isSafeInteger(display.height) || display.width < 320 || display.height < 240
     || display.width > 3840 || display.height > 2160 || (display.locale !== undefined && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u.test(display.locale))) {
     throw new ChromiumLaunchError("profile_validation");
   }
+  if (options.proxyServer !== undefined && !/^http:\/\/127\.0\.0\.1:\d{1,5}$/u.test(options.proxyServer)) throw new ChromiumLaunchError("profile_validation");
   const directory = path.resolve(options.userDataDir);
   const args = [
     ...SAFE_CHROMIUM_ARGS,
@@ -231,6 +235,7 @@ export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDat
     ...(options.headless === false ? [] : ["--headless=new"]),
     `--window-size=${display.width},${display.height}`,
     ...(display.locale ? [`--lang=${display.locale}`, `--accept-lang=${display.locale}`] : []),
+    ...(options.proxyServer === undefined ? [] : egressProxyArgs(options.proxyServer)),
   ];
   return Object.freeze(args);
 }

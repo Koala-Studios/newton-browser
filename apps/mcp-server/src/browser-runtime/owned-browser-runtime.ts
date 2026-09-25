@@ -81,6 +81,7 @@ export type LaunchOwnedBrowserRuntimeOptions = Readonly<{
   killTree?: ChromiumLaunchOptions["killTree"];
   platform?: NodeJS.Platform;
   ephemeralIdentity?: boolean;
+  proxyServer?: string;
 }>;
 
 export class OwnedBrowserRuntime {
@@ -194,6 +195,7 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
       browserFamily: options.browserFamily,
       ...(options.headless === undefined ? {} : { headless: options.headless }),
       ...(options.display === undefined ? {} : { display: options.display }),
+      ...(options.proxyServer === undefined ? {} : { proxyServer: options.proxyServer }),
       ...(options.readyDeadlineMs === undefined ? {} : { readyDeadlineMs: options.readyDeadlineMs }),
       ...(options.stderrDiagnosticBytes === undefined ? {} : { stderrDiagnosticBytes: options.stderrDiagnosticBytes }),
       ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
