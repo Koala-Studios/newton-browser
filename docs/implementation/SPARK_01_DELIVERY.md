@@ -1,6 +1,6 @@
 # Spark packet 01 delivery notes
 
-Implementation status: completed in working tree `C:\Users\Frank\.codex\worktrees\421a\newton-browser`.
+Implementation status: completed in working tree `C:\Users\<user>\.codex\worktrees\421a\newton-browser`.
 
 ## Added exported APIs
 

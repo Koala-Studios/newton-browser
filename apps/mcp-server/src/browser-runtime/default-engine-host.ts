@@ -2,7 +2,8 @@ import path from "node:path";
 
 import { ensureConfigDirectory, configDirectory, loadDirectConfiguration, profileStoreDirectory } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
-import { openProfileStore } from "./profile-store.ts";
+import { collectOrphanedIdentities, openProfileStore } from "./profile-store.ts";
+import fs from "node:fs";
 import { LoginSource } from "./login-source.ts";
 import { startEgressProxy, type EgressProxy } from "./egress-proxy.ts";
 import { EngineHost, ownedEngineConnection, engineConnectionFromRuntime, type ExistingPageRequest, type LoginMaintenance } from "./engine-host.ts";
@@ -65,6 +66,29 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
     } };
   } };
   return new EngineHost(connect,connectExisting,advertisement?()=>discoverExistingBrowser(advertisement):()=>discoverExistingDirectory(connectionsDirectory),maintenance);
+}
+
+/**
+ * Removes session copies of the shared login that a crashed host left behind. `liveNamespaces` are
+ * the PID namespaces of every host that may still be running sessions on this store; login-source
+ * generations are always kept. For stores used only through login sources.
+ */
+export function collectOrphanedSessionCopies(env: NodeJS.ProcessEnv, liveNamespaces: readonly string[]): number {
+  const directory = configDirectory(env);
+  const store = openProfileStore(profileStoreDirectory(env, directory));
+  const keep = new Set<string>();
+  const sourceRoot = path.join(directory, "login-sources");
+  for (const source of fs.existsSync(sourceRoot) ? fs.readdirSync(sourceRoot, { withFileTypes: true }) : []) {
+    if (!source.isDirectory() || source.isSymbolicLink()) continue;
+    for (const name of fs.readdirSync(path.join(sourceRoot, source.name))) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const metadata = JSON.parse(fs.readFileSync(path.join(sourceRoot, source.name, name), "utf8")) as { identityId?: unknown };
+        if (typeof metadata.identityId === "string") keep.add(metadata.identityId);
+      } catch { /* not generation metadata */ }
+    }
+  }
+  return collectOrphanedIdentities(store, { keep, liveNamespaces: new Set(liveNamespaces), unleasedStaleAfterMs: 30 * 60_000 });
 }
 
 function resolveFamily(preference: "auto" | BrowserFamily, env: NodeJS.ProcessEnv): BrowserFamily {

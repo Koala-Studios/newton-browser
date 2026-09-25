@@ -1,6 +1,6 @@
 # Catalog factoring candidate (2026-09-08)
 
-Authoritative checkout: `C:\Users\Frank\.codex\worktrees\421a\newton-browser`.
+Authoritative checkout: `C:\Users\<user>\.codex\worktrees\421a\newton-browser`.
 
 The old command schema serialized the same target subtree 18 times and waitFor
 subtree eight times. This is wire duplication despite shared source constants.

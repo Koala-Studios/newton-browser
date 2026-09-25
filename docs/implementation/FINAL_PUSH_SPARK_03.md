@@ -1,6 +1,6 @@
 # Spark packet 03 — integrate platform-neutral installation
 
-Authoritative checkout: `C:\Users\Frank\.codex\worktrees\421a\newton-browser`. Read AGENTS.md and FINAL_PUSH_PLATFORM_INTEGRATION.md. Luna's batch01 run is complete; installer paths can now change. No subagents, other-task messages, tests/builds/browser launches or package/config changes. Astra owns engine/core/CLI and linux-native-registration.ts. Complete this whole packet before final response.
+Authoritative checkout: `C:\Users\<user>\.codex\worktrees\421a\newton-browser`. Read AGENTS.md and FINAL_PUSH_PLATFORM_INTEGRATION.md. Luna's batch01 run is complete; installer paths can now change. No subagents, other-task messages, tests/builds/browser launches or package/config changes. Astra owns engine/core/CLI and linux-native-registration.ts. Complete this whole packet before final response.
 
 Allowed writes ONLY:
 - `apps/mcp-server/src/native-file.ts` (new)

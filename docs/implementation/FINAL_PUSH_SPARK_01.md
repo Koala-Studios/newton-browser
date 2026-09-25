@@ -1,6 +1,6 @@
 # Spark coding packet 01 — isolated helpers
 
-Use model `gpt-5.3-codex-spark`, reasoning xhigh. Authoritative working directory is `C:\Users\Frank\.codex\worktrees\421a\newton-browser`. Read root AGENTS.md. Frank authorizes this coding delegation; no subagents or other workers. Luna owns tests/QA; do not launch builds, tests, browsers, package changes or modify its files.
+Use model `gpt-5.3-codex-spark`, reasoning xhigh. Authoritative working directory is `C:\Users\<user>\.codex\worktrees\421a\newton-browser`. Read root AGENTS.md. The operator authorizes this coding delegation; no subagents or other workers. Luna owns tests/QA; do not launch builds, tests, browsers, package changes or modify its files.
 
 Write ONLY these new files:
 1. `packages/driver/src/text-edit-range.ts`

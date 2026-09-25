@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sourceInventory } from "./source-inventory.mjs";
 
 const root = process.cwd();
 const failures = [];
@@ -202,7 +203,9 @@ if (readText("packages/core/src/action-json-schema.ts").includes('value: { type:
   failures.push("public action values must have an explicit length bound");
 }
 
-for (const file of walk(root)) {
+const inventory = sourceInventory(root);
+for (const relative of inventory.symlinks) failures.push(`${relative}: symlinked source path`);
+for (const file of inventory.files) {
   const relative = path.relative(root, file).replaceAll("\\", "/");
   const normalized = relative.toLowerCase();
   for (const term of blockedTerms) {
@@ -251,14 +254,6 @@ function readText(relative) {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
 }
 
-function* walk(directory) {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if ([".git", "node_modules", "dist", "coverage", "artifacts"].includes(entry.name)) continue;
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) yield* walk(absolute);
-    else yield absolute;
-  }
-}
 
 function isTextFile(file) {
   return /\.(?:css|html|js|json|md|mjs|ts|yaml|yml)$/.test(file) || /(?:^|\\|\/)\.gitignore$/.test(file);

@@ -1,6 +1,6 @@
 # SPARK 04 Delivery Notes
 
-- Repository: `C:\Users\Frank\.codex\worktrees\421a\newton-browser`
+- Repository: `C:\Users\<user>\.codex\worktrees\421a\newton-browser`
 - Working branch/checkout for this delivery: authoritative SPARK-04 context (`421a`).
 - Previous `7704` work was rejected; changes are now applied only in this checkout.
 

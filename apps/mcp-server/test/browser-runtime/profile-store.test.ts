@@ -421,3 +421,27 @@ function absentProcessId(): number {
   }
   throw new Error("exited_process_id_was_reused");
 }
+
+test("orphaned session copies from torn-down sandboxes are collected; live, kept and fresh identities stay", async () => {
+  const { collectOrphanedIdentities, createNewtonIdentity, listNewtonIdentities, openProfileStore } = await import("../../src/browser-runtime/profile-store.ts");
+  const { randomBytes } = await import("node:crypto");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "orphans-"));
+  try {
+    const store = openProfileStore(path.join(root, "store"));
+    const make = () => createNewtonIdentity(store, { browserFamily: "chrome" });
+    const lease = (identity: { id: string; path: string }, pidNamespace: string) => fs.writeFileSync(path.join(identity.path, ".newton-browser-profile-lease"),
+      `${JSON.stringify({ version: 1, type: "identity_lease", id: identity.id, browserFamily: "chrome", nonce: randomBytes(32).toString("hex"), pid: 12, createdAt: new Date().toISOString(), pidNamespace })}\n`);
+    const dead = make(); lease(dead, "pid:[4026500001]");
+    const live = make(); lease(live, "pid:[4026500002]");
+    const source = make(); lease(source, "pid:[4026500003]");
+    const fresh = make();
+    const stale = make();
+    const old = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(path.join(stale.path, ".newton-browser-profile-identity"), old, old); fs.utimesSync(stale.path, old, old);
+    fs.mkdirSync(path.join(store.root, `.removing-${dead.id}-${randomBytes(32).toString("hex")}`));
+    const removed = collectOrphanedIdentities(store, { keep: new Set([source.id]), liveNamespaces: new Set(["pid:[4026500002]"]), unleasedStaleAfterMs: 30 * 60_000 });
+    assert.equal(removed, 2);
+    assert.deepEqual(listNewtonIdentities(store).map(identity => identity.id).sort(), [live.id, source.id, fresh.id].sort());
+    assert.equal(fs.readdirSync(store.root).some(name => name.startsWith(".removing-")), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

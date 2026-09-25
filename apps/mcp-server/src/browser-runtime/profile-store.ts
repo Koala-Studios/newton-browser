@@ -398,6 +398,50 @@ export function removeNewtonIdentity(store: ProfileStore, id: string): void {
   withStoreLock(store, () => {
     const target = identityPath(store, identity);
     if (pathEntryExists(path.join(target, IDENTITY_LEASE), "profile_identity_lease_unreadable")) fail("profile_identity_busy");
+    removeIdentityLocked(store, identity);
+  });
+}
+
+/**
+ * Removes session copies a crashed host left behind. A copy is orphaned when its lease belongs to a
+ * PID namespace that no longer exists (every process of a torn-down sandbox is gone, so its browser
+ * is closed), or when it has no lease and has not changed for `unleasedStaleAfterMs`. Identities in
+ * `keep` (login-source generations) and leases in this namespace are never touched here.
+ */
+export function collectOrphanedIdentities(store: ProfileStore, input: { keep: ReadonlySet<string>; liveNamespaces: ReadonlySet<string>; unleasedStaleAfterMs: number }): number {
+  requireStore(store);
+  return withStoreLock(store, () => {
+    let removed = 0;
+    for (const entry of fs.readdirSync(store.root, { withFileTypes: true })) {
+      // A removal interrupted after its rename leaves only a quarantine directory.
+      if (/^\.removing-nbi_[a-f0-9]{32}-[A-Za-z0-9_-]{1,64}$/u.test(entry.name) && entry.isDirectory() && !entry.isSymbolicLink()) {
+        try { fs.rmSync(path.join(store.root, entry.name), { recursive: true }); } catch { /* retried next time */ }
+        continue;
+      }
+      if (!IDENTITY_PATTERN.test(entry.name) || input.keep.has(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const target = identityPath(store, entry.name);
+      const leasePath = path.join(target, IDENTITY_LEASE);
+      try {
+        if (pathEntryExists(leasePath, "profile_identity_lease_unreadable")) {
+          const metadata = readLeaseMetadata(leasePath);
+          const namespace = metadata.pidNamespace ?? null;
+          if (namespace === null || namespace === PID_NAMESPACE || input.liveNamespaces.has(namespace)) continue;
+          fs.unlinkSync(leasePath);
+        } else {
+          const changed = Math.max(fs.lstatSync(target).mtimeMs, fs.lstatSync(path.join(target, IDENTITY_MARKER)).mtimeMs);
+          if (Date.now() - changed < input.unleasedStaleAfterMs) continue;
+        }
+        removeIdentityLocked(store, entry.name);
+        removed++;
+      } catch { /* an unreadable or changing copy is left for a later sweep */ }
+    }
+    return removed;
+  });
+}
+
+function removeIdentityLocked(store: ProfileStore, identity: string): void {
+  {
+    const target = identityPath(store, identity);
     const marker = readMarker(target, IDENTITY_MARKER, "identity");
     if (marker.identity !== identity) fail("profile_identity_invalid");
     assertMarkerIdentity(target, marker, "profile_identity_invalid");
@@ -414,7 +458,7 @@ export function removeNewtonIdentity(store: ProfileStore, id: string): void {
     } catch {
       fail("profile_identity_cleanup_failed");
     }
-  });
+  }
 }
 
 function verifyPreparedSource(source: PreparedSource): void {

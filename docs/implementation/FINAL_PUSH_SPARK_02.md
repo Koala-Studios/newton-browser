@@ -1,6 +1,6 @@
 # Spark packet 02 — immutable native artifacts
 
-Work only in `C:\Users\Frank\.codex\worktrees\421a\newton-browser`. Same model and no-subagent policy as packet 01. Luna owns tests/builds and no messages to other tasks. No testing, builds, browser launches or integration imports in existing files.
+Work only in `C:\Users\<user>\.codex\worktrees\421a\newton-browser`. Same model and no-subagent policy as packet 01. Luna owns tests/builds and no messages to other tasks. No testing, builds, browser launches or integration imports in existing files.
 
 Allowed writes:
 - `packages/driver/src/text-edit-range.ts` (review corrections below)

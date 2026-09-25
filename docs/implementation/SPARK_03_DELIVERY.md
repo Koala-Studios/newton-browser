@@ -1,6 +1,6 @@
 # Spark packet 03 delivery notes
 
-Work completed in `C:\Users\Frank\.codex\worktrees\421a\newton-browser`.
+Work completed in `C:\Users\<user>\.codex\worktrees\421a\newton-browser`.
 
 ## Files written
 

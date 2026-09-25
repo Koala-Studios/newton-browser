@@ -1,6 +1,6 @@
 # Solo implementation evidence — 2026-09-08
 
-Authoritative checkout: `C:\Users\Frank\.codex\worktrees\421a\newton-browser`. This is source evidence, not a packed release or completed P00–P14 claim. Frank's latest instruction makes implementation and all QA solely Astra's responsibility. No worker messages, assignments, polling or subagents were used for this batch.
+Authoritative checkout: `C:\Users\<user>\.codex\worktrees\421a\newton-browser`. This is source evidence, not a packed release or completed P00–P14 claim. The operator's latest instruction makes implementation and all QA solely Astra's responsibility. No worker messages, assignments, polling or subagents were used for this batch.
 
 ## Implemented
 

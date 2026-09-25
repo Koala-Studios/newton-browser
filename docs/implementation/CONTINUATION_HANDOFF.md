@@ -7,7 +7,7 @@ Prepared 2026-09-25. Read this before editing. This is an execution guide for th
 - Repository: `https://github.com/Koala-Studios/newton-browser` (public).
 - Branch: `codex/newton-browser-consolidation-2026-09-25`.
 - Implementation checkpoint: **`8e35a21d7859297271460e31528c922bfce33c4c`**. The handoff itself is a subsequent documentation commit on that branch. Start from the branch tip containing this file, not from `main`.
-- Authoritative local checkout on the original machine: `C:\Users\Frank\.codex\worktrees\421a\newton-browser`.
+- Authoritative local checkout on the original machine: `C:\Users\<user>\.codex\worktrees\421a\newton-browser`.
 - `C:\DEV\newton-browser` is an older dirty checkout at the original baseline. Do not copy its files over this branch, reset it, clean it, or use it just because the harness starts there.
 - Other worktrees may contain unrelated or rejected worker output. They are not integration sources for this handoff.
 - The full intended outcome is P00–P14 in the approved replacement architecture: a fast model feedback loop and reliable actual tasks, in both standalone and explicitly selected existing-browser mode. Finish the existing implementation; do not begin another speculative rewrite.
@@ -103,7 +103,7 @@ Do not add another outcome mapper, observer cache, scheduler, ref store, profile
 In PowerShell on the original machine:
 
 ```powershell
-Set-Location 'C:\Users\Frank\.codex\worktrees\421a\newton-browser'
+Set-Location 'C:\Users\<user>\.codex\worktrees\421a\newton-browser'
 git status --short --branch
 git log -3 --oneline
 git merge-base --is-ancestor 8e35a21d7859297271460e31528c922bfce33c4c HEAD

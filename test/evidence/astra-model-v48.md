@@ -31,6 +31,6 @@ two clipped screenshots are `astra-model-v48-image-5.png` and `...-6.png`.
 Public session stop and host close completed. Node REPL exited. Automatic approval
 review rejected recursive deletion of the exact temporary extraction/config directory
 with "blocked by policy"; it remains at
-`C:\Users\Frank\AppData\Local\Temp\newton-model-qa-2c69914fdbce4fa6ae288755dd36e38c`.
+`C:\Users\<user>\AppData\Local\Temp\newton-model-qa-2c69914fdbce4fa6ae288755dd36e38c`.
 No alternate deletion method was attempted. This is not full release acceptance or
 a ChatGPT parity benchmark.

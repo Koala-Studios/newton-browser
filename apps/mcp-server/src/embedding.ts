@@ -2,7 +2,7 @@
 // task runner). The host owns processes, credentials and the operator channel; the
 // model only ever sees `call` results. Nothing here spawns a CLI.
 import { EngineError } from "@newton-browser/core";
-import { createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
+import { collectOrphanedSessionCopies, createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
 import type { EngineHost } from "./browser-runtime/engine-host.ts";
 import { handleEngineMcp, ENGINE_TOOL_CATALOG } from "./engine-mcp.ts";
 import type { EngineFrame, EngineFrameOptions, EngineOperatorInput, EngineSessionEvent, EngineWebAuthnCredential } from "@newton-browser/driver/session-live";
@@ -37,6 +37,8 @@ export type BrowserEngine = Readonly<{
   /** Done (publish) or cancel. Publishing makes the signed-in state the source's next generation; running sessions keep their copies. */
   finishSignIn(sessionId: string, publish: boolean): Promise<{ generation: string } | undefined>;
   sessions(): readonly { sessionId: string; state: string }[];
+  /** Remove session copies left by crashed hosts; pass the PID namespaces of every host still running on this store. */
+  collectOrphans(liveNamespaces: readonly string[]): number;
   stop(sessionId: string): Promise<void>;
   close(): Promise<void>;
 }>;
@@ -73,6 +75,7 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
     beginSignIn: (sourceId, args, sessionOptions = {}) => started(() => host.start(args, { ...sessionOptions, maintenanceOf: sourceId })),
     finishSignIn: (sessionId, publish) => host.finishMaintenance(sessionId, publish),
     sessions: () => host.list(),
+    collectOrphans: liveNamespaces => collectOrphanedSessionCopies(env, liveNamespaces),
     stop: sessionId => host.stop(sessionId),
     close: () => host.close(),
   });
