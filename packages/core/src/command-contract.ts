@@ -109,6 +109,8 @@ export type EngineReceipt = Readonly<{
   dispatch: EngineDispatch; postcondition: EnginePostcondition; nextCommandId: number;
   page: EnginePageStamp; steps: readonly EngineStepReceipt[]; stoppedAt?: number;
   errorCode?: EngineErrorCode; observation: EngineObservation;
+  /** The page stopped responding; the session reopened its last address in a new page with the same sign-in. */
+  pageRestarted?: { pageId: string; url?: string };
 }>;
 export type EngineCommandState = Readonly<{
   commandId: number; state: "queued" | "running" | "reconciling"; dispatch: EngineDispatch;

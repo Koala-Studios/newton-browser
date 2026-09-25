@@ -297,7 +297,7 @@ export class PageExecutor implements EngineExecutor {
         if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId)) {
           if (input.pending) this.suspendedInputs.add(input);
         } else await input.finish();
-      } finally { this.input = undefined; }
+      } finally { if (this.input === input) this.input = undefined; }
     }
   }
   private async performAction(context: CommandContext, page: EnginePageStamp, action: EngineInputAction): Promise<EnginePostcondition> {
@@ -780,6 +780,31 @@ export class PageExecutor implements EngineExecutor {
     while(!budget.fits(view())&&newPages.length){newPages.pop();pagesLimited=true;limited=true;}
     if(!budget.fits(view()))throw new EngineError('output_budget');
     return view();
+  }
+  /**
+   * A page whose renderer stopped answering is replaced: a new page in the same browser (same
+   * identity and sign-ins) opens its last address, and the hung page is closed. Owned browsers only.
+   */
+  async recover(page: EnginePageStamp): Promise<{ pageId: string; url?: string } | undefined> {
+    if (this.closed || !this.connection.ownsBrowser) return undefined;
+    const url = this.directory.inventory().find(item => item.pageId === page.pageId)?.url;
+    const created = await this.connection.wire.send("Target.createTarget", { url: "about:blank" });
+    const pageId = string(created.targetId);
+    if (!pageId) return undefined;
+    const deadline = performance.now() + 10_000;
+    while (!this.directory.inventory().some(item => item.pageId === pageId)) {
+      if (this.closed || performance.now() > deadline) return undefined;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    await this.connection.wire.send("Target.closeTarget", { targetId: page.pageId }).catch(() => undefined);
+    // The hung action's calls went to the closed page and may never settle; it no longer holds input.
+    this.input = undefined;
+    this.directory.removePage(page.pageId);
+    this.pendingNavigations.delete(page.pageId);
+    this.directory.select(pageId);
+    const route = [...this.routes].find(([, owner]) => owner === pageId)?.[0];
+    if (url && route) await this.connection.wire.send("Page.navigate", { url }, route).catch(() => undefined);
+    return { pageId, ...(url ? { url } : {}) };
   }
   /** Console records since collection began; the first read starts collecting. */
   async consoleRecords(options: { pageId?: string; level?: ConsoleEntry["level"]; pattern?: string; limit: number; clear?: boolean }) {

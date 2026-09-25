@@ -18,6 +18,8 @@ export interface EngineExecutor {
   readRecords?(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget):Promise<EngineObservation>;
   readDocument?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, cursor?: string, scope?: EngineTarget): Promise<EngineObservation>;
   screenshot?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, options: unknown): Promise<EngineObservation>;
+  /** Replace a page whose renderer stopped answering with a new page at its last address, keeping the browser and identity. */
+  recover?(page: EnginePageStamp): Promise<{ pageId: string; url?: string } | undefined>;
   /** Must close the exact owned runtime, or revoke/detach a borrowed claim. Never await this queue. */
   close(): Promise<void>;
 }
@@ -182,7 +184,8 @@ export class SessionEngine {
         catch (error) { observation = { state: "unavailable", errorCode: engineErrorCode(error) }; }
       }
     })().catch(error => { failure = engineErrorCode(error); });
-    await this.reconcile(execution, context, () => { item.record.state = { commandId: item.record.id, state: "reconciling", dispatch: context.dispatch }; });
+    const restarted = await this.reconcile(execution, context, () => { item.record.state = { commandId: item.record.id, state: "reconciling", dispatch: context.dispatch }; }, item.page);
+    if (restarted) observation = { state: "unavailable", errorCode: "timed_out" };
     // A timed-out optional read cannot rewrite already-known input effects.
     // Its own unavailable observation carries that timeout/cancellation.
     failure = actionPhaseFinished ? failure : context.cancellation ?? failure;
@@ -190,7 +193,8 @@ export class SessionEngine {
     const reason = failure === "cancelled" || failure === "timed_out" ? failure : failure ? (context.dispatch === "not_started" ? "rejected" : "failed") : "completed";
     item.record.complete({ sessionId: this.sessionId, commandId: item.record.id, state: "finished", reason,
       dispatch: context.dispatch, postcondition, nextCommandId: this.store.nextId, page: item.page,
-      steps: [...steps], ...(failure ? { errorCode: failure, stoppedAt: steps.length ? steps.length - 1 : 0 } : stoppedAt === undefined ? {} : { stoppedAt }), observation });
+      steps: [...steps], ...(failure ? { errorCode: failure, stoppedAt: steps.length ? steps.length - 1 : 0 } : stoppedAt === undefined ? {} : { stoppedAt }), observation,
+      ...(restarted ? { pageRestarted: restarted } : {}) });
     context.dispose();
     this.bytes -= item.bytes;
     this.active = undefined;
@@ -220,7 +224,7 @@ export class SessionEngine {
     }).then(value => { observation = item.mode === "records" ? this.records(value, item.page, item.maxBytes, item.previousSnapshotId, item.scope,item.recordShape) : value; }).catch(error => {
       observation = { state: "unavailable", errorCode: engineErrorCode(error) };
     });
-    await this.reconcile(execution, item.context, () => undefined);
+    await this.reconcile(execution, item.context, () => undefined, item.page);
     item.complete(item.context.cancellation ? { state: "unavailable", errorCode: item.context.cancellation } : observation);
     item.context.dispose(); this.active = undefined; this.pump();
   }
@@ -260,17 +264,30 @@ export class SessionEngine {
     if (budget.fits(projected)&&(delta?.reset!==false||bytes(projected)<bytes(reset))) return projected;
     return budget.fits(reset) ? reset : { state: "unavailable", errorCode: "output_budget" };
   }
-  private async reconcile(execution: Promise<void>, context: CommandContext, onReconciling: () => void): Promise<void> {
+  /** Waits for the operation after its deadline. A page that never answers is replaced when possible; otherwise the session is quarantined. */
+  private async reconcile(execution: Promise<void>, context: CommandContext, onReconciling: () => void, page?: EnginePageStamp): Promise<{ pageId: string; url?: string } | undefined> {
     let settled = false;
     const finished = execution.finally(() => { settled = true; });
     await Promise.race([finished, context.aborted]);
-    if (settled) return;
+    if (settled) return undefined;
     onReconciling();
     let dispose!: () => void;
     await Promise.race([finished, new Promise<void>(resolve => { dispose = this.clock.schedule(resolve, this.reconciliationMs); })]);
     dispose();
-    if (!settled) { this.admission = "quarantined"; this.cancelQueued(); void this.stop().catch(() => undefined); }
+    if (settled) return undefined;
+    const restarted = page && this.executor.recover ? await this.recoverPage(page) : undefined;
+    // The hung call belongs to the closed page; the lane continues on the new one.
+    if (restarted) return restarted;
+    this.admission = "quarantined"; this.cancelQueued(); void this.stop().catch(() => undefined);
+    return undefined;
   }
+  private async recoverPage(page: EnginePageStamp): Promise<{ pageId: string; url?: string } | undefined> {
+    let dispose!: () => void;
+    const deadline = new Promise<undefined>(resolve => { dispose = this.clock.schedule(() => resolve(undefined), SessionEngine.RECOVERY_MS); });
+    try { return await Promise.race([this.executor.recover!(page).catch(() => undefined), deadline]); }
+    finally { dispose(); }
+  }
+  static RECOVERY_MS = 15_000;
   private cancelled(item: QueueItem): EngineReceipt {
     return { sessionId: this.sessionId, commandId: item.record.id, state: "finished", reason: "cancelled",
       dispatch: "not_started", postcondition: { state: "not_requested" }, nextCommandId: this.store.nextId,

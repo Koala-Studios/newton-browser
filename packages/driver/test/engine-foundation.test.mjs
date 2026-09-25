@@ -203,3 +203,27 @@ test('a lane read changes selection only after actions queued before it (page se
   assert.deepEqual(failed, { state: 'unavailable', errorCode: 'unknown_page' });
   assert.equal((await engine.observe()).state, 'none', 'the lane keeps working');
 });
+
+test('a command that never settles restarts its page and keeps the session; without recovery the session is quarantined (D11)', async () => {
+  const clock = new Clock();
+  const hung = () => new Promise(() => {});
+  const ex = executor(hung);
+  let recovered = 0;
+  ex.recover = async admitted => { recovered++; assert.equal(admitted.pageId, 'p1'); return { pageId: 'p2', url: 'https://example.com/app' }; };
+  const engine = new SessionEngine('recover', ex, { clock, reconciliationMs: 250 });
+  const receipt = engine.submit({ ...request(1), timeoutMs: 1000 });
+  await tick(); clock.advance(1000); await tick(); clock.advance(250); await tick();
+  const result = await receipt;
+  assert.equal(recovered, 1);
+  assert.deepEqual(result.pageRestarted, { pageId: 'p2', url: 'https://example.com/app' });
+  assert.equal(result.reason, 'timed_out');
+  assert.equal(engine.state, 'open');
+
+  let closed = 0;
+  const plain = new SessionEngine('plain', executor(hung, async () => { closed++; }), { clock, reconciliationMs: 250 });
+  const stuck = plain.submit({ ...request(1), timeoutMs: 1000 });
+  await tick(); clock.advance(1000); await tick(); clock.advance(250); await tick();
+  assert.equal((await stuck).pageRestarted, undefined);
+  assert.notEqual(plain.state, 'open');
+  assert.equal(closed, 1);
+});
