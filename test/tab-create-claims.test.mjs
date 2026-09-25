@@ -138,3 +138,18 @@ test("a foreign intervening claim is never removed by failed create ownership", 
   await authority.disconnect(foreign);
   await authority.disconnect(creator);
 });
+
+// D25: one connection's quiesce releases only its own tabs.
+test("releasing one connection's tabs leaves another connection's claims usable", async () => {
+  const debug = debuggerApi();
+  const authority = new TabClaims(debug.api, "epoch");
+  const first = authority.bindPort(), second = authority.bindPort();
+  await authority.claim(first, 11);
+  const kept = await authority.claim(second, 12);
+  await authority.releaseAll(first);
+  assert.deepEqual(debug.detached, [11]);
+  assert.equal(authority.isClaimed(11), false);
+  assert.equal(authority.isClaimed(12), true);
+  await authority.command(second, kept, "Runtime.evaluate", { expression: "1" });
+  await authority.claim(first, 13);
+});

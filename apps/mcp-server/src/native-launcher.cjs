@@ -1,12 +1,13 @@
-// Stable Windows native executable entry. No npm installation or working-tree path at launch.
+// Stable native executable entry (Windows, macOS, Linux). No npm installation or working-tree path at launch.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
+const RUNTIME_CAP = 512 * 1024 * 1024;
 const root = path.resolve(path.dirname(process.execPath), '..', '..');
 assertDirectory(root);
-const runtime = process.platform === 'win32' ? 'node.exe' : process.platform === 'linux' ? 'node' : null;
+const runtime = process.platform === 'win32' ? 'node.exe' : process.platform === 'linux' || process.platform === 'darwin' ? 'node' : null;
 if (runtime === null) throw new Error('native_installation_invalid');
 
 const configuration = readRecord(path.join(root, 'launcher.json'));
@@ -22,7 +23,8 @@ const record = readRecord(path.join(build, 'build.json'));
 if (
   record?.version !== 1
   || record.entryDigest !== digest
-  || record.runtimeDigest !== hashFile(path.join(build, runtime), 4 * 1024 * 1024)
+  // A real Node runtime is 100+ MB; it is streamed through the hash with a bound, never read whole.
+  || record.runtimeDigest !== hashFile(path.join(build, runtime), RUNTIME_CAP)
 ) {
   throw new Error('native_installation_changed');
 }

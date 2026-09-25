@@ -37,6 +37,18 @@ export function nativePlatformLayout(input: {
       }),
     });
   }
+  if (input.platform === "darwin") {
+    // Chrome and Edge on macOS read per-user host manifests from their Application Support directories.
+    const home = normalizeHome(input.homeDirectory);
+    const relative = input.browser === "chrome"
+      ? "Library/Application Support/Google/Chrome/NativeMessagingHosts"
+      : "Library/Application Support/Microsoft Edge/NativeMessagingHosts";
+    return Object.freeze({
+      runtimeName: "node",
+      launcherName: "native-launcher",
+      registration: Object.freeze({ kind: "file", path: path.posix.join(home, relative, `${input.hostName}.json`) }),
+    });
+  }
   if (input.platform !== "linux") throw new Error("native_install_arguments");
 
   const configDirectory = input.configDirectory === undefined
@@ -67,8 +79,12 @@ function validateLinuxConfigDirectory(configDirectory: unknown): string {
 }
 
 function normalizeLinuxHomeConfig(homeDirectory: unknown): string {
+  return path.posix.join(normalizeHome(homeDirectory), ".config");
+}
+
+function normalizeHome(homeDirectory: unknown): string {
   if (typeof homeDirectory !== "string" || !homeDirectory.length || !path.posix.isAbsolute(homeDirectory) || homeDirectory.includes("\0")) {
     throw new Error("native_install_arguments");
   }
-  return path.posix.join(homeDirectory, ".config");
+  return homeDirectory;
 }

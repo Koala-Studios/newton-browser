@@ -158,6 +158,10 @@ export class TabClaims {
   }
   async disconnect(owner: Owner): Promise<void> {
     this.owners.delete(owner);
+    await this.releaseAll(owner);
+  }
+  /** Releases one connection's tabs and pending creations; other connections keep theirs. */
+  async releaseAll(owner: Owner): Promise<void> {
     const creations=[...this.creationJobs].filter(([,creator])=>creator===owner).map(([job])=>job.catch(()=>undefined));
     const results = await Promise.allSettled([...creations.map(job=>bounded(job)),...[...this.claims.values()].filter(claim => claim.owner === owner).map(claim => this.revoke(claim))]);
     if (results.some(result => result.status === "rejected")) throw new Error("detach_failed");

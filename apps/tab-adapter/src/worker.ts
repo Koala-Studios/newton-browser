@@ -35,6 +35,7 @@ const ready = (async () => {
 })();
 void ready.catch(() => undefined);
 
+const updaters = new Set<unknown>();
 native.onMessage.addListener(raw => {
   try {
     const complete = assembly.accept(raw); if (!complete) return;
@@ -47,7 +48,7 @@ native.onMessage.addListener(raw => {
     }
     const owner = owners.get(connectionId); if (!owner) return;
     if (message.type === "close") {
-      owners.delete(connectionId); ids.delete(owner); void authority.disconnect(owner).catch(() => undefined); return;
+      owners.delete(connectionId); ids.delete(owner); updaters.delete(owner); void authority.disconnect(owner).catch(() => undefined); return;
     }
     if (message.type !== "request") return;
     const request = message.request as Record<string, unknown>;
@@ -57,10 +58,11 @@ native.onMessage.addListener(raw => {
       if (request.method === 'create_tab') return authority.createTab(owner,chrome.tabs);
       if (request.method === "release") { await authority.release(owner, args.token as ClaimToken); return {}; }
       if (request.method === "command") return authority.command(owner, args.token as ClaimToken, String(args.method), args.params as Record<string, unknown>, args.sessionId as string | undefined);
-      if (request.method === "quiesce") { await authority.quiesce(); return { state: "quiescent" }; }
-      if (request.method === "reload") { await authority.quiesce(); chrome.runtime.reload(); return {}; }
-      if(request.method==='prepare_update')return updateBinding.prepare(args.ticket);
-      if(request.method==='prove_update')return updateBinding.prove(args.ticket);
+      // A connection quiesces only its own tabs; only a connection inside a proven update may quiesce or reload the adapter.
+      if (request.method === "quiesce") { if (updaters.has(owner)) await authority.quiesce(); else await authority.releaseAll(owner); return { state: "quiescent" }; }
+      if (request.method === "reload") { if (!updaters.has(owner)) throw new Error("unsupported_method"); await authority.quiesce(); chrome.runtime.reload(); return {}; }
+      if(request.method==='prepare_update'){const result=await updateBinding.prepare(args.ticket);updaters.add(owner);return result;}
+      if(request.method==='prove_update'){const result=await updateBinding.prove(args.ticket);updaters.add(owner);return result;}
       if(request.method==='finish_update'){await updateBinding.finish(args.ticket);return {};}
       if (request.method === "inventory") {const tabs=await chrome.tabs.query({});return { incomplete:tabs.length>128,tabs:tabs.slice(0,128).map(tab=>({tabId:tab.id,url:(tab.url??'').slice(0,4096),title:(tab.title??'').slice(0,512),claimed:authority.isClaimed(tab.id??0)})) };}
       throw new Error("unsupported_method");
