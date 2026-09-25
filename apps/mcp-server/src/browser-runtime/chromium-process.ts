@@ -244,7 +244,9 @@ export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDat
       ? ["--edge-skip-compat-layer-relaunch"]
       : []),
     `--user-data-dir=${directory}`,
-    ...(options.headless === false ? [] : ["--headless=new", ...(options.userAgent ? [`--user-agent=${options.userAgent}`] : [])]),
+    // Headless Chrome also reports navigator.webdriver = true, which sign-in pages treat as a bot.
+    ...(options.headless === false ? [] : ["--headless=new", "--disable-blink-features=AutomationControlled",
+      ...(options.userAgent ? [`--user-agent=${options.userAgent}`] : [])]),
     `--window-size=${display.width},${display.height}`,
     ...(display.locale ? [`--lang=${display.locale}`, `--accept-lang=${display.locale}`] : []),
     ...(options.proxyServer === undefined ? [] : egressProxyArgs(options.proxyServer)),

@@ -331,6 +331,7 @@ test("headless launches send the browser's ordinary user agent instead of Headle
   assert.match(headedUserAgent(148, "darwin"), /\(Macintosh; Intel Mac OS X 10_15_7\).* Chrome\/148\.0\.0\.0 /u);
   assert.match(headedUserAgent(148, "win32", "edge"), /Windows NT 10\.0.* Edg\/148\.0\.0\.0$/u);
   assert.ok(chromiumLaunchArgs({ userDataDir, headless: true, userAgent }).includes(`--user-agent=${userAgent}`));
+  assert.ok(chromiumLaunchArgs({ userDataDir, headless: true }).includes("--disable-blink-features=AutomationControlled"));
   assert.equal(chromiumLaunchArgs({ userDataDir, headless: false, userAgent }).some((arg) => arg.startsWith("--user-agent")), false);
   assert.throws(() => chromiumLaunchArgs({ userDataDir, headless: true, userAgent: "bad\nagent" }), ChromiumLaunchError);
   assert.equal(browserMajorVersion("/fake/chromium-a", "linux", () => "Chromium 153.0.8010.52 built on Debian GNU/Linux 12 (bookworm)\n"), 153);
