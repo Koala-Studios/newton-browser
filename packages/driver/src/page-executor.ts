@@ -977,6 +977,23 @@ export class PageExecutor implements EngineExecutor {
         incomplete=true;readFailed=true;
       }
     }
+    // D29/D4: controls the accessibility tree misses (script-driven clickables) and a layer covering the page.
+    let cover: { text: string } | undefined;
+    const coverIds = new Set<number>();
+    if (!scoped && !readFailed) {
+      try {
+        const extras = await this.discoverPageExtras(context, page);
+        const known = new Set(candidates.filter(item => item.binding.frameId === page.frameId).map(item => item.binding.backendNodeId));
+        for (const item of [...extras.cover, ...extras.clickables]) {
+          if (known.has(item.backendNodeId)) continue;
+          known.add(item.backendNodeId);
+          candidates.push({ view: { role: "clickable", name: item.name }, binding: this.directory.binding(page, item.backendNodeId), primary: false });
+        }
+        for (const item of extras.cover) coverIds.add(item.backendNodeId);
+        if (extras.coverText !== undefined) cover = { text: extras.coverText };
+        incomplete ||= extras.incomplete;
+      } catch (error) { if (context.cancellation || error instanceof EngineError && error.code === "stale_target") throw error; }
+    }
     const nodes: ReturnType<typeof readAXControls>["controls"][number]["view"][] = [];
     const bindings: NodeBinding[] = [];
     let outputLimited=false;
@@ -986,8 +1003,9 @@ export class PageExecutor implements EngineExecutor {
     // order is retained within each class; navigation-link chrome must not crowd
     // every field out of the initial state.
     // A dialog's controls come first: it covers the page and must be handled.
-    const priority = (view: { role: string; context?: readonly { role: string }[] }) => {
+    const priority = (view: { role: string; context?: readonly { role: string }[] }, binding?: NodeBinding) => {
       if (view.context?.some(item => item.role === "dialog" || item.role === "alertdialog")) return -1;
+      if (binding && binding.frameId === page.frameId && coverIds.has(binding.backendNodeId)) return -1;
       return ["textbox", "searchbox", "combobox", "spinbutton", "textarea", "listbox"].includes(view.role) ? 0
         : ["button", "checkbox", "radio", "switch", "slider", "tab"].includes(view.role) ? 1 : 2;
     };
@@ -997,7 +1015,7 @@ export class PageExecutor implements EngineExecutor {
         && (!needle || [view.name, view.description ?? "", ...(view.context ?? []).map(item => item.name)].some(value => value.toLocaleLowerCase().includes(needle)));
       for (let index = candidates.length - 1; index >= 0; index--) if (!matches(candidates[index]!.view)) candidates.splice(index, 1);
     }
-    candidates.sort((left, right) => priority(left.view) - priority(right.view) || Number(right.primary) - Number(left.primary));
+    candidates.sort((left, right) => priority(left.view, left.binding) - priority(right.view, right.binding) || Number(right.primary) - Number(left.primary));
     for (const { view: projected, binding } of candidates.slice(0, 512)) {
       try{this.directory.route(binding);}catch(error){
         if(scoped||binding.frameId===page.frameId)throw error;
@@ -1012,10 +1030,46 @@ export class PageExecutor implements EngineExecutor {
     this.directory.describe(page,{title,url});
     const published = this.directory.publish(bindings);
     return { state: incomplete || nodes.length < candidates.length ? "incomplete" : "available", trust: "untrusted_page_content", scope: scoped ? "target" : "page",
-      page, ...(title === undefined ? {} : { title }), ...(url === undefined ? {} : { url }),
+      page, ...(title === undefined ? {} : { title }), ...(url === undefined ? {} : { url }), ...(cover ? { cover } : {}),
       ...(outputLimited?{incompleteReason:"output_limit" as const}:readFailed?{incompleteReason:"evidence_unavailable" as const}:incomplete?{incompleteReason:"rendered_subset" as const}:nodes.length<candidates.length?{incompleteReason:"work_limit" as const}:{}),
       snapshotId: published.snapshotId, expiredSnapshots: published.expiredSnapshots,
       nodes: nodes.map((node, i) => ({ ...node, ref: published.refs[i]! })) };
+  }
+  /** One bounded read-only page query. Role-less elements that act like buttons (pointer cursor, onclick or
+   * tabindex, a visible label, no interactive child), and a fixed layer covering the viewport centre with its controls. */
+  private async discoverPageExtras(context: CommandContext, page: EnginePageStamp): Promise<{
+    clickables: { backendNodeId: number; name: string }[]; cover: { backendNodeId: number; name: string }[]; coverText?: string; incomplete: boolean }> {
+    const binding = this.directory.binding(page, 1);
+    const send = (method: string, params: Record<string, unknown>) => context.read(() => this.send(binding, method, params));
+    const group = "newton-browser-discovery";
+    try {
+      const evaluated = object(await send("Runtime.evaluate", { expression: PAGE_EXTRAS_SCRIPT, returnByValue: false, silent: true, objectGroup: group }));
+      const resultId = string(object(evaluated.result).objectId);
+      if (!resultId) return { clickables: [], cover: [], incomplete: false };
+      const fields = array(object(await send("Runtime.getProperties", { objectId: resultId, ownProperties: true })).result);
+      const field = (name: string) => object(object(fields.find(item => item.name === name)).value);
+      const elements = async (name: string, max: number) => {
+        const listId = string(field(name).objectId);
+        if (!listId) return [];
+        const entries = array(object(await send("Runtime.getProperties", { objectId: listId, ownProperties: true })).result)
+          .filter(item => /^[0-9]+$/u.test(string(item.name))).sort((a, b) => Number(a.name) - Number(b.name)).slice(0, max);
+        const found: { backendNodeId: number; name: string }[] = [];
+        for (const entry of entries) {
+          const pair = array(object(await send("Runtime.getProperties", { objectId: string(object(entry.value).objectId), ownProperties: true })).result);
+          const elementId = string(object(object(pair.find(item => item.name === "0")).value).objectId);
+          const label = string(object(object(pair.find(item => item.name === "1")).value).value).slice(0, 120);
+          if (!elementId || !label) continue;
+          const node = object(object(await send("DOM.describeNode", { objectId: elementId })).node);
+          if (Number.isSafeInteger(node.backendNodeId) && Number(node.backendNodeId) > 0) found.push({ backendNodeId: Number(node.backendNodeId), name: label });
+        }
+        return found;
+      };
+      const coverTextValue = field("coverText").value;
+      return { clickables: await elements("clickables", 24), cover: await elements("cover", 16),
+        ...(typeof coverTextValue === "string" ? { coverText: coverTextValue.slice(0, 160) } : {}), incomplete: field("incomplete").value === true };
+    } finally {
+      await send("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => undefined);
+    }
   }
   async readRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget):Promise<EngineObservation>{
     if(shape==='controls'||[...this.dialogs.values()].some(dialog=>dialog.pageId===page.pageId))return this.observe(context,page,budget,true,scope);
@@ -1480,3 +1534,37 @@ function waitTarget(waitFor: EngineWaitFor): EngineTarget | undefined {
   if (waitFor.role && waitFor.name) return { kind: "semantic", role: waitFor.role, name: waitFor.name, exact: true };
   return undefined;
 }
+
+/** Read-only and bounded: scans at most 4000 elements and returns element/label pairs, never page data beyond labels. */
+const PAGE_EXTRAS_SCRIPT = `(() => {
+  const W = innerWidth, H = innerHeight, native = "a,button,input,select,textarea,summary,label,option,[contenteditable],[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option],[role=textbox],[role=combobox],[role=slider]";
+  const label = el => (el.getAttribute("aria-label") || el.innerText || el.title || "").replace(/\\s+/g, " ").trim().slice(0, 120);
+  const visible = el => { const r = el.getBoundingClientRect(); return r.width >= 8 && r.height >= 8 && r.bottom > 0 && r.top < H * 3 && r.right > 0 && r.left < W; };
+  const clickables = []; let scanned = 0, incomplete = false;
+  for (const el of document.body ? document.body.querySelectorAll("*") : []) {
+    if (++scanned > 4000) { incomplete = true; break; }
+    if (clickables.length >= 24) { incomplete = true; break; }
+    if (el.matches(native) || el.closest(native) || el.querySelector(native)) continue;
+    const signal = el.hasAttribute("onclick") || el.hasAttribute("tabindex") && el.tabIndex >= 0;
+    if (!signal) {
+      if (getComputedStyle(el).cursor !== "pointer") continue;
+      if (el.parentElement && getComputedStyle(el.parentElement).cursor === "pointer") continue;
+    }
+    if (!visible(el)) continue;
+    const name = label(el); if (name) clickables.push([el, name]);
+  }
+  let coverLayer = null;
+  for (let el = document.elementFromPoint(W / 2, H / 2); el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (style.position === "fixed" || style.position === "sticky") { const r = el.getBoundingClientRect(); if (r.width * r.height >= 0.4 * W * H) coverLayer = el; break; }
+  }
+  const cover = [];
+  if (coverLayer && !coverLayer.closest("[role=dialog],[role=alertdialog],dialog[open]")) {
+    for (const el of coverLayer.querySelectorAll("a,button,input,select,textarea,[role=button],[role=link],[onclick],[tabindex]")) {
+      if (cover.length >= 16) break;
+      if (!visible(el)) continue;
+      const name = label(el) || el.getAttribute("value") || el.getAttribute("placeholder") || ""; if (name) cover.push([el, name.slice(0, 120)]);
+    }
+  }
+  return { clickables, cover, coverText: coverLayer && cover.length ? label(coverLayer).slice(0, 160) : undefined, incomplete };
+})()`;

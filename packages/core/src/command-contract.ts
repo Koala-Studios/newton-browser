@@ -96,6 +96,8 @@ export type EngineObservation =
       newPages?: readonly (EnginePageStamp & {openerPageId?:string;selected:boolean;title?:string;url?:string})[];
       newPagesIncomplete?: boolean;
       navigation?: Readonly<{ state: "pending"; url?: string }>;
+      /** A fixed layer covers the page (a promotion, consent or sign-up prompt without dialog semantics); its controls come first. */
+      cover?: Readonly<{ text: string }>;
       dialog?: Readonly<{ dialogId: string; type: "alert" | "confirm" | "prompt" | "beforeunload"; message: string }>;
       nodes: readonly EngineFieldView[]; records?: readonly EngineObservationRecord[]; delta?: EngineObservationDelta; text?: string; cursor?: string; complete?: boolean; imageData?: string; mimeType?: string;
       provenance?: Readonly<{ pageId: string; documentGeneration: number; captureId: string; viewport: Readonly<{ width: number; height: number }>; clip: Readonly<{ x: number; y: number; width: number; height: number }>; maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable" }> }>;
