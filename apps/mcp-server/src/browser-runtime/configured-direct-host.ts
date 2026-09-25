@@ -46,7 +46,7 @@ export type ConfiguredDirectBrowserHostOptions = Readonly<{
   listIdentities?: typeof listNewtonIdentities;
   removeIdentity?: typeof removeNewtonIdentity;
   recoverIdentityLease?: typeof recoverStaleNewtonIdentityLease;
-  identityLeaseRecoveryVerifier?: (browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier;
+  identityLeaseRecoveryVerifier?: (browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier | Promise<IdentityLeaseClosureVerifier>;
   startDriverSession?: DirectBrowserHostOptions["startDriverSession"];
   maxSessions?: number;
   maxQueueItems?: number;
@@ -114,7 +114,7 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
     let identity: NewtonProfileIdentity;
     try {
       if (persistentIdentity) {
-        preparePersistentIdentityLease({
+        await preparePersistentIdentityLease({
           store,
           identity: persistentIdentity,
           recoverIdentityLease,
@@ -168,19 +168,19 @@ export function createConfiguredDirectBrowserHost(options: ConfiguredDirectBrows
   });
 }
 
-function preparePersistentIdentityLease(input: Readonly<{
+async function preparePersistentIdentityLease(input: Readonly<{
   store: ProfileStore;
   identity: NewtonProfileIdentity;
   recoverIdentityLease: typeof recoverStaleNewtonIdentityLease;
-  verifierFactory: ((browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier) | undefined;
-}>): void {
+  verifierFactory: ((browserFamily: BrowserFamily) => IdentityLeaseClosureVerifier | Promise<IdentityLeaseClosureVerifier>) | undefined;
+}>): Promise<void> {
   let inspection: ReturnType<typeof inspectNewtonIdentityLease>;
   try { inspection = inspectNewtonIdentityLease(input.store, input.identity.id); }
   catch { throw configuredError("configured_identity_recovery_failed"); }
   if (inspection === "available") return;
   if (typeof input.verifierFactory !== "function") throw configuredError("configured_identity_busy");
   try {
-    const verifier = input.verifierFactory(input.identity.browserFamily);
+    const verifier = await input.verifierFactory(input.identity.browserFamily);
     if (typeof verifier !== "function") throw configuredError("configured_identity_recovery_unavailable");
     input.recoverIdentityLease(input.store, input.identity.id, verifier);
   } catch (error) {

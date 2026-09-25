@@ -74,6 +74,7 @@ type Marker = {
   kind?: "persistent" | "opaque_import";
   dev: string;
   ino: string;
+  ownerPid?: number;
 };
 
 type FileFact = {
@@ -626,6 +627,7 @@ function createStage(store: ProfileStore, identity: string, source: "new" | "opa
     storeNonce: storeMarker.nonce,
     identity,
     kind: source === "new" ? "persistent" : "opaque_import",
+    ownerPid: process.pid,
     ...directoryIdentity(stage),
   });
   writeManifest(stage, Object.freeze({ version: 1, id: identity, browserFamily, createdAt: new Date().toISOString(), source }));
@@ -671,7 +673,7 @@ function describeIdentity(store: ProfileStore, target: string, identity: string)
 
 function withStoreLock<T>(store: ProfileStore, operation: () => T): T {
   const lock = path.join(store.root, STORE_LOCK);
-  const value = nonce();
+  const value = JSON.stringify({ version: 1, nonce: nonce(), pid: process.pid, storeNonce: requireStore(store).nonce });
   let handle: number;
   try {
     handle = fs.openSync(lock, "wx", 0o600);

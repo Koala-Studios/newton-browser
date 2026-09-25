@@ -167,20 +167,12 @@ if (( AGENT_COST_STATUS != 0 )); then
   exit "$AGENT_COST_STATUS"
 fi
 
-STAGE=direct_live
+STAGE=real_sites
 set +e
-NEWTON_BROWSER_QA_BROWSER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/eval-live.log" pnpm eval:direct-live
+NEWTON_BROWSER_QA_BROWSER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/real-sites.log" pnpm eval:real-sites
 LIVE_STATUS=$?
 set -e
-record_log "$RAW_LOG_ROOT/eval-live.log" eval-live-diagnostics "$LIVE_STATUS"
-if (( LIVE_STATUS == 0 )); then
-  STAGE=real_sites
-  set +e
-  NEWTON_BROWSER_QA_BROWSER=chrome node "$BOUNDED_COMMAND" "$RAW_LOG_ROOT/real-sites.log" pnpm eval:real-sites
-  LIVE_STATUS=$?
-  set -e
-  record_log "$RAW_LOG_ROOT/real-sites.log" real-sites-diagnostics "$LIVE_STATUS"
-fi
+record_log "$RAW_LOG_ROOT/real-sites.log" real-sites-diagnostics "$LIVE_STATUS"
 if (( LIVE_STATUS == 0 )); then
   STAGE=packed_direct
   set +e

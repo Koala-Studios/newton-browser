@@ -1,7 +1,7 @@
 import { deflateSync, inflateSync } from "node:zlib";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const MAX_RASTER_PIXELS = 20_000_000;
+export const MAX_RASTER_PIXELS = 20_000_000;
 const MAX_COMPRESSED_BYTES = 24 * 1024 * 1024;
 
 export type CssMaskRegion = Readonly<{ x: number; y: number; width: number; height: number }>;
@@ -24,7 +24,7 @@ export function maskCapturedPng(
   clip: CssCaptureClip,
   regions: readonly CssMaskRegion[],
 ): MaskedPng {
-  if (!validClip(clip) || regions.length === 0 || regions.length > 32) throw new Error("invalid_raster_mask_input");
+  if (!validClip(clip) || regions.length > 32) throw new Error("invalid_raster_mask_input");
   if (typeof base64 !== "string" || base64.length === 0 || base64.length > MAX_COMPRESSED_BYTES * 2) {
     throw new Error("invalid_raster_mask_input");
   }
@@ -60,10 +60,6 @@ export function maskCapturedPng(
       }
     }
   }
-  if (appliedRegions === 0) {
-    return { base64, width: parsed.width, height: parsed.height, appliedRegions: 0 };
-  }
-
   const encoded = encodePng(parsed.width, parsed.height, parsed.channels, parsed.pixels);
   return { base64: encoded.toString("base64"), width: parsed.width, height: parsed.height, appliedRegions };
 }

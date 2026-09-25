@@ -25,6 +25,24 @@ test("browser candidates are deterministic for Windows, macOS, and Linux", () =>
   ]);
 });
 
+test("Windows system candidates resolve mixed-case environment keys for Chrome and Edge", () => {
+  const env = {
+    ProgramFiles: "C:\\Program Files",
+    "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    LocalAppData: "C:\\Users\\Test\\AppData\\Local",
+  };
+  assert.deepEqual(browserExecutableCandidates({ family: "chrome", platform: "win32", env }), [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Users\\Test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
+  ]);
+  assert.deepEqual(browserExecutableCandidates({ family: "edge", platform: "win32", env }), [
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Users\\Test\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe",
+  ]);
+});
+
 test("explicit executable wins and must be an exact executable regular file", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "newton-browser-discovery-"));
   try {

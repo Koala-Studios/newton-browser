@@ -7,7 +7,6 @@ import { BROWSER_ACT_JSON_SCHEMA, BROWSER_COMPOSITE_REF_PATTERN_SOURCE, parseBro
 
 import { NEWTON_BROWSER_VERSION } from "./cli.ts";
 import type { DirectBrowserHost } from "./browser-runtime/direct-browser-host.ts";
-import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
 import {
   MODERN_MCP_PROTOCOL_VERSION,
   serveModernMcpStdio,
@@ -18,6 +17,9 @@ import {
 } from "./modern-mcp-stdio.ts";
 import { normalizeAgentActionResult, projectObservation, type AgentObservationOptionsInput } from "./agent-output.ts";
 import { annotationsForTool, MCP_SERVER_INSTRUCTIONS } from "./mcp-contract.ts";
+import { EngineHost } from "./browser-runtime/engine-host.ts";
+import { handleEngineMcp } from "./engine-mcp.ts";
+import { createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
 
 type BrowserHost = DirectBrowserHost;
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -37,8 +39,8 @@ const DIRECT_SESSION_ID_PATTERN = "^direct_session_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9
 const DIRECT_SESSION_ID = new RegExp(DIRECT_SESSION_ID_PATTERN, "u");
 let cachedToolCatalog: Array<Record<string, unknown>> | null = null;
 
-export async function startNewtonBrowserMcpServer(input: { host?: BrowserHost } = {}): Promise<void> {
-  const host = input.host ?? createDefaultDirectBrowserHost();
+export async function startNewtonBrowserMcpServer(input: { host?: BrowserHost | EngineHost } = {}): Promise<void> {
+  const host = input.host ?? createDefaultEngineHost();
   try {
     await serveNewtonBrowserMcpConnection({ host, readable: process.stdin, writable: process.stdout });
   } finally {
@@ -46,13 +48,13 @@ export async function startNewtonBrowserMcpServer(input: { host?: BrowserHost } 
   }
 }
 
-async function shutdownBrowserHost(host: BrowserHost): Promise<void> {
+async function shutdownBrowserHost(host: BrowserHost | EngineHost): Promise<void> {
   try { await host.stopAll(); } catch { /* close is the authoritative retry/terminal cleanup path */ }
   await host.close();
 }
 
 async function serveNewtonBrowserMcpConnection(input: {
-  host: BrowserHost;
+  host: BrowserHost | EngineHost;
   readable: Readable;
   writable: Writable;
 }): Promise<void> {
@@ -64,13 +66,14 @@ async function serveNewtonBrowserMcpConnection(input: {
 }
 
 export async function handleMcpMessage(
-  host: BrowserHost,
+  host: BrowserHost | EngineHost,
   message: ModernMcpRequest,
   context: ModernMcpRequestContext = { signal: new AbortController().signal },
 ): Promise<ModernMcpResponse | null> {
   const id = message.id;
   const metadataError = validateRequestMetadata(message.params);
   if (metadataError) return errorResponse(id, metadataError.code, metadataError.message, metadataError.data);
+  if (host instanceof EngineHost) return handleEngineMcp(host, message, context);
   if (message.method === "server/discover") {
     if (!hasExactParameterKeys(message.params, ["_meta"])) {
       return errorResponse(id, -32602, "Invalid server/discover parameters.", { errorCode: "invalid_discover_parameters" });

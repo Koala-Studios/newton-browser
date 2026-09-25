@@ -1,7 +1,7 @@
 import { configDirectory, ensureConfigDirectory, loadDirectConfiguration, profileStoreDirectory } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { createConfiguredDirectBrowserHost } from "./configured-direct-host.ts";
-import { createIdentityLeaseClosureVerifier } from "./identity-lease-closure.ts";
+import { freshIdentityClosureVerifier } from "./async-closure.ts";
 
 export function createDefaultDirectBrowserHost(env: NodeJS.ProcessEnv = process.env) {
   const directory = configDirectory(env);
@@ -15,7 +15,7 @@ export function createDefaultDirectBrowserHost(env: NodeJS.ProcessEnv = process.
     browserFamily,
     hostPolicies: configuration.hostPolicies,
     identityBindings: configuration.identityBindings,
-    identityLeaseRecoveryVerifier: (family) => createIdentityLeaseClosureVerifier({ browserFamily: family }),
+    identityLeaseRecoveryVerifier: freshIdentityClosureVerifier,
     ...(explicitPath ? { executablePath: explicitPath } : {}),
   });
 }

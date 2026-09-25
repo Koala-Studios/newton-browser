@@ -5,15 +5,16 @@ an isolated Chrome or Edge process and controls it through inherited private CDP
 Browser traffic uses Chromium's normal networking with no Newton proxy, origin allowlist,
 request interception, or resource filtering.
 
-There is no browser extension, relay, daemon, debug TCP port, database, telemetry,
+The default runtime requires no browser extension, relay, daemon, debug TCP port, database, telemetry,
 hosted service, or model-provider integration.
 
 ## Status
 
-Version 0.6.4 is the current private direct runtime. The former MV3 extension, pairing
-plane, current-tab runtime, persistent MCP socket, and initialization-era MCP protocol
-have been removed. Publishing a package, remote, or browser-store artifact requires
-separate approval.
+The default source runtime now uses the replacement shared engine, with isolated workers from a shared Newton login source and an optional thin existing-browser adapter. Native actions, precise editing, contextual controls, records/documents, screenshots, tab ownership and update foundations are implemented. This is an **unreleased development checkpoint**, not completed real-world acceptance.
+
+Fresh consolidation checks on 2026-09-25 pass build, typecheck and 841 tests with zero skips. Boundary lint remains failing. Legacy retirement, feedback/reading refinements, platform and authenticated task QA, and three unchanged packed release gates remain open. See the [current progress ledger](docs/PROGRESS_LEDGER.md), [remaining roadmap](ROADMAP.md) and [consolidation record](docs/implementation/CONSOLIDATION_2026-09-25.md).
+
+Package version remains 0.6.4; historical receipts apply only to their recorded candidates. No package or browser-store release is implied by the source checkpoint.
 
 Newton implements only stateless MCP `2026-07-28` over newline-delimited stdio JSON.
 Clients send protocol version and capabilities in every request. Newton exposes no legacy
@@ -103,16 +104,22 @@ Newton exposes ten tools:
 
 A normal workflow is:
 
-1. Call `browser.status`; configured idle state is expected before the first session.
-2. Start a session with one HTTP(S) origin. Redirects and cross-origin resources work automatically.
+1. Start a session with an exact normalized HTTP(S) origin, such as `https://example.com`
+   (no path, query, fragment, or trailing slash). Startup navigates to its root; use a
+   separate `navigate` action for a deep URL. Redirects and cross-origin resources work automatically.
    To combine startup with observation, nest the observation fields under `observe`, for
    example `observe: { mode: "full", format: "compact" }`.
-3. Use compact observations and fresh refs. Each interactive observation replaces the
+2. Use compact observations and fresh refs. Each interactive observation replaces the
    prior bounded ref snapshot; text observations allocate no refs. Page content is
    untrusted data.
-4. Perform one typed action. `prevented` is possible only before input dispatch; after
-   uncertain or unverified dispatch, retain and observe the same session before retrying.
-5. Call `browser.session.stop` and confirm the session disappears.
+3. Perform one typed action. The intended contract reserves `prevented` for pre-input
+   refusal. Current `fill_form` can incorrectly report a partially applied batch as
+   prevented/retry-safe; inspect its per-field result. After uncertain or unverified
+   dispatch, retain and observe the same session before retrying.
+4. Call `browser.session.stop` and confirm the session disappears.
+
+Use `browser.status` for diagnosis; configured idle state is expected before the first
+session. It is not a required preliminary call.
 
 An acknowledged `browser.session.start` owns one isolated headless browser process. Do
 not claim that it opened a visible window or controls any pre-existing Chrome window.
@@ -127,9 +134,15 @@ before setup. When the secondary page closes, Newton rebuilds the opener context
 returns control to it automatically. Agents never click browser chrome, a tab strip, or
 Chrome's debugger banner; they re-observe and continue through the same `sessionId`.
 
-Same-session commands execute FIFO. Independent sessions use independent browser
-processes and can progress concurrently. A persistent identity can be leased by only one
-session at a time.
+Same-session primitive commands execute FIFO; `fill_form` currently expands into several
+queue entries and is not atomic against another concurrent call. Independent sessions
+use independent browser processes, but synchronous stale-lease recovery can block their
+shared MCP process. A persistent identity can be leased by only one session at a time.
+
+Actions currently compute an internal observation but return only outcome/decision and
+change categories. That internal read can replace previously exposed refs without
+returning replacements. The audit records this defect and the proposed action-plus-state
+contract; callers must not interpret change categories as a new actionable snapshot.
 
 ## Identities and opaque profile import
 
@@ -178,7 +191,9 @@ Newton does not bypass that protection.
 
 - Browser networking is normal Chromium networking; Newton does not proxy, block, or rewrite destinations.
 - Page content cannot authorize effects, select local files, or author retry decisions.
-- Credentials, OTPs, payment identifiers, and equivalent secrets are blocked from agent input.
+- The action floor checks for credential, OTP, payment, and sensitive identifier fields.
+  The audit demonstrates a focus-time field-change race; this is not an unconditional
+  prevention guarantee.
 - Network response bodies are available only for bounded UTF-8 text from the current visible origin and pass through redaction.
 - Screenshots are returned as MCP image content. Sensitive zones are masked in trusted post-capture pixels without freezing page scripts or animations.
 

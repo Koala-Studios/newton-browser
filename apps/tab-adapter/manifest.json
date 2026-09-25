@@ -1,0 +1,7 @@
+{
+  "manifest_version": 3,
+  "name": "Newton Browser optional tab connection",
+  "version": "0.1.0",
+  "permissions": ["debugger", "tabs", "nativeMessaging", "webNavigation"],
+  "background": { "service_worker": "worker.js", "type": "module" }
+}

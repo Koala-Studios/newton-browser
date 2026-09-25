@@ -7,8 +7,10 @@ TCP port.
 
 ## Install the direct runtime
 
-Version 0.6.4 is a private local candidate and is not published to npm. From this
-checkout, build and run the exact compiled entrypoint:
+This checkout contains version 0.6.4. Local build instructions below do not establish
+current npm/publication or installed-client state. The development task records a prior
+0.6.4 release/install; verify the exact installed entrypoint when diagnosing a client.
+For source testing, build and run the exact compiled entrypoint:
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -165,3 +167,89 @@ Continue with [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 This prerelease is not a general production-ready browser agent. Verify the exact target
 site and workflow in the current session before consequential use; current-tree complete
 release and real-site evidence are tracked in [`PROGRESS_LEDGER.md`](PROGRESS_LEDGER.md).
+# Optional adapter candidate (2026-09-08)
+
+The current development package includes `dist/tab-adapter/{manifest.json,worker.js,setup.html}`.
+Normal package installation and standalone browsing do not register or require it.
+
+```powershell
+newton-browser adapter prepare
+newton-browser adapter setup
+newton-browser adapter status
+```
+
+`prepare` copies the packaged worker unchanged into the Newton configuration directory
+and establishes a stable unpacked extension ID. Repeating it preserves the ID and code;
+it does not silently update an existing installation. `setup` additionally registers
+the Windows Chrome native host. First setup currently requires Node 25.5 or newer to
+build the stable native launcher. Chrome's one-time Developer mode / Load unpacked
+installation uses the directory returned by the command. Newton adds no approval prompts.
+
+`status` probes live native connections and reports `ready` only when a compatible
+browser responds. MCP existing-browser discovery uses the installed connection directory;
+manual advertisement-file configuration is optional. Multiple live profiles have separate
+connection and instance IDs. Explicit existing-browser requests must select the intended
+connection; standalone remains the default.
+
+To create a separate background tab after the operator requests their browser, use
+the connection and instance IDs from discovery:
+
+```json
+{
+  "mode": "existing",
+  "connectionId": "<discovered connection ID>",
+  "target": {
+    "kind": "new_tab",
+    "instanceId": "<discovered instance ID>",
+    "url": "https://example.com/"
+  }
+}
+```
+
+Pass this to `browser.session.start`. It creates an inactive blank tab, establishes
+debugger ownership, and navigates through the shared engine. Invalid URLs fail before
+creation. Claiming an existing `kind: "tab"` still leaves its current location intact.
+Stopping a successfully started borrowed session releases claims and preserves its tabs.
+
+Borrowed popups inherit the worker that owns the actual source tab. They appear in
+`browser.pages.list` with their opener; opening a popup does not change the selected
+page. Action observations also include `newPages` for owned pages first observed during
+that command, so the next action can use their `pageId` without a listing round trip.
+`newPagesIncomplete` flags bounded/truncated feedback; use the page list for more detail.
+Popups that appear later are discovered on subsequent reads, without waiting for an
+arbitrary period of browser quietness. The extension uses Chrome's navigation-target source event, requiring the
+`webNavigation` permission in the initial manifest. Earlier development candidates
+without that permission cannot receive this change through a worker.js-only update;
+the installed manifest and permissions are never silently rewritten.
+
+Worker code updates retain the installed manifest, permissions and extension ID:
+
+```powershell
+newton-browser adapter update --connection CONNECTION_ID --instance INSTANCE_EPOCH --tab TAB_ID
+newton-browser adapter recover --connection CONNECTION_ID --instance INSTANCE_EPOCH --tab TAB_ID
+```
+
+Use IDs from `adapter status` for the explicitly selected browser and a normal HTTP(S)
+tab available for a fresh debugger claim and read-only DOM smoke check. `update` uses
+the current package's adapter code; `--from DIRECTORY` selects a staged build with an
+otherwise identical manifest. The package manifest may omit the installation-specific
+key. This command updates `worker.js` only; it cannot change permissions or setup assets.
+
+An installation-wide lock excludes concurrent updates across profiles. A durable journal
+retains the ticket and both code versions before publication. Metadata commits only after
+the expected bootstrap and smoke check; failures attempt verified rollback. `status`
+reports `updating` while ownership is held and `recovery_required` for unfinished work.
+Recovery after publication requires the original browser's update marker; selecting a
+different profile cannot establish that proof. Already committed recovery only retries
+marker cleanup, with no reload or smoke replay. `cleanupPending` means commit succeeded
+but marker cleanup could not be confirmed.
+
+The public update/recovery paths pass packed Windows Chromium QA
+(`astra-native-update-v30.log` and `astra-native-recovery-v30.log`), including forced
+rollback and recovery after both bootstrap checks fail. Wrong-profile recovery leaves
+the journal unchanged; the original profile restores verified code and ready status.
+`astra-native-kill-v30.log` additionally kills an actual disposable updater after code
+publication and verifies lock release and public recovery without updater cleanup.
+This is an implementation candidate, not release acceptance. Unsealed-build
+migration, Linux launcher support and final development versus production artifact
+separation remain unfinished.

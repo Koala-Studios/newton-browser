@@ -26,7 +26,7 @@ export function browserExecutableCandidates(input: Omit<BrowserDiscoveryInput, "
   const env = input.env ?? process.env;
   const home = input.homeDirectory ?? os.homedir();
   if (platform === "win32") {
-    const roots = [env.PROGRAMFILES, env["PROGRAMFILES(X86)"], env.LOCALAPPDATA]
+    const roots = [environmentValue(env, "PROGRAMFILES"), environmentValue(env, "PROGRAMFILES(X86)"), environmentValue(env, "LOCALAPPDATA")]
       .filter((value): value is string => typeof value === "string" && value.length > 0);
     const suffixes = input.family === "chrome"
       ? [path.win32.join("Google", "Chrome", "Application", "chrome.exe")]
@@ -132,6 +132,12 @@ function supportedPlatform(value: NodeJS.Platform): BrowserPlatform {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function environmentValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  if (env[key] !== undefined) return env[key];
+  const matchedKey = Object.keys(env).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+  return matchedKey === undefined ? undefined : env[matchedKey];
 }
 
 function unavailable(cause: unknown): Error & { unavailable: true } {

@@ -1,7 +1,10 @@
 # Newton Browser MCP host
 
 Local stdio MCP host for Newton-owned Chrome or Edge processes over inherited private
-CDP pipes. It uses no browser extension, relay, daemon, telemetry, or CDP TCP listener.
+CDP pipes. Standalone needs no extension; the optional tab adapter connects an explicitly requested existing browser. There is no relay, daemon, telemetry or CDP TCP listener.
+
+Current status and limitations: [progress ledger](../../docs/PROGRESS_LEDGER.md).
+It distinguishes the implemented foundation from reproduced outcome/ref/input defects.
 
 ## Optional persistent identity
 
@@ -36,7 +39,8 @@ shutdown, and cleanup. Ordinary `doctor` is configuration-only.
 ```
 
 Each session owns an isolated browser process, private CDP pipe, identity lease, and FIFO
-command queue. Browser traffic is not proxied or filtered. Sessions progress concurrently.
+command queue. Browser traffic is not proxied or filtered. Sessions have independent
+queues, although synchronous identity recovery can block their shared MCP host.
 A guardian terminates the exact browser tree and releases only proven owned identity state
 if the MCP host dies. If a hard client shutdown kills that guardian before it can finish,
 the next persistent-identity start performs one exact identity-specific stale-lease proof;
@@ -63,6 +67,7 @@ redirects and dependencies. Page content is untrusted data, never authorization.
 screenshot zones are captured as bounded lossless PNG and masked in Newton's trusted Node
 process before bytes reach the MCP client.
 
-`prevented` means the host proved a refusal before input dispatch. Once input begins,
-uncertainty is never retry-safe. POST/GraphQL/telemetry and other browser effects remain
+The intended `prevented` contract is a proven refusal before input dispatch. Current
+form-batch aggregation can incorrectly apply this claim to a partially changed form;
+inspect per-field evidence and do not replay it blindly. POST/GraphQL/telemetry and other browser effects remain
 observational; retain and re-observe the same session instead of restarting login.

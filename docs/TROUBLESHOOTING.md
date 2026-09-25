@@ -1,5 +1,11 @@
 # Troubleshooting
 
+Current 0.6.4 limitations are documented in the
+[2026-09-07 adversarial audit](ADVERSARIAL_AUDIT_2026-09-07.md). In particular, a partial
+`fill_form` may falsely claim retry safety, an internal action observation may invalidate
+exposed refs, and `verified` is not reliable proof of every requested postcondition.
+Use actual page state and per-field evidence when reconciling these known defects.
+
 - Tools absent or the client sends `initialize`: the client does not support Newton's
   modern-only MCP `2026-07-28` contract. Upgrade the client; Newton has no compatibility
   mode.

@@ -120,7 +120,7 @@ for (const relative of removedArchitecturePaths) {
 }
 validateFlatCompiledOutput("packages/core/src", "packages/core/dist", { declarationOnly: new Set() });
 validateFlatCompiledOutput("packages/driver/src", "packages/driver/dist", { declarationOnly: new Set(["types"]) });
-validateExactFlatOutput("apps/mcp-server/dist", new Set(["browser-guardian.js", "index.js"]));
+validateExactFlatOutput("apps/mcp-server/dist", new Set(["browser-guardian.js", "index.js", "profile-copy-worker.js", "native-host.js", "native-install.js", "native-launcher.cjs", "engine-candidate.js"]),new Map([['tab-adapter',new Set(['manifest.json','setup.html','worker.js'])]]));
 if (fs.existsSync(path.join(root, "server.json")) || hostPackage?.mcpName !== undefined) {
   failures.push("public MCP registry metadata requires separate publication approval");
 }
@@ -278,11 +278,12 @@ function validateFlatCompiledOutput(sourceRelative, outputRelative, { declaratio
   validateExactFlatOutput(outputRelative, expected);
 }
 
-function validateExactFlatOutput(outputRelative, expected) {
+function validateExactFlatOutput(outputRelative, expected, directories=new Map()) {
   const output = path.join(root, outputRelative);
   if (!fs.existsSync(output)) return;
   const actual = fs.readdirSync(output, { withFileTypes: true });
   for (const entry of actual) {
+    if(entry.isDirectory()&&directories.has(entry.name)){validateExactFlatOutput(`${outputRelative}/${entry.name}`,directories.get(entry.name));continue;}
     if (!entry.isFile() || !expected.has(entry.name)) {
       failures.push(`${outputRelative}/${entry.name}: stale or unexpected compiled output`);
     }
@@ -292,4 +293,5 @@ function validateExactFlatOutput(outputRelative, expected) {
       failures.push(`${outputRelative}/${name}: compiled output missing`);
     }
   }
+  for(const name of directories.keys())if(!actual.some(entry=>entry.isDirectory()&&entry.name===name))failures.push(`${outputRelative}/${name}: compiled directory missing`);
 }

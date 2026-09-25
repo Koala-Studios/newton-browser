@@ -9,6 +9,38 @@ function frame(value: unknown): Buffer {
   return Buffer.from(`${JSON.stringify(value)}\0`, "utf8");
 }
 
+test('oversized correlated observations are drained without losing the next response',async()=>{
+  for (const split of [false,true]) {
+    const fromBrowser=new PassThrough(),toBrowser=new PassThrough();toBrowser.resume();
+    const transport=new CdpPipeTransport(fromBrowser,toBrowser,{maxMessageBytes:100});
+    const read=transport.send('Accessibility.getFullAXTree').catch(error=>error);
+    const other=transport.send('Browser.getVersion');
+    const oversized=frame({id:1,result:{nodes:['x'.repeat(1000)]}});
+    if(split){fromBrowser.write(oversized.subarray(0,31));fromBrowser.write(oversized.subarray(31,200));assert.equal(transport.closed,false);fromBrowser.write(Buffer.concat([oversized.subarray(200),frame({id:2,result:{product:'Chrome'}})]));}
+    else fromBrowser.write(Buffer.concat([oversized,frame({id:2,result:{product:'Chrome'}})]));
+    assert.equal((await read).code,'cdp_message_too_large');assert.deepEqual(await other,{product:'Chrome'});
+    assert.equal(transport.closed,false);assert.equal(transport.pendingRequestCount,0);transport.close();
+  }
+});
+
+test('oversized mutations, events and uncorrelated responses remain terminal',async()=>{
+  for(const value of [{id:1,result:{text:'x'.repeat(1000)}},{id:99,result:{text:'x'.repeat(1000)}},{method:'DOM.documentUpdated',params:{text:'x'.repeat(1000)}}]){
+    const fromBrowser=new PassThrough(),toBrowser=new PassThrough();toBrowser.resume();
+    const transport=new CdpPipeTransport(fromBrowser,toBrowser,{maxMessageBytes:100});
+    const pending=transport.send('Input.insertText',{text:'typed'}).catch(error=>error);
+    fromBrowser.write(frame(value));assert.equal((await pending).code,'cdp_message_too_large');assert.equal(transport.closed,true);
+  }
+});
+
+test('EOF while draining an oversized observation rejects remaining work as incomplete',async()=>{
+  const fromBrowser=new PassThrough(),toBrowser=new PassThrough();toBrowser.resume();
+  const transport=new CdpPipeTransport(fromBrowser,toBrowser,{maxMessageBytes:100});
+  const read=transport.send('Accessibility.getFullAXTree').catch(error=>error);
+  const other=transport.send('Browser.getVersion').catch(error=>error);
+  fromBrowser.write(frame({id:1,result:{text:'x'.repeat(1000)}}).subarray(0,200));fromBrowser.end();
+  assert.equal((await read).code,'cdp_message_too_large');assert.equal((await other).code,'cdp_incomplete_frame');assert.equal(transport.closed,true);
+});
+
 test("correlates split response frames and preserves child session routing", async () => {
   const fromBrowser = new PassThrough();
   const toBrowser = new PassThrough();

@@ -47,7 +47,7 @@ child.stdout.on("data", (chunk) => {
       send(request(2, "tools/list", {}));
     } else if (message.id === 2) {
       const tools = message.result?.tools;
-      if (!Array.isArray(tools) || tools.length !== 10 || tools.some((tool) => typeof tool?.name !== "string" || !tool.name.startsWith("browser."))) {
+      if (!Array.isArray(tools) || tools.length !== 13 || tools.some((tool) => typeof tool?.name !== "string" || !tool.name.startsWith("browser."))) {
         terminalError ??= new Error("packed_catalog_tools_invalid");
         child.kill();
         return;
@@ -67,7 +67,7 @@ if (terminalError) throw terminalError;
 if (!discovered || !catalogVerified || exit.code !== 0 || exit.signal) {
   throw new Error(`packed_catalog_failed:${safeCategory(stderrTail)}`);
 }
-process.stdout.write(`${JSON.stringify({ ok: true, protocols: 1, tools: 10, browserStarted: false })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, protocols: 1, tools: 13, browserStarted: false })}\n`);
 
 function request(id, method, params) {
   return {

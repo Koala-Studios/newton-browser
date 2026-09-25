@@ -22,8 +22,17 @@ test("trusted raster masking blackens only the requested scaled rectangle", () =
 
 test("trusted raster masking rejects malformed, unsupported, and unbounded inputs", () => {
   assert.throws(() => maskCapturedPng("not-base64", { x: 0, y: 0, width: 1, height: 1 }, [{ x: 0, y: 0, width: 1, height: 1 }]), /invalid_raster_mask_png/u);
-  assert.throws(() => maskCapturedPng(rgbaPng(1, 1, [1, 2, 3, 4]).toString("base64"), { x: 0, y: 0, width: 1, height: 1 }, []), /invalid_raster_mask_input/u);
   assert.throws(() => maskCapturedPng(rgbaPng(1, 1, [1, 2, 3, 4]).toString("base64"), { x: 0, y: 0, width: 1, height: 1 }, Array.from({ length: 33 }, () => ({ x: 0, y: 0, width: 1, height: 1 }))), /invalid_raster_mask_input/u);
+});
+
+test('zero discovered regions preserve pixels while still stripping ancillary metadata',()=>{
+  const input=rgbaPng(1,1,[10,20,30,255]);
+  const metadata=Buffer.concat([input.subarray(0,33),chunk('tEXt',Buffer.from('note\0not-for-output')),input.subarray(33)]);
+  const masked=maskCapturedPng(metadata.toString('base64'),{x:0,y:0,width:1,height:1},[]);
+  assert.equal(masked.appliedRegions,0);
+  const output=Buffer.from(masked.base64,'base64');
+  assert.equal(output.includes(Buffer.from('not-for-output')),false);
+  assert.deepEqual([...decodeRgba(output,1,1)],[10,20,30,255]);
 });
 
 function rgbaPng(width: number, height: number, color: readonly number[]): Buffer {

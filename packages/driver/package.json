@@ -18,6 +18,9 @@
     "@newton-browser/core": "workspace:*"
   },
   "exports": {
-    "./direct-session-runtime": "./dist/direct-session-runtime.js"
+    "./direct-session-runtime": "./dist/direct-session-runtime.js",
+    "./session-engine": "./dist/session-engine.js",
+    "./page-executor": "./dist/page-executor.js",
+    "./connection": "./dist/connection.js"
   }
 }

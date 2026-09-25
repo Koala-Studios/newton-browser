@@ -2,6 +2,10 @@
 
 Strict TypeScript browser-control runtime for the direct owned-browser host.
 
+See the [2026-09-07 adversarial audit](../../docs/ADVERSARIAL_AUDIT_2026-09-07.md) for
+current input, wait, observation, ref and timeout defects. Strict compilation proves type
+conformance, not that the browser performed the requested application action.
+
 ## Primary modules
 
 - `driver`: CDP observe, screenshot, action, input, dialog, and target logic.

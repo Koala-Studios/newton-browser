@@ -79,34 +79,28 @@ try {
     && discovered.result.supportedVersions.length === 1
     && discovered.result.supportedVersions[0] === "2026-07-28", "packed_discovery_failed");
 
-  const status = await client.tool("browser.status", {});
-  requireSuccess(status, "packed_direct_status_failed");
-  requireState(status.value?.mode === "direct"
-    && status.value?.configured === true
-    && status.value?.ready === true
-    && status.value?.runtimeState === "idle", "packed_direct_idle_status_invalid");
+  const sessionsBefore = await client.tool("browser.sessions.list", {});
+  requireSuccess(sessionsBefore, "packed_direct_idle_status_failed");
+  requireState(Array.isArray(sessionsBefore.value?.sessions) && sessionsBefore.value.sessions.length === 0, "packed_direct_idle_status_invalid");
 
-  const started = await client.tool("browser.session.start", { origin });
+  const started = await client.tool("browser.session.start", { url: origin });
   requireSuccess(started, "packed_direct_session_start_failed");
   const sessionId = started.value?.sessionId;
   requireState(typeof sessionId === "string" && sessionId.length > 0, "packed_direct_session_id_missing");
-  const activeStatus = await client.tool("browser.status", {});
-  requireSuccess(activeStatus, "packed_direct_active_status_failed");
-  requireState(activeStatus.value?.ready === true && activeStatus.value?.runtimeState === "ready", "packed_direct_not_ready");
 
-  const observed = await client.tool("browser.observe", { sessionId, format: "json", maxNodes: 80 });
+  const observed = await client.tool("browser.observe", { sessionId });
   requireSuccess(observed, "packed_direct_observe_failed");
   const actionButton = observationNodes(observed.value).find((node) => node.role === "button" && node.name === "Direct action");
   requireState(typeof actionButton?.ref === "string", "packed_direct_action_ref_missing");
 
   const clicked = await client.tool("browser.act", {
     sessionId,
-    action: { kind: "click", ref: actionButton.ref },
+    command: { commandId: 1, action: { kind: "click", target: { kind: "ref", ref: actionButton.ref }, waitFor: { text: "Verified", timeoutMs: 10_000 } } },
   });
   requireSuccess(clicked, "packed_direct_click_failed");
-  requireState(clicked.value?.status === "verified", "packed_direct_click_unverified");
+  requireState(clicked.value?.dispatch === "acknowledged" && clicked.value?.postcondition?.state === "met", "packed_direct_click_unverified");
 
-  const verified = await client.tool("browser.observe", { sessionId, format: "json", maxNodes: 80 });
+  const verified = await client.tool("browser.observe", { sessionId });
   requireSuccess(verified, "packed_direct_verify_failed");
   const nodes = observationNodes(verified.value);
   requireState(nodes.some((node) => node.role === "button" && node.name === "Verified"), "packed_direct_effect_unverified");
@@ -115,18 +109,18 @@ try {
 
   const navigated = await client.tool("browser.act", {
     sessionId,
-    action: { kind: "click", ref: navigationButton.ref },
+    command: { commandId: 2, action: { kind: "click", target: { kind: "ref", ref: navigationButton.ref }, waitFor: { text: "destination-ready", timeoutMs: 10_000 } } },
   });
   requireSuccess(navigated, "packed_direct_cross_origin_action_failed");
   requireSuccess(await client.tool("browser.act", {
     sessionId,
-    action: { kind: "wait_for", waitFor: { text: "destination-ready", timeoutMs: 10_000 } },
+    command: { commandId: 3, action: { kind: "wait_for", waitFor: { text: "destination-ready", timeoutMs: 10_000 } } },
   }), "packed_direct_cross_origin_navigation_failed");
   requireState(destinationApplicationRequests === 1, "packed_direct_cross_origin_request_missing");
 
   const stopped = await client.tool("browser.session.stop", { sessionId });
   requireSuccess(stopped, "packed_direct_stop_failed");
-  requireState(stopped.value?.stopped === true, "packed_direct_stop_unacknowledged");
+  requireState(stopped.value?.state === "closed", "packed_direct_stop_unacknowledged");
   requireState(remainingIdentityDirectories(profileStoreRoot) === 0, "packed_direct_identity_residue");
   const sessions = await client.tool("browser.sessions.list", {});
   requireSuccess(sessions, "packed_direct_session_list_failed");
@@ -355,7 +349,7 @@ function remainingIdentityDirectories(storeRoot) {
 }
 
 function observationNodes(value) {
-  return Array.isArray(value?.result?.nodes) ? value.result.nodes : [];
+  return Array.isArray(value?.observation?.nodes) ? value.observation.nodes : [];
 }
 
 function requireSuccess(result, code) {

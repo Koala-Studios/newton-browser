@@ -30,6 +30,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/driver
 
+  apps/tab-adapter:
+    devDependencies:
+      '@newton-browser/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   packages/core: {}
 
   packages/driver:

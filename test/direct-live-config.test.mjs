@@ -6,7 +6,7 @@ import test from "node:test";
 const root = path.resolve(import.meta.dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
-test("release and live suites use only the direct owned-browser runtime", () => {
+test("release and live suites use the packed default session engine", () => {
   const packageJson = read("package.json");
   const release = read("scripts/release-check.mjs");
   const complete = read("scripts/release-complete-local.mjs");
@@ -17,10 +17,11 @@ test("release and live suites use only the direct owned-browser runtime", () => 
   assert.match(suite, /direct_runtime/u);
   assert.match(suite, /direct_setup/u);
   assert.match(suite, /direct_input/u);
-  assert.match(complete, /eval:direct-live/u);
-  assert.doesNotMatch(complete, /eval:real-sites/u);
-  assert.match(complete, /realSiteEvidenceRequiredSeparately/u);
+  assert.match(complete, /eval:real-sites/u);
+  assert.doesNotMatch(complete, /eval:direct-live/u);
+  assert.match(complete, /legacyDirectSuiteExcluded/u);
   assert.match(complete, /smoke:packed-direct/u);
+  assert.match(packageJson, /"eval:real-sites": "node (?:--experimental-strip-types )?scripts\/smoke\/packed-real-sites-live\.mjs"/u);
   assert.doesNotMatch(read("scripts/smoke/live-config.mjs"), /NEWTON_BROWSER_BROWSER/u);
 });
 
@@ -37,23 +38,14 @@ test("shared live fixtures construct a direct host and clean it", () => {
   }
 });
 
-test("real-site QA covers seven logged-out production surfaces and trusted masking on the storefront", () => {
-  const source = read("scripts/smoke/direct-real-sites-live.mjs");
-  assert.match(source, /origin: "https:\/\/www\.rfc-editor\.org"/u);
-  assert.match(source, /if \(site\.url\) \{/u);
+test("real-site QA runs the packed default engine against public production surfaces", () => {
+  const source = read("scripts/smoke/packed-real-sites-live.mjs");
+  assert.match(source, /https:\/\/www\.rfc-editor\.org\//u);
   assert.match(source, /en\.wikipedia\.org/u);
-  assert.match(source, /www\.youtube\.com/u);
-  assert.match(source, /www\.redditinc\.com/u);
-  assert.match(source, /mercatodibellina\.com/u);
   assert.match(source, /www\.w3\.org\/WAI/u);
-  assert.match(source, /www\.facebook\.com\/business\/ads/u);
-  assert.match(source, /trusted_masked_png_in_memory/u);
-  assert.match(source, /maskDisposition !== "mask_applied"/u);
-  assert.doesNotMatch(source, /classifyMeta|classifyYouTube|login_required|authenticated_shell/u);
-  assert.match(source, /const initialMode = await requireUsefulOrText\(sessionId, initial, site\.id/u);
-  assert.ok(source.indexOf("if (terminalFailure)") > source.indexOf("} finally {"));
-  assert.match(source, /cleanupConfirmed,\s*temporaryRootRemoved:/u);
-  assert.match(source, /if \(!host && !cleanupConfirmed\) cleanupConfirmed = true;\s*if \(cleanupConfirmed && fs\.existsSync\(owned\.root\)\)/u);
+  assert.match(source, /packed_default_session_engine/u);
+  assert.match(source, /legacyHost: false/u);
+  assert.doesNotMatch(source, /createDefaultDirectBrowserHost|handleMcpMessage/u);
 });
 
 test("authorized profile QA makes no authentication claim and always cleans its owned identity", () => {

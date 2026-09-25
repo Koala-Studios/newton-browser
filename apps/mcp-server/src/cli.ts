@@ -1,8 +1,18 @@
+import path from "node:path";
+import {fileURLToPath} from 'node:url';
+import {prepareAdapterDirectory,readAdapterDirectory} from './adapter-directory.ts';
+import {installNativeLocal} from './native-install.ts';
+import {discoverExistingDirectory,nativeAdvertisements,existingConnectionId} from './existing-connection.ts';
+import {developmentUpdateControl} from './adapter-update-control.ts';
+import {updateInstalledAdapter,recoverInstalledAdapter} from './adapter-update-transaction.ts';
+import {openUpdateJournal} from './adapter-update-journal.ts';
+import { discoverBrowserExecutable } from "./browser-runtime/browser-discovery.ts";
 import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
 import { dispatchIdentityCommand } from "./browser-runtime/identity-cli.ts";
 import { createIdentityLeaseClosureVerifier } from "./browser-runtime/identity-lease-closure.ts";
 import { createProfileSourceClosureVerifier } from "./browser-runtime/profile-closure.ts";
 import { listNewtonIdentities, openProfileStore } from "./browser-runtime/profile-store.ts";
+import { LoginSource } from "./browser-runtime/login-source.ts";
 import {
   runDirectIdentityLogin,
   runDirectLiveDoctor,
@@ -26,6 +36,54 @@ const MINIMUM_NODE_RANGE = PACKAGE_METADATA.nodeRange;
 const MINIMUM_NODE_MAJOR = PACKAGE_METADATA.nodeMajor;
 
 export async function handleUtilityCommand(args: string[]): Promise<boolean> {
+  if(args[0]==='adapter'){
+    const operation=args[1];
+    if(!['prepare','setup','status','update','recover'].includes(operation??''))throw utilityError('adapter_invalid_arguments');
+    const directory=path.join(configDirectory(),'tab-adapter');
+    if(operation==='update'||operation==='recover'){
+      const flags=parseUtilityFlags(args.slice(2),new Set(operation==='update'?['--from','--connection','--instance','--tab']:['--connection','--instance','--tab']));
+      const connectionId=flags.single('--connection'),instanceId=flags.single('--instance'),tab=flags.single('--tab');
+      if(!connectionId||!/^existing_[a-f0-9]{24}$/.test(connectionId)||!instanceId||instanceId.length>256||!tab||!/^\d+$/.test(tab)||!Number.isSafeInteger(Number(tab))||Number(tab)<=0)throw utilityError('adapter_invalid_arguments');
+      const nativeDirectory=path.join(configDirectory(),'tab-adapter-native','connections');
+      const connect=async({ticket,signal,bindingRequired}:{ticket:string;signal:AbortSignal;bindingRequired:boolean})=>{
+        const advertisement=(await nativeAdvertisements(nativeDirectory)).find(file=>existingConnectionId(file)===connectionId);
+        if(!advertisement)throw utilityError('browser_connection_missing');
+        return developmentUpdateControl({directory:nativeDirectory,advertisement,instanceId,ticket,smokeTabId:Number(tab),signal,bindingRequired});
+      };
+      const result=operation==='update'?await updateInstalledAdapter(directory,flags.single('--from')??path.join(path.dirname(fileURLToPath(import.meta.url)),'tab-adapter'),connect):await recoverInstalledAdapter(directory,connect);
+      process.stdout.write(JSON.stringify(result)+'\n');return true;
+    }
+    if(operation==='status'&&args.length!==2)throw utilityError('adapter_invalid_arguments');
+    if(operation==='status'){
+      let journal;
+      try{
+        journal=await openUpdateJournal(directory);
+        const pending=journal.read();
+        if(pending&&pending.phase!=='committed'){
+          process.stdout.write(JSON.stringify({state:'recovery_required',phase:pending.phase,directory})+'\n');return true;
+        }
+      }catch(error){
+        if((error as Error).message==='installation_busy'){process.stdout.write(JSON.stringify({state:'updating',directory})+'\n');return true;}
+        if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+      }finally{await journal?.close();}
+      let installed;
+      try{installed=await readAdapterDirectory(directory);}catch(error){
+        if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+        process.stdout.write(JSON.stringify({state:'not_installed'})+'\n');return true;
+      }
+      const connection=await discoverExistingDirectory(path.join(configDirectory(),'tab-adapter-native','connections'));
+      process.stdout.write(JSON.stringify({state:connection.available?'ready':'not_ready',extensionId:installed.extensionId,directory:installed.directory,connection})+'\n');return true;
+    }
+    const setupFlags=parseUtilityFlags(args.slice(2),new Set(['--browser']));
+    const browser=setupFlags.single('--browser')??'chrome';
+    if(browser!=='chrome'&&browser!=='edge')throw utilityError('adapter_invalid_arguments');
+    if(operation==='setup'&&!['win32','linux'].includes(process.platform))throw utilityError('native_install_platform_unsupported');
+    const installed=await prepareAdapterDirectory(directory,path.join(path.dirname(fileURLToPath(import.meta.url)),'tab-adapter'));
+    if(operation==='setup')await installNativeLocal(path.join(configDirectory(),'tab-adapter-native'),installed.extensionId,{browser});
+    process.stdout.write(JSON.stringify({state:operation==='setup'?'browser_install_required':'prepared',extensionId:installed.extensionId,directory:installed.directory,
+      setupPage:`chrome-extension://${installed.extensionId}/setup.html`,...(operation==='setup'?{browser,instructions:`In ${browser}://extensions enable Developer mode, choose Load unpacked, and select the directory shown. This browser installation is needed once.`}:{})})+'\n');
+    return true;
+  }
   if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
     process.stdout.write(`${utilityHelp()}\n`);
     return true;
@@ -42,6 +100,53 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     if (args.length > 2 || (args.length === 2 && args[1] !== "--live")) throw utilityError("direct_doctor_invalid_arguments");
     const report = args[1] === "--live" ? await runDirectLiveDoctor() : await collectDoctorReport();
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return true;
+  }
+  if (args[0] === "source") {
+    const sourceArgs = args.slice(1);
+    const operation = sourceArgs[0];
+    if (!operation || !["init", "status", "recover", "refresh", "login", "collect"].includes(operation)) throw utilityError("source_invalid_arguments");
+    const flags = parseUtilityFlags(sourceArgs.slice(1), new Set(["--id", "--browser"]));
+    const sourceId = flags.single("--id");
+    const browser = flags.single("--browser");
+    if (!sourceId || !/^[a-z0-9_-]{1,80}$/u.test(sourceId) || (browser !== "chrome" && browser !== "edge")) throw utilityError("source_invalid_arguments");
+    const directory = ensureConfigDirectory(configDirectory());
+    const source = await LoginSource.open(openProfileStore(profileStoreDirectory(process.env, directory)), path.join(directory, "login-sources"), sourceId, browser);
+    if (operation === "recover") {
+      process.stdout.write(`${JSON.stringify({ state: await source.recoverPublication(), ...(await source.status()) }, null, 2)}\n`);
+      return true;
+    }
+    if (operation === "collect") {
+      const retired = await source.collectRetired();
+      process.stdout.write(`${JSON.stringify({ state: "collected", retired, ...(await source.status()) }, null, 2)}\n`);
+      return true;
+    }
+    if (operation === "login" || operation === "refresh") {
+      const executable = discoverBrowserExecutable({ family: browser, ...(process.env.NEWTON_BROWSER_BROWSER_EXECUTABLE ? { explicitPath: process.env.NEWTON_BROWSER_BROWSER_EXECUTABLE } : {}), env: process.env });
+      if (!executable) throw utilityError("source_browser_unavailable");
+      const runtime = await source.beginMaintenance(executable.path, false);
+      let published = false;
+      try {
+        process.stdout.write(`${JSON.stringify({ state: "maintenance_ready", sourceId, identityId: runtime.receipt.identityId, browserFamily: browser })}\nPress Enter after completing login, or close the browser to cancel.\n`);
+        const requested=await new Promise<boolean>(resolve=>{
+          let done=false;
+          const finish=(publish:boolean)=>{if(done)return;done=true;process.stdin.off('data',data);process.stdin.off('end',cancel);process.stdin.off('close',cancel);process.off('SIGINT',cancel);process.off('SIGTERM',cancel);process.stdin.pause();resolve(publish);};
+          const data=(chunk:Buffer|string)=>{if(String(chunk).includes('\n')||String(chunk).includes('\r'))finish(true);};
+          const cancel=()=>finish(false);
+          process.stdin.on('data',data);process.stdin.once('end',cancel);process.stdin.once('close',cancel);process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
+          void runtime.unavailable.then(cancel,cancel);
+          if(process.stdin.readableEnded||process.stdin.destroyed)cancel();else process.stdin.resume();
+        });
+        if(!requested){process.stdout.write(JSON.stringify({state:'maintenance_cancelled',sourceId})+'\n');return true;}
+        const generation = await source.publish(runtime);
+        published = true;
+        process.stdout.write(`${JSON.stringify({ state: "published", ...generation })}\n`);
+      } finally {
+        if (!published) await source.cancelMaintenance(runtime);
+      }
+      return true;
+    }
+    process.stdout.write(`${JSON.stringify({ state: operation === "init" ? "initialized" : "available", ...(await source.status()) }, null, 2)}\n`);
     return true;
   }
   if (args[0] === "identity") {
@@ -148,7 +253,18 @@ function utilityHelp(): string {
     `Newton Browser ${NEWTON_BROWSER_VERSION}`,
     "",
     "Optional browser preference:",
+    "  newton-browser adapter prepare [--browser chrome|edge]",
+    "  newton-browser adapter setup [--browser chrome|edge]  (Windows/Linux user-local native registration)",
+    "  newton-browser adapter status",
+    "  newton-browser adapter update [--from DIRECTORY] --connection ID --instance EPOCH --tab ID",
+    "  newton-browser adapter recover --connection ID --instance EPOCH --tab ID",
     "  newton-browser setup --browser <chrome|edge>",
+    "  newton-browser source init --id <name> --browser <chrome|edge>",
+    "  newton-browser source status --id <name> --browser <chrome|edge>",
+    "  newton-browser source login --id <name> --browser <chrome|edge>",
+    "  newton-browser source refresh --id <name> --browser <chrome|edge>",
+    "  newton-browser source collect --id <name> --browser <chrome|edge>  (remove retired generations)",
+    "  newton-browser source recover --id <name> --browser <chrome|edge>",
     "",
     "Optional persistent identity:",
     "  newton-browser identity create --browser <chrome|edge>",

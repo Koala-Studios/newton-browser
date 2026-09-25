@@ -8,6 +8,12 @@ export const DEFAULT_CDP_MAX_PENDING_REQUESTS = 256;
 // navigation terminally tear down the private transport.
 export const DEFAULT_CDP_MAX_EVENT_QUEUE = 1024;
 export const DEFAULT_CDP_MAX_LISTENERS = 16;
+const oversizedReadMethods = new Set([
+  'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
+  'Accessibility.getChildAXNodes', 'Accessibility.queryAXTree',
+  'Accessibility.getAXNodeAndAncestors',
+  'DOM.getDocument', 'DOM.describeNode', 'Page.captureScreenshot',
+]);
 
 export type CdpParams = Record<string, unknown>;
 export type CdpEvent = Readonly<{
@@ -45,15 +51,18 @@ const ERROR_MESSAGES: Record<CdpTransportErrorCode, string> = {
 
 export class CdpTransportError extends Error {
   readonly code: CdpTransportErrorCode;
+  readonly detail?: string;
 
-  constructor(code: CdpTransportErrorCode) {
-    super(ERROR_MESSAGES[code]);
+  constructor(code: CdpTransportErrorCode, detail?: string) {
+    super(detail ? `${ERROR_MESSAGES[code]}: ${detail}` : ERROR_MESSAGES[code]);
     this.name = "CdpTransportError";
     this.code = code;
+    if (detail) this.detail = detail;
   }
 }
 
 type PendingRequest = Readonly<{
+  method: string;
   resolve: (value: CdpParams) => void;
   reject: (error: CdpTransportError) => void;
 }>;
@@ -86,6 +95,7 @@ export class CdpPipeTransport implements PrivateCdpTransport {
   private eventProcessing = false;
   private nextId = 1;
   private buffer: Buffer = Buffer.alloc(0);
+  private discardingOversizedRead = false;
   private writeTail: Promise<void> = Promise.resolve();
   private terminalError: CdpTransportError | null = null;
 
@@ -93,13 +103,13 @@ export class CdpPipeTransport implements PrivateCdpTransport {
     this.consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   };
   private readonly handleEnd = (): void => {
-    this.fail(this.buffer.length > 0 ? "cdp_incomplete_frame" : "cdp_transport_closed");
+    this.fail(this.buffer.length > 0 || this.discardingOversizedRead ? "cdp_incomplete_frame" : "cdp_transport_closed");
   };
   private readonly handleError = (): void => {
     this.fail("cdp_transport_closed");
   };
   private readonly handleClose = (): void => {
-    this.fail(this.buffer.length > 0 ? "cdp_incomplete_frame" : "cdp_transport_closed");
+    this.fail(this.buffer.length > 0 || this.discardingOversizedRead ? "cdp_incomplete_frame" : "cdp_transport_closed");
   };
 
   constructor(readable: Readable, writable: Writable, options: CdpTransportOptions = {}) {
@@ -148,7 +158,7 @@ export class CdpPipeTransport implements PrivateCdpTransport {
     }
 
     const result = new Promise<CdpParams>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { method, resolve, reject });
     });
     const write = this.writeTail.then(() => this.writePayload(payload));
     this.writeTail = write.catch(() => {});
@@ -180,7 +190,29 @@ export class CdpPipeTransport implements PrivateCdpTransport {
       const delimiter = chunk.indexOf(0, offset);
       const end = delimiter < 0 ? chunk.length : delimiter;
       const segment = chunk.subarray(offset, end);
+      if (this.discardingOversizedRead) {
+        if (delimiter < 0) return;
+        this.discardingOversizedRead = false;
+        offset = delimiter + 1;
+        continue;
+      }
       if (this.buffer.length + segment.length > this.maxMessageBytes) {
+        // A bounded observation failure must not destroy unrelated commands or
+        // the session. Recover only a positively correlated, read-only response.
+        // Chromium serializes its response id first. If that prefix is absent
+        // or ambiguous, retain the existing terminal behavior (including events).
+        const prefix = Buffer.concat([this.buffer.subarray(0,128),segment.subarray(0,128)]).subarray(0,128).toString('ascii');
+        const match = /^\s*\{\s*"id"\s*:\s*([1-9][0-9]*)\s*,/u.exec(prefix);
+        const id = match ? Number(match[1]) : 0;
+        const pending = Number.isSafeInteger(id) ? this.pending.get(id) : undefined;
+        if (pending && oversizedReadMethods.has(pending.method)) {
+          this.pending.delete(id); this.buffer = Buffer.alloc(0);
+          pending.reject(new CdpTransportError('cdp_message_too_large'));
+          this.discardingOversizedRead = delimiter < 0;
+          if (delimiter < 0) return;
+          offset = delimiter + 1;
+          continue;
+        }
         this.fail("cdp_message_too_large");
         return;
       }
@@ -215,7 +247,10 @@ export class CdpPipeTransport implements PrivateCdpTransport {
         return;
       }
       this.pending.delete(Number(value.id));
-      if (plainRecord(value.error)) pending.reject(new CdpTransportError("cdp_protocol_error"));
+      if (plainRecord(value.error)) {
+        const detail = typeof value.error.message === "string" ? value.error.message.slice(0, 240) : undefined;
+        pending.reject(new CdpTransportError("cdp_protocol_error", detail));
+      }
       else pending.resolve(plainRecord(value.result) ? value.result : {});
       return;
     }
@@ -287,6 +322,7 @@ export class CdpPipeTransport implements PrivateCdpTransport {
     const error = new CdpTransportError(code);
     this.terminalError = error;
     this.buffer = Buffer.alloc(0);
+    this.discardingOversizedRead = false;
     this.eventQueue.length = 0;
     this.detachListeners();
     for (const pending of this.pending.values()) pending.reject(error);

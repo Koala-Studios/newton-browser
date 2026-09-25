@@ -14,6 +14,9 @@ test("package tarball is byte-identical across source mtimes and remains install
     fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "dist", "browser-guardian.js"), "export const guardian = true;\n");
     fs.writeFileSync(path.join(packageRoot, "dist", "index.js"), "#!/usr/bin/env node\nconsole.log('ok');\n");
+    for (const name of ["engine-candidate.js", "native-host.js", "native-install.js", "native-launcher.cjs", "profile-copy-worker.js"]) fs.writeFileSync(path.join(packageRoot, "dist", name), "// packed foundation fixture\n");
+    fs.mkdirSync(path.join(packageRoot,'dist/tab-adapter'));
+    for(const name of ['manifest.json','setup.html','worker.js'])fs.writeFileSync(path.join(packageRoot,'dist/tab-adapter',name),'fixture\n');
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "fixture-package", version: "1.0.0", bin: { fixture: "./dist/index.js" } }, null, 2));
     fs.writeFileSync(path.join(packageRoot, "README.md"), "fixture\r\nreadme\r\n");
     const license = path.join(root, "LICENSE");
@@ -34,6 +37,8 @@ test("package tarball is byte-identical across source mtimes and remains install
     assert.deepEqual(listed.stdout.trim().split(/\r?\n/u), [
       "package/dist/browser-guardian.js",
       "package/dist/index.js",
+      "package/dist/engine-candidate.js", "package/dist/native-host.js", "package/dist/native-install.js", "package/dist/native-launcher.cjs", "package/dist/profile-copy-worker.js",
+      'package/dist/tab-adapter/manifest.json','package/dist/tab-adapter/setup.html','package/dist/tab-adapter/worker.js',
       "package/package.json",
       "package/README.md",
       "package/LICENSE",

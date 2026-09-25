@@ -1,86 +1,33 @@
 # Architecture decisions
 
-This file records the current architecture only. Extension, relay, daemon, proxy,
-origin-grant, and transition-era decisions remain in Git history, not as supported
-alternatives.
+Reconciled 2026-09-25 against the consolidated replacement source. [PROGRESS_LEDGER.md](PROGRESS_LEDGER.md) owns current implementation/verification status; [SESSION_ENGINE_DESIGN.md](SESSION_ENGINE_DESIGN.md) remains the approved target. The old direct-only decision text was superseded rather than retained as a second active contract.
 
-## 1. One direct runtime
+## Execution and control
 
-Newton owns one isolated Chrome or Edge process per session. It does not attach to the
-operator's ordinary browser or use an extension, relay, pairing plane, daemon, browser
-store, continuity socket, current-tab control, or tab handoff.
+The default MCP path uses `EngineHost`, `SessionEngine` and `PageExecutor`. One session queue owns mutations and reads; `PageDirectory` owns page/frame generations and public refs. Commands use monotonic IDs and distinct dispatch, postcondition and observation facts. Identical retries join/retrieve the original command rather than replay input. Sequences preserve partial effect truth; they are not transactions.
 
-## 2. Stateless modern MCP only
+Public transport is stateless MCP 2026-07-28 over newline-delimited stdio JSON, with per-request metadata and no initialization-era fallback. Stdout contains only protocol frames. The remaining legacy direct-host branch, exports and doctor/test consumers are retirement debt, not another supported architecture.
 
-The public control plane is MCP `2026-07-28` over newline-delimited stdio JSON. Every
-request carries protocol version and client capabilities. Newton implements
-`server/discover`, `tools/list`, `tools/call`, and cancellation. It has no initialization
-handshake, session header, legacy framing, or fallback.
+## Browser connections
 
-## 3. Private browser transport
+Standalone is the complete default: one headless Chrome/Edge process and writable Newton identity per worker, blank-first startup and inherited private CDP. Startup accepts a normalized complete HTTP(S) URL. Redirects, cross-origin navigation, frames, subresources, workers and popups use ordinary Chromium networking. No TCP debugging endpoint, local HTTP control proxy, installed daemon, hosted service, database or model-provider integration is added.
 
-Chromium launches blank-first with inherited CDP pipes and `--no-startup-window`. Newton
-creates the exact root target through browser-level CDP and gives the driver a one-shot
-private bootstrap. A TCP debugging endpoint is never used.
+A newly implemented optional thin extension/native-messaging connection permits the operator's existing browser only on explicit request. Separate workers own separate tabs and may act concurrently. Browser logic stays in the shared engine; the extension routes native operations/events and ownership. Borrowed cleanup releases claims and detaches; it does not terminate the personal browser. The old extension/relay/pairing/continuity implementation remains retired.
 
-## 4. Normal Chromium networking
+## Identity and cleanup
 
-The session `origin` is the initial HTTP(S) URL and may select an operator-owned identity.
-It is not a network boundary. Redirects, subresources, frames, workers, popups, regional
-domains, authentication endpoints, and browser dependencies use Chromium's ordinary
-network stack.
+Shared standalone login comes from a closed Newton-owned source generation, copied opaquely through a narrow allowlist into separate identities. Never run competing processes against one writable profile, inspect browser secrets, merge worker changes back, or silently select the operator's personal profile. Source refresh is an explicit maintenance/publication lifecycle.
 
-Newton has no policy proxy, destination allowlist, CDP Fetch interception, request denial,
-or page API patching. It does not disable background networking, component updates,
-extensions, sync, or default apps. If a deployment requires destination-level network
-isolation, it must provide that outside Newton with an OS, browser, or network boundary.
+Owned browsers launch under a separate guardian; cleanup targets only the exact proven browser tree and identity lease. Cancellation prevents further ordinary input. Held key/button releases are narrowly bounded cleanup; cleanup uncertainty remains visible. Pending-start/stop and disruption stress are still acceptance work.
 
-## 5. Isolated identity ownership
+## Input and observation
 
-Each session leases one Newton-owned identity. A guardian owns the exact browser tree and
-cleanup facts. Host or browser loss triggers process-first cleanup; uncertain cleanup is
-retained and retryable.
+Native input and read-only isolated-world DOM/AX inspection preserve normal site behavior. No injected selection/value mutation, synthetic change event, focus emulation, animation freezing or request interception is an accepted substitute. Native select is bounded and single-selection only. Exact-match editing uses bounded native selection plus verified native insertion/deletion; unsupported ranges fail before text replacement, and no whole-field fallback is hidden.
 
-With explicit operator authorization, Newton may opaque-copy a narrow allowlist from a
-closed stable profile. It never parses or exports profile data, excludes passwords,
-autofill, history, downloads, extensions, sessions, service workers, and caches, and never
-modifies or merges back into the source.
+Actions return bounded useful next state where available. Discovery cannot rewrite action dispatch truth. Controls preserve context and validation; records/deltas and document cursors report partial coverage honestly. Child-frame churn discards that child's stale observations without invalidating an unchanged root. Root generation changes still invalidate old references. Full compact-feedback and closed-shadow document acceptance remain open.
 
-## 6. No page modification for observation
+Screenshots use native sensitive-region discovery and trusted host-side masking, with bounded image output and coordinate provenance. Source support and historical packed tests do not establish every hidden-tab/full-page/backend edge case.
 
-Observation is read-only CDP/DOM/accessibility work. Newton does not install persistent
-mutation observers, emulate focus, inject UI, freeze scripts or animations, or otherwise
-change the page to make automation easier. Trusted input uses Chromium's input protocol.
-Sensitive screenshot regions are measured before capture and masked afterward in trusted
-Node code.
+## Delivery truth
 
-## 7. Compact public browser contract
-
-The public surface is ten tools: status, session start/list/stop/stop-all, observe, act,
-screenshot, console, and network. Targeted actions use flat fields. Refs come from a fresh
-observation. One idempotency key represents one logical effect. Same-session work is FIFO;
-different sessions progress concurrently.
-
-The action floor still blocks automatic entry of credentials, payment data, and sensitive
-identifiers. Commit and external-effect metadata describe risk; they do not authorize an
-action. `browser.session.stop` is the only finalization path.
-
-## 8. Truthful outcomes
-
-The outer result supplies authoritative status, outcome, retry classification, decision,
-and bounded errors. Page-derived payloads carry untrusted-data provenance. A command that
-may have crossed a commit boundary reports uncertainty and must not be retried
-automatically.
-
-## 9. No compatibility surface
-
-Deleted extension, socket, legacy MCP, proxy, origin-grant, Fetch-containment,
-page-effects, synthetic-tab, ownership, finalize, and result-alias branches must not be
-reintroduced. Unsupported fields and clients fail clearly.
-
-## 10. Completion and release
-
-Implementation is complete only after one frozen tree passes typecheck, deterministic and
-packed tests, live Chrome and Edge workflows, real public-site rendering/action QA,
-process/profile cleanup evidence, and three consecutive unchanged-tree release gates.
-Publishing, remotes, public distribution, and license changes require separate approval.
+Distinguish source implementation, automated fixtures, live browser probes, packed artifacts and completed real tasks. The replacement requires everyday online acceptance in both modes, platform coverage and three unchanged packed release gates. A Git checkpoint is not a release certificate. Historical receipts remain bound to their exact tested candidate.

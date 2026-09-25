@@ -10,3 +10,7 @@ test/evidence/runs/
 
 # Local dev MCP wiring (machine-specific absolute paths)
 .mcp.json
+
+# Local browser QA residue (never publish profiles or extracted packages)
+test/evidence/astra-model-v49-config/
+test/evidence/astra-model-v49-package/

@@ -1,9 +1,264 @@
 # Newton Browser defect ledger
+## Current status reconciliation — 2026-09-25
+
+The authoritative current gaps are in [PROGRESS_LEDGER.md](../../docs/PROGRESS_LEDGER.md). Dated entries below retain their original candidate/evidence scope; a worker's fixed/completed label is not a replacement release certificate.
+
+- Source-fixed: child-frame navigation during AX discovery aborted an unchanged root session with stale_target. Stale child results are omitted; root invalidation still rejects. Deterministic regression: `packages/driver/test/observation-frame-churn.test.mjs`; live control-context/pointer fixtures pass.
+- Implemented with bounded coverage: exact-match native edit, selection verification, replacement/deletion and cancellation after selection without text mutation. Probe and range tests pass; real persisted editors, selection drift/sensitivity transitions and backend/platform matrix remain open.
+- Release integrity: candidate digest includes tracked/untracked source and rejects unsafe/unstable files. Five deterministic digest tests pass. Final harness and three-pass acceptance remain incomplete.
+- Newly reconfirmed gate gap: boundary lint flags planning/evidence names and walks local profile residue; it also requires legacy files scheduled for removal. Lint is failing, not waived.
+- Fresh checkpoint: build/typecheck pass; 841 tests pass with zero skips. See [consolidation](../../docs/implementation/CONSOLIDATION_2026-09-25.md) and [solo implementation evidence](astra-solo-foundations-2026-09-08.md).
+
+
+## Astra takeover regressions — 2026-09-08 (candidate fixes, release gate pending)
+
+- CANDIDATE: real MDN returned shadow controls that could not be clicked or filled.
+  Document-level hit/focus queries retarget to shadow hosts. Root-tree hit checks,
+  composed containment and tree-local focus checks now pass deterministic open/closed
+  Chrome click/fill/global typing effects. Native focused discovery follows authored
+  closed roots. `astra-model-v48.md` and `astra-shadow-input-fixed-e.log`; packed live
+  MDN replay and nested/overlay adversarial QA pending.
+
+- CANDIDATE: Windows Chrome discovery fails when process.env is spread into a plain
+  object because ProgramFiles casing no longer supports uppercase lookup. Case-insensitive
+  Windows root lookup now passes six discovery tests; see luna-windows-browser-env.md.
+
+- OPEN: ordinary MDN viewport screenshot exceeds the64KiB public output budget.
+  Clipping works but costs extra model calls and requires recovering viewport context.
+  Recorded by model-directed v48 task; full-frame image usability needs improvement.
+
+- CANDIDATE: screenshot required callers to invent an explicit sensitive-zone target,
+  making ordinary screenshot use unnecessarily difficult. Automatic native discovery
+  now runs with omitted/empty zones; optional targets add masks. Zero applied regions
+  report mask_not_applicable. PNG metadata is stripped even with no masks (previously
+  that path returned the original PNG). `astra-automatic-screenshot-b.log`:5/5 pass,
+  including public MCP validation and actual Chrome ordinary/auto-masked captures.
+
+- CANDIDATE: native sensitive-field discovery replaces the open-shadow walker and
+  now masks ordinary, closed-shadow, same-process and cross-site frame fields in
+  actual Chrome pixels. `astra-native-sensitive-integrated.log`: 13/13 pass. Late
+  resource cleanup, aggregate search limits and frame membership checks included.
+  Same-process clipping, real transforms/zoom and full-page correctness still open.
+
+- OPEN: a retained native modal in one worker's tab suspends screenshot capture in
+  another worker's tab in the same Chrome window. Packed v47c trace records the
+  second capture request without response before deadline. Capture QA now precedes
+  retained-modal preservation QA; that fixture ordering is not a production fix.
+
+- OPEN: automatic sensitive geometry walker cannot enter closed shadow roots.
+  Native DOM search feasibility is now proven against a real closed-shadow OTP
+  fixture (`astra-sensitive-shadow-search-b.log`). It needs DOM.getDocument depth:0
+  before getSearchResults IDs can be resolved. Production integration, frame mapping
+  and adapter coverage remain pending; this test does not close the masking defect.
+
+- CANDIDATE: catalog expands identical target and waitFor subtrees in each action
+  and again in sequence steps. Hoisting those constraints while retaining per-variant
+  field allowlists reduces source catalog tokens from 9,293 to 4,633. Build/parser
+  tests pass; independent validator QA and packed measurement pending. See current
+  ASTRA_EXECUTION checkpoint. No model task-speed claim follows from token count alone.
+
+- OPEN: post-capture spatial verification exposes Chrome full-page capture changing
+  viewport width from 749 to 764 pixels, potentially invalidating precomputed masks.
+  `astra-full-page-spatial-transition.log` records exact before/after metrics. The new
+  screenshot consistency barrier rejects this image; the prior full-page height-only
+  passing test was insufficient. Full-page masking remains unresolved, not release-ready.
+
+- fullPage screenshots silently retained viewport-sized clips. The tall-page regression
+  failed at origin y=400 instead of document origin zero. FullPage now uses measured
+  document content extent, retains the capture mode for later revalidation, and rejects
+  raster sizes beyond the shared decoder limit before capture. `astra-full-page-fixed.log`
+  verifies clip extent and actual PNG height above 2000 pixels in Chrome; packed proof pending.
+
+- Fresh screenshots after scrolling still clipped document origin zero. Mask boxes and
+  click_at also mixed viewport/document coordinates. The real regression reproduced
+  clip.y=0 at scrollY=400. Clip/mask/input mappings now use observed CSS spatial state;
+  a fresh capture click reaches the actual visible button after scroll, and stale
+  screenshot checks still pass. Evidence: `astra-scrolled-capture-repro.log` and
+  `astra-scrolled-capture-fixed-b.log`. Independent mask pixel verification pending.
+
+- Scoped controls omitted actionable iframe descendants. Included frame ancestry is
+  now checked and each frame is observed in its own AX/DOM identity. Live v45 uncovered
+  a second defect: scoped queryAXTree could remain unanswered on a cross-site container,
+  stalling observation to its deadline. Scoped AX reads now use bounded child expansion
+  rather than broad role queries. Five AX snapshot regressions and packed v46 pass;
+  the live fixture fills an included frame via its returned ref and rejects outside
+  sibling control inclusion. Luna's independent route/projection tests are pending.
+
+- Document extraction flattened heading levels into undifferentiated text. It now emits
+  bounded Markdown heading prefixes for native and valid semantic levels while preserving
+  existing whitespace and Unicode behavior. `document-chunk.test.mjs` covers hierarchy,
+  invalid-level handling, and prefix budget exhaustion. Packed v44 online evidence confirms
+  actual Wikipedia/W3C headings and successful continuation workflows.
+
+- Ordinary document extraction omitted embedded frame text. It now shares scoped
+  traversal and its aggregate work limits/continuation participant stamps. Membership
+  uses the same preferred readable root as text extraction, preventing frames outside
+  main content from leaking into that main's read. VM and orchestration cases verify
+  preferred-root selection/fallback; packed v43 verifies visible sibling inclusion for
+  body reads and sibling exclusion for scoped reads, preserving hidden exclusions.
+
+- Candidate frame membership omitted the document reader's excluded tag ancestors.
+  An iframe beneath a canvas or excluded field subtree could therefore be included
+  even when parent text extraction excluded that subtree. The shared reader module
+  now exports the tested membership predicate with matching tag exclusions plus
+  existing visibility/sensitivity checks. `frame-scope-predicate.test.mjs` executes the
+  actual predicate and tests inherited exclusions, early rejection and bounded ancestry.
+  Focused tests/build/typecheck pass; packed live exclusion QA remains pending.
+
+- V40 expanded frame fixture deterministically exposed container scroll below the
+  viewport failing before dispatch (`astra-native-scoped-frame-v40.log`). Unlike click,
+  targeted scroll did not reveal its target before resolving pointer coordinates.
+  It now prepares the pointer document, natively reveals an offscreen container and
+  revalidates visibility before exactly one wheel. `offscreen-container-scroll.test.mjs`
+  verifies effect ordering and offset postcondition. The larger unchanged fixture passes
+  packed v41 with trusted wheel/100px offset evidence; scoped cross-site text inclusion
+  and outside-sibling exclusion also pass in `astra-native-scoped-frame-v41.log`.
+
+- Scoped document reads previously stopped at iframe elements, silently omitting their
+  readable descendant documents. Candidate traversal now checks owned frame ancestry
+  and read-only owner containment, uses shared work limits, labels embedded text, and
+  expires cached continuations when participating frame generations change. Deterministic
+  orchestration regression is `scoped-document-frames.test.mjs`; membership browser QA
+  and adversarial exclusions remain pending. Do not call this fully verified yet.
+
+- Text-only `press` sent the same native insertion as `type` but failed to select
+  existing field feedback, causing a full page-control observation after small edits.
+  It now shares field feedback when no chord follows. Enter/other chords retain broad
+  feedback because they can submit or move focus. `press-feedback.test.mjs` verifies
+  focused-global insertion selection, unchanged native dispatch, and chord exclusions;
+  driver build/typecheck pass. The test isolates feedback selection, not browser
+  projection. Live savings are unmeasured and this source change is newer than v38.
+
+- The native connection page-family map had the same duplicate-at-capacity defect at
+  its 256-route boundary. Luna fixed the admission condition; parent reviewed and ran
+  `existing-page-family-route-capacity.test.mjs` with the existing family tests (7/7).
+  New overflow and cross-tab collisions still close the client. Integrated packed v38
+  passes expanded Chrome QA (`astra-native-frame-v38.log`), including cross-site frame
+  fill/removal followed by working popup input. It does not exercise pending frame
+  command cancellation in a real browser; deterministic API tests supply that evidence.
+
+- At the adapter's 128-route limit, repeated attachment metadata for an existing route
+  incorrectly quarantined the claim. Real overflow also left pending commands hung.
+  Capacity now applies only to newly admitted routes; overflow retires pending work
+  with `route_capacity` while retaining conservative ownership until disconnect cleanup.
+  `tab-route-retirement.test.mjs` reproduces duplicate/overflow/cleanup behavior.
+  Integrated `astra-suite-v23.log`: 753/753 pass, 30557.069 ms, no skipped tests.
+
+- Frame-route detach only removed admission authority, leaving already dispatched
+  commands pending and stale held-input cleanup queued against a dead route. Route
+  detach now rejects that route's pending commands, retires its held inputs, and leaves
+  the parent and sibling routes usable. Per-attachment identity also prevents an already
+  fulfilled transport acknowledgement from crossing detach/reattach before its command
+  continuation. `tab-route-retirement.test.mjs` deterministically covers both cases;
+  the focused route and adversarial tab-detach run passes 7/7, and typecheck passes.
+  These are API-level tests; current packed live iframe churn still needs verification.
+
+- A browser detach could leave a never-settling CDP command retaining its old tab claim;
+  a late acknowledgement could also return success after release. The claim now owns
+  cancellation callbacks, retires pending operations at confirmed detach, and checks its
+  generation/state before returning an acknowledgement. Deterministic regressions:
+  `tab-detach-pending.test.mjs`, updated `tab-foundation.test.mjs`, and independently
+  authored `tab-detach-pending-adversarial.test.mjs`. Cleanup uncertainty retains the
+  claim in quarantine while rejecting pending operations; unrelated tabs remain usable.
+- Luna's adversarial test found synchronous fallback debugger detach throws escaped as
+  raw errors. The fallback invocation now runs inside its caught promise chain, preserving
+  the normalized `detach_failed` contract. Full source suite `astra-suite-v22.log` passes
+  750/750. Packed v37 lifecycle QA passed before this final normalization change; it
+  does not prove the final source artifact or complete release acceptance.
+
+- Packed online QA caught search controls crowded out by navigation links and redundant
+  record identity metadata. Default controls now omit record IDs and prioritize editable
+  controls; `control-budget.test.mjs` verifies the adversarial 200-link layout. The v2
+  packed Wikipedia/GitHub/W3C rerun passes; failed v1 evidence is preserved.
+- OPEN: expanded borrowed adapter parity fails on an inactive-tab mouseMoved acknowledgement
+  in headed/headless Chrome. Explicit test activation gets past the actions but a post-detach
+  modal oracle still stalls. `foundation-tab-connection.json` is failing current evidence,
+  not the earlier fill-only passing gate. Production activation/emulation was not added.
+
+- Container wheel input was acknowledged before its compositor offset changed, producing
+  an immediate false `not_met`. The frame-selector live test proves the later fixture
+  scroll effect and now passes bounded transition verification on same/cross-site frames.
+- Text waits read only the top document and eagerly flattened its body even for URL-only
+  predicates. Pointer QA proved the child click effect was missed. Text predicates now use
+  the shared bounded document reader in controlled frame documents; URL/title checks avoid
+  body reads. The three pointer action regressions pass with real trusted event oracles.
+- Document extraction flattened preformatted whitespace, omitted destinations and could
+  split surrogate pairs at chunk boundaries. `document-reader.test.mjs` and
+  `document-chunk.test.mjs` verify structure, links, escaped byte budgets, exact continuation,
+  generation expiry, work-limited prefix continuation and pre-access field exclusion.
+
+- Modal prompt withheld `Input.dispatchMouseEvent` acknowledgement and occupied the command
+  lane until timeout. `test/engine-regressions/dialog-lifecycle.test.mjs` failed with an
+  attempted/timed-out receipt before the fix. It now returns exact dialog state promptly,
+  preserves attempted evidence, rejects stale dialog IDs before input, accepts/dismisses
+  prompts, handles Enter/navigation alerts and confirms subsequent fixture effects.
+- Offset iframe click used a child DOM rectangle in the page input coordinate system.
+  `test/engine-regressions/frame-selector-scope.test.mjs` failed the checked expectation
+  before geometry conversion. Native content quads plus hit-node evidence now verify the
+  intended checkbox in same-site and cross-site frames. Fragment/history cases verify that
+  same-document navigation does not wait for a replacement generation.
+- Record identities derived from fresh refs, and missing baseline exceptions escaped a
+  fulfillment handler. The engine-foundation regression verifies unchanged records produce
+  no false changes, missing baselines reset, and the next queued read completes.
+- Key validation and select option work were checked after preparatory focus. Preflight now
+  rejects unsupported chords/disabled optgroups/excessive key counts before input. Native
+  input unit tests verify reverse releases, modifier behavior and focus-race fencing.
+- Adapter forwarding omitted shared engine CDP methods; held keys discarded their child
+  routes and pointer releases were absent. `test/tab-foundation.test.mjs` verifies allowed
+  tab-scoped methods, forbidden browser-wide methods, and exact original-route cleanup.
+- Unknown inspection facts were coerced to false and ordinary values were redacted before
+  effect verification. Target-inspection tests now reject incomplete evidence and preserve
+  exact ordinary values internally; getter oracles still prove no sensitive value access.
+
+These source regressions and the frozen baseline Luna workflow/concurrency reports do not
+replace packed adapter QA, full architecture completion or the final three release gates.
+
+## 2026-09-07 connection feasibility follow-up
+
+The [prototype report](../../docs/CONNECTION_PROTOTYPES_2026-09-07.md) records the accepted
+connection model and passing disposable experiments. This is not a production bug-fix claim.
+The new login probe deterministically shows that the current family-wide closure verifier
+rejects a closed source while other workers run. Root cause:
+`apps/mcp-server/src/browser-runtime/profile-closure.ts` rejects any detected process of
+the same browser family instead of proving closure of the exact Newton-owned source.
+`pnpm prototype:login` records this rejection and separately proves the proposed exact-source
+closure approach with private fixture ownership facts. Durable source-generation ownership
+and crash recovery remain implementation work.
+
+The connection probe also records corrected fixture navigation readiness and same-install
+reload checks. The final reload assertion verifies changed executable extension code, a
+new epoch, rejection of a previously usable claim, and success with a fresh claim. Chrome's
+developer-mode UI setting is enabled only in the disposable test profile.
 
 Entries before BB-049 are archived extension-era history. Deleted extension/relay paths
 are not current product surfaces, and their receipts do not close a direct-runtime gate.
 Later entries track the owned-browser and modern stateless MCP implementation. Every
 current defect remains pending until the frozen-tree final gate records its regression.
+
+## AUD-2026-09-07 — Current architecture and agent-loop findings (open)
+
+Source: `f2ae1ee` / 0.6.4. The detailed [adversarial report](../../docs/ADVERSARIAL_AUDIT_2026-09-07.md)
+records root causes, locations, proposed fixes and desired regression assertions for A01–A10.
+No production fix was made by the audit.
+
+- Reproductions: `pnpm audit:current`, with `NEWTON_BROWSER_QA_BROWSER=edge` for Edge.
+  This corrected-contract gate intentionally exits nonzero while findings remain.
+- Fresh evidence: [Chrome](audit-current-runtime-2026-09-07-chrome.json) and
+  [Edge](audit-current-runtime-2026-09-07-edge.json). Both confirm exact fixture cleanup.
+- Reproduced: sensitive-field focus race; partially applied form reported prevented and
+  retry-safe; read-only fill, failed navigation and hidden semantic wait falsely verified;
+  discarded action observations; undisclosed ref replacement; semantic targeting beyond
+  default cap; contradictory node/text budgets; rejected full start URL.
+- Deterministic queue experiment: timeout returns while the executor remains active and
+  stop waits for it. Retaining serialization is necessary; bounded cancellation/recovery
+  of that executor is the missing behavior.
+- Source-confirmed additional stall risk: synchronous process-table subprocesses in
+  stale-lease recovery have no timeout. A deliberately hung system scan was not run.
+- Negative lifecycle evidence: `pnpm audit:guardian` did not reproduce a surviving
+  descendant in the synthetic Windows root-exit case. Do not report that experiment as
+  a guardian leak or as exhaustive cross-platform lifecycle proof.
+- Baseline: build, typecheck, boundary lint, 490 existing tests and static token budgets
+  pass despite these failures. No fresh packed release/Linux/authenticated matrix claim.
 
 ## BB-048 — Observer focus redundantly mutated an already-active tab
 
@@ -2309,3 +2564,583 @@ All defects below have deterministic regression coverage. Foundation defects BB-
   same canonical nested example.
 - Status: deterministic, catalog-budget, and source-live verified for 0.6.4. Packed and
   three-pass frozen-candidate verification are the remaining release gates.
+# Replacement foundation regressions (2026-09-07)
+
+These fixes are in the injected replacement candidate unless explicitly noted. They do
+not certify retirement of the old default runtime or completion of the full audit.
+
+| Defect / reproducible trigger | Root cause and fix | Regression evidence |
+| --- | --- | --- |
+| Crash a copy child while staging on Windows, then recover its transaction | Number-valued filesystem inode identity loses precision; recovery now uses bigint stats and exact bigint comparisons | `test/profile-transaction-recovery.test.mjs`, actual child exit 77 |
+| Start two authenticated workers concurrently from one published source | A competing store mutex can block release after a successful copy; retain the lease capability, wait for lock removal, retry only pre-operation store acquisition | Deterministic contention/uncertain-result tests in `test/profile-transaction-recovery.test.mjs`; concurrent Chrome/Edge source QA |
+| Fill a ref inside a cross-site iframe immediately after startup | Child frame-tree roots can omit parent ID and attachment setup can still be pending; preserve known route-parent metadata and await registered attachment work under the deadline | `foundation-engine-chrome.json`, `foundation-engine-edge.json`; independent checks of both iframe field values |
+| Bootstrap the real MV3 adapter | Top-level await prevents the service worker from starting; register listeners synchronously and perform digest initialization asynchronously | Packed native tab QA |
+| Connect immediately after native hello | Hello could precede listening/rendezvous publication; an explicit native-ready handshake now fences use | Packed independent-client tab QA |
+| Detach arrives during claim revocation | Premature removal could allow a new claim before old detach completed; revoking/quarantined states retain authority until reconciliation completes | Claim race tests and native disconnect/update QA |
+# Astra takeover regressions (2026-09-08)
+
+- Sensitive target inspection eagerly read `.value` before suppressing its return value,
+  including screenshot-mask inspection. The access is now gated by sensitivity first.
+  `packages/driver/test/target-inspection.test.mjs` executes the real inspection function
+  against a getter oracle: both refusal and masking cases failed with one read before
+  the fix and pass with zero reads after it.
+- Same-process frame selectors searched the route root repeatedly. The live
+  `test/engine-regressions/frame-selector-scope.test.mjs` reproduced ambiguous parent and
+  missing child fields. Resolver now obtains each child document through its frame owner;
+  both fields fill correctly. PageDirectory supplies the authoritative parent/route facts.
+- Sequences stopped after actions with no requested postcondition and reused old document
+  stamps across navigation. Ordinary click/press now report not_requested rather than
+  fabricated success or uncertainty about an unrequested assertion; later steps retain
+  the admitted page but obtain its current document. Negative postconditions identify
+  stoppedAt. Two new `engine-foundation.test.mjs` tests failed before and pass after.
+- Wait parsing accepted timeout-only, state-only and contradictory target bags. Strict
+  parser and JSON schema now require a meaningful predicate, one complete target strategy
+  and exact value-state pairing. `command-foundation.test.mjs` covers invalid and valid
+  requests, including empty expected values.
+
+- Hidden borrowed tabs stalled on mouse moves and wheel dispatch; new hidden headed tabs
+  also acknowledged but discarded clicks before first paint. Repro: two inactive fixture
+  tabs through the real native adapter, then hover, checkbox click and container scroll.
+  Chromium's [input queue](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc)
+  aligns moves to rendering frames with a five-second fallback;
+  [Overlay.enable](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/core/inspector/inspector_overlay_agent.cc)
+  enables unbuffered debugger input without showing an overlay.
+  [Wheel dispatch](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/protocol/input_handler.cc)
+  waits for a visual-state callback. Fix: enable that domain, observe a hidden document's
+  viewport once before pointer input, and request a viewport observation concurrently
+  with each hidden wheel. No activation, visibility emulation, injected page mutations,
+  or repeated input. Exactly one pending internal viewport observation per page; verified
+  offsets decide scroll completion even if another tab's modal delays the screenshot.
+  `packages/driver/test/hidden-input.test.mjs` covers navigation during preparation,
+  visible-page zero capture, and verified scrolls despite unresolved optional capture.
+  `scripts/verify-tab-foundation.mjs` now passes headed/headless with trusted event oracles,
+  zero visibility transitions, retained prompt after detach and real update/rollback.
+  These are candidate fixes; full real-site adapter parity and release acceptance remain.
+- The former post-detach prompt oracle falsely treated a new Page handler as inheriting
+  an already open dialog. Chromium's
+  [Page handler](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/protocol/page_handler.cc)
+  keeps the callback in handlers enabled when the dialog opens. The test now establishes
+  its independent observer beforehand, then dismisses the preserved prompt only after
+  both workers stop. No production dialog auto-dismiss was added to make QA pass.
+- Duplicate row buttons lost their association, checkbox string tristates disappeared,
+  and partial field feedback omitted related error text. The shared AX control projector
+  now preserves bounded ancestor context, normalizes true/false/mixed and follows explicit
+  error relationships. Missing/empty scope are distinct and scope-incompatible deltas
+  reset. `control-reader.test.mjs` (independent Luna tests) and the live MCP
+  `control-context.test.mjs` verify these cases, including real LayoutTableRow roles.
+- A main element under a hidden ancestor was incorrectly treated as visible document
+  content. The bounded reader checks ancestors before accessing descendant text; normal
+  reads fall back to visible body content, while explicitly scoped hidden reads stay
+  empty. Getter-oracle and live tests cover this. Scoped child-frame snapshots retain
+  immutable content and reject continuation after document changes.
+- Fixed byte deductions could leave a 2048-byte control read empty or let optional output
+  overflow its actual action envelope. Reader projection now uses the same escaped MCP
+  result serializer as final output. `output-budget.test.mjs` verifies exact/one-byte-below
+  boundaries and image accounting; live MCP verifies useful scoped controls and edited
+  field validation at the minimum budget without losing published refs.
+- Offscreen pointer targets could not be clicked. A native scroll preparation is now
+  followed by fresh geometry, and all preparation is counted in dispatch. Its regression
+  uncovered a second bug after nonzero scrolling: viewport quads were passed directly to
+  `DOM.getNodeForLocation`, whose Chromium implementation expects document coordinates.
+  The route-root scroll offset is now added only for that hit test; native mouse input
+  retains viewport coordinates. `pointer-actions.test.mjs` verifies offscreen, clipped,
+  covered and iframe targets; the packed native adapter test now includes offscreen input.
+
+### Astra online navigation and observation regression (2026-09-08)
+
+- Repro: frozen `astra-packed-probes-v4.json`, Wikipedia result click, then controls and
+  document read. Direct source diagnosis showed `stale_target` after acknowledged click,
+  followed by `cdp_message_too_large` from unbounded `Accessibility.getFullAXTree` and
+  unavailable subsequent reads. The transport's 4 MiB bound was not raised.
+- Root causes: a navigation replaced the document between read-only condition probes;
+  the controls reader fetched unrelated article text/layout nodes before bounding output.
+  Bounded AX traversal now caps branch work and prunes control/text layout leaves;
+  semantic lookup uses renderer-side role/name queries. CDP depth and query semantics:
+  https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/ . Arbitrarily wide
+  nodes and enormous individual AX properties remain a transport-size hardening gap.
+- Regression: `ax-snapshot.test.mjs` verifies bounded depth/requests, no text-layout
+  expansion and direct scope; `navigation-probe.test.mjs` verifies read retry only across
+  generation changes, with unchanged-document failures preserved. Live source evidence
+  `navigation-diagnosis.json` verifies the observed article URL and Countess of Lovelace
+  body text, no protocol failure, and maximum AX response bytes. Not packed acceptance.
+- A still-parsing page could be cached as complete empty text. The reader now reports
+  loading internally and waits on the actual lifecycle/DOM transition before snapshotting.
+  Deterministic loading-prefix/cache assertions are in those tests and
+  `document-chunk.test.mjs`. The latter also verifies hidden-main fallback and removal of
+  HTML indentation noise while preserving preformatted whitespace.
+- QA defect: protocol success was treated as action success. Earlier v2/v3 pass reports
+  ignored rejected uppercase `ENTER` actions. The audit records exact false positives;
+  those reports are superseded, pending corrected runner verification.
+
+### Oversized observation isolation and deep control discoverability
+
+- A 5 MiB AX name deterministically exceeded the 4 MiB frame ceiling and destroyed all
+  later CDP work. The pipe now drains only positively correlated oversized read responses
+  with a recognized initial response ID; it does not accumulate the discarded payload or
+  increase the ceiling. Oversized events/mutations/unknown responses remain terminal.
+  `cdp-pipe.test.ts` covers split/coalesced frames, following replies, terminal cases and
+  EOF while draining. Real `oversized-observation.test.mjs` verifies a document read and
+  a subsequent navigation after the oversized AX response.
+- Native adapter `post(result)` rejection was outside the operation's rejection handler.
+  A native message-size failure could therefore withhold its reply until timeout. The
+  response chain now catches serialization/post failures and returns a bounded error;
+  if that error cannot be posted it disconnects that owner's claims. Adapter-specific
+  oversized-response regression remains to be added; ordinary native fixture passes.
+- Frozen packed v5 failed to return GitHub's deeply nested issue filter after bounded
+  breadth traversal consumed its work budget. Scarce editable roles now use renderer-side
+  queries plus bounded ancestor retrieval. Primary-landmark link queries prevent global
+  navigation from crowding issue/article links out of compact observations. Unit AX
+  tests cover deep-field and primary-link retrieval; `github-diagnosis.json` is source
+  live evidence for the requested query in the actual URL and visible issue links.
+
+### Popup lifecycle and optional-read deadline isolation
+
+- Actual owned popup test initially never received attachment: target auto-attachment
+  on a renderer does not discover its top-level popup. Owned private connections now
+  discover and explicitly attach their new pages; borrowed connections do not gain
+  browser-level capabilities. `popup-ownership.test.mjs` verifies separate targeting,
+  unchanged parent selection, opener metadata, and observed URL/title.
+- A self-closing popup withheld its Page.enable reply, stranding the pending attachment
+  and parent observation. Target destruction/detachment now cancels the exact pending
+  page attachment and fences subsequent initialization; late replies cannot recreate it.
+  The same real-browser regression verifies transient closure leaves the parent usable.
+- Read cancellation previously waited for the underlying operation, causing optional
+  observation timeout to quarantine the session and rewrite an acknowledged click as
+  timed_out. Read-only operations now race cancellation; input acknowledgements retain
+  their separate reconciliation behavior. The engine preserves finished action facts
+  when only optional observation expires. `engine-foundation.test.mjs` proves a verified
+  effect, unavailable/timed_out observation, next-command progress, and no late replay.
+- Native oversized-response regression is now covered by
+  `test/tab-adapter-response.test.mjs`: the actual bundled worker returns
+  native_message_limit and accepts the next command on the same claim.
+
+### Structured records, isolated DOM reads and compact deltas
+
+- The former record projection only wrapped controls, losing table spans, blank cells
+  and header associations. Native extraction now preserves cell identities and grid
+  occupancy, uses actual table row order, and checks identities before/after reads.
+  `table-grid.test.mjs`, `table-grid-adversarial.test.mjs` and live
+  `structured-records.test.mjs` verify spans, blanks, explicit/scoped headers, link
+  destinations, small budgets, form states and actionable refs. Luna reproduced a
+  self-referencing header incorrectly marked resolved; grid validation now rejects it.
+- Main-world DOM wrappers could invoke application overrides during nominally read-only
+  extraction. Resolved nodes now use isolated per-frame/document native wrappers.
+  `document-reader.test.mjs` deliberately overrides getAttribute to mutate a visible
+  heading; reads preserve the original heading. Eight independent deterministic
+  readonly-world tests cover cache, routes, generations, failure retry and late replies.
+  The discarded V8 throwOnSideEffect experiment rejected ordinary legitimate DOM reads;
+  it is not enabled for document/table extraction.
+- Deltas formerly repeated all records, and nested form ref changes looked like content
+  changes. Deltas now omit unchanged content while separately refreshing all unchanged
+  actionable refs and ordering. Full reset is used when smaller. A baseline lookup also
+  previously happened after inserting/evicting the new snapshot; retained older baselines
+  are now obtained first. `record-delta.test.mjs` verifies reconstruction, nested refs,
+  byte reduction and eviction. Whole suite `astra-suite-v6.log`: 606/606 pass.
+
+### DOM invalidation after navigation commit
+
+- Packed online v7 correctly failed Wikipedia's click receipt even though the article
+  had opened. Captured live trace (`navigation-race-7.log`) shows frameNavigated at
+  1451 ms, DOM.documentUpdated at 1456 and 1657 ms, then DOM.describeNode rejects
+  `Could not find node with given id` at 1661 ms. Navigation generation alone could
+  not detect that later invalidation of frontend DOM IDs.
+- Waits now capture a same-page DOM revision as well as document generation. Proven
+  invalidation retries only the read probe, preserving acknowledged input. Unchanged
+  failures and other-page invalidations still fail honestly. Two new deterministic
+  `navigation-probe.test.mjs` cases cover positive and negative behavior. The source
+  diagnostic observed a recovered error with completed click and verified article
+  (`navigation-race-11.log`; its old zero-error diagnostic assertion is historical).
+- Frozen packed v8 (7ae6df89623963cf91622fbfdaf895987ba4bea621427067119a09dc914eaa1a)
+  passes Wikipedia, GitHub issue filtering, W3C document continuation with actual
+  receipts and effects checked (`astra-packed-probes-v8.json`, 27 calls). Complete
+  source suite `astra-suite-v7.log`: 614 passed, no failure/cancellation/skip/todo.
+
+### Restored file selection and owned resize; remaining update failure
+
+- Replacement action schema/executor omitted `set_files` and `resize`. Both are now
+  strict typed actions. `resize-files.test.mjs` exercises real MCP responsive layouts,
+  accepted filenames, hidden native inputs, application-cleared selections, wrong/missing
+  targets and a native alert opened by file selection. Borrowed resize refuses before
+  any wire/input operation. File selection uses DOM.setFileInputFiles, not DOM assignment.
+- Local validator retains open handles and checks path/file identity before dispatch.
+  Initial validator incorrectly rejected valid Windows forward-slash/case variants;
+  review reproduced the rejection and Luna corrected normalization. Eight filesystem
+  regressions and six independent integrated action tests pass, including replacement
+  and cancellation before dispatch, non-multiple rejection and uncertain post-input reads.
+- Complete suite `astra-suite-v8.log`: 625 passed, zero failures/cancellations/skips;
+  Luna's later six action tests were also independently rerun successfully.
+- Packed v9: b39dff7640bf7722a61be7a2bf18962a5bd1daa5b1c0829d26b314a02408e0d3,
+  279297 bytes. Adapter headless `astra-adapter-v9b.log` and headed
+  `astra-adapter-headed-v9.log` pass actual file selection, independent DOM effect checks,
+  existing input/modal behavior, update and forced rollback.
+- OPEN release blocker: initial `astra-adapter-v9.log` passed action/oracle checks but
+  failed reload and rollback with adapter_bootstrap_recovery_required. Subsequent passes
+  do not close it. Coordinator now retains both underlying causes in AggregateError;
+  `tab-foundation.test.mjs` proves diagnostic preservation. Original causes were discarded,
+  so no root cause is claimed yet. Next investigation must correlate reload with a new
+  native bootstrap rather than assume an immediately usable setup-page context.
+
+## Native readiness, discovery and pending accounting (2026-09-08)
+
+- Repro: the private listener could publish before receiving extension hello; early
+  native EOF during startup could strand a discoverable or unresolved startup.
+  Root cause: publication followed listener readiness rather than validated peer
+  readiness. Broker now races closure, validates hello, writes a private staged
+  advertisement and atomically renames only after readiness. Three deterministic
+  startup tests prove hello gating, malformed hello rejection and EOF cleanup.
+- Repro: 65 unanswered requests were admitted once their transport writes completed.
+  Root cause: in-flight accounting decremented on write acknowledgement. Broker now
+  tracks request IDs until the exact owner receives a response; duplicate IDs and
+  capacity overflow retire that connection. Two regressions prove 64 unanswered
+  capacity, slot reuse after a response, duplicate rejection and one owner close.
+- Discovery/setup formerly reported configuration rather than actual readiness.
+  Both now use the shared native client and bounded live inventory without claims;
+  tests prove unavailable configuration, safe error normalization and escaped 8 KiB
+  output limits. Tab claims use this same client and check required capabilities.
+- A second hello or untyped response could otherwise corrupt client expectations.
+  Shared client now rejects both; adversarial tests cover these alongside endpoint
+  restriction, identity mismatch, reverse responses, disconnect and timeout policy.
+- Evidence: `astra-suite-v10.log` 648/648 pass, no skipped or cancelled tests;
+  typecheck passes. `astra-pack-v12.log` freezes SHA256
+  84ce9788e14a8839439d7311c74649ed7cf68f51c33c7be1298f2aa0e035923a.
+  Full production setup/reload identity and release acceptance remain open.
+- Packed v12 headed adapter passed at 08:38:32 UTC (`astra-adapter-headed-v12.log`),
+  including concurrent ownership, live actions, code update and forced rollback.
+- Additional source-only defect after v12: malformed response results were coerced
+  to `{}`, allowing missing/null/scalar/array payloads to look like acknowledgements.
+  Conflicting result/error fields were also ambiguous. Strict envelope validation
+  now retires the connection; five deterministic regression cases pass. The full
+  focused native group is 22/22 and typecheck passes. Repack before attributing this
+  final validation change to an artifact.
+
+## Same-profile development update continuity (2026-09-08)
+
+- A fresh epoch plus matching code digest can identify the wrong browser when several
+  profiles share one extension installation. The former QA-only directory assumption
+  is replaced by a random exact marker proved through the selected browser's tabs API.
+- Live feasibility rejected two assumptions: chrome.tabs.create can return while URL
+  is pending (`astra-update-binding-diagnosis.log`, pending=true, committed=false),
+  and chrome.runtime.reload removes extension-owned marker pages (new-peer inventory
+  contained no update page in `astra-update-binding-commit.log`). The final marker is
+  an inactive about:blank fragment with no page script. Preparation waits on tab events
+  and a current-tab read, with explicit removal/deadline errors.
+- `native-reconnect.test.mjs` deterministically exercises another live profile before
+  a later matching advertisement, cancellation of unanswered proof, and deadline.
+  Three tests pass. Reconnect is event driven and retains only the selected live peer.
+- `astra-update-control-v14.log` exposed attach_failed on the internal blank marker.
+  Smoke now claims an authorized normal tab, reads its document root, and releases;
+  it never navigates or repeats site input. Actual headless and headed v15 runs pass
+  same-installation two-profile exclusion, update, fresh claim/DOM smoke and rollback.
+- V15 SHA256 9c6af01c974cd61791ff32d6d25e30e4e0ca612fbf5bc85344a071ef000583e7,
+  283648 bytes. Native client/control are packed; the optional extension is built from
+  source in these tests. Public installation/recovery and release acceptance remain open.
+- Luna deterministically found that a failed post-create tab read left a marker that
+  made the next preparation busy. Preparation now reuses one exact committed marker
+  for the same ticket, including through a fresh binding instance; another ticket is
+  still refused. The regression proves one creation and exact cleanup. Eleven binding
+  tests pass with three reconnect tests and the actual-worker response test.
+- Final current source suite `astra-suite-v12.log`: 668 passed, zero failures,
+  cancellations, skips or todos, 27580.6089 ms. Typecheck passes.
+
+## Packaged optional installation and discovery (2026-09-08)
+
+- Previously the optional worker was compiled with a per-test native host name and
+  rebuilt from source during adapter QA. The archive now contains exact worker/manifest/
+  setup assets. Native host names derive from extension ID, removing per-install code
+  compilation. Actual packed CLI preparation preserves worker bytes and stable identity.
+- Public prepare/setup/status now exist; setup registers the exact Windows Chrome host.
+  Directory metadata and hashes reject partial/tampered roots, symlinks and expanded
+  manifest capabilities. Seven filesystem regressions pass, including simultaneous setup.
+- Native unregister used substring matching and could accept a different manifest path
+  with the owned path as a prefix. It now parses and compares the exact registration value.
+- Default-host existing discovery now reads installed advertisements, requires explicit
+  connection selection when needed, and bounds multiple profile results to 8 KiB after
+  escaping. Two live peer identities survive the deterministic truncation test.
+- V20 packed CLI/default-host/adapter QA passes in `astra-public-setup-v20.log`; package
+  hash e7445c26ed5903050528c83c3535e2d1b0b1e17563114d862d82749c5294a158.
+  Public durable update/recovery, idempotent native installation, Linux support and final
+  release acceptance remain open; internal update/rollback QA does not close those gaps.
+- Full suite `astra-suite-v13.log`: 676/676 pass, 28191.7261 ms, no skipped/cancelled
+  tests. Later `native-registration-path.test.mjs` independently proves exact equality,
+  prefix/foreign-path rejection, and rejection of multiple registry values; this final
+  parser refinement is after the frozen v20 package. Typecheck and boundary checks pass.
+
+## Immutable native runtime and setup publication (2026-09-08)
+
+- Repeated setup wrote directly into an existing runtime build, including its executable
+  while Chrome could be using it. The installer now creates complete staged builds with
+  entry/runtime hashes and reuses only verified immutable builds. Seven deterministic
+  inert-file tests cover inode/mtime stability, changed source isolation, different entry
+  builds, concurrent install, tamper/partial rejection, symlinks, bounds and stage cleanup.
+- Launcher executable plus verification record are now published as one directory. New
+  launcher code gets a distinct installed path instead of overwriting a running executable.
+  The root ownership record also precedes any installation mutation.
+- Actual simultaneous setup on Windows exposed EPERM replacing launcher.json in v23.
+  Root cause: competing identical pointer publication was treated as unconditional rename
+  success/failure. Publisher now observes the actual desired JSON and accepts only the
+  identical completed effect. A different value remains rejected; no retry sleep.
+  `native-publication.test.mjs` deterministically covers both collision outcomes and
+  no rewrite for already matching metadata. Source now fsyncs its staged JSON.
+- V24 packaged Chrome QA passes simultaneous first/repeated setup while the native host
+  is running, verifies unchanged runtime inode/mtime, then completes browser actions and
+  update/rollback across two profiles. `astra-native-concurrent-v24.log` / package SHA256
+  1b1154470f5e2c86305278cf0f83931c29f1cef9fca8dacf65cd42301cab4222.
+  Durable different-version update ownership, public recovery and Linux remain unfinished.
+- V25 repeated concurrent setup failed native_file_changed because repeated inherited
+  ACL application could change ctime during hash verification. A direct Windows repro
+  (`astra-native-acl-proof.json`) records unchanged bytes/mtime but changed ctime. ACL
+  application is now confined to the unpublished ownership stage. Live regression checks
+  require inode, mtime and ctime to remain unchanged on repeated running-host setup.
+- Three actual-launcher-source tests prove bounded metadata/runtime verification,
+  symlink rejection and pinned runtime/environment without executing fixture binaries.
+- OPEN: v26 hover timed out before dispatch at the unchanged 2500 ms action deadline.
+  `astra-native-concurrent-v26.log` is retained. V27 later passed but does not explain
+  the failure. Bounded opt-in native command diagnostics now capture correlation and
+  timing without command payloads; a privacy regression verifies the field allowlist.
+- Current source suite `astra-suite-v15.log`: 691/691 pass, no skipped/cancelled tests,
+  29221.4051 ms. The live hover failure remains open despite these passing source tests.
+- Frozen v28 is 304261 bytes, SHA256
+  45138d3057f5b39c4ca55d5d2842cf6fb7bde354c71edb16fbc3b20ab580c7ec.
+  Headed packed concurrent-setup/action/update QA passes at 09:46:24 UTC in
+  `astra-native-headed-v28.log`. The earlier unexplained hover timeout remains open.
+
+### Installation-wide update ownership and crash persistence (2026-09-08)
+
+- Gap: browser-local tab ownership cannot serialize two updaters sharing one installed
+  extension directory. An in-memory update state also loses rollback bytes and proof
+  state when its worker exits. The public update feature remains unfinished.
+- Added kernel-owned installation exclusion and a bounded journal containing both code
+  snapshots, ticket, digests and explicit write-ahead publication/verification phases.
+  Failed journal publication prevents further writes through that handle; reopening
+  revalidates disk evidence. A new update cannot replace unfinished recovery evidence.
+- `installation-lock.test.mjs` proves exact child crash releases ownership.
+  `installation-lock-adversarial.test.mjs` independently covers aliases, independent
+  directories, invalid roots, repeated release and unrelated pipe clients.
+  `adapter-update-journal.test.mjs` covers interrupted publication/rollback reopening,
+  phase ordering, queued writes at close and corrupt snapshot rejection without a
+  leaked lock. Combined Windows run: 11 passed, 0 failed, 242.7068 ms.
+- Limits: these primitives are not yet wired into the public update path. Linux kernel
+  behavior and Windows power-loss durability are unverified. No new packed/live QA is
+  attributed to these source-only changes; v28 remains the latest frozen package.
+- Full source verification: `astra-suite-v16.log`, 702/702 pass, no skipped/cancelled
+  tests, 29093.0524 ms. Typecheck and boundary check pass.
+
+### Durable transaction and public command composition (2026-09-08)
+
+- Added `adapter-update-transaction.ts`, public update/recover CLI paths and explicit
+  updating/recovery-required status. Metadata commits after verified bootstrap and
+  fresh-claim DOM smoke, so updating worker.js no longer leaves installation.json stale.
+  Recovery validates the installation identity/static assets and permits only the
+  two recorded worker digests. Unknown code is never overwritten as a guessed rollback.
+- Repro/root cause: exit between durable commit and marker cleanup left a live old
+  ticket. Starting another transaction previously could overwrite that ticket before
+  cleanup. New updates clean the old marker first and preserve its record on failure.
+  Missing-marker cleanup is idempotent; foreign/ambiguous markers still fail.
+- Parent-rerun `adapter-update-transaction-adversarial.test.mjs`: 7 pass, 688.0225 ms.
+  Covers success, rollback, interrupted recovery, exclusion, committed no-replay recovery,
+  old-ticket preservation and unknown-code rejection. `update-binding-adversarial.test.mjs`
+  passes 11 tests including repeated already-absent cleanup and foreign-marker rejection.
+- Recovery controls require existing marker proof after publication has begun; they do
+  not create replacement proof in a different profile. Packed/public/live evidence is
+  being gathered separately; these injected controls do not establish that acceptance.
+- Frozen v30 package: 313945 bytes, SHA256
+  83fe0b2645a73ba59e0b184199f426cf313c76197e5654eb27ac1eb3e8590c7e.
+  `astra-pack-v30.log` passes. Actual headless Chromium in
+  `astra-native-update-v30.log` passes public CLI update and ready metadata status,
+  live forced rollback through the packed durable transaction, wrong-profile marker
+  rejection and public already-committed recovery (2026-09-08T10:10:13.637Z).
+  Interrupted recovery remains a distinct live check; this does not establish release
+  acceptance or close the older unexplained v26 hover timeout.
+- Expanded unchanged-v30 live run `astra-native-recovery-v30.log` passes at
+  2026-09-08T10:12:03.406Z: forced failure of both update and rollback bootstrap
+  verification leaves durable recovery evidence; public wrong-profile recovery leaves
+  its exact bytes unchanged; original-profile public recovery verifies rollback and
+  restores ready status. This is a real browser failure/recovery flow, but the trigger
+  is injected bootstrap mismatch rather than killing the updater process.
+- Full source suite `astra-suite-v17.log`: 714/714 passed, 31766.743 ms, no skipped or
+  cancelled tests. Typecheck and boundary check pass.
+- Actual process-kill acceptance `astra-native-kill-v30.log` passes at
+  2026-09-08T10:14:10.824Z using unchanged packed v30. Disposable
+  `scripts/foundation-update-client.mjs` runs the packed transaction through actual
+  worker.js publication, then pauses at the reload call. Parent verifies published
+  journal/code and updating status, kills only that known child, verifies recovery_required,
+  then public recovery verifies previous code and ready status. No updater cleanup runs.
+  The suspension hook is confined to the QA wrapper; production has no fault flags.
+- `adapter-cli-update.test.mjs`: four parent-rerun tests pass, 225.2131 ms, covering
+  argument rejection without config mutation and absent/locked/pending status. This is
+  additional focused verification after the 714-test suite, not a new full-suite count.
+
+### Borrowed popup attribution and routing (2026-09-08)
+
+- Repro: click a fixture's window.open button through native input in an owned background
+  tab, then list its pages. V31 left the popup unclaimed. `astra-native-popup-v31d.log`
+  records Chrome tab IDs/opener metadata and CDP target/opener evidence: tabs.openerTabId
+  points to the setup tab, while CDP's opener is the actual background source page.
+  This is an attribution defect, not a reason for sleeps or wider timeouts.
+- Use Chrome's webNavigation.onCreatedNavigationTarget sourceTabId for the ownership
+  decision: https://developer.chrome.com/docs/extensions/reference/api/webNavigation#event-onCreatedNavigationTarget
+  The initial manifest gains webNavigation; no request interception or website scripts
+  are added. Unknown/unowned sources cannot confer ownership.
+- TabClaims reserves a child before attachment yields and revokes late attachment if
+  the opener was released. Native page-family routing uses each page's claim token and
+  isolates nested debugger routes; PageExecutor consumes scoped page events without
+  granting borrowed browser-wide target discovery. Initial popup events are buffered.
+- V32 package 316197 bytes, SHA256
+  7bfc9c82cd527c71b5f976c44efaeb2008fa4a6b3998b00e3114ca6b343b8ba5.
+  `astra-native-popup-v32.log` passes at 2026-09-08T10:26:49.171Z with two independently
+  owned popups, native child edits, foreign claim rejection and existing update/recovery
+  cases. V31's first run used a wrong QA tool name; v31b/c/d retain the actual attribution
+  failure. Expanded independent popup-effect and full-suite evidence are separate checks.
+- A separate race reproduced in `astra-native-popup-oracle-v32b.log`: the popup was
+  claimed, and native Page.enable was already pending before the root AX response, but
+  synchronous pages.list omitted it. PageExecutor.pages now awaits known attachment
+  promises under the existing read deadline; host/MCP await that result. No sleep,
+  network-idle wait or timeout increase was added. Two deterministic gated tests in
+  `page-list-attachment.test.mjs` prove completed attachment inclusion and closed-popup
+  cancellation without stalling/removing the parent (2 pass, 164.0981 ms).
+- The first expanded oracle run (`astra-native-popup-oracle-v32.log`) stalled because
+  QA read a child while its parent modal intentionally remained open. The exact owned
+  browser was stopped, allowing normal QA finally/unregister/temp cleanup; the temp
+  root was verified absent. QA now dismisses the preserved modal through its original
+  observer before reading child effects and bounds those reads. This was a harness
+  ordering defect, not a passing popup oracle or a production modal fix.
+- Full suite before the page-list race fix: `astra-suite-v18.log`, 729/729 pass,
+  31327.5171 ms, no skips/cancellations; boundary check passes. Later race-fix evidence
+  must not be inferred from this earlier full-suite result.
+- V33 package: 316279 bytes, SHA256
+  5de7de18460ad1d74824a3737c74c182c6c06f4c367f0d34d3e3feddb4005871.
+  `astra-pack-v33.log` passes. `astra-native-popup-v33.log` passes at
+  2026-09-08T10:33:49.202Z with independent post-release popup value oracles, stable
+  selected parents, foreign popup claim refusal, and the existing public update,
+  verified rollback, wrong-profile recovery and updater-process-kill recovery checks.
+- Current full source suite `astra-suite-v19.log`: 731/731 passed, 29743.9784 ms,
+  no skips/cancellations/failures. Typecheck and boundary check pass.
+
+### Explicit existing-browser new-tab creation (2026-09-08)
+
+- Missing capability: existing mode required the caller to supply an already existing
+  tab ID. Added explicit new_tab session target and native create_tab capability, using
+  inactive blank creation, ownership attachment, then ordinary shared-engine navigation.
+  Existing-tab claims still do not navigate; default session mode stays standalone.
+- New capacity reservations cover in-flight creations. Disconnect/update quiescence
+  wait for pending creation cleanup. Failed creation never deletes an intervening
+  foreign claim. `tab-create-claims.test.mjs`: five independently reviewed/rerun tests
+  pass, 107.0375 ms. `existing-new-tab-host.test.mjs`: two tests pass, proving invalid
+  targets fail before connecting and attachment precedes normalized navigation.
+- V34: 317084 bytes, SHA256
+  88c51f8851801a754f1fb5d59f5283a1faae5587c4fcace298577dd3a52ddb1f.
+  Packed live `astra-native-new-tab-v34.log` passes at 2026-09-08T10:40:12.117Z with
+  two independent new-tab sessions, native edits, foreign claim rejection, post-release
+  browser-side value checks, popup tests and the existing update/recovery suite.
+- Full source suite `astra-suite-v20.log`: 738/738 passed, 29162.0551 ms, no failures,
+  cancellations, skips or todos. Typecheck and boundary check pass.
+
+### Popup feedback without a prerequisite listing call (2026-09-08)
+
+- Missing feedback forced the model to list pages after opening a popup. The executor
+  now keeps one page baseline per command context, including sequences, and attaches
+  newly observed owned page summaries to action observations. Known attachments settle
+  within the existing command deadline; no arbitrary readiness sleep or extra read.
+- Feedback fits the actual encoded receipt budget. Candidate metadata is bounded and
+  omitted candidates are explicit. Dropping local controls alone does not set the
+  more-candidates flag. The selected page remains unchanged.
+- Packed v35 live `astra-native-popup-direct-v35.log` passes at
+  2026-09-08T10:46:48.219Z: child edit uses the prior receipt's pageId before listing,
+  followed by independent post-release edit oracles and the existing lifecycle suite.
+  V35 is 317916 bytes, SHA256
+  ebb2a7b057f1a218e205a792e828f56b0c4e2080828945b5991fe3f61c8b393c.
+- Separate defect: failed create_tab cleanup rejected competing claims but inventory
+  reported claimed=false while removal was pending. isClaimed now includes that closing
+  reservation. Deterministic gated `tab-create-cleanup.test.mjs` passes (109.5151 ms).
+  It verifies unavailable status and exclusion during removal, then release afterward.
+- Current v36 is 317966 bytes, SHA256
+  91ac855b3326ebe360356238c4ec6697a2cc67c529959e42ac2683b1dc61cd5c.
+  `astra-native-popup-feedback-v36.log` passes at 2026-09-08T10:48:08.001Z with direct
+  receipt-based popup input and independent effects, plus prior lifecycle/update checks.
+- Four independently reviewed/rerun projection tests pass in
+  `packages/driver/test/action-new-pages.test.mjs` (301.9633 ms): unchanged pages,
+  metadata/candidate bounds, escaped-byte budget and truncation flags, cancellation.
+  The seeded baseline/local-reader stub is isolated projection evidence; actual native
+  input/baseline behavior is verified separately by the packed browser test.
+- Full suite `astra-suite-v21.log`: 743/743 pass, 29927.9328 ms, no failures,
+  cancellations, skips or todos. Typecheck and boundary check pass.
+# Screenshot image response inherited text ceiling — candidate fixed
+
+The v48 model-directed MDN task returned output_budget for a default screenshot,
+forcing two clipped captures. Root cause: parser, catalog and session queue capped
+base64 image responses at the same64KiB as text. Screenshot-specific ENGINE_LIMITS
+now default2MiB/max4MiB; exact final-envelope checks and raster limits remain.
+`engine-screenshot-options.test.mjs` covers100KB payload delivery, explicit small
+budget refusal, invalid limits and unchanged text ceiling. Combined regression
+3/3 pass in astra-image-budget-regressions.log. Live source MDN image reviewed in
+astra-mdn-image-budget.png;36KB capture confirms integration but is not an oversized
+repro. Candidate v49 packed, no full release acceptance claim. Image optimization
+and full-page capture correctness remain open.
+# Hydrated documentation code disappeared — open-shadow candidate fixed
+
+v49 interactive MDN task read surrounding prose but omitted syntax and examples.
+Live native diagnostics show five MDN-CODE-EXAMPLE open shadow roots each with PRE,
+and zero ordinary document PREs. Root cause: document reader descended childNodes
+only. It now traverses rendered open-shadow children and unflattened slot assignment,
+retaining work/output bounds and exclusions. Actual Chrome fixture verifies nested
+code/whitespace, slot once/fallback and exclusion of unassigned/hidden/input text.
+Three document regression tests pass in astra-shadow-document.log. Live source MDN
+read includes fetch(resource) and new Request examples (astra-mdn-code-fixed.json).
+Closed roots and scoped shadow-host ancestry remain separate open work.
+# Scoped reads bypassed shadow-host exclusion — candidate fixed
+
+Deterministic actual-Chrome repro scopes an inner element under an aria-hidden
+shadow host. The former parentElement-only document walk returns excluded-host-secret;
+the current walk returns empty/excluded. Ancestry now crosses assigned slots and
+shadow hosts within existing limits. Frame membership uses the same ancestry rather
+than contains(), rejecting the excluded descendant and accepting a visible shadow
+descendant. Four document tests pass (astra-scoped-shadow-document.log), including
+the old/new comparison and native side-effect-checked frame predicate. Closed-root
+discovery and unrendered explicitly scoped light DOM still need coverage.
+# Explicit scope included unrendered component content — candidate fixed
+
+Real Chrome old/new repro shows unassigned light-DOM text exposed by explicit scope
+despite ordinary composed traversal omitting it. Scope and frame inclusion now reject
+unassigned children of open shadow hosts and replaced slot fallback. Assigned content
+remains readable. Native assignedNodes requires omitting Chromium's debug side-effect
+checker on FRAME_SCOPE_FUNCTION; objects still resolve in Newton's isolated world.
+Fixture overrides the page's assignedNodes to throw and verifies isolated native
+reads succeed. Seven tests pass in astra-unassigned-shadow-document-c.log. Closed
+shadow content discovery is not implemented by this change.
+# Full-page native scrollbar transition — bounded recapture candidate
+
+Native full-page screenshot changes749→764 viewport width on the real regression,
+including at scrollY0. A second native capture is stable764→764 and renders the
+offscreen marker. Production now discards the first unstable image and permits one
+fresh full-page attempt with the original deadline, fresh masks/clip, unchanged frame
+membership and no pending attachment. Repeated instability still refuses, with no
+capture ID published. Viewport captures do not retry. Focused7/7 pass including
+actual bottom-marker pixels; cancellation/navigation/pending-frame fault tests added
+for full integration run v31. This does not repair Chromium's scrollbar behavior.
+# Packed borrowed full-page capture stalls — open
+
+v50 viewport adapter harness passes. Adding a fullPage screenshot through the same
+public packed client before prompt opening produces timed_out; trace ends with
+Page.captureScreenshot sent and no response before deadline. Evidence:
+astra-adapter-full-page-v50.log. Native hidden-tab full-page behavior needs isolation.
+Do not infer success from standalone809-test green or the prior viewport-only adapter
+pass. Extended assertion remains in foundation-tab-client/verify-tab-foundation.
+# Navigation committed during optional action feedback — candidate refresh
+
+Observed in packed v49 MDN task: click acknowledged and destination read succeeds,
+but action observation is stale_target. Candidate observeAfterAction refreshes once
+only if that exact error coincides with a root document-generation advance. It reads
+the same page with the original context/budget; input is never repeated. Deterministic
+generation-transition tests cover success and no retry for unrelated errors, unchanged
+documents or second instability (astra-navigation-feedback.log). Actual live feedback
+improvement remains to verify; this is not a timing/latency acceptance claim.
+# Text wait ignored visible UI outside main — candidate fixed
+
+MDN search result existed in AX feedback but wait_for text timed out5,032ms. Wait
+used document reader main/article root preference, excluding the search dialog.
+Page-wide waits now read bounded body content; focused document reads retain main.
+Real Chrome header/hidden exclusion regression passes. Fresh same-site wait completes
+63.4366ms (astra-mdn-wait-fixed.json/.log). This does not resolve long-body text beyond
+the bounded read or hidden-frame owner coverage. Navigation feedback on that flow
+still returns zero controls during destination load; generation refresh alone is not
+a complete feedback-loop fix.

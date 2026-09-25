@@ -13,6 +13,8 @@ export function buildDeterministicPackageTarball({ packageRoot, licensePath, tar
   const entries = [
     binaryEntry(resolvedPackageRoot, "dist/browser-guardian.js", 0o644),
     binaryEntry(resolvedPackageRoot, "dist/index.js", 0o755),
+    ...["engine-candidate.js", "native-host.js", "native-install.js", "native-launcher.cjs", "profile-copy-worker.js"].map(name => binaryEntry(resolvedPackageRoot, `dist/${name}`, 0o644)),
+    ...['manifest.json','setup.html','worker.js'].map(name=>binaryEntry(resolvedPackageRoot,`dist/tab-adapter/${name}`,0o644)),
     packageJsonEntry(resolvedPackageRoot),
     textEntry(resolvedPackageRoot, "README.md", 0o644),
     Object.freeze({ name: "package/LICENSE", mode: 0o644, data: normalizedText(resolvedLicense) }),

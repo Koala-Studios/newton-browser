@@ -57,7 +57,7 @@ export function packCheck() {
 
   // Build core first: the mcp bundle resolves @newton-browser/core through its package
   // exports (dist), which do not exist on a clean checkout until core is built.
-  run("pnpm", ["build:core"]);
+  run("pnpm", ["build:driver"]);
   run("pnpm", ["build:mcp"]);
   const packed = buildDeterministicPackageTarball({
     packageRoot: path.join(root, "apps", "mcp-server"),
@@ -66,12 +66,13 @@ export function packCheck() {
   });
   if (!fs.existsSync(tarball)) throw new Error(`missing packed artifact: ${tarball}`);
   const listing = run("tar", ["-tf", tarball], { capture: true }).stdout.trim().split(/\r?\n/);
-  for (const required of ["package/dist/index.js", "package/dist/browser-guardian.js", "package/package.json", "package/README.md"]) {
+  for (const required of ["package/dist/index.js", "package/dist/browser-guardian.js", "package/dist/engine-candidate.js", "package/dist/native-host.js", "package/dist/native-install.js", "package/dist/native-launcher.cjs", "package/dist/profile-copy-worker.js", "package/package.json", "package/README.md"]) {
     if (!listing.includes(required)) throw new Error(`packed artifact missing ${required}`);
   }
   for (const file of listing) {
     if (/\.(?:ts|map)$/u.test(file) || /node_modules|packages\/core|src\//u.test(file)) throw new Error(`packed artifact leaks workspace source: ${file}`);
   }
+  for(const name of ['manifest.json','setup.html','worker.js'])if(!listing.includes(`package/dist/tab-adapter/${name}`))throw new Error('packed optional adapter missing');
 
   const temp = createPackCheckTempRoot();
   try {
@@ -81,6 +82,13 @@ export function packCheck() {
     const entry = path.join(temp, "node_modules", "newton-browser", "dist", "index.js");
     const versionResult = run(process.execPath, [entry, "--version"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();
     if (versionResult !== version) throw new Error(`packed version mismatch: ${versionResult}`);
+    const adapterBefore=JSON.parse(run(process.execPath,[entry,'adapter','status'],{cwd:temp,capture:true,env:isolatedEnv}).stdout);
+    if(adapterBefore.state!=='not_installed')throw new Error('ordinary package installation registered an adapter');
+    const prepare=()=>JSON.parse(run(process.execPath,[entry,'adapter','prepare'],{cwd:temp,capture:true,env:isolatedEnv}).stdout);
+    const prepared=prepare(),repeated=prepare();
+    if(prepared.state!=='prepared'||prepared.extensionId!==repeated.extensionId||prepared.directory!==repeated.directory)throw new Error('packed adapter preparation changed identity');
+    if(!fs.readFileSync(path.join(prepared.directory,'worker.js')).equals(fs.readFileSync(path.join(path.dirname(entry),'tab-adapter/worker.js'))))throw new Error('adapter preparation rebuilt packaged code');
+    if(fs.existsSync(path.join(isolatedEnv.NEWTON_BROWSER_CONFIG_DIR,'tab-adapter-native')))throw new Error('adapter preparation unexpectedly registered a native host');
     const linkedPackage = path.join(temp, "linked-newton-browser");
     fs.symlinkSync(path.dirname(path.dirname(entry)), linkedPackage, process.platform === "win32" ? "junction" : "dir");
     const linkedVersion = run(process.execPath, [path.join(linkedPackage, "dist", "index.js"), "--version"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();

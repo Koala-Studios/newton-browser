@@ -1,6 +1,9 @@
 # No-extension architecture
 
-Status: implemented current architecture, updated 2026-08-19.
+Status: implemented physical architecture, reconciled 2026-09-07. Current decisions live
+in [DECISIONS.md](DECISIONS.md); implementation gaps and repair proposals are in the
+[adversarial audit](ADVERSARIAL_AUDIT_2026-09-07.md). This rationale does not certify the
+agent-facing contract or task reliability.
 
 ## Conclusion
 
@@ -20,7 +23,7 @@ Codex or another MCP client
         -> isolated Newton identity lease
         -> Chrome/Edge process
           -> inherited private CDP pipe
-            -> one Newton-owned target and its frame/worker graph
+            -> active Newton-owned page, owned popups, and frame/worker graphs
 ```
 
 There is no TCP debugging port, MCP listener, installed daemon, extension, proxy, hosted
@@ -35,7 +38,8 @@ popups, and browser services. Denying those destinations produced inert controls
 CSS/icon rendering, sign-out loops, `ERR_BLOCKED_BY_CLIENT`, and connection error `-111`.
 
 The current product therefore uses ordinary Chromium networking. The required session
-`origin` is an initial URL and optional identity-binding key, not an allowlist. Newton does
+`origin` is an exact normalized origin and optional identity-binding key, not an allowlist.
+Startup navigates to its root; deep URLs currently require another action. Newton does
 not intercept Fetch, patch page networking APIs, or disable browser services. A deployment
 that needs destination isolation must enforce it outside Newton.
 
@@ -52,12 +56,17 @@ plaintext state export, unauthenticated debugging ports, or direct reuse of a li
 
 ## Agent efficiency
 
-The public surface remains ten tools with compact accessibility observations, stable refs,
-flat actions, diff results, one canonical outcome envelope, bounded console/network reads,
-and dedicated screenshot image content. Sessions serialize their own commands while
-independent sessions run concurrently.
+The public surface remains ten tools with compact accessibility observations, bounded refs,
+flat actions, observation diffs, outcome envelopes, console/network reads, and dedicated
+screenshot image content. Primitive session commands are serialized. Form batches expand
+outside the queue; synchronous identity recovery can stall independent sessions.
 
-## Safety retained without page breakage
+The current driver computes observations after actions, then the MCP projection discards
+their nodes while those internal reads replace refs. Contradictory output budgets and
+presentation-capped targeting add further repair turns. Compact serialization alone is
+not evidence of an efficient model feedback loop.
+
+## Intended safety properties and current gaps
 
 - isolated process/profile ownership and guardian cleanup;
 - private CDP transport and exact target/session registry;
@@ -67,6 +76,10 @@ independent sessions run concurrently.
 - no arbitrary JavaScript tool;
 - page content treated as untrusted data;
 - non-mutating observation and trusted post-capture raster masking.
+
+The audit reproduces a sensitive-field focus race, false partial-batch prevention, and
+false verified postconditions. Native select also uses DOM mutation and synthetic events.
+These remain defects to correct, not supported exceptions to the intended properties.
 
 ## Explicit non-goals
 

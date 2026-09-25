@@ -1,0 +1,51 @@
+import path from "node:path";
+
+import { ensureConfigDirectory, configDirectory, loadDirectConfiguration, profileStoreDirectory } from "../config.ts";
+import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
+import { openProfileStore } from "./profile-store.ts";
+import { LoginSource } from "./login-source.ts";
+import { EngineHost, ownedEngineConnection,type ExistingPageRequest } from "./engine-host.ts";
+import { connectExistingTab,createExistingTab,discoverExistingBrowser,discoverExistingDirectory,nativeAdvertisements,existingConnectionId } from "../existing-connection.ts";
+
+export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): EngineHost {
+  const directory = configDirectory(env);
+  ensureConfigDirectory(directory);
+  const configuration = loadDirectConfiguration({ directory, env });
+  const store = openProfileStore(profileStoreDirectory(env, directory));
+  const sourceRoot = path.join(directory, "login-sources");
+  const configuredSource = env.NEWTON_BROWSER_LOGIN_SOURCE;
+  const advertisement = env.NEWTON_BROWSER_NATIVE_ADVERTISEMENT;
+
+  const connect = async (sourceId?: string) => {
+    const family = resolveFamily(configuration.browser, env);
+    const executable = discoverBrowserExecutable({family,...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE?{explicitPath:env.NEWTON_BROWSER_BROWSER_EXECUTABLE}:{}),env});
+    if(!executable)throw new Error('configured_browser_unavailable');
+    const source = await LoginSource.open(store, sourceRoot, sourceId ?? configuredSource ?? "default", family);
+    const clone = await source.clone();
+    return ownedEngineConnection({
+      executablePath: executable.path,
+      browserFamily: family,
+      profileStore: store,
+      identityId: clone.identity.id,
+      ephemeralIdentity: true,
+      headless: true,
+    });
+  };
+
+  const connectionsDirectory=path.join(directory,'tab-adapter-native','connections');
+  const connectExisting = async (input: ExistingPageRequest) => {
+    const files=advertisement?[advertisement]:await nativeAdvertisements(connectionsDirectory);
+    const matches=input.connectionId?files.filter(file=>existingConnectionId(file)===input.connectionId):files;
+    if(matches.length!==1)throw new Error(matches.length?'browser_connection_required':'browser_instance_changed');
+    return input.tabId===undefined?createExistingTab(matches[0]!,input.instanceId):connectExistingTab(matches[0]!,input.tabId,input.instanceId);
+  };
+  return new EngineHost(connect,connectExisting,advertisement?()=>discoverExistingBrowser(advertisement):()=>discoverExistingDirectory(connectionsDirectory));
+}
+
+function resolveFamily(preference: "auto" | BrowserFamily, env: NodeJS.ProcessEnv): BrowserFamily {
+  if (preference !== "auto") return preference;
+  if (env.NEWTON_BROWSER_BROWSER_EXECUTABLE) throw new Error("configured_browser_family_required");
+  if (discoverBrowserExecutable({ family: "chrome", env })) return "chrome";
+  if (discoverBrowserExecutable({ family: "edge", env })) return "edge";
+  throw new Error("configured_browser_unavailable");
+}

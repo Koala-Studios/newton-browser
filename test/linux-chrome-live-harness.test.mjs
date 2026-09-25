@@ -35,11 +35,10 @@ test("image pins a full Chrome runtime and no extension tooling", () => {
   assert.doesNotMatch(dockerfile, /xdotool|load-extension|apps\/extension/u);
 });
 
-test("entrypoint runs only the direct owned-process gates", () => {
+test("entrypoint runs only the packed owned-process gates", () => {
   assert.match(entrypoint, /pnpm build/u);
   assert.match(entrypoint, /pnpm pack:check/u);
   assert.match(entrypoint, /pnpm eval:agent-cost/u);
-  assert.match(entrypoint, /pnpm eval:direct-live/u);
   assert.match(entrypoint, /pnpm eval:real-sites/u);
   assert.match(entrypoint, /pnpm smoke:packed-direct/u);
   assert.match(entrypoint, /newton-bounded-command\.mjs|\$BOUNDED_COMMAND/u);

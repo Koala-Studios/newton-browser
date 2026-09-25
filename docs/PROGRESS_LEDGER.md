@@ -1,90 +1,47 @@
 # Newton Browser progress ledger
 
-## Active program — normal-browser direct runtime
+Updated 2026-09-25. This is the authoritative current status; dated audit and worker reports are historical evidence, not competing completion claims. The consolidation is a development checkpoint, not a release.
 
-Newton has one local architecture: stateless MCP `2026-07-28` on stdio, one isolated
-owned Chrome or Edge process per session, private CDP pipes, ordinary Chromium networking,
-and ten compact tools.
+## Source and delivery boundary
 
-The 0.5.1/0.5.2 exact-origin proxy architecture was retired after real login and public
-site evidence showed a systemic incompatibility pattern: valid regional redirects were
-blocked, required CSS/font/image/API resources were denied, controls could become inert,
-and browser-generated `ERR_BLOCKED_BY_CLIENT` pages replaced the real site. The current
-implementation removes that network boundary instead of accumulating provider-specific
-allowlists.
+The replacement lives in the `421a` worktree, based on `f2ae1ee` (package version remains 0.6.4). The older `C:\DEV\newton-browser` checkout contains an earlier dirty copy and must not overwrite this implementation. The approved architecture is [SESSION_ENGINE_DESIGN.md](SESSION_ENGINE_DESIGN.md); the detailed remaining checklist is [final push.md](../final%20push.md). All implementation and QA are solo. Earlier worker handoff instructions are superseded.
 
-## Definition of complete
+The default MCP path now constructs `EngineHost` and uses `SessionEngine`/`PageExecutor`. Claims that it is still fill-only, accepts only an origin, or has not cut over are obsolete. The old direct host, parser and several CLI/test consumers still survive: default cutover is implemented; legacy retirement is not.
 
-| Gate | Required evidence | State |
-| --- | --- | --- |
-| Single architecture | no extension, relay, daemon, socket continuity, current-tab, legacy MCP, proxy, origin grants, or Fetch containment | pass: boundary scan |
-| Modern MCP | exact 2026-07-28 metadata/discovery/result/cancellation; old handshake/framing rejected | pass: deterministic and packed discovery |
-| Normal browser behavior | redirects/resources/frames/workers/popups/background dependencies are not denied or rewritten by Newton | pass: Chrome/Edge cross-origin navigation and nested-frame live proof |
-| Rendering integrity | no network-altering launch flags, injected UI, focus emulation, persistent observers, or script/animation freeze | pass in source; representative live surfaces render without Newton block/error signatures |
-| Direct runtime | source and exact-packed start/observe/act/screenshot/stop in Chrome and Edge | pass: seven-stage source suites and packed artifact |
-| Concurrency | same-session FIFO, cross-session progress, distinct processes/identities, zero residue | pass: Chrome and Edge live |
-| Frames/input/lifecycle | same-process and nested OOPIF actions, owned popup/new-tab activation and opener restoration, dialogs, renderer/process loss, guardian cleanup, stale-ref fencing, bounded same-document ref recycling | pass: deterministic plus current-tree Chrome/Edge secondary-page live proof |
-| Compact output | token budgets, flat actions, one canonical result shape, image-only screenshots | pass: 2,881-token catalog and 658-token workflow |
-| Real-site usability | usable video, community, commerce, advertising, reference, and standards pages; no blocked/error pages or raw icon ligatures | seven logged-out production surfaces pass in Chrome |
-| Packaging | exact tarball install/run, source-free artifacts, bounded receipts, zero residue | pass: Chrome and Edge, identical SHA-256 |
-| Authorized opaque import | closed local profile copied through the narrow opaque allowlist, source untouched, owned identity cleanup | final QA pending |
-| Release stability | three consecutive unchanged-tree release checks after all live QA and documentation freeze | final gate: recorded by consecutive release command receipts without post-run source edits |
+## Implemented and exercised
 
-## Current implementation inventory
+| Area | Current behavior and evidence boundary |
+| --- | --- |
+| Shared execution | Per-session serialized actions/reads, bounded sequences, monotonic command IDs, duplicate joining, retained receipts, cancellation and independent session stop. Dispatch, postcondition and optional feedback are distinct. Resource/startup shutdown stress remains open. |
+| Owned browsers | Complete HTTP(S) start URL, blank-first private CDP, guardian ownership, isolated headless Chrome/Edge processes and writable identities. Normal Chromium networking remains unrestricted by Newton. |
+| Targeting and actions | Frame/document-stamped refs, semantic/selector resolution, shadow-aware focus/hits, native fill/type/clear, click variants/hover, keys, scroll, navigation/history, waits, dialogs, popups and explicit page selection. Native select supports a single native selection; custom/multiple selection is not silently emulated. |
+| Precise editing | Strict exact-match `edit`, optional prefix/suffix/occurrence, grapheme-aware bounded native selection, verified offsets, native insertion/deletion and unchanged surrounding text checks. Cancellation after selection leaves text untouched. Tested on actual Chrome inputs, multiline/Unicode and simple inline contenteditable; persisted real rich-editor and adapter/platform parity remain unproven. |
+| Feedback and reading | Action-local field/validation feedback, native related combobox options, destination metadata, one generation-aware read refresh, stable public refs, contextual controls, typed links/tables/forms, record deltas and immutable document continuation. Bounded text wait checks outside main/article too. Closed-shadow document coverage and consistently useful compact next-state feedback remain incomplete. |
+| Visual/files | Screenshot budgets, trusted native sensitive-region masking, coordinate provenance, owned viewport resize, bounded image/video file upload, full-page and hidden borrowed-tab capture work. Full adversarial visual/cleanup/platform matrix remains open. |
+| Shared login | Closed Newton-owned immutable source generation, opaque narrow copies into separate identities, maintenance/publication/recovery, refresh and explicit collection CLI. Worker changes never merge back. Real provider login/revocation and CLI interruption acceptance remain open. |
+| Existing browser | Optional thin tab adapter and native messaging use the same engine. Explicit operator selection, per-worker owned tabs, concurrent separate tabs, disconnect/claim cleanup and staged update/rollback have source and historical packed Chrome evidence. Standalone does not depend on the extension. |
+| Installation | Immutable runtime/launcher artifacts, Windows Chrome/Edge layout and Linux user-local registration code exist. Windows foundation evidence is broader than current Linux evidence. Actual Linux executable/registration/unregister and full Edge existing-mode acceptance are not established. |
+| Release preparation | Streaming tracked/untracked candidate digest includes source and rejects unstable/unsafe paths; exact generated directories are excluded. Existing local release script uses it. The grouped test runner and full release harness still need independent completion. |
 
-- Deleted: MV3 extension/store assets, relay/pairing, socket continuity, legacy MCP,
-  finalize aliases, policy proxy, origin-grant configuration/CLI, CDP Fetch interception,
-  request denial, popup containment tickets, and blocked-origin result metadata.
-- Retained: isolated process/profile ownership, guardian cleanup, private CDP pipe,
-  application session IDs, FIFO/idempotency, target/frame topology generations, identity
-  leases, trusted input, post-action verification, raster masking, bounded console/network
-  evidence, and authorized opaque profile import.
-- Removed page interference: persistent main-world observers, focus emulation, script
-  disabling, animation freezing, and browser flags that disable normal services.
-- Corrected dynamic-page targeting: attached waits no longer require visibility, hidden
-  responsive selector duplicates are ignored when exactly one visible match exists, and
-  selector/semantic fill may refresh a target only before any input is dispatched.
-- Session-owned secondary pages are bounded and isolated as page contexts. Newton discovers
-  but does not attach to or activate a provisional blank target. After the page commits to
-  HTTP(S), it is attached, configured, activated, and given a fresh registry. Closing it
-  restores a freshly rebuilt opener context; browser chrome is never clicked.
-- Public MCP: ten tools; no resources, prompts, daemon, subscriptions, or
-  connection-scoped state. Session start accepts one initial `origin`, plus optional
-  browser-family and identity selection.
-- Network response bodies remain a read-output privacy boundary: Newton returns text only
-  for the current visible origin. This does not block the browser request.
-- Post-dispatch integrity: background POST/GraphQL/telemetry is not an action gate;
-  `prevented` is pre-dispatch only, and uncertain dispatched input is never retry-safe.
+## Verification register
 
-## Evidence policy
+- Source checkpoint from 2026-09-08: **841 passed, zero failures/skips**, plus typecheck. See [solo evidence](../test/evidence/astra-solo-foundations-2026-09-08.md).
+- Fresh consolidation checks and Git scope are recorded in [CONSOLIDATION_2026-09-25.md](implementation/CONSOLIDATION_2026-09-25.md). Historical counts are not substituted for fresh results.
+- Latest historical packed candidate is v53: 13 files, 329700 bytes, SHA-256 `038bb2482517f3bfcb6e543d08b217134a40c001eade78a772101164cacc18ad`. It predates subsequent feedback, precise-edit and platform changes. It does not certify this tree.
+- Historical v53 public scripted QA: Wikipedia, GitHub issues and W3C, 27 calls and no recorded recovery, 53304 output text tokens plus 4808 catalog tokens. This is not measured model reasoning cost or authenticated acceptance.
+- Historical MDN model run: seven public calls. Later source MDN checks improved the search-to-result oracle. Neither is matched ChatGPT parity evidence.
+- No completed three-pass unchanged-candidate release sequence exists for this replacement. No npm/store release is authorized by this checkpoint push.
 
-Final receipts under `test/evidence/` identify the exact source digest, platform,
-browser/runtime versions, bounded results, package hash/entries, residue facts, and release
-pass ordinal. They may contain fixed codes, counts, categories, and hashes only; never
-credentials, profile contents, private page content, or raw CDP logs.
+## Remaining work / closure criteria
 
-`bugs.md`, comparative audits, and earlier receipts are historical engineering records.
-They do not describe the current network contract unless explicitly marked current.
+| Gap | Exact remaining work |
+| --- | --- |
+| Useful next state / model cost | Finish action-specific dialog/menu/search feedback and compact control projection; distinguish all omission/readiness causes; prove navigation returns actionable refs without routine repair observe; measure model turns, output tokens, waits and recovery. |
+| Reading / edit conformance | Closed-shadow rendered document reading, consistent cross-frame exclusions and bounded acquisition; real virtualized tables/lists; selection drift, focus/sensitivity changes, rich normalization/persistence, Edge/Linux/borrowed edit and select coverage. |
+| Lifecycle / visual reliability | Bound pending startup/stop paths, test host/renderer/adapter loss and resource churn, complete hidden capture cleanup and independent pixel/mask oracles across modes. |
+| Login / platform setup | Actual provider authentication sharing from a closed Newton source, refresh/revocation under concurrency, EOF/signal/browser-close maintenance cancellation; real Linux install/chmod/registration/unregister and Edge parity. |
+| Legacy retirement | Migrate doctor, old direct-host consumers, tests and scripts to the shared engine; remove old parser/runtime/exports after behavior coverage is retained. Unimported metadata helper and grouped QA runner are candidates, not completed migration. |
+| Packaging / release harness | Finish current-engine groups and critical-skip enforcement, assert packed production contents and update stability, freeze an exact candidate, run actual packed both-mode/platform acceptance and three unchanged release gates. |
+| Everyday acceptance | Complete real authenticated forms, persisted editing, visual/embedded interfaces, shared login and matched model tasks. Fixtures and public read-only sites are insufficient. |
 
-## Current Windows evidence
-
-- Build and strict typecheck: pass.
-- Deterministic tests: 490 passed, 0 failed, 0 skipped.
-- Evaluations: 41 passed; agent-cost catalog 2,881/3,000 tokens and workflow
-  658/2,100 tokens.
-- Chrome and Edge source live suites: seven of seven stages pass for each family. The
-  direct-runtime stage first creates an exact stale lease on a bound persistent identity,
-  automatically recovers it while an unrelated ordinary Chrome window remains open, then
-  replaces 260 controls through four same-document generations, observes 250 nodes each
-  cycle, opens and controls a secondary page, restores its opener, and continues navigation
-  and exact cleanup. Windows Edge uses its family-specific compatibility-layer bypass so
-  inherited private CDP pipe handles survive startup.
-- Exact 0.6.4 packed-artifact verification is part of the frozen-candidate release gate
-  below; Chrome and Edge must produce one identical artifact hash.
-- Release stability is the last external gate. Its three consecutive command receipts are
-  authoritative because writing their result back into this file would change the tested
-  source digest after the fact.
-- Real public sites: RFC Editor, Wikipedia, YouTube, Reddit's public corporate surface,
-  Mercato di Bellina search/fill, W3C accessibility, and a public advertising surface all pass without Newton
-  block pages or raw icon ligatures. The commerce run also verifies trusted screenshot
-  masking. All sessions, identities, leases, and temporary roots are cleaned exactly.
+Do not mark P00–P14 complete from test counts, code presence, worker claims or old packed receipts. The [defect ledger](../test/evidence/bugs.md) retains detailed fixes and residual findings; [ROADMAP.md](../ROADMAP.md) gives the remaining implementation order.
