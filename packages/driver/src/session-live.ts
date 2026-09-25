@@ -30,7 +30,7 @@ export type EngineOperatorInput =
   | Readonly<{ type: "key"; action: "down" | "up"; key: string; code?: string; text?: string; modifiers?: number; keyCode?: number }>
   | Readonly<{ type: "text"; text: string }>;
 
-type FrameSubscription = { route: string; listeners: Set<(frame: EngineFrame) => void | Promise<void>>; busy: Set<unknown>; latest: Map<unknown, EngineFrame> };
+type FrameSubscription = { route: string; listeners: Set<(frame: EngineFrame) => void | Promise<void>>; busy: Set<unknown>; latest: Map<unknown, EngineFrame>; last?: EngineFrame };
 
 /** Live view, takeover input, authenticator and host events for one executor's pages. */
 export class SessionLive {
@@ -122,6 +122,8 @@ export class SessionLive {
         maxWidth: bounded(options.maxWidth, 1280, 160, 3840), maxHeight: bounded(options.maxHeight, 900, 120, 2160), everyNthFrame: 1 }, route);
     }
     subscription.listeners.add(listener);
+    // Chromium sends frames only when the page changes: a listener joining a running screencast starts from the latest one.
+    if (subscription.last) this.deliver(subscription, listener, subscription.last);
     const current = subscription;
     return async () => {
       current.listeners.delete(listener); current.latest.delete(listener); current.busy.delete(listener);
@@ -139,6 +141,7 @@ export class SessionLive {
     const metadata = object(params.metadata);
     const frame: EngineFrame = { pageId, data: params.data, mimeType: "image/jpeg",
       width: Number(metadata.deviceWidth) || 0, height: Number(metadata.deviceHeight) || 0, timestamp: Number(metadata.timestamp) || Date.now() / 1000 };
+    subscription.last = frame;
     for (const listener of subscription.listeners) this.deliver(subscription, listener, frame);
   }
 
