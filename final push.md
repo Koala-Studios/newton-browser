@@ -2,6 +2,8 @@
 
 Audit date: 2026-09-08. This is the remaining execution contract, not a release claim.
 
+Continuation guide, reconciled 2026-09-25: [CONTINUATION_HANDOFF.md](docs/implementation/CONTINUATION_HANDOFF.md). Start there for current implementation facts, exact code paths and batch instructions; the original baseline and old worker assignments below are historical.
+
 Consolidated 2026-09-25: current status is [docs/PROGRESS_LEDGER.md](docs/PROGRESS_LEDGER.md), with fresh build/typecheck and 841 passing tests. Boundary lint remains failing; details and push scope are in [CONSOLIDATION_2026-09-25.md](docs/implementation/CONSOLIDATION_2026-09-25.md). This checklist retains its original baseline; do not interpret its old missing-edit/default-cutover descriptions as current facts.
 
 Latest execution rule from Frank: Astra completes all implementation, review, QA and testing alone. Do not message, assign, poll or wait for either former worker; let already-running assignments finish. No subagents or other workers. This supersedes all delegation instructions below and in earlier handoffs. Independently inspect any concurrent output before incorporating it.

@@ -2,6 +2,8 @@
 
 Updated 2026-09-25. This is the authoritative current status; dated audit and worker reports are historical evidence, not competing completion claims. The consolidation is a development checkpoint, not a release.
 
+Continuation entry point: [in-depth worker handoff](implementation/CONTINUATION_HANDOFF.md), with the exact branch/checkpoint, source map, ordered batches, known traps, commands and completion criteria. It supersedes dated staffing instructions and missing-feature assumptions in older packet notes.
+
 ## Source and delivery boundary
 
 The replacement lives in the `421a` worktree, based on `f2ae1ee` (package version remains 0.6.4). The older `C:\DEV\newton-browser` checkout contains an earlier dirty copy and must not overwrite this implementation. The approved architecture is [SESSION_ENGINE_DESIGN.md](SESSION_ENGINE_DESIGN.md); the detailed remaining checklist is [final push.md](../final%20push.md). All implementation and QA are solo. Earlier worker handoff instructions are superseded.

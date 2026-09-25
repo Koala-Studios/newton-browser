@@ -1,5 +1,7 @@
 # Consolidation checkpoint — 2026-09-25
 
+For implementation continuation, start with [CONTINUATION_HANDOFF.md](CONTINUATION_HANDOFF.md). Creating this guide did not start or contact a worker.
+
 ## Scope
 
 Consolidates the replacement implementation, tests, plans and reviewed evidence summaries from the authoritative `421a` worktree, based on `f2ae1ee71c66bea3488926df8332bec2d1ec7cfc`. The review branch is `codex/newton-browser-consolidation-2026-09-25`. The existing `origin` is the public Koala-Studios/newton-browser repository. Frank explicitly requested consolidation and push; no merge, tag, npm publication or store release is included.
