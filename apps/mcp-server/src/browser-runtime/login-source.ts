@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { BrowserDisplay } from "./chromium-process.ts";
 import { createNewtonIdentity, inspectNewtonIdentityLease, recoverStaleNewtonIdentityLease, removeNewtonIdentity, type NewtonProfileIdentity, type ProfileStore } from "./profile-store.ts";
 import { OwnedBrowserRuntime, launchOwnedBrowserRuntime } from "./owned-browser-runtime.ts";
-import { recoverProfileTransaction } from "./profile-transaction-recovery.ts";
+import { recoverProfileTransaction, STORE_TRANSACTION_STALE_MS } from "./profile-transaction-recovery.ts";
 import { freshIdentityClosureVerifier } from "./async-closure.ts";
 
 type Generation = Readonly<{ version: 1; sourceId: string; generation: string; identityId: string; browserFamily: "chrome" | "edge" }>;
@@ -183,6 +183,7 @@ async function copyIdentity(store: ProfileStore, identityId: string): Promise<Ne
     try { return await copyIdentityAttempt(store, identityId); }
     catch (error) {
       if (!(error instanceof Error) || error.message !== "source_copy_busy") throw error;
+      await recoverStaleCopy(store, identityId);
       await waitForCopyAvailability(store, identityId, deadline);
     }
   }
@@ -216,6 +217,16 @@ async function copyIdentityAttempt(store: ProfileStore, identityId: string): Pro
     });
   } finally { activeCopies--; }
 }
+/** A copy that died, possibly in another sandbox, must not block every later clone. Source identities
+ * are never launched and copies are killed after 60 s, so their leases are bounded like store transactions. */
+async function recoverStaleCopy(store: ProfileStore, identityId: string): Promise<void> {
+  try { recoverProfileTransaction(store); } catch { /* busy or changed: wait and try again */ }
+  try {
+    if (inspectNewtonIdentityLease(store, identityId) === "available") return;
+    const family = JSON.parse(await fs.readFile(path.join(store.root, identityId, ".newton-browser-profile.json"), "utf8")).browserFamily;
+    recoverStaleNewtonIdentityLease(store, identityId, await freshIdentityClosureVerifier(family), { foreignOwnerStaleAfterMs: STORE_TRANSACTION_STALE_MS });
+  } catch { /* the copy is still live */ }
+}
 async function waitForCopyAvailability(store: ProfileStore, identityId: string, deadline: number): Promise<void> {
   if (performance.now() >= deadline) throw new Error("source_copy_timeout");
   const leasePath = path.join(store.root, identityId, ".newton-browser-profile-lease");
@@ -229,7 +240,8 @@ async function waitForCopyAvailability(store: ProfileStore, identityId: string, 
     };
     const exists = async (filename: string) => { try { await fs.lstat(filename); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } };
     const check = () => { void Promise.all([exists(leasePath), exists(storeLock)]).then(present => { if (present.every(value => !value)) end(); }, () => end(new Error("source_copy_unavailable"))); };
-    const timer = setTimeout(() => end(new Error("source_copy_timeout")), Math.max(1, deadline - performance.now()));
+    // Wake periodically so a copy that died without removing its files can be recovered.
+    const timer = setTimeout(() => end(performance.now() >= deadline ? new Error("source_copy_timeout") : undefined), Math.max(1, Math.min(5_000, deadline - performance.now())));
     try {
       for (const directory of [store.root, path.join(store.root, identityId)]) {
         const watcher = watch(directory, check); watcher.on("error", () => end(new Error("source_copy_unavailable"))); watchers.push(watcher);

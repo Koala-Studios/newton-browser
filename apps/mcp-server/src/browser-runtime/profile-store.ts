@@ -75,6 +75,7 @@ type Marker = {
   dev: string;
   ino: string;
   ownerPid?: number;
+  ownerPidNamespace?: string;
 };
 
 type FileFact = {
@@ -239,7 +240,8 @@ export function acquireNewtonIdentityLease(store: ProfileStore, id: string): New
     if (pathEntryExists(leasePath, "profile_identity_lease_unreadable")) fail("profile_identity_busy");
     const leaseNonce = nonce();
     const createdAt = new Date().toISOString();
-    const metadata = { version: 1, type: "identity_lease", id: identity.id, browserFamily: identity.browserFamily, nonce: leaseNonce, pid: process.pid, createdAt };
+    const metadata = { version: 1, type: "identity_lease", id: identity.id, browserFamily: identity.browserFamily, nonce: leaseNonce, pid: process.pid, createdAt,
+      ...(PID_NAMESPACE === null ? {} : { pidNamespace: PID_NAMESPACE }) };
     let handle: number | undefined;
     try {
       handle = fs.openSync(leasePath, "wx", 0o600);
@@ -344,6 +346,7 @@ export function recoverStaleNewtonIdentityLease(
   store: ProfileStore,
   id: string,
   verifyBrowserClosed: IdentityLeaseClosureVerifier,
+  options: { foreignOwnerStaleAfterMs?: number } = {},
 ): NewtonIdentityLeaseRecovery {
   requireStore(store);
   const identityId = checkedIdentity(id);
@@ -353,15 +356,22 @@ export function recoverStaleNewtonIdentityLease(
     if (!pathEntryExists(leasePath, "profile_identity_lease_unreadable")) return "available";
     const metadata = readLeaseMetadata(leasePath);
     if (metadata.id !== identity.id || metadata.browserFamily !== identity.browserFamily) fail("profile_identity_lease_invalid");
-    if (processExists(metadata.pid)) fail("profile_identity_lease_active");
-    // The recorded host can be gone while its guardian/browser tree is still
-    // cleaning up. Never infer profile closure from the host PID alone. The
-    // independently supplied verifier is deliberately conservative and proves
-    // that no recorded owner descendant or Chromium process using this exact
-    // Newton identity remains before the exact stale lease is quarantined.
-    assertNoBrowserLocks(identity.path);
-    if (!identityLeaseClosureProved(verifyBrowserClosed, identity.path, "Default", metadata.pid)) {
-      fail("profile_identity_lease_closure_unproved");
+    if (!sameProcessNamespace(metadata)) {
+      // Another sandbox's PID cannot be probed from here, so a process table proves nothing.
+      // Only a caller whose leases are short-lived may release one by age.
+      if (ownerIsLive(metadata, options.foreignOwnerStaleAfterMs)) fail("profile_identity_lease_active");
+      assertNoBrowserLocks(identity.path);
+    } else {
+      if (processExists(metadata.pid)) fail("profile_identity_lease_active");
+      // The recorded host can be gone while its guardian/browser tree is still
+      // cleaning up. Never infer profile closure from the host PID alone. The
+      // independently supplied verifier is deliberately conservative and proves
+      // that no recorded owner descendant or Chromium process using this exact
+      // Newton identity remains before the exact stale lease is quarantined.
+      assertNoBrowserLocks(identity.path);
+      if (!identityLeaseClosureProved(verifyBrowserClosed, identity.path, "Default", metadata.pid)) {
+        fail("profile_identity_lease_closure_unproved");
+      }
     }
     const fileIdentity = leaseFileIdentity(leasePath);
     const quarantine = path.join(identity.path, `.recovered-lease-${nonce()}`);
@@ -430,7 +440,7 @@ function validateLeaseState(state: RegisteredLease, directory: string, leasePath
     || metadata.pid !== state.pid || metadata.createdAt !== state.createdAt) fail("profile_identity_lease_invalid");
 }
 
-function readLeaseMetadata(leasePath: string): { id: string; browserFamily: "chrome" | "edge"; nonce: string; pid: number; createdAt: string } {
+function readLeaseMetadata(leasePath: string): { id: string; browserFamily: "chrome" | "edge"; nonce: string; pid: number; createdAt: string; pidNamespace?: string } {
   let value: unknown;
   try {
     value = JSON.parse(fs.readFileSync(leasePath, "utf8"));
@@ -444,8 +454,9 @@ function readLeaseMetadata(leasePath: string): { id: string; browserFamily: "chr
     || typeof metadata.nonce !== "string" || !/^[a-f0-9]{64}$/.test(metadata.nonce)
     || typeof metadata.pid !== "number" || !Number.isSafeInteger(metadata.pid) || metadata.pid <= 0
     || typeof metadata.createdAt !== "string" || !Number.isFinite(Date.parse(metadata.createdAt))
-    || Object.keys(metadata).sort().join(",") !== "browserFamily,createdAt,id,nonce,pid,type,version") fail("profile_identity_lease_invalid");
-  return metadata as { id: string; browserFamily: "chrome" | "edge"; nonce: string; pid: number; createdAt: string };
+    || (metadata.pidNamespace !== undefined && (typeof metadata.pidNamespace !== "string" || metadata.pidNamespace.length > 80))
+    || Object.keys(metadata).filter(key => key !== "pidNamespace").sort().join(",") !== "browserFamily,createdAt,id,nonce,pid,type,version") fail("profile_identity_lease_invalid");
+  return metadata as { id: string; browserFamily: "chrome" | "edge"; nonce: string; pid: number; createdAt: string; pidNamespace?: string };
 }
 
 function leaseFileIdentity(leasePath: string): LeaseFileIdentity {
@@ -464,6 +475,21 @@ function leaseFileIdentity(leasePath: string): LeaseFileIdentity {
 function sameLeaseFileIdentity(left: LeaseFileIdentity, right: LeaseFileIdentity, renamed: boolean): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size
     && (renamed || (left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs));
+}
+
+/** A PID means something only inside its PID namespace; each sandboxed host has its own. */
+export const PID_NAMESPACE: string | null = (() => { try { return fs.readlinkSync("/proc/self/ns/pid"); } catch { return null; } })();
+export type ProcessOwner = { pid: number; pidNamespace?: unknown; createdAt?: unknown };
+export function sameProcessNamespace(owner: { pidNamespace?: unknown }): boolean {
+  return (owner.pidNamespace ?? null) === PID_NAMESPACE;
+}
+/** An owner in this namespace is live while its PID exists. One in another namespace cannot be
+ * probed: it stays live unless the caller's operation is bounded and the record is older than that bound. */
+export function ownerIsLive(owner: ProcessOwner, foreignStaleAfterMs?: number): boolean {
+  if (sameProcessNamespace(owner)) return processExists(owner.pid);
+  if (foreignStaleAfterMs === undefined) return true;
+  const created = typeof owner.createdAt === "string" ? Date.parse(owner.createdAt) : Number.NaN;
+  return !Number.isFinite(created) || Date.now() - created <= foreignStaleAfterMs;
 }
 
 function processExists(pid: number): boolean {
@@ -628,6 +654,7 @@ function createStage(store: ProfileStore, identity: string, source: "new" | "opa
     identity,
     kind: source === "new" ? "persistent" : "opaque_import",
     ownerPid: process.pid,
+    ...(PID_NAMESPACE === null ? {} : { ownerPidNamespace: PID_NAMESPACE }),
     ...directoryIdentity(stage),
   });
   writeManifest(stage, Object.freeze({ version: 1, id: identity, browserFamily, createdAt: new Date().toISOString(), source }));
@@ -673,7 +700,8 @@ function describeIdentity(store: ProfileStore, target: string, identity: string)
 
 function withStoreLock<T>(store: ProfileStore, operation: () => T): T {
   const lock = path.join(store.root, STORE_LOCK);
-  const value = JSON.stringify({ version: 1, nonce: nonce(), pid: process.pid, storeNonce: requireStore(store).nonce });
+  const value = JSON.stringify({ version: 1, nonce: nonce(), pid: process.pid, storeNonce: requireStore(store).nonce,
+    createdAt: new Date().toISOString(), ...(PID_NAMESPACE === null ? {} : { pidNamespace: PID_NAMESPACE }) });
   let handle: number;
   try {
     handle = fs.openSync(lock, "wx", 0o600);
