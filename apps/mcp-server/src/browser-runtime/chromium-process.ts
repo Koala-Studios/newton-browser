@@ -6,6 +6,7 @@ import type { Readable, Writable } from "node:stream";
 
 import { validateExecutable, type BrowserPlatform } from "./browser-discovery.ts";
 import { CdpPipeTransport, type PrivateCdpTransport } from "./cdp-pipe.ts";
+import { browserMajorVersion, headedUserAgent } from "./browser-user-agent.ts";
 import { egressProxyArgs } from "./egress-proxy.ts";
 import type { GuardianProfileCleanupPlan } from "./profile-store.ts";
 import { ProcessCleanupError, ProcessSupervisor, type SupervisedChild } from "./process-supervisor.ts";
@@ -61,6 +62,8 @@ export type ChromiumLaunchOptions = Readonly<{
   userDataDir: string;
   browserFamily?: "chrome" | "edge";
   headless?: boolean;
+  /** Sent instead of the headless user agent; launchChromium derives it from the browser when omitted. */
+  userAgent?: string;
   display?: BrowserDisplay;
   readyDeadlineMs?: number;
   stderrDiagnosticBytes?: number;
@@ -131,7 +134,8 @@ export async function launchChromium(options: ChromiumLaunchOptions): Promise<Ch
   validateExecutablePath(options.executablePath, options.platform ?? process.platform);
   try { validateUserDataDir(options); } catch { throw new ChromiumLaunchError("profile_validation"); }
   let args: readonly string[];
-  try { args = chromiumLaunchArgs(options); } catch (error) {
+  const userAgent = options.userAgent ?? launchUserAgent(options);
+  try { args = chromiumLaunchArgs({ ...options, ...(userAgent ? { userAgent } : {}) }); } catch (error) {
     if (error instanceof ChromiumLaunchError) throw error;
     throw new ChromiumLaunchError("profile_validation");
   }
@@ -218,13 +222,21 @@ function monitorProcessExit(child: ChildProcess): ProcessExitState {
 export type BrowserDisplay = Readonly<{ width: number; height: number; locale?: string }>;
 export const DEFAULT_BROWSER_DISPLAY: BrowserDisplay = Object.freeze({ width: 1280, height: 900 });
 
-export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "browserFamily" | "platform" | "display" | "proxyServer">): readonly string[] {
+function launchUserAgent(options: ChromiumLaunchOptions): string | undefined {
+  if (options.headless === false || options.spawn) return undefined;
+  const platform = options.platform ?? process.platform;
+  const major = browserMajorVersion(options.executablePath, platform);
+  return major === null ? undefined : headedUserAgent(major, platform, options.browserFamily ?? "chrome");
+}
+
+export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDataDir" | "headless" | "browserFamily" | "platform" | "display" | "proxyServer" | "userAgent">): readonly string[] {
   const display = options.display ?? DEFAULT_BROWSER_DISPLAY;
   if (!Number.isSafeInteger(display.width) || !Number.isSafeInteger(display.height) || display.width < 320 || display.height < 240
     || display.width > 3840 || display.height > 2160 || (display.locale !== undefined && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u.test(display.locale))) {
     throw new ChromiumLaunchError("profile_validation");
   }
   if (options.proxyServer !== undefined && !/^http:\/\/127\.0\.0\.1:\d{1,5}$/u.test(options.proxyServer)) throw new ChromiumLaunchError("profile_validation");
+  if (options.userAgent !== undefined && !/^[\x20-\x7e]{1,300}$/u.test(options.userAgent)) throw new ChromiumLaunchError("profile_validation");
   const directory = path.resolve(options.userDataDir);
   const args = [
     ...SAFE_CHROMIUM_ARGS,
@@ -232,7 +244,7 @@ export function chromiumLaunchArgs(options: Pick<ChromiumLaunchOptions, "userDat
       ? ["--edge-skip-compat-layer-relaunch"]
       : []),
     `--user-data-dir=${directory}`,
-    ...(options.headless === false ? [] : ["--headless=new"]),
+    ...(options.headless === false ? [] : ["--headless=new", ...(options.userAgent ? [`--user-agent=${options.userAgent}`] : [])]),
     `--window-size=${display.width},${display.height}`,
     ...(display.locale ? [`--lang=${display.locale}`, `--accept-lang=${display.locale}`] : []),
     ...(options.proxyServer === undefined ? [] : egressProxyArgs(options.proxyServer)),

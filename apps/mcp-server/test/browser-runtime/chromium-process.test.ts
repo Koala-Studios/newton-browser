@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 import { chromiumLaunchArgs, ChromiumLaunchError, launchChromium } from "../../src/browser-runtime/chromium-process.ts";
+import { browserMajorVersion, headedUserAgent } from "../../src/browser-runtime/browser-user-agent.ts";
 import type { CdpEventListener, CdpParams, PrivateCdpTransport } from "../../src/browser-runtime/cdp-pipe.ts";
 import { acquireNewtonIdentityLease, createNewtonIdentity, openProfileStore, releaseNewtonIdentityLease, validateNewtonIdentityLease } from "../../src/browser-runtime/profile-store.ts";
 
@@ -321,4 +322,17 @@ test("launch accepts an executable beneath a linked ancestor without accepting a
   });
   assert.equal(current.spawnCalls.length, 1);
   await launched.close();
+});
+
+test("headless launches send the browser's ordinary user agent instead of HeadlessChrome", () => {
+  const userDataDir = path.resolve(os.tmpdir(), "newton-browser-ua");
+  const userAgent = headedUserAgent(153, "linux");
+  assert.equal(userAgent, "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36");
+  assert.match(headedUserAgent(148, "darwin"), /\(Macintosh; Intel Mac OS X 10_15_7\).* Chrome\/148\.0\.0\.0 /u);
+  assert.match(headedUserAgent(148, "win32", "edge"), /Windows NT 10\.0.* Edg\/148\.0\.0\.0$/u);
+  assert.ok(chromiumLaunchArgs({ userDataDir, headless: true, userAgent }).includes(`--user-agent=${userAgent}`));
+  assert.equal(chromiumLaunchArgs({ userDataDir, headless: false, userAgent }).some((arg) => arg.startsWith("--user-agent")), false);
+  assert.throws(() => chromiumLaunchArgs({ userDataDir, headless: true, userAgent: "bad\nagent" }), ChromiumLaunchError);
+  assert.equal(browserMajorVersion("/fake/chromium-a", "linux", () => "Chromium 153.0.8010.52 built on Debian GNU/Linux 12 (bookworm)\n"), 153);
+  assert.equal(browserMajorVersion("/fake/chromium-b", "linux", () => { throw new Error("no"); }), null);
 });
