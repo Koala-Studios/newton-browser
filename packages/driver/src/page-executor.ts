@@ -829,17 +829,31 @@ export class PageExecutor implements EngineExecutor {
   /** Host-only: events for the embedding process (never the model). */
   subscribeEvents(listener: (event: EngineSessionEvent) => void): () => void { return this.live.subscribe(listener); }
   /** Host-only: live JPEG frames of a page (the selected one by default). */
-  subscribeFrames(listener: (frame: EngineFrame) => void | Promise<void>, options: EngineFrameOptions & { pageId?: string } = {}): Promise<() => Promise<void>> {
+  async subscribeFrames(listener: (frame: EngineFrame) => void | Promise<void>, options: EngineFrameOptions & { pageId?: string } = {}): Promise<() => Promise<void>> {
     if (this.closed) throw new EngineError("session_closed");
-    return this.live.subscribeFrames(this.bindPage(options.pageId).pageId, listener, options);
+    const page = this.bindPage(options.pageId);
+    await this.front(page);
+    return this.live.subscribeFrames(page.pageId, listener, options);
   }
   /** Host-only: operator input on the same page, used while the session is paused for the operator. */
   async operatorInput(input: EngineOperatorInput, pageId?: string): Promise<void> {
     if (this.closed) throw new EngineError("session_closed");
     const page = this.bindPage(pageId);
+    if ((input.type === "mouse" && input.action === "down") || (input.type === "key" && input.action === "down") || input.type === "text") await this.front(page);
     await this.live.operatorInput(this.directory.route(this.directory.binding(page, 1)), input);
   }
+  /**
+   * Chrome paints, screencasts and fully runs only the tab in front. A tab the site opens takes the front while the
+   * session may keep working on another page, whose reads then stall and whose live view goes blank.
+   */
+  private async front(page: EnginePageStamp): Promise<void> {
+    if (!this.connection.ownsBrowser) return; // Never move the tabs of a person's own browser.
+    let route: string;
+    try { route = this.directory.route(this.directory.binding(page, 1)); } catch { return; }
+    await this.connection.wire.send("Page.bringToFront", {}, route).catch(() => undefined);
+  }
   async readyPage(context: CommandContext, page: EnginePageStamp): Promise<{ page: EnginePageStamp } | { observation: EngineObservation }> {
+    await this.front(page);
     if (!this.pendingNavigations.has(page.pageId)) return { page };
     const committed = await this.awaitCommittedNavigation(context, page);
     return this.pendingNavigations.has(page.pageId) && !committed ? { observation: this.pendingNavigationView(page) } : { page: committed ?? page };
@@ -1226,6 +1240,7 @@ export class PageExecutor implements EngineExecutor {
     } finally {void this.send(binding,"Runtime.releaseObject",{objectId}).catch(()=>undefined);}
   }
   async screenshot(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, rawOptions: unknown): Promise<EngineObservation> {
+    await this.front(page);
     const capture=()=>this.captureScreenshot(context,page,budgetValue,rawOptions,false);
     if(this.connection.ownsBrowser||object(rawOptions).fullPage!==true)return capture();
     const root=this.directory.binding(page,1);
