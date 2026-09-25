@@ -1,4 +1,4 @@
-import { ENGINE_LIMITS, EngineError, boundedInteger, engineErrorCode, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
+import { type EngineControlQuery, ENGINE_LIMITS, EngineError, boundedInteger, engineErrorCode, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
   type EngineInputAction, type EngineObservation, type EngineObservationRecord, type EnginePageStamp, type EnginePostcondition, type EngineReceipt, type EngineStepReceipt, type EngineTarget } from "@newton-browser/core";
 import { CommandContext, engineClock, type EngineClock } from "./command-context.ts";
 import { CommandStore, type CommandRecord } from "./command-store.ts";
@@ -12,8 +12,9 @@ const postconditionKind=(action:EngineInputAction):Exclude<EnginePostcondition,{
 export interface EngineExecutor {
   bindPage(pageId?: string): EnginePageStamp;
   act(context: CommandContext, page: EnginePageStamp, action: EngineInputAction): Promise<EnginePostcondition>;
-  observe(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, recordMode?: boolean, scope?: EngineTarget): Promise<EngineObservation>;
+  observe(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, recordMode?: boolean, scope?: EngineTarget, query?: EngineControlQuery): Promise<EngineObservation>;
   observeAfterAction?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget): Promise<EngineObservation>;
+  readyPage?(context: CommandContext, page: EnginePageStamp): Promise<{ page: EnginePageStamp } | { observation: EngineObservation }>;
   readRecords?(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget):Promise<EngineObservation>;
   readDocument?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, cursor?: string, scope?: EngineTarget): Promise<EngineObservation>;
   screenshot?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, options: unknown): Promise<EngineObservation>;
@@ -21,7 +22,7 @@ export interface EngineExecutor {
   close(): Promise<void>;
 }
 interface QueueItem { kind: "command"; command: EngineCommand; page: EnginePageStamp; record: CommandRecord; bytes: number; context: CommandContext; }
-interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; options?: unknown; complete(value: EngineObservation): void; }
+interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; options?: unknown; complete(value: EngineObservation): void; }
 
 export class SessionEngine {
   readonly sessionId: string;
@@ -82,7 +83,7 @@ export class SessionEngine {
     this.pump();
     return record.result;
   }
-  observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget } = {}): Promise<EngineObservation> {
+  observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery } = {}): Promise<EngineObservation> {
     if(options.recordShape!==undefined&&(options.mode!=='records'||!['controls','links','table','form'].includes(options.recordShape)))throw new EngineError('invalid_arguments');
     if (this.admission !== "open") throw new EngineError("session_closed");
     if (this.queue.length + (this.active ? 1 : 0) >= ENGINE_LIMITS.queueItems) throw new EngineError("queue_full");
@@ -94,6 +95,7 @@ export class SessionEngine {
     const item: ReadItem = { kind: "read", page, maxBytes, bytes: 0, context, complete, ...(options.mode === "document" ? { mode: "document" as const } : options.mode === "records" ? { mode: "records" as const } : {}), ...(options.cursor === undefined ? {} : { cursor: options.cursor }), ...(options.previousSnapshotId === undefined ? {} : { previousSnapshotId: options.previousSnapshotId }) };
     this.queue.push(item);
     if (options.scope) item.scope = options.scope;
+    if (options.query) item.query = options.query;
     if (options.recordShape) item.recordShape=options.recordShape;
     void context.aborted.then(() => {
       const index = this.queue.indexOf(item);
@@ -197,12 +199,18 @@ export class SessionEngine {
       const records=value.records??value.nodes.map(node=>({...node,recordId:node.recordId??node.ref,kind:"control" as const}));
       return readBudget.fits({...value,nodes:[],records,...(item.previousSnapshotId===undefined?{}:{delta:{baseSnapshotId:item.previousSnapshotId,reset:true,resetReason:'baseline_unavailable',added:[],removed:[],changed:[]}})});
     }};
-    const execution = Promise.resolve().then(() => item.mode === "document" && this.executor.readDocument
-      ? this.executor.readDocument(item.context, item.page, budget, item.cursor, item.scope)
+    const execution = Promise.resolve().then(async () => {
+      // A read during a document navigation waits for the new document, or reports it pending.
+      const ready = item.mode !== "screenshot" && this.executor.readyPage ? await this.executor.readyPage(item.context, item.page) : { page: item.page };
+      if ("observation" in ready) return ready.observation;
+      const page = ready.page;
+      return item.mode === "document" && this.executor.readDocument
+      ? this.executor.readDocument(item.context, page, budget, item.cursor, item.scope)
       : item.mode === "screenshot" && this.executor.screenshot
-        ? this.executor.screenshot(item.context, item.page, budget, item.options)
-      : item.mode === 'records' && this.executor.readRecords ? this.executor.readRecords(item.context,item.page,budget,item.recordShape??'controls',item.scope)
-      : this.executor.observe(item.context, item.page, budget, item.mode === "records", item.scope)).then(value => { observation = item.mode === "records" ? this.records(value, item.page, item.maxBytes, item.previousSnapshotId, item.scope,item.recordShape) : value; }).catch(error => {
+        ? this.executor.screenshot(item.context, page, budget, item.options)
+      : item.mode === 'records' && this.executor.readRecords ? this.executor.readRecords(item.context,page,budget,item.recordShape??'controls',item.scope)
+      : this.executor.observe(item.context, page, budget, item.mode === "records", item.scope, item.query);
+    }).then(value => { observation = item.mode === "records" ? this.records(value, item.page, item.maxBytes, item.previousSnapshotId, item.scope,item.recordShape) : value; }).catch(error => {
       observation = { state: "unavailable", errorCode: engineErrorCode(error) };
     });
     await this.reconcile(execution, item.context, () => undefined);

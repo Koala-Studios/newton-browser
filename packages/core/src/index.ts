@@ -10,3 +10,4 @@ export * from "./redaction.ts";
 export * from "./risk.ts";
 export * from "./text-redaction.ts";
 export * from "./transport.ts";
+export * from "./argument-diagnostics.ts";

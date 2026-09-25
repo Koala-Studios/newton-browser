@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ENGINE_ERRORS, EngineError, redactText, asObservationBudget, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
+import { ENGINE_ERRORS, EngineError, asObservationBudget, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
 import { CommandContext } from "./command-context.ts";
 import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
@@ -75,6 +75,9 @@ export class PageExecutor implements EngineExecutor {
   private readonly captures = new Map<string, CaptureRecord>();
   private readonly pointerDocuments = new Map<string, number>();
   private readonly viewportFrames = new Map<string, Promise<void>>();
+  private timezone: string | undefined;
+  // Main-frame document navigations requested but not yet committed or stopped, per page.
+  private readonly pendingNavigations = new Map<string, string>();
   private readonly captureObservations = new Set<string>();
   private documentBytes = 0;
   private nextDocumentSnapshot = 1;
@@ -95,7 +98,8 @@ export class PageExecutor implements EngineExecutor {
     });
     connection.signal.addEventListener("abort", () => { this.closed = true; this.unsubscribe?.(); }, { once: true });
   }
-  async start(url?: string): Promise<EngineObservation> {
+  async start(url?: string, options: { timeoutMs?: number; viewport?: { width: number; height: number }; timezone?: string } = {}): Promise<EngineObservation> {
+    this.timezone = options.timezone;
     this.unsubscribe = this.connection.wire.onEvent(event => {
       // Do not return an async handler to a transport that serializes event delivery.
       try {
@@ -129,7 +133,7 @@ export class PageExecutor implements EngineExecutor {
           const route = event.sessionId ?? ""; const pageId = this.routes.get(route);
           const type = string(event.params.type);
           if (pageId && ["alert", "confirm", "prompt", "beforeunload"].includes(type)) {
-            this.dialogs.set(route, { id: `dialog${this.nextDialog++}`, pageId, route, type: type as "alert" | "confirm" | "prompt" | "beforeunload", message: redactText(string(event.params.message)).slice(0, 512) });
+            this.dialogs.set(route, { id: `dialog${this.nextDialog++}`, pageId, route, type: type as "alert" | "confirm" | "prompt" | "beforeunload", message: string(event.params.message).slice(0, 512) });
             this.dialogWaiters.forEach(wake => wake(pageId));
             this.conditionWaiters.forEach(wake => wake());
           }
@@ -162,8 +166,18 @@ export class PageExecutor implements EngineExecutor {
         } else if (event.method === "Page.frameAttached") {
           if (this.pendingFrames.size >= 128) throw new EngineError("work_limit");
           this.pendingFrames.add(string(event.params.frameId));
+        } else if (event.method === "Page.frameRequestedNavigation" || event.method === "Page.frameStartedNavigating") {
+          const pageId = this.routes.get(event.sessionId ?? "");
+          const sameDocument = event.method === "Page.frameStartedNavigating" && /^(sameDocument|historySameDocument)$/u.test(string(event.params.navigationType));
+          if (pageId && event.params.frameId === pageId && !sameDocument && (event.params.disposition === undefined || event.params.disposition === "currentTab")) {
+            this.pendingNavigations.set(pageId, string(event.params.url).slice(0, 2048));
+          }
+        } else if (event.method === "Page.frameStoppedLoading") {
+          const pageId = this.routes.get(event.sessionId ?? "");
+          if (pageId && event.params.frameId === pageId && this.pendingNavigations.delete(pageId)) this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Page.frameNavigated") {
           const pageId = this.routes.get(event.sessionId ?? "");
+          if (pageId && object(event.params.frame).id === pageId) this.pendingNavigations.delete(pageId);
           if (pageId) this.frame(pageId, object(event.params.frame), event.sessionId!);
           this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Page.frameDetached") {
@@ -177,7 +191,7 @@ export class PageExecutor implements EngineExecutor {
           this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Target.targetDestroyed") {
           const pageId=string(event.params.targetId);
-          this.directory.removePage(pageId);this.domRevisions.delete(pageId);this.attachingPages.delete(pageId);
+          this.directory.removePage(pageId);this.domRevisions.delete(pageId);this.attachingPages.delete(pageId);this.pendingNavigations.delete(pageId);
           this.pageAttachments.get(pageId)?.controller.abort();
           for(const [route,owner] of this.routes)if(owner===pageId){this.directory.detachRoute(route);this.routes.delete(route);this.routeParents.delete(route);this.dialogs.delete(route);}
           this.conditionWaiters.forEach(wake => wake());
@@ -196,8 +210,13 @@ export class PageExecutor implements EngineExecutor {
     const route = string(result.sessionId);
     if (!route) throw new EngineError("connection_lost");
     await this.attach(this.connection.rootTargetId, route, true);
-    const context = new CommandContext(10_000);
+    const context = new CommandContext(options.timeoutMs ?? 30_000);
     try {
+      if (options.viewport && this.connection.ownsBrowser) {
+        // The launch window size includes platform chrome; set the page area exactly.
+        const window = await this.connection.wire.send('Browser.getWindowForTarget', { targetId: this.connection.rootTargetId });
+        if (Number.isSafeInteger(window.windowId)) await this.connection.wire.send('Browser.setContentsSize', { windowId: window.windowId, ...options.viewport });
+      }
       if (url) {
         const navigation = await this.connection.wire.send("Page.navigate", { url }, route);
         if (navigation.errorText) throw new EngineError("navigation_failed");
@@ -374,7 +393,7 @@ export class PageExecutor implements EngineExecutor {
         if(!Array.isArray(accepted.names)||!accepted.names.every(name=>typeof name==='string')||accepted.count!==accepted.names.length)throw new EngineError('evidence_unavailable');
         names=accepted.names as string[];
       }finally{void Promise.resolve().then(()=>this.send(binding,'Runtime.releaseObject',{objectId})).catch(()=>{});}
-      this.localField=binding;this.localFileNames=names.map(name=>redactText(name));
+      this.localField=binding;this.localFileNames=[...names];
       return {state:JSON.stringify(names)===JSON.stringify(prepared.names)?'met':'not_met',kind:'files'};
     }finally{prepared.close();}
   }
@@ -713,6 +732,11 @@ export class PageExecutor implements EngineExecutor {
   }
   async observeAfterAction(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue);
+    // An action that started a document navigation reports the committed
+    // document, not the one being replaced. Keep part of the budget for the read.
+    const navigated = await this.awaitCommittedNavigation(context, page);
+    if (navigated) { page = navigated; this.localField = undefined; this.localFileNames = undefined; }
+    if (this.pendingNavigations.has(page.pageId)) { this.localField = undefined; this.localFileNames = undefined; return this.pendingNavigationView(page); }
     let observed:EngineObservation;
     try{observed=await this.observeLocalFeedback(context,page,budget);}
     catch(error){
@@ -740,6 +764,38 @@ export class PageExecutor implements EngineExecutor {
     if(!budget.fits(view()))throw new EngineError('output_budget');
     return view();
   }
+  async readyPage(context: CommandContext, page: EnginePageStamp): Promise<{ page: EnginePageStamp } | { observation: EngineObservation }> {
+    if (!this.pendingNavigations.has(page.pageId)) return { page };
+    const committed = await this.awaitCommittedNavigation(context, page);
+    return this.pendingNavigations.has(page.pageId) && !committed ? { observation: this.pendingNavigationView(page) } : { page: committed ?? page };
+  }
+  // Chromium stalls accessibility reads of a document whose replacement is
+  // still loading. Report the pending navigation; the next read gets the new page.
+  private pendingNavigationView(page: EnginePageStamp): EngineObservation {
+    const url = this.pendingNavigations.get(page.pageId);
+    return { state: "incomplete", trust: "untrusted_page_content", scope: "page", page, nodes: [], incompleteReason: "evidence_unavailable",
+      navigation: { state: "pending", ...(url ? { url: url.slice(0, 256) } : {}) } };
+  }
+  private async awaitCommittedNavigation(context: CommandContext, page: EnginePageStamp): Promise<EnginePageStamp | undefined> {
+    if (!this.pendingNavigations.has(page.pageId)) {
+      const current = this.directory.stamp(page.pageId);
+      return current.documentGeneration === page.documentGeneration ? undefined : current;
+    }
+    const remaining = context.deadline - performance.now();
+    const deadline = performance.now() + Math.max(0, remaining - Math.min(2_000, remaining / 4));
+    while (this.pendingNavigations.has(page.pageId) && this.directory.stamp(page.pageId).documentGeneration === page.documentGeneration) {
+      if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId) || performance.now() >= deadline) return undefined;
+      try { await this.waitForCondition(context, deadline); } catch (error) { if (error instanceof EngineError && error.code === "timed_out") return undefined; throw error; }
+    }
+    const current = this.directory.stamp(page.pageId);
+    if (current.documentGeneration === page.documentGeneration) return undefined;
+    // Give the new document a bounded moment to parse; read it as it is after that.
+    const loader = this.directory.loader(current), parsed = Math.min(deadline, performance.now() + 1_000);
+    while (!this.lifecycle.get(loader)?.has("DOMContentLoaded") && performance.now() < parsed) {
+      try { await this.waitForCondition(context, parsed); } catch (error) { if (error instanceof EngineError && error.code === "timed_out") break; throw error; }
+    }
+    return this.directory.stamp(page.pageId);
+  }
   private async observeLocalFeedback(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue);
     const binding = this.localField; this.localField = undefined;
@@ -765,7 +821,7 @@ export class PageExecutor implements EngineExecutor {
     const control = projected.controls.find(candidate => candidate.backendNodeId === binding.backendNodeId)??(fileNames&&facts.type==='file'?{view:{role:'button',name:'File input',readonly:false,disabled:facts.disabled}}:undefined);
     if (!control) throw new EngineError("evidence_unavailable");
     const view:Omit<EngineFieldView,'ref'> = { ...control.view,
-      readonly: facts.readonly, disabled: facts.disabled, ...(facts.value === undefined ? {} : { value: redactText(facts.value) }),...(fileNames&&facts.type==='file'?{fileNames,fileCount:fileNames.length}:{}) };
+      ...(facts.readonly ? { readonly: true } : {}), ...(facts.disabled ? { disabled: true } : {}), ...(facts.value === undefined ? {} : { value: facts.value }),...(fileNames&&facts.type==='file'?{fileNames,fileCount:fileNames.length}:{}) };
     // Select the complete public view before allocating its actionable reference.
     const preview=(node:typeof view):EngineObservation=>({state:"incomplete",trust:"untrusted_page_content",scope:"target",page,snapshotId:"s9007199254740991",expiredSnapshots:["s9007199254740991","s9007199254740991"],incompleteReason:"output_limit",nodes:[{...node,ref:"e9007199254740991"}]});
     let selected=view,limited=false;
@@ -811,7 +867,7 @@ export class PageExecutor implements EngineExecutor {
     return { state: !limited && !incomplete ? "available" : "incomplete", trust: "untrusted_page_content", scope: "target", page, snapshotId: published.snapshotId,
       ...(limited?{incompleteReason:"output_limit" as const}:incomplete?{incompleteReason:"work_limit" as const}:{}),expiredSnapshots: published.expiredSnapshots, nodes: feedback.map((node,index)=>({...node,ref:published.refs[index]!})) };
   }
-  async observe(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, recordMode = false, scope?: EngineTarget): Promise<EngineObservation> {
+  async observe(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, recordMode = false, scope?: EngineTarget, query?: EngineControlQuery): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue);
     context.checkpoint();
     const dialog = [...this.dialogs.values()].find(item => item.pageId === page.pageId);
@@ -873,9 +929,9 @@ export class PageExecutor implements EngineExecutor {
         if (frame.frameId === page.frameId) {
           const root = raw.find(node => object(node.role).value === "RootWebArea");
           if (root) {
-            title = redactText(string(object(root.name).value)).slice(0, 256);
+            title = string(object(root.name).value).slice(0, 256);
             const location = string(object(array(root.properties).find(property => property.name === "url")?.value).value);
-            if (location && location.length <= 1024) url = redactText(location);
+            if (location && location.length <= 1024) url = location;
           }
         }
         if (visited > 20_000) { incomplete = true; break; }
@@ -903,11 +959,19 @@ export class PageExecutor implements EngineExecutor {
     // Keep edit/search controls discoverable under a compact default budget. DOM
     // order is retained within each class; navigation-link chrome must not crowd
     // every field out of the initial state.
-    const priority = (role: string) => {
-      return ["textbox", "searchbox", "combobox", "spinbutton", "textarea", "listbox"].includes(role) ? 0
-        : ["button", "checkbox", "radio", "switch", "slider"].includes(role) ? 1 : 2;
+    // A dialog's controls come first: it covers the page and must be handled.
+    const priority = (view: { role: string; context?: readonly { role: string }[] }) => {
+      if (view.context?.some(item => item.role === "dialog" || item.role === "alertdialog")) return -1;
+      return ["textbox", "searchbox", "combobox", "spinbutton", "textarea", "listbox"].includes(view.role) ? 0
+        : ["button", "checkbox", "radio", "switch", "slider", "tab"].includes(view.role) ? 1 : 2;
     };
-    candidates.sort((left, right) => priority(left.view.role) - priority(right.view.role) || Number(right.primary) - Number(left.primary));
+    if (query) {
+      const needle = query.text?.toLocaleLowerCase();
+      const matches = (view: typeof candidates[number]["view"]) => (!query.role || view.role === query.role)
+        && (!needle || [view.name, view.description ?? "", ...(view.context ?? []).map(item => item.name)].some(value => value.toLocaleLowerCase().includes(needle)));
+      for (let index = candidates.length - 1; index >= 0; index--) if (!matches(candidates[index]!.view)) candidates.splice(index, 1);
+    }
+    candidates.sort((left, right) => priority(left.view) - priority(right.view) || Number(right.primary) - Number(left.primary));
     for (const { view: projected, binding } of candidates.slice(0, 512)) {
       try{this.directory.route(binding);}catch(error){
         if(scoped||binding.frameId===page.frameId)throw error;
@@ -986,7 +1050,7 @@ export class PageExecutor implements EngineExecutor {
         if(pending.some(frame=>{const parent=this.directory.parent(frame);return parent&&included.has(parent.frameId);}))extracted.truncated=true;
         for(const frame of participants)this.directory.binding(frame,1);
       }
-      const redacted = redactText(extracted.text);
+      const redacted = extracted.text;
       const text = boundDocumentUtf8(redacted, DOCUMENT_CACHE_BYTES);
       const complete = !extracted.truncated && text.length === redacted.length;
       snapshotId = `d${this.nextDocumentSnapshot++}`;
@@ -1159,6 +1223,7 @@ export class PageExecutor implements EngineExecutor {
     // from waiting for the renderer's five-second animation-frame fallback.
     await send("Overlay.enable");
     await send("Page.setLifecycleEventsEnabled", { enabled: true });
+    if (isPage && this.timezone) await send("Emulation.setTimezoneOverride", { timezoneId: this.timezone });
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     const tree = await send("Page.getFrameTree");
     if(this.routes.get(route)!==pageId)return;

@@ -1,4 +1,4 @@
-import { EngineError, redactText, type EnginePageStamp } from "@newton-browser/core";
+import { EngineError, type EnginePageStamp } from "@newton-browser/core";
 
 export type NodeBinding = Readonly<{
   connectionEpoch: string; claimGeneration: number; pageId: string; frameId: string;
@@ -15,6 +15,8 @@ export class PageDirectory {
   private readonly pages = new Map<string, Page>();
   private readonly refs = new Map<string, NodeBinding>();
   private readonly snapshots: Snapshot[] = [];
+  private readonly liveRefs = new Map<string, string>();
+  static readonly SNAPSHOTS = 8;
   private nextRef = 1;
   private nextSnapshot = 1;
   private nextDocument = 1;
@@ -81,10 +83,10 @@ export class PageDirectory {
   describe(stamp: EnginePageStamp, metadata: {title?:string|undefined;url?:string|undefined}): void {
     const page=this.page(stamp.pageId);this.binding(stamp,1);
     if(stamp.frameId!==page.root)return;
-    if(metadata.title!==undefined)page.title=redactText(metadata.title).slice(0,256);
+    if(metadata.title!==undefined)page.title=metadata.title.slice(0,256);
     if(metadata.url!==undefined){
       delete page.url;
-      try{const url=new URL(metadata.url);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)page.url=redactText(url.href).slice(0,2048);}catch{/* Not a supported browser location. */}
+      try{const url=new URL(metadata.url);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)page.url=url.href.slice(0,2048);}catch{/* Not a supported browser location. */}
     }
   }
   loader(stamp:EnginePageStamp):string {
@@ -122,21 +124,39 @@ export class PageDirectory {
   publish(bindings: readonly NodeBinding[]): { snapshotId: string; refs: readonly string[]; expiredSnapshots: readonly string[] } {
     if (bindings.length > 512) throw new EngineError("work_limit");
     bindings.forEach(binding => this.route(binding));
+    // The same live element keeps its ref across observations, and refs stay
+    // valid for several snapshots so a multi-field form can be filled from one read.
+    const reused = bindings.map(binding => { const ref = this.liveRefs.get(bindingKey(binding)); return ref && this.refs.has(ref) ? ref : undefined; });
     const expiredSnapshots: string[] = [];
-    while (this.snapshots.length >= 2 || this.refs.size + bindings.length > 1024) {
+    const added = reused.filter(ref => ref === undefined).length;
+    while (this.snapshots.length >= PageDirectory.SNAPSHOTS || (this.snapshots.length && this.refs.size + added > 1024)) {
       const snapshot = this.snapshots.shift()!; expiredSnapshots.push(snapshot.id);
-      snapshot.refs.forEach(ref => this.refs.delete(ref));
+      const kept = new Set([...this.snapshots.flatMap(item => item.refs), ...reused.filter((ref): ref is string => ref !== undefined)]);
+      for (const ref of snapshot.refs) if (!kept.has(ref)) this.forget(ref);
     }
     const snapshot: Snapshot = { id: `s${this.nextSnapshot++}`, refs: [] };
-    bindings.forEach(binding => { const ref = `e${this.nextRef++}`; this.refs.set(ref, binding); snapshot.refs.push(ref); });
+    bindings.forEach((binding, index) => {
+      let ref = reused[index];
+      if (!ref || !this.refs.has(ref)) { ref = `e${this.nextRef++}`; this.refs.set(ref, binding); this.liveRefs.set(bindingKey(binding), ref); }
+      snapshot.refs.push(ref);
+    });
     this.snapshots.push(snapshot);
     return { snapshotId: snapshot.id, refs: snapshot.refs, expiredSnapshots };
+  }
+  private forget(ref: string): void {
+    const binding = this.refs.get(ref);
+    if (binding && this.liveRefs.get(bindingKey(binding)) === ref) this.liveRefs.delete(bindingKey(binding));
+    this.refs.delete(ref);
   }
   private page(id: string): Page { const page = this.pages.get(id); if (!page) throw new EngineError("unknown_page"); return page; }
   private removeDescendants(page: Page, id: string): void {
     for (const frame of [...page.frames.values()]) if (frame.parentId === id) { this.removeDescendants(page, frame.id); page.frames.delete(frame.id); }
   }
   private pruneRefs(): void {
-    for (const [ref, binding] of this.refs) { try { this.route(binding); } catch { this.refs.delete(ref); } }
+    for (const [ref, binding] of this.refs) { try { this.route(binding); } catch { this.forget(ref); } }
   }
+}
+
+function bindingKey(binding: NodeBinding): string {
+  return `${binding.connectionEpoch}:${binding.claimGeneration}:${binding.pageId}:${binding.frameId}:${binding.documentGeneration}:${binding.backendNodeId}`;
 }

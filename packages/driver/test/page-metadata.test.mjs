@@ -120,7 +120,7 @@ test("stale describe stamps cannot overwrite newer root document metadata", () =
   });
 });
 
-test("titles are bounded and redacted, while credential and non-HTTP URLs are not exposed", () => {
+test("titles are bounded and kept as written, while credential and non-HTTP URLs are not exposed", () => {
   const value = directory();
   value.addPage("p1");
   const stamp = navigateRoot(value, "p1", "loader-1", "https://user:password@example.com/private");
@@ -132,8 +132,7 @@ test("titles are bounded and redacted, while credential and non-HTTP URLs are no
   const entry = inventoryEntry(value, "p1");
   assert.equal(entry?.url, undefined);
   assert.equal(entry?.title?.length, 256);
-  assert.ok(entry?.title?.includes("[REDACTED]"));
-  assert.equal(entry?.title?.includes("secret"), false);
+  assert.ok(entry?.title?.startsWith("Bearer abcdefghijklmnopqrstuvwxyz token=secret"), "page text reaches the model unchanged");
 });
 
 test("removing a page invalidates its refs without corrupting another page", () => {

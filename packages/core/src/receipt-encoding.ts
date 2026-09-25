@@ -1,5 +1,4 @@
 import { EngineError, type EngineReceipt, type EngineObservation } from "./command-contract.ts";
-import { redactText } from "./text-redaction.ts";
 
 /** The reader and final encoder share this exact escaped MCP result envelope. */
 export function encodeEngineResult(value: unknown, maxBytes?: number) {
@@ -9,7 +8,7 @@ export function encodeEngineResult(value: unknown, maxBytes?: number) {
     const record=value as Record<string,unknown>,observation=record.observation as EngineObservation;
     if(observation&&(observation.state==='available'||observation.state==='incomplete')) {
       const {imageData,...rest}=observation;
-      safe={...record,observation:{...rest,nodes:rest.nodes.map(node=>({...node,name:redactText(node.name),...(node.value===undefined?{}:{value:redactText(node.value)})}))}};
+      safe={...record,observation:rest};
       if(typeof imageData==='string'&&typeof observation.mimeType==='string')image={type:'image',data:imageData,mimeType:observation.mimeType};
     }
   }

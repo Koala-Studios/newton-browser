@@ -35,13 +35,17 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
     // An article's broad link tree must not exhaust traversal before a deeply
     // nested search/form field. Query these scarce high-value roles in Chromium,
     // then fetch their ancestor paths for the same scope/context projection.
-    const matches = await Promise.allSettled(['searchbox','textbox','combobox'].map(role => send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role})));
+    // Deep action controls (add to cart, quantity, options) sit below any
+    // breadth-first bound on real storefronts, so query them directly too.
+    const queried: [string, number][] = [['searchbox',16],['textbox',16],['combobox',16],['spinbutton',16],['button',64],['checkbox',16],['radio',24],['switch',8],['tab',16],['slider',8]];
+    const matches = await Promise.allSettled(queried.map(([role]) => send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role})));
     const fields: Ax[] = [];
-    for (const result of matches) {
-      if (result.status === 'rejected') { incomplete = true; continue; }
-      const batch = nodes(result.value.nodes); if (batch.length > 16) incomplete = true;
-      fields.push(...batch.slice(0,16));
-    }
+    matches.forEach((result, index) => {
+      if (result.status === 'rejected') { incomplete = true; return; }
+      const cap = queried[index]![1];
+      const batch = nodes(result.value.nodes).filter(node => !node.ignored); if (batch.length > cap) incomplete = true;
+      fields.push(...batch.slice(0, cap));
+    });
     add(fields);
     for (let index=0;index<fields.length;index+=8) {
       const paths=await Promise.allSettled(fields.slice(index,index+8).map(node => send('Accessibility.getAXNodeAndAncestors',{backendNodeId:node.backendDOMNodeId})));
@@ -86,5 +90,23 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
       if (Array.isArray(children) && children.some(child => typeof child === 'string' && !found.has(child))) incomplete = true;
     }
   }
+  markMainContent(found, primary);
   return {nodes: [...found.values()], incomplete, primary};
+}
+
+/** Controls inside the page's single main landmark rank ahead of site chrome. */
+function markMainContent(found: Map<string, Ax>, primary: Set<number>): void {
+  const mains = [...found.values()].filter(node => object(node.role).value === 'main' && !node.ignored);
+  if (mains.length !== 1) return;
+  const parent = new Map<string, string>();
+  for (const node of found.values()) {
+    if (typeof node.parentId === 'string') parent.set(String(node.nodeId), node.parentId);
+    if (Array.isArray(node.childIds)) for (const child of node.childIds) if (typeof child === 'string') parent.set(child, String(node.nodeId));
+  }
+  const main = String(mains[0]!.nodeId);
+  for (const node of found.values()) {
+    if (!Number.isSafeInteger(node.backendDOMNodeId)) continue;
+    let id = parent.get(String(node.nodeId));
+    for (let depth = 0; id && depth < 256; depth++, id = parent.get(id)) if (id === main) { primary.add(Number(node.backendDOMNodeId)); break; }
+  }
 }

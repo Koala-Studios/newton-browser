@@ -1,4 +1,4 @@
-import { EngineError, redactText } from '@newton-browser/core';
+import { EngineError } from '@newton-browser/core';
 import type { CommandContext } from './command-context.ts';
 import type { NodeBinding } from './page-directory.ts';
 import { DOCUMENT_READ_FUNCTION } from './document-reader.ts';
@@ -70,10 +70,10 @@ export async function readNativeTable(context:CommandContext,binding:NodeBinding
     const cells:TableSourceCell[]=raw.map((cell,index)=>{
       if(typeof cell.text!=='string'||typeof cell.header!=='boolean')throw new EngineError('evidence_unavailable');
       totalChars+=cell.text.length+list(cell.links).reduce((sum,link)=>sum+String(link.label??'').length+String(link.href??'').length,0);
-      return {id:'cell'+String(children[index]!.backendNodeId),header:cell.header,text:redactText(cell.text),rowSpan:Number(cell.rowSpan),colSpan:Number(cell.colSpan),
+      return {id:'cell'+String(children[index]!.backendNodeId),header:cell.header,text:String(cell.text),rowSpan:Number(cell.rowSpan),colSpan:Number(cell.colSpan),
         domId:String(cell.domId??''),scope:['row','col','rowgroup','colgroup'].includes(String(cell.scope))?cell.scope as NonNullable<TableSourceCell['scope']>:'auto',
         ...(Array.isArray(cell.explicitHeaders)?{explicitHeaders:cell.explicitHeaders.map(String)}:{}),
-        links:list(cell.links).map(link=>({label:redactText(String(link.label??'')),href:redactText(String(link.href??''))}))};
+        links:list(cell.links).map(link=>({label:String(link.label??''),href:String(link.href??'')}))};
     });
     if(totalChars>262144)throw new EngineError('work_limit');
     truncated ||= facts.truncated===true;

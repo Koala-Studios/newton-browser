@@ -57,12 +57,14 @@ export type EngineStepReceipt = Readonly<{
   index: number; dispatch: EngineDispatch; postcondition: EnginePostcondition; errorCode?: EngineErrorCode;
 }>;
 export type EngineFieldView = Readonly<{
-  ref: string; recordId?: string; role: string; name: string; value?: string; readonly: boolean; disabled: boolean;
+  ref: string; recordId?: string; role: string; name: string; value?: string; readonly?: boolean; disabled?: boolean;
   checked?: boolean | "mixed"; selected?: boolean; expanded?: boolean; required?: boolean; href?: string; elementType?: string;
   context?: readonly Readonly<{ role: string; name: string }>[];
   invalid?: boolean; validation?: readonly string[]; description?: string;
   fileNames?: readonly string[]; fileCount?: number;
 }>;
+/** Narrow an observation to controls with this role and/or containing this text (name, description or context). */
+export type EngineControlQuery = Readonly<{ role?: string; text?: string }>;
 export type EngineControlRecord = EngineFieldView & Readonly<{ recordId: string; kind: "control" | "link" }>;
 export type EngineTableRecord = Readonly<{
   kind:"table";recordId:string;ref:string;name:string;coverage:"rendered";
@@ -93,6 +95,7 @@ export type EngineObservation =
       title?: string; url?: string;
       newPages?: readonly (EnginePageStamp & {openerPageId?:string;selected:boolean;title?:string;url?:string})[];
       newPagesIncomplete?: boolean;
+      navigation?: Readonly<{ state: "pending"; url?: string }>;
       dialog?: Readonly<{ dialogId: string; type: "alert" | "confirm" | "prompt" | "beforeunload"; message: string }>;
       nodes: readonly EngineFieldView[]; records?: readonly EngineObservationRecord[]; delta?: EngineObservationDelta; text?: string; cursor?: string; complete?: boolean; imageData?: string; mimeType?: string;
       provenance?: Readonly<{ pageId: string; documentGeneration: number; captureId: string; viewport: Readonly<{ width: number; height: number }>; clip: Readonly<{ x: number; y: number; width: number; height: number }>; maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable" }> }>;

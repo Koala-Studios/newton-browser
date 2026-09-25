@@ -165,10 +165,15 @@ test('document and snapshot generations are independent; late OOPIF detach is ha
   assert.equal(d.route(d.resolve(one.refs[0], 'p1')), 'b');
   d.navigate('p1', { frameId: 'root', route: 'a', loaderId: 'late' });
   assert.equal(d.route(binding),'b');
-  d.publish([binding]); const three = d.publish([binding]);
-  assert.deepEqual(three.expiredSnapshots, [one.snapshotId]); assert.throws(() => d.resolve(one.refs[0], 'p1'), /stale_target/);
+  const three = d.publish([binding]);
+  assert.equal(three.refs[0], one.refs[0], 'the same live element keeps its ref');
+  for (let index = 0; index < 6; index++) d.publish([]);
+  const other = d.publish([d.binding(stamp, 8)]);
+  assert.deepEqual(other.expiredSnapshots, [one.snapshotId]);
+  assert.equal(d.route(d.resolve(one.refs[0], 'p1')), 'b', 'a ref lives while any retained snapshot lists it');
+  assert.deepEqual(d.publish([]).expiredSnapshots, [three.snapshotId]); assert.throws(() => d.resolve(one.refs[0], 'p1'), /stale_target/);
   d.navigate('p1', { frameId: 'root', route: 'b', loaderId: 'l2' });
-  assert.throws(() => d.resolve(three.refs[0], 'p1'), /stale_target/);
+  assert.throws(() => d.resolve(other.refs[0], 'p1'), /stale_target/);
   assert.equal(d.stamp().documentGeneration, stamp.documentGeneration + 1);
 });
 

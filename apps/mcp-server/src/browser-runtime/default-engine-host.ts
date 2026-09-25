@@ -5,6 +5,7 @@ import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discove
 import { openProfileStore } from "./profile-store.ts";
 import { LoginSource } from "./login-source.ts";
 import { EngineHost, ownedEngineConnection,type ExistingPageRequest } from "./engine-host.ts";
+import type { BrowserDisplay } from "./chromium-process.ts";
 import { connectExistingTab,createExistingTab,discoverExistingBrowser,discoverExistingDirectory,nativeAdvertisements,existingConnectionId } from "../existing-connection.ts";
 
 export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): EngineHost {
@@ -16,7 +17,7 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
   const configuredSource = env.NEWTON_BROWSER_LOGIN_SOURCE;
   const advertisement = env.NEWTON_BROWSER_NATIVE_ADVERTISEMENT;
 
-  const connect = async (sourceId?: string) => {
+  const connect = async (sourceId?: string, display?: BrowserDisplay) => {
     const family = resolveFamily(configuration.browser, env);
     const executable = discoverBrowserExecutable({family,...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE?{explicitPath:env.NEWTON_BROWSER_BROWSER_EXECUTABLE}:{}),env});
     if(!executable)throw new Error('configured_browser_unavailable');
@@ -29,6 +30,7 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
       identityId: clone.identity.id,
       ephemeralIdentity: true,
       headless: true,
+      ...(display ? { display } : {}),
     });
   };
 

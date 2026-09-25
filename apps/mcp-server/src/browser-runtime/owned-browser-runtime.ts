@@ -1,6 +1,6 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 
-import {
+import { type BrowserDisplay,
   ChromiumLaunchError,
   ChromiumProcess,
   launchChromium,
@@ -73,6 +73,7 @@ export type LaunchOwnedBrowserRuntimeOptions = Readonly<{
   profileStore: ProfileStore;
   identityId: string;
   headless?: boolean;
+  display?: BrowserDisplay;
   readyDeadlineMs?: number;
   stderrDiagnosticBytes?: number;
   spawn?: SpawnLike;
@@ -192,6 +193,7 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
       userDataDir: lease.path,
       browserFamily: options.browserFamily,
       ...(options.headless === undefined ? {} : { headless: options.headless }),
+      ...(options.display === undefined ? {} : { display: options.display }),
       ...(options.readyDeadlineMs === undefined ? {} : { readyDeadlineMs: options.readyDeadlineMs }),
       ...(options.stderrDiagnosticBytes === undefined ? {} : { stderrDiagnosticBytes: options.stderrDiagnosticBytes }),
       ...(options.spawn === undefined ? {} : { spawn: options.spawn }),

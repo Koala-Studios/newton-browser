@@ -1,17 +1,17 @@
-import { ENGINE_LIMITS, ENGINE_COMMAND_SCHEMA, ENGINE_TARGET_SCHEMA, EngineError, boundedInteger, boundedString, encodeEngineReceipt, encodeEngineResult, engineErrorCode, exactObject, parseEngineCommand, parseEngineTarget } from "@newton-browser/core";
+import { ENGINE_LIMITS, ENGINE_COMMAND_SCHEMA, ENGINE_TARGET_SCHEMA, EngineError, boundedInteger, boundedString, encodeEngineReceipt, encodeEngineResult, engineErrorCode, exactObject, explainArguments, parseEngineCommand, parseEngineTarget } from "@newton-browser/core";
 import type { EngineHost } from "./browser-runtime/engine-host.ts";
 import { MODERN_MCP_PROTOCOL_VERSION, type ModernMcpRequest, type ModernMcpRequestContext, type ModernMcpResponse } from "./modern-mcp-stdio.ts";
 
 const catalog = [
   { name: "browser.session.start", description: "Default: isolated headless browser at a complete URL. Only when the operator requests their browser, claim a specific existing tab or create an owned background tab using target kind new_tab and a complete URL.", inputSchema: { oneOf: [
-    { type: "object", properties: { url: { type: "string" }, mode: { const: "owned" }, sourceId: { type: "string" } }, required: ["url"], additionalProperties: false },
+    { type: "object", properties: { url: { type: "string" }, mode: { const: "owned" }, sourceId: { type: "string" }, viewport: { type: "object", description: "Page area; default 1280x900.", properties: { width: { type: "integer", minimum: 320, maximum: 3840 }, height: { type: "integer", minimum: 240, maximum: 2160 } }, required: ["width", "height"], additionalProperties: false }, locale: { type: "string", description: "BCP 47, e.g. en-CA." }, timezone: { type: "string", description: "IANA, e.g. America/Toronto." }, timeoutMs: { type: "integer", minimum: 1000, maximum: 120000, description: "Start budget; default 30000." } }, required: ["url"], additionalProperties: false },
     { type: "object", properties: { mode: { const: "existing" }, connectionId: { type: "string" }, target: { type: "object", properties: { kind: { const: "tab" }, tabId: { type: "integer", minimum: 1 }, instanceId: { type: "string" } }, required: ["kind", "tabId", "instanceId"], additionalProperties: false } }, required: ["mode", "target"], additionalProperties: false },
     { type: "object", properties: { mode: { const: "existing" }, connectionId: { type: "string" }, target: { type: "object", properties: { kind: { const: "new_tab" }, url: { type: "string" }, instanceId: { type: "string" } }, required: ["kind", "url", "instanceId"], additionalProperties: false } }, required: ["mode", "target"], additionalProperties: false },
   ] } },
   { name: "browser.existing.discover", description: "Probe the configured existing-browser connection and return bounded live tab inventory with instance identity and ownership. Does not claim tabs. Existing mode requires the operator to request their browser.", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
   { name: "browser.existing.setup", description: "Check live existing-browser readiness and tab inventory. Reports not_ready when the adapter cannot respond; does not install the extension or claim tabs.", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } },
   { name: "browser.act", description: "Perform one bounded action or sequence. Reuse a commandId only for the identical command; inspect the receipt before recovery. observation.newPages supplies newly observed owned popups with pageId and opener; use command.pageId to act there. Selection stays unchanged. newPagesIncomplete means use pages.list for more candidates.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, command: ENGINE_COMMAND_SCHEMA }, required: ["sessionId", "command"], additionalProperties: false } },
-  { name: "browser.observe", description: "Read bounded controls with context and validation. In records mode, recordShape selects controls (default), links, table or form; table/form need a unique container or scope. Scope accepts ref, selector or semantic target. Non-reset deltas replace records: apply removals and upserts, refresh refs (including form fields), then order. Reset supplies full records. Reads consume no mutation IDs.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, pageId: { type: "string" }, scope: ENGINE_TARGET_SCHEMA, mode: { enum: ["controls", "records"] }, recordShape: { enum: ["controls", "links", "table", "form"] }, previousSnapshotId: { type: "string", minLength: 1, maxLength: 120 }, maxBytes: { type: "integer", minimum: 2048, maximum: 65536 }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000 } }, required: ["sessionId"], additionalProperties: false } },
+  { name: "browser.observe", description: "Read bounded controls with context and validation. In records mode, recordShape selects controls (default), links, table or form; table/form need a unique container or scope. Scope accepts ref, selector or semantic target. Non-reset deltas replace records: apply removals and upserts, refresh refs (including form fields), then order. Reset supplies full records. Reads consume no mutation IDs.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, pageId: { type: "string" }, scope: ENGINE_TARGET_SCHEMA, mode: { enum: ["controls", "records"] }, recordShape: { enum: ["controls", "links", "table", "form"] }, previousSnapshotId: { type: "string", minLength: 1, maxLength: 120 }, query: { type: "object", description: "Only controls with this role and/or containing this text in their name, description or context.", properties: { role: { type: "string", minLength: 1, maxLength: 80 }, text: { type: "string", minLength: 1, maxLength: 256 } }, minProperties: 1, additionalProperties: false }, maxBytes: { type: "integer", minimum: 2048, maximum: 65536 }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000 } }, required: ["sessionId"], additionalProperties: false } },
   { name: "browser.document.read", description: "Read bounded redacted document text, optionally from one container, and receive an opaque continuation cursor.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, pageId: { type: "string" }, scope: ENGINE_TARGET_SCHEMA, maxBytes: { type: "integer", minimum: 2048, maximum: 65536 }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000 } }, required: ["sessionId"], additionalProperties: false } },
   { name: "browser.document.continue", description: "Continue one immutable document snapshot with its opaque cursor. Snapshots expire after five minutes or when their document changes.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, pageId: { type: "string" }, cursor: { type: "string", minLength: 1, maxLength: 120 }, maxBytes: { type: "integer", minimum: 2048, maximum: 65536 }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000 } }, required: ["sessionId", "cursor"], additionalProperties: false } },
   { name: "browser.screenshot", description: "Capture a bounded PNG with automatic password and sensitive-autocomplete masking across frames and shadow roots. Optional sensitiveZones add explicit masks. Refuses unverifiable geometry or incomplete discovery.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, pageId: { type: "string" }, maxBytes: { type: "integer", minimum: 8192, maximum: ENGINE_LIMITS.maxScreenshotBytes, default: ENGINE_LIMITS.defaultScreenshotBytes }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000 }, fullPage: { type: "boolean" }, clip: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 } }, required: ["x", "y", "width", "height"], additionalProperties: false }, sensitiveZones: { type: "array", maxItems: 32, items: ENGINE_TARGET_SCHEMA } }, required: ["sessionId"], additionalProperties: false } },
@@ -21,6 +21,12 @@ const catalog = [
   { name: "browser.command", description: "Get or cancel a command without waiting behind input.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, commandId: { type: "integer", minimum: 1 }, cancel: { type: "boolean" } }, required: ["sessionId", "commandId"], additionalProperties: false } },
   { name: "browser.session.stop", description: "Stop this owned session independently of its action queue.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
 ];
+
+function parseControlQuery(raw: unknown) {
+  const query = exactObject(raw, ["role", "text"]);
+  if (query.role === undefined && query.text === undefined) throw new EngineError("invalid_arguments");
+  return { ...(query.role === undefined ? {} : { role: boundedString(query.role, 80) }), ...(query.text === undefined ? {} : { text: boundedString(query.text, 256) }) };
+}
 
 function parseScreenshotOptions(args: Record<string, unknown>) {
   if (args.pageId !== undefined && typeof args.pageId !== "string") throw new EngineError("invalid_arguments");
@@ -46,6 +52,7 @@ function parseScreenshotOptions(args: Record<string, unknown>) {
 export async function handleEngineMcp(host: EngineHost, message: ModernMcpRequest, context: ModernMcpRequestContext): Promise<ModernMcpResponse | null> {
   const response = (result: unknown): ModernMcpResponse => ({ jsonrpc: "2.0", id: message.id, result });
   const wrap = encodeEngineResult;
+  let toolName: unknown, toolArguments: unknown;
   try {
     if (message.method === "server/discover") {
       exactObject(message.params, ["_meta"]);
@@ -54,12 +61,13 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
     if (message.method === "tools/list") { exactObject(message.params, ["_meta"]); return response({ tools: catalog, ttlMs: 0, cacheScope: "private" }); }
     if (message.method !== "tools/call") return { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Unsupported MCP method." } };
     const params = exactObject(message.params, ["_meta", "name", "arguments"]);
+    toolName = params.name; toolArguments = params.arguments;
     context.signal.throwIfAborted();
     if (params.name === "browser.session.start") return response(wrap(await host.start(params.arguments)));
     if (params.name === "browser.existing.discover") { exactObject(params.arguments, []); return response(wrap(await host.existingStatus())); }
     if (params.name === "browser.existing.setup") { exactObject(params.arguments, []); return response(wrap(await host.existingSetup())); }
     if (params.name === "browser.sessions.list") { exactObject(params.arguments, []); return response(wrap({ sessions: host.list() })); }
-    const args = exactObject(params.arguments, params.name === "browser.act" ? ["sessionId", "command"] : params.name === "browser.command" ? ["sessionId", "commandId", "cancel"] : params.name === "browser.observe" ? ["sessionId", "pageId", "mode", "recordShape", "scope", "previousSnapshotId", "maxBytes", "timeoutMs"] : params.name === "browser.document.read" ? ["sessionId", "pageId", "scope", "maxBytes", "timeoutMs"] : params.name === "browser.document.continue" ? ["sessionId", "pageId", "cursor", "maxBytes", "timeoutMs"] : params.name === "browser.screenshot" ? ["sessionId", "pageId", "maxBytes", "timeoutMs", "fullPage", "clip", "sensitiveZones"] : params.name === "browser.page.select" ? ["sessionId", "pageId"] : ["sessionId"]);
+    const args = exactObject(params.arguments, params.name === "browser.act" ? ["sessionId", "command"] : params.name === "browser.command" ? ["sessionId", "commandId", "cancel"] : params.name === "browser.observe" ? ["sessionId", "pageId", "mode", "recordShape", "scope", "previousSnapshotId", "query", "maxBytes", "timeoutMs"] : params.name === "browser.document.read" ? ["sessionId", "pageId", "scope", "maxBytes", "timeoutMs"] : params.name === "browser.document.continue" ? ["sessionId", "pageId", "cursor", "maxBytes", "timeoutMs"] : params.name === "browser.screenshot" ? ["sessionId", "pageId", "maxBytes", "timeoutMs", "fullPage", "clip", "sensitiveZones"] : params.name === "browser.page.select" ? ["sessionId", "pageId"] : ["sessionId"]);
     const session = host.session(args.sessionId);
     if (params.name === "browser.act") {
       const command = parseEngineCommand(args.command);
@@ -89,6 +97,7 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
       return response(wrap({ observation: await session.observe({
       ...(args.pageId === undefined ? {} : { pageId: boundedString(args.pageId, 120) }),
       ...(args.scope === undefined ? {} : { scope: parseEngineTarget(args.scope) }),
+      ...(args.query === undefined ? {} : { query: parseControlQuery(args.query) }),
       ...(args.recordShape===undefined?{}:{recordShape:args.recordShape as 'controls'|'links'|'table'|'form'}),
       ...(args.mode === undefined ? {} : { mode: args.mode === "records" ? "records" as const : args.mode === "controls" ? "controls" as const : (() => { throw new EngineError("invalid_arguments"); })() }),
       ...(args.previousSnapshotId === undefined ? {} : { previousSnapshotId: boundedString(args.previousSnapshotId, 120) }),
@@ -99,6 +108,13 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
     return { jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "Unknown tool name." } };
   } catch (error) {
     if (context.signal.aborted) return null;
-    return response({ ...wrap({ errorCode: engineErrorCode(error) }), isError: true });
+    const errorCode = engineErrorCode(error);
+    // Name the field and what it expects, and the command ID the session still expects.
+    const issue = errorCode === "invalid_arguments" ? explainArguments(catalog.find(tool => tool.name === toolName)?.inputSchema, toolArguments) : undefined;
+    let nextCommandId: number | undefined;
+    if (toolName === "browser.act" && toolArguments && typeof toolArguments === "object") {
+      try { nextCommandId = host.session((toolArguments as Record<string, unknown>).sessionId).nextCommandId; } catch { /* no such session */ }
+    }
+    return response({ ...wrap({ errorCode, ...(issue ? { field: issue.field, expected: issue.expected } : {}), ...(nextCommandId === undefined ? {} : { nextCommandId }) }), isError: true });
   }
 }

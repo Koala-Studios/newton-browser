@@ -37,7 +37,7 @@ test('MCP table, form and link records preserve structure, budgets and actionabl
     const same=await call('browser.observe',{sessionId,mode:'records',recordShape:'table',previousSnapshotId:full.observation.snapshotId,maxBytes:16384});
     assert.equal(same.observation.delta.reset,false);assert.deepEqual(same.observation.records,[]);
     assert.deepEqual(same.observation.delta.changed,[]);assert.equal(same.observation.delta.refs[0].recordId,table.recordId);
-    assert.notEqual(same.observation.delta.refs[0].ref,table.ref);
+    assert.equal(same.observation.delta.refs[0].ref,table.ref,'the same table keeps its ref');
     const compact=await call('browser.observe',{sessionId,mode:'records',recordShape:'table',scope:{kind:'selector',selector:'#roster'},maxBytes:2048});
     assert.equal(compact.observation.state,'incomplete');assert.equal(compact.observation.records[0].complete,false);assert.ok(compact.observation.records[0].rows.length>0);
     const formView=await call('browser.observe',{sessionId,mode:'records',recordShape:'form',maxBytes:8192});const form=formView.observation.records[0];

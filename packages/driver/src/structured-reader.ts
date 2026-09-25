@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { EngineError,redactText,type EngineObservation,type EngineObservationBudget,type EngineObservationRecord,type EnginePageStamp,type EngineRecordShape,type EngineTarget,type EngineTableRecord,type EngineFieldView } from '@newton-browser/core';
+import { EngineError,type EngineObservation,type EngineObservationBudget,type EngineObservationRecord,type EnginePageStamp,type EngineRecordShape,type EngineTarget,type EngineTableRecord,type EngineFieldView } from '@newton-browser/core';
 import type {CommandContext} from './command-context.ts';
 import type {PageDirectory,NodeBinding} from './page-directory.ts';
 import type {TargetResolver} from './target-resolver.ts';
@@ -29,7 +29,7 @@ export async function readStructuredRecords(context:CommandContext,page:EnginePa
     const root=await resolver.resolve(context,page,scope??{kind:'selector',selector:'table'});
     const {grid,truncated}=await readNativeTable(context,root,send);
     const ax=list((await read(root,'Accessibility.getPartialAXTree',{backendNodeId:root.backendNodeId,fetchRelatives:false})).nodes);
-    const name=redactText(String(object(ax.find(node=>node.backendDOMNodeId===root.backendNodeId)?.name).value??'')).slice(0,256);
+    const name=String(object(ax.find(node=>node.backendDOMNodeId===root.backendNodeId)?.name).value??'').slice(0,256);
     const record=(count:number,ref:string):EngineTableRecord=>{
       const needed=new Set(grid.cells.filter(cell=>cell.row<count).map(cell=>cell.id));
       const byId=new Map(grid.cells.map(cell=>[cell.id,cell]));
@@ -50,7 +50,7 @@ export async function readStructuredRecords(context:CommandContext,page:EnginePa
     if(described.localName!=='form'&&object(ax.nodes.find(node=>node.backendDOMNodeId===root.backendNodeId)?.role).value!=='form')throw new EngineError('unsupported_structure');
     const projection=readAXControls(ax.nodes,root.backendNodeId);
     if(!projection.foundScope)throw new EngineError('evidence_unavailable');
-    const name=redactText(String(object(ax.nodes.find(node=>node.backendDOMNodeId===root.backendNodeId)?.name).value??'')).slice(0,256);
+    const name=String(object(ax.nodes.find(node=>node.backendDOMNodeId===root.backendNodeId)?.name).value??'').slice(0,256);
     const fields:Omit<EngineFieldView,'ref'>[]=[],bindings=[root];
     const build=(refs:readonly string[],complete:boolean)=>view([{kind:'form',recordId:identity(root),ref:refs[0]!,name,fields:fields.map((field,index)=>({...field,ref:refs[index+1]!})),complete}],complete,'output_limit');
     let limited=false;

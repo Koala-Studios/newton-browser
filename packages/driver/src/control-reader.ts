@@ -1,4 +1,4 @@
-import { redactText, type EngineFieldView } from '@newton-browser/core';
+import { type EngineFieldView } from '@newton-browser/core';
 
 type Ax = Record<string, unknown>;
 const object = (value: unknown): Ax => value && typeof value === 'object' && !Array.isArray(value) ? value as Ax : {};
@@ -6,6 +6,13 @@ const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const list = (value: unknown): Ax[] => Array.isArray(value) ? value.map(object) : [];
 const roles = new Set(['button','link','textbox','searchbox','combobox','checkbox','radio','switch','menuitem','tab','option','slider','spinbutton','listbox','textarea']);
 const contextRoles = new Set(['dialog','alertdialog','form','row','listitem','group','radiogroup','tabpanel','region']);
+
+const trackingParameter=/^(utm_[a-z]+|fbclid|gclid|gbraid|wbraid|msclkid|mc_[a-z]+|_ga|_gl|_hsenc|_hsmi|ref_src|igshid|si|pr_[a-z_]+)$/i;
+/** A link's destination without click-tracking parameters; the ref, not this text, is what gets acted on. */
+function compactHref(url: URL): string {
+  for(const key of [...url.searchParams.keys()])if(trackingParameter.test(key))url.searchParams.delete(key);
+  return url.href.length>256?url.origin+url.pathname.slice(0,200)+(url.search?'?…':''):url.href;
+}
 
 /** Project relationships from AX evidence without per-control geometry or value reads. */
 export function readAXControls(raw: readonly Ax[], scopeBackendNodeId?: number): {
@@ -38,7 +45,7 @@ export function readAXControls(raw: readonly Ax[], scopeBackendNodeId?: number):
     }
   }
   const bounded=(value: unknown,limit=256):string=>{
-    const safe=redactText(text(value));if(safe.length>limit)incomplete=true;return safe.slice(0,limit);
+    const safe=text(value);if(safe.length>limit)incomplete=true;return safe.slice(0,limit);
   };
   const controls: {backendNodeId:number;view:Omit<EngineFieldView,'ref'>}[]=[];
   const relatedText=(root:Ax):string=>{
@@ -92,13 +99,14 @@ export function readAXControls(raw: readonly Ax[], scopeBackendNodeId?: number):
     let href:string|undefined;
     const destination=property('url').value;
     if(typeof destination==='string') {
-      try {const url=new URL(destination);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)href=bounded(url.href,2048);}catch{/* malformed page URL is not an actionable destination */}
+      try {const url=new URL(destination);if(['http:','https:'].includes(url.protocol)&&!url.username&&!url.password)href=bounded(compactHref(url),2048);}catch{/* malformed page URL is not an actionable destination */}
     }
-    controls.push({backendNodeId:Number(node.backendDOMNodeId),view:{role,name:bounded(object(node.name).value),readonly:boolean('readonly')===true,disabled:boolean('disabled')===true,
+    // Only true states are listed: repeating false on every control crowds the budget.
+    controls.push({backendNodeId:Number(node.backendDOMNodeId),view:{role,name:bounded(object(node.name).value),...(boolean('readonly')===true?{readonly:true}:{}),...(boolean('disabled')===true?{disabled:true}:{}),
       ...(typeof checked==='boolean'||checked==='mixed'?{checked}:{}),
       ...(selectedValue===undefined?{}:{selected:selectedValue}),...(expanded===undefined?{}:{expanded}),...(required===undefined?{}:{required}),
       ...(href===undefined?{}:{href}),...(ancestors.length?{context:ancestors.slice(0,3).reverse()}:{}),
-      ...(invalid===undefined?{}:{invalid:invalid!==false&&invalid!=='false'}),
+      ...(invalid===undefined||invalid===false||invalid==='false'?{}:{invalid:true}),
       ...(validation.length?{validation:validation.slice(0,4)}:{}),...(description?{description}:{})}});
   }
   return {controls,incomplete,foundScope:true};

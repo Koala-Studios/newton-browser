@@ -5,6 +5,7 @@ import { PageExecutor } from "@newton-browser/driver/page-executor";
 import type { EngineConnection } from "@newton-browser/driver/connection";
 import { launchOwnedBrowserRuntime, type LaunchOwnedBrowserRuntimeOptions } from "./owned-browser-runtime.ts";
 import type {ExistingDiscovery} from '../existing-connection.ts';
+import { DEFAULT_BROWSER_DISPLAY, type BrowserDisplay } from "./chromium-process.ts";
 export type ExistingPageRequest={connectionId?:string;tabId?:number;instanceId:string};
 
 export async function ownedEngineConnection(options: LaunchOwnedBrowserRuntimeOptions): Promise<EngineConnection> {
@@ -18,26 +19,38 @@ export async function ownedEngineConnection(options: LaunchOwnedBrowserRuntimeOp
 /** Injectable replacement host until the full catalog cutover. No legacy result translation. */
 export class EngineHost {
   readonly kind = "session_engine";
-  private readonly connect: (sourceId?: string) => Promise<EngineConnection>;
+  private readonly connect: (sourceId?: string, display?: BrowserDisplay) => Promise<EngineConnection>;
   private readonly connectExisting: ((input: ExistingPageRequest) => Promise<EngineConnection>) | undefined;
   private readonly sessions = new Map<string, SessionEngine>();
   private readonly executors = new Map<string, PageExecutor>();
   private closing = false;
   private readonly starts = new Set<Promise<unknown>>();
   private readonly discoverExisting:(()=>Promise<ExistingDiscovery>)|undefined;
-  constructor(connect: (sourceId?: string) => Promise<EngineConnection>, connectExisting?: (input: ExistingPageRequest) => Promise<EngineConnection>,discoverExisting?:()=>Promise<ExistingDiscovery>) {
+  constructor(connect: (sourceId?: string, display?: BrowserDisplay) => Promise<EngineConnection>, connectExisting?: (input: ExistingPageRequest) => Promise<EngineConnection>,discoverExisting?:()=>Promise<ExistingDiscovery>) {
     this.connect = connect; this.connectExisting = connectExisting;this.discoverExisting=discoverExisting;
   }
   async start(raw: unknown) {
-    const args = exactObject(raw, ["mode", "url", "sourceId", "target", "connectionId"]);
+    const args = exactObject(raw, ["mode", "url", "sourceId", "target", "connectionId", "viewport", "locale", "timezone", "timeoutMs"]);
     const mode = args.mode === undefined ? "owned" : args.mode;
     let url: string | undefined;
     let connect: () => Promise<EngineConnection>;
+    let display: BrowserDisplay | undefined;
+    let timezone: string | undefined;
+    const timeoutMs = args.timeoutMs === undefined ? 30_000 : boundedInteger(args.timeoutMs, 1_000, 120_000);
     if (mode === "owned") {
-      exactObject(args, ["mode", "url", "sourceId"]);
+      exactObject(args, ["mode", "url", "sourceId", "viewport", "locale", "timezone", "timeoutMs"]);
       url = normalizeEngineUrl(args.url);
       const sourceId = args.sourceId === undefined ? undefined : boundedString(args.sourceId, 120);
-      connect = () => this.connect(sourceId);
+      const viewport = args.viewport === undefined ? DEFAULT_BROWSER_DISPLAY : exactObject(args.viewport, ["width", "height"]);
+      const locale = args.locale === undefined ? undefined : boundedString(args.locale, 35);
+      if (locale !== undefined && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u.test(locale)) throw new EngineError("invalid_arguments");
+      display = { width: boundedInteger(viewport.width, 320, 3840), height: boundedInteger(viewport.height, 240, 2160), ...(locale ? { locale } : {}) };
+      if (args.timezone !== undefined) {
+        timezone = boundedString(args.timezone, 64);
+        if (!/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/u.test(timezone)) throw new EngineError("invalid_arguments");
+      }
+      const requested = display;
+      connect = () => this.connect(sourceId, requested);
     } else if (mode === "existing" && this.connectExisting) {
       exactObject(args, ["mode", "target", "connectionId"]);
       const target = exactObject(args.target, ["kind", "tabId", "instanceId", "url"]);
@@ -55,7 +68,7 @@ export class EngineHost {
       const executor = new PageExecutor(connection);
       try {
         if (this.closing) throw new EngineError("session_closed");
-        const observation = await executor.start(url);
+        const observation = await executor.start(url, { timeoutMs, ...(display ? { viewport: { width: display.width, height: display.height } } : {}), ...(timezone ? { timezone } : {}) });
         if (this.closing) throw new EngineError("session_closed");
         const sessionId = `engine_${randomUUID()}`;
         const engine = new SessionEngine(sessionId, executor);
