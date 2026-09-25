@@ -23,9 +23,12 @@ The default MCP path now constructs `EngineHost` and uses `SessionEngine`/`PageE
 | Shared login | Closed Newton-owned immutable source generation, opaque narrow copies into separate identities, maintenance/publication/recovery, refresh and explicit collection CLI. Worker changes never merge back. Real provider login/revocation and CLI interruption acceptance remain open. |
 | Existing browser | Optional thin tab adapter and native messaging use the same engine. Explicit operator selection, per-worker owned tabs, concurrent separate tabs, disconnect/claim cleanup and staged update/rollback have source and historical packed Chrome evidence. Standalone does not depend on the extension. |
 | Installation | Immutable runtime/launcher artifacts, Windows Chrome/Edge layout and Linux user-local registration code exist. Windows foundation evidence is broader than current Linux evidence. Actual Linux executable/registration/unregister and full Edge existing-mode acceptance are not established. |
+| macOS | Owned mode runs on macOS since `1eaf086` (branch `claude/macos-owned-runtime`): full suite 843/845 with two Windows-only skips, live engine regressions 35/35, shared login published and inherited by two concurrent sessions. Fixed: code-sign clone hard link, Command-shortcut select-all and its framed-page input stall, closed-select keyboard, `sun_path` socket length (also affected Linux), installation lock, root-owned system links. Existing-browser mode is not supported on macOS (registration layout and signed launcher missing). |
 | Release preparation | Streaming tracked/untracked candidate digest includes source and rejects unstable/unsafe paths; exact generated directories are excluded. Existing local release script uses it. The grouped test runner and full release harness still need independent completion. |
 
 ## Verification register
+
+- 2026-09-25 macOS audit: [AUDIT_2026-09-25.md](AUDIT_2026-09-25.md) records fixed defects M1–M8, open defects D1–D21 (including model-facing feedback, viewport, observation ranking, overlays, and a missing console/network regression) and the gaps for unattended worker use.
 
 - Source checkpoint from 2026-09-08: **841 passed, zero failures/skips**, plus typecheck. See [solo evidence](../test/evidence/astra-solo-foundations-2026-09-08.md).
 - Fresh consolidation checks and Git scope are recorded in [CONSOLIDATION_2026-09-25.md](implementation/CONSOLIDATION_2026-09-25.md). Historical counts are not substituted for fresh results.
