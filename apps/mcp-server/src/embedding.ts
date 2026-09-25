@@ -1,6 +1,7 @@
 // Supported library entry for a host process that embeds the engine (for example a
 // task runner). The host owns processes, credentials and the operator channel; the
 // model only ever sees `call` results. Nothing here spawns a CLI.
+import { EngineError } from "@newton-browser/core";
 import { createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
 import type { EngineHost } from "./browser-runtime/engine-host.ts";
 import { handleEngineMcp, ENGINE_TOOL_CATALOG } from "./engine-mcp.ts";
@@ -55,7 +56,10 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
   };
   const started = async (run: () => Promise<unknown>): Promise<BrowserToolResult> => {
     try { return { content: [{ type: "text", text: JSON.stringify(await run()) }] }; }
-    catch (error) { return { content: [{ type: "text", text: JSON.stringify({ errorCode: error instanceof Error && /^[a-z_]{1,80}$/u.test(error.message) ? error.message : "evidence_unavailable" }) }], isError: true }; }
+    catch (error) {
+      const phase = error instanceof EngineError ? error.phase : undefined;
+      return { content: [{ type: "text", text: JSON.stringify({ errorCode: error instanceof Error && /^[a-z_]{1,80}$/u.test(error.message) ? error.message : "evidence_unavailable", ...(phase ? { phase } : {}) }) }], isError: true };
+    }
   };
   return Object.freeze({
     tools: () => tools,

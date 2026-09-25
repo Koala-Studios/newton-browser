@@ -27,6 +27,8 @@ export class OwnedBrowserRuntimeError extends Error {
   readonly phase: OwnedBrowserRuntimePhase;
   readonly cleanupUncertain: boolean;
   readonly identityBusy: boolean;
+  /** The browser process phase that failed, when the browser itself did not start. */
+  readonly launchPhase: string | undefined;
   private readonly cleanupRetry: (() => Promise<void>) | undefined;
 
   constructor(
@@ -34,6 +36,7 @@ export class OwnedBrowserRuntimeError extends Error {
     cleanupUncertain = false,
     cleanupRetry?: () => Promise<void>,
     identityBusy = false,
+    launchPhase?: string,
   ) {
     super("Owned browser runtime operation failed.");
     this.name = "OwnedBrowserRuntimeError";
@@ -41,6 +44,7 @@ export class OwnedBrowserRuntimeError extends Error {
     this.cleanupUncertain = cleanupUncertain;
     this.cleanupRetry = cleanupRetry;
     this.identityBusy = identityBusy;
+    this.launchPhase = launchPhase;
   }
 
   retryCleanup(): Promise<void> {
@@ -212,10 +216,10 @@ export async function launchOwnedBrowserRuntime(options: LaunchOwnedBrowserRunti
         await error.retryCleanup();
         await rollbackLease(lease, options.spawn === undefined);
       };
-      throw new OwnedBrowserRuntimeError("browser_start", true, retry);
+      throw new OwnedBrowserRuntimeError("browser_start", true, retry, false, error.phase);
     }
     await rollbackLease(lease, options.spawn === undefined);
-    throw new OwnedBrowserRuntimeError("browser_start");
+    throw new OwnedBrowserRuntimeError("browser_start", false, undefined, false, error instanceof ChromiumLaunchError ? error.phase : undefined);
   }
 
   return new OwnedBrowserRuntime(OWNED_RUNTIME_CAPABILITY, { process, lease });

@@ -19,6 +19,7 @@ import type {EngineRecordShape,EngineFieldView} from '@newton-browser/core';
 import { maskCapturedPng, MAX_RASTER_PIXELS } from "./raster-mask.ts";
 import {nativeSensitiveRegions} from './native-sensitive-regions.ts';
 import type { EngineExecutor } from "./session-engine.ts";
+import { SessionDiagnostics, type ConsoleEntry, type DiagnosticKind } from "./session-diagnostics.ts";
 import { SessionLive, type EngineFrame, type EngineFrameOptions, type EngineOperatorInput, type EngineSessionEvent, type EngineWebAuthnCredential } from "./session-live.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -72,6 +73,7 @@ export class PageExecutor implements EngineExecutor {
   private readonly resolver: TargetResolver;
   private readonly readonlyWorlds:ReadonlyWorlds;
   private readonly live:SessionLive;
+  private readonly diagnostics=new SessionDiagnostics();
   private readonly lifecycle = new Map<string, Set<string>>();
   private readonly lifecycleWaiters = new Set<() => void>();
   private readonly conditionWaiters = new Set<() => void>();
@@ -104,13 +106,16 @@ export class PageExecutor implements EngineExecutor {
     });
     connection.signal.addEventListener("abort", () => { this.closed = true; this.unsubscribe?.(); }, { once: true });
   }
-  async start(url?: string, options: { timeoutMs?: number; viewport?: { width: number; height: number }; timezone?: string; authenticator?: readonly EngineWebAuthnCredential[] } = {}): Promise<EngineObservation> {
+  async start(url?: string, options: { timeoutMs?: number; viewport?: { width: number; height: number }; timezone?: string; authenticator?: readonly EngineWebAuthnCredential[]; collect?: readonly DiagnosticKind[] } = {}): Promise<EngineObservation> {
     this.timezone = options.timezone;
+    // Collection asked for at start covers the first document too: each route enables it as it attaches.
+    for (const kind of options.collect ?? []) await this.diagnostics.enable(kind, []);
     if (options.authenticator) this.live.useAuthenticator(options.authenticator);
     this.unsubscribe = this.connection.wire.onEvent(event => {
       // Do not return an async handler to a transport that serializes event delivery.
       try {
         this.live.handle(event, route => this.routes.get(route));
+        this.diagnostics.handle(event, route => this.routes.get(route));
         if (event.method === "Target.targetCreated" && (this.connection.ownsBrowser||this.connection.tracksOwnedPages)) {
           const info = object(event.params.targetInfo),pageId=string(info.targetId);
           if(info.type==='page'&&pageId&&pageId!==this.connection.rootTargetId&&!this.attachingPages.has(pageId)) {
@@ -173,7 +178,7 @@ export class PageExecutor implements EngineExecutor {
         } else if (event.method === "Target.detachedFromTarget") {
           const route = string(event.params.sessionId),pageId=this.routes.get(route);
           if(pageId&&this.pageAttachments.get(pageId)?.route===route){this.attachingPages.delete(pageId);this.pageAttachments.get(pageId)!.controller.abort();this.directory.removePage(pageId);}
-          this.directory.detachRoute(route); this.routes.delete(route); this.routeParents.delete(route); this.dialogs.delete(route);
+          this.directory.detachRoute(route); this.diagnostics.forgetRoute(route); this.routes.delete(route); this.routeParents.delete(route); this.dialogs.delete(route);
         } else if (event.method === "Page.frameAttached") {
           this.prunePendingFrames();
           if (this.pendingFrames.size >= 128) { this.pendingFrames.delete(this.pendingFrames.keys().next().value!); this.degraded = true; }
@@ -776,6 +781,25 @@ export class PageExecutor implements EngineExecutor {
     if(!budget.fits(view()))throw new EngineError('output_budget');
     return view();
   }
+  /** Console records since collection began; the first read starts collecting. */
+  async consoleRecords(options: { pageId?: string; level?: ConsoleEntry["level"]; pattern?: string; limit: number; clear?: boolean }) {
+    const started = await this.collect("console");
+    return { ...(started ? { collecting: "started" as const } : {}), ...this.diagnostics.readConsole({ ...options, ...(options.pageId ? { pageId: this.bindPage(options.pageId).pageId } : {}) }) };
+  }
+  /** Request metadata since collection began, or one current-origin text body. */
+  async networkRecords(options: { pageId?: string; urlPattern?: string; failedOnly?: boolean; requestId?: string; limit: number; maxBytes: number }) {
+    const started = await this.collect("network");
+    if (options.requestId === undefined) return { ...(started ? { collecting: "started" as const } : {}), ...this.diagnostics.readNetwork({ ...options, ...(options.pageId ? { pageId: this.bindPage(options.pageId).pageId } : {}) }) };
+    const page = this.directory.inventory().find(item => item.pageId === this.bindPage(options.pageId).pageId);
+    let origin = "";
+    try { origin = page?.url ? new URL(page.url).origin : ""; } catch { /* no current origin */ }
+    return { response: await this.diagnostics.responseBody(options.requestId, origin, options.maxBytes, (route, method, params) => this.connection.wire.send(method, params, route)) };
+  }
+  private async collect(kind: DiagnosticKind): Promise<boolean> {
+    if (this.closed) throw new EngineError("session_closed");
+    if (this.diagnostics.isEnabled(kind)) return false;
+    return this.diagnostics.enable(kind, [...this.routes.keys()].map(route => [route, (method: string, params: RecordValue = {}) => this.connection.wire.send(method, params, route)] as [string, (method: string, params?: RecordValue) => Promise<RecordValue>]));
+  }
   /** Host-only: events for the embedding process (never the model). */
   subscribeEvents(listener: (event: EngineSessionEvent) => void): () => void { return this.live.subscribe(listener); }
   /** Host-only: live JPEG frames of a page (the selected one by default). */
@@ -1277,7 +1301,7 @@ export class PageExecutor implements EngineExecutor {
     return observation;
   }
   async close(): Promise<void> {
-    this.closed = true; this.unsubscribe?.(); this.live.close();
+    this.closed = true; this.unsubscribe?.(); this.live.close(); this.diagnostics.close();
     for(const pending of this.pageAttachments.values())pending.controller.abort();
     this.pageAttachments.clear();this.attachingPages.clear();
     this.readonlyWorlds.clear();
@@ -1306,6 +1330,7 @@ export class PageExecutor implements EngineExecutor {
     await send("Page.setLifecycleEventsEnabled", { enabled: true });
     if (isPage && this.timezone) await send("Emulation.setTimezoneOverride", { timezoneId: this.timezone });
     if (isPage) await this.live.attachPage(route, send);
+    await this.diagnostics.attachRoute(send);
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     const tree = await send("Page.getFrameTree");
     if(this.routes.get(route)!==pageId)return;

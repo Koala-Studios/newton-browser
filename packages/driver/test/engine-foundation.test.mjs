@@ -187,3 +187,19 @@ test('reads share the queue but never consume public mutation IDs', async () => 
   held.resolve(); await action; await read;
   assert.deepEqual(order, ['fill', 'read']); assert.equal(engine.nextCommandId, 2);
 });
+
+test('a lane read changes selection only after actions queued before it (page select, D12)', async () => {
+  const order = [], gate = deferred();
+  const engine = new SessionEngine('select', executor(async () => { order.push('act'); await gate.promise; return { state: 'met', kind: 'value' }; }));
+  const action = engine.submit(request(1));
+  const selected = engine.observe({ pageId: 'p1', beforeRead: () => order.push('select') });
+  await tick();
+  assert.deepEqual(order, ['act'], 'selection waits for the queued action');
+  gate.resolve();
+  await action; await selected;
+  assert.deepEqual(order, ['act', 'select']);
+  const { EngineError } = await import('@newton-browser/core');
+  const failed = await engine.observe({ beforeRead: () => { throw new EngineError('unknown_page'); } });
+  assert.deepEqual(failed, { state: 'unavailable', errorCode: 'unknown_page' });
+  assert.equal((await engine.observe()).state, 'none', 'the lane keeps working');
+});

@@ -22,7 +22,7 @@ export interface EngineExecutor {
   close(): Promise<void>;
 }
 interface QueueItem { kind: "command"; command: EngineCommand; page: EnginePageStamp; record: CommandRecord; bytes: number; context: CommandContext; }
-interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; options?: unknown; complete(value: EngineObservation): void; }
+interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; options?: unknown; beforeRead?: () => void; complete(value: EngineObservation): void; }
 
 export class SessionEngine {
   readonly sessionId: string;
@@ -86,7 +86,7 @@ export class SessionEngine {
     this.pump();
     return record.result;
   }
-  observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery } = {}): Promise<EngineObservation> {
+  observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; beforeRead?: () => void } = {}): Promise<EngineObservation> {
     if(options.recordShape!==undefined&&(options.mode!=='records'||!['controls','links','table','form'].includes(options.recordShape)))throw new EngineError('invalid_arguments');
     if (this.admission !== "open") throw new EngineError("session_closed");
     if (this.queue.length + (this.active ? 1 : 0) >= ENGINE_LIMITS.queueItems) throw new EngineError("queue_full");
@@ -100,6 +100,8 @@ export class SessionEngine {
     if (options.scope) item.scope = options.scope;
     if (options.query) item.query = options.query;
     if (options.recordShape) item.recordShape=options.recordShape;
+    // Runs in the lane, after earlier queued work, for example selecting the page to read.
+    if (options.beforeRead) item.beforeRead = options.beforeRead;
     void context.aborted.then(() => {
       const index = this.queue.indexOf(item);
       if (index !== -1) { this.queue.splice(index, 1); context.dispose(); complete({ state: "unavailable", errorCode: context.cancellation! }); }
@@ -196,6 +198,8 @@ export class SessionEngine {
   }
   private async runRead(item: ReadItem): Promise<void> {
     let observation: EngineObservation = { state: "unavailable", errorCode: "read_failed" };
+    try { item.beforeRead?.(); }
+    catch (error) { item.complete({ state: "unavailable", errorCode: engineErrorCode(error) }); item.context.dispose(); this.active = undefined; this.pump(); return; }
     const readBudget=readObservationBudget(item.maxBytes);
     const budget:EngineObservationBudget=item.mode!=="records"?readBudget:{maxBytes:item.maxBytes,fits:value=>{
       if(value.state!=="available"&&value.state!=="incomplete")return readBudget.fits(value);

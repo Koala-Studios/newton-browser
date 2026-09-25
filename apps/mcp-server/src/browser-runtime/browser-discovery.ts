@@ -70,7 +70,8 @@ export function trustedLinuxSystemBrowserTarget(linkPath: string, canonicalTarge
   });
 }
 
-function validateExecutable(candidate: string, platform: BrowserPlatform, source: BrowserExecutable["source"]): string {
+/** The one executable check: discovery and process launch both use it. Returns the canonical path. */
+export function validateExecutable(candidate: string, platform: BrowserPlatform, source: BrowserExecutable["source"]): string {
   if (typeof candidate !== "string" || candidate.length === 0 || candidate.includes("\0")) throw new Error("browser_executable_invalid");
   const absolute = path.resolve(candidate);
   let stat: fs.Stats;

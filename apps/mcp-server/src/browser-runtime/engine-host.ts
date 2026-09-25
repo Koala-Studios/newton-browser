@@ -40,16 +40,17 @@ export class EngineHost {
   }
   /** `host` options come only from the embedding process, never from model arguments. */
   async start(raw: unknown, host: { authenticator?: readonly EngineWebAuthnCredential[]; onEvent?: (event: EngineSessionEvent) => void; maintenanceOf?: string } = {}) {
-    const args = exactObject(raw, ["mode", "url", "sourceId", "target", "connectionId", "viewport", "locale", "timezone", "timeoutMs"]);
+    const args = exactObject(raw, ["mode", "url", "sourceId", "target", "connectionId", "viewport", "locale", "timezone", "collect", "timeoutMs"]);
     const mode = args.mode === undefined ? "owned" : args.mode;
     let url: string | undefined;
     let connect: () => Promise<EngineConnection>;
     let display: BrowserDisplay | undefined;
     let finish: ((publish: boolean) => Promise<{ generation: string } | undefined>) | undefined;
     let timezone: string | undefined;
+    const collect = parseCollect(args.collect);
     const timeoutMs = args.timeoutMs === undefined ? 30_000 : boundedInteger(args.timeoutMs, 1_000, 120_000);
     if (mode === "owned") {
-      exactObject(args, ["mode", "url", "sourceId", "viewport", "locale", "timezone", "timeoutMs"]);
+      exactObject(args, ["mode", "url", "sourceId", "viewport", "locale", "timezone", "collect", "timeoutMs"]);
       url = normalizeEngineUrl(args.url);
       const sourceId = args.sourceId === undefined ? undefined : boundedString(args.sourceId, 120);
       const viewport = args.viewport === undefined ? DEFAULT_BROWSER_DISPLAY : exactObject(args.viewport, ["width", "height"]);
@@ -79,12 +80,12 @@ export class EngineHost {
     if (this.closing) throw new EngineError("session_closed");
     if (this.sessions.size + this.starts.size >= 16) throw new EngineError("work_limit");
     const start = (async () => {
-      const connection = await connect();
+      const connection = await connect().catch(launchFailure);
       const executor = new PageExecutor(connection);
       const unsubscribe = host.onEvent ? executor.subscribeEvents(host.onEvent) : undefined;
       try {
         if (this.closing) throw new EngineError("session_closed");
-        const observation = await executor.start(url, { timeoutMs, ...(host.authenticator ? { authenticator: host.authenticator } : {}), ...(display ? { viewport: { width: display.width, height: display.height } } : {}), ...(timezone ? { timezone } : {}) });
+        const observation = await executor.start(url, { timeoutMs, ...(host.authenticator ? { authenticator: host.authenticator } : {}), ...(display ? { viewport: { width: display.width, height: display.height } } : {}), ...(timezone ? { timezone } : {}), ...(collect.length ? { collect } : {}) });
         if (this.closing) throw new EngineError("session_closed");
         const sessionId = `engine_${randomUUID()}`;
         const engine = new SessionEngine(sessionId, executor);
@@ -102,6 +103,8 @@ export class EngineHost {
     if (!session) throw new EngineError("session_closed");
     return session;
   }
+  consoleRecords(id: unknown, options: Parameters<PageExecutor["consoleRecords"]>[0]) { return this.executor(id).consoleRecords(options); }
+  networkRecords(id: unknown, options: Parameters<PageExecutor["networkRecords"]>[0]) { return this.executor(id).networkRecords(options); }
   pages(id: unknown) {
     const sessionId = boundedString(id, 120);
     const executor = this.executors.get(sessionId);
@@ -139,8 +142,8 @@ export class EngineHost {
     const executor = this.executors.get(sessionId);
     if (!executor) throw new EngineError("session_closed");
     const page = boundedString(pageId, 120);
-    executor.directory.select(page);
-    return this.sessions.get(sessionId)!.observe({ pageId: page, maxBytes: 8192, timeoutMs: 10000 });
+    // Selection changes in the session lane, after actions queued before it.
+    return this.sessions.get(sessionId)!.observe({ pageId: page, maxBytes: 8192, timeoutMs: 10000, beforeRead: () => executor.directory.select(page) });
   }
   screenshot(id: unknown, options: { pageId?: string; maxBytes?: number; timeoutMs?: number; options?: unknown }) {
     return this.session(id).screenshot(options);
@@ -173,4 +176,22 @@ export class EngineHost {
     this.sessions.clear(); this.executors.clear();
   }
   close(): Promise<void> { return this.stopAll(); }
+}
+
+function parseCollect(raw: unknown): ("console" | "network")[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 2 || raw.some(kind => kind !== "console" && kind !== "network")) throw new EngineError("invalid_arguments");
+  return [...new Set(raw as ("console" | "network")[])];
+}
+
+/** Browser launch failures keep their phase instead of reading as missing evidence. */
+function launchFailure(error: unknown): never {
+  if (error instanceof EngineError) throw error;
+  const failure = error as { name?: unknown; phase?: unknown; launchPhase?: unknown } | null;
+  if (failure?.name === "OwnedBrowserRuntimeError" || failure?.name === "ChromiumLaunchError") {
+    const phase = typeof failure.launchPhase === "string" ? failure.launchPhase : typeof failure.phase === "string" ? failure.phase : undefined;
+    throw new EngineError("browser_launch_failed", phase);
+  }
+  if (error instanceof Error && /^[a-z_]{1,80}$/u.test(error.message)) throw new EngineError("browser_launch_failed", error.message);
+  throw error;
 }

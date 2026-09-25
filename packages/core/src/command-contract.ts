@@ -7,11 +7,14 @@ export const ENGINE_ERRORS = [
   "output_budget", "work_limit", "unknown_command", "unknown_page", "cursor_expired",
   "dialog_opened", "unsupported_structure", "invalid_file_path", "file_not_found", "symlink_not_allowed",
   "file_too_large", "file_total_too_large", "file_type_not_allowed", "file_changed", "operator_control",
+  "browser_launch_failed",
 ] as const;
 export type EngineErrorCode = typeof ENGINE_ERRORS[number];
 export class EngineError extends Error {
   readonly code: EngineErrorCode;
-  constructor(code: EngineErrorCode) { super(code); this.name = "EngineError"; this.code = code; }
+  /** Where a multi-step operation failed, for example a browser launch phase. */
+  readonly phase: string | undefined;
+  constructor(code: EngineErrorCode, phase?: string) { super(code); this.name = "EngineError"; this.code = code; this.phase = phase; }
 }
 export function engineErrorCode(error: unknown): EngineErrorCode {
   return error instanceof EngineError ? error.code : "evidence_unavailable";

@@ -45,6 +45,7 @@ const EXPECTED_FILES = [
   "renderer-liveness.js",
   "session-command-pump.d.ts",
   "session-command-pump.js",
+  "session-diagnostics.d.ts", "session-diagnostics.js",
   "session-engine.d.ts", "session-engine.js",
   "session-live.d.ts", "session-live.js",
   "structured-reader.d.ts", "structured-reader.js",
