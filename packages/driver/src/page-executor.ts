@@ -235,9 +235,10 @@ export class PageExecutor implements EngineExecutor {
         if (Number.isSafeInteger(window.windowId)) await this.connection.wire.send('Browser.setContentsSize', { windowId: window.windowId, ...options.viewport });
       }
       if (url) {
+        const before = this.directory.stamp(this.connection.rootTargetId).documentGeneration;
         const navigation = await this.connection.wire.send("Page.navigate", { url }, route);
         if (navigation.errorText) throw new EngineError("navigation_failed");
-        if (navigation.loaderId) await this.waitForDocument(context, string(navigation.loaderId), this.connection.rootTargetId);
+        if (navigation.loaderId) await this.waitForDocument(context, string(navigation.loaderId), this.connection.rootTargetId, before);
         const tree = await this.connection.wire.send("Page.getFrameTree", {}, route);
         this.frameTree(this.connection.rootTargetId, object(tree.frameTree), route);
       }
@@ -526,7 +527,7 @@ export class PageExecutor implements EngineExecutor {
     if (result.errorText) throw new EngineError("navigation_failed");
     const loaderId = string(result.loaderId);
     if (loaderId) {
-      await this.waitForDocument(context, loaderId, page.pageId);
+      await this.waitForDocument(context, loaderId, page.pageId, before);
       await this.waitForGeneration(context, page.pageId, before);
     } else {
       // A fragment navigation does not create a new document generation.
@@ -1518,15 +1519,28 @@ export class PageExecutor implements EngineExecutor {
       await this.waitForCondition(context, context.deadline);
     }
   }
-  private async waitForDocument(context: CommandContext, loaderId: string, pageId: string): Promise<void> {
+  /**
+   * Waits until the requested document is parsed. With `afterGeneration`, a document that replaced it (a script
+   * redirect while it was still parsing, as sign-in pages do) also ends the wait once parsed: the requested one never
+   * reaches DOMContentLoaded.
+   */
+  private async waitForDocument(context: CommandContext, loaderId: string, pageId: string, afterGeneration?: number): Promise<void> {
     context.checkpoint();
     if ([...this.dialogs.values()].some(dialog => dialog.pageId === pageId)) throw new EngineError("dialog_opened");
-    if (this.lifecycle.get(loaderId)?.has("DOMContentLoaded")) return;
+    const parsed = () => {
+      if (this.lifecycle.get(loaderId)?.has("DOMContentLoaded")) return true;
+      if (afterGeneration === undefined) return false;
+      let current: EnginePageStamp;
+      try { current = this.directory.stamp(pageId); } catch { return false; }
+      const loader = this.directory.loader(current);
+      return current.documentGeneration > afterGeneration && loader !== loaderId && !!this.lifecycle.get(loader)?.has("DOMContentLoaded");
+    };
+    if (parsed()) return;
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => { clearTimeout(timer); this.lifecycleWaiters.delete(wake); this.dialogWaiters.delete(dialog); context.signal.removeEventListener("abort", abort); };
       const abort = () => { cleanup(); reject(context.signal.reason); };
       const dialog = (openedPage: string) => { if (openedPage === pageId) { cleanup(); reject(new EngineError("dialog_opened")); } };
-      const wake = () => { if (this.lifecycle.get(loaderId)?.has("DOMContentLoaded")) { cleanup(); resolve(); } };
+      const wake = () => { if (parsed()) { cleanup(); resolve(); } };
       const timer = setTimeout(() => { cleanup(); reject(new EngineError("timed_out")); }, Math.max(1, context.deadline - performance.now()));
       this.lifecycleWaiters.add(wake); this.dialogWaiters.add(dialog); context.signal.addEventListener("abort", abort, { once: true }); wake();
     });
