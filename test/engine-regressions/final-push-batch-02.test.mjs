@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile, chmod, lstat } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile, chmod, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,7 +10,7 @@ import { createNewtonIdentity, openProfileStore } from '../../apps/mcp-server/sr
 import { resolveTextEditRange } from '../../packages/driver/src/text-edit-range.ts';
 
 async function tempDirectory(prefix) {
-  return mkdtemp(path.join(tmpdir(), prefix));
+  return mkdtemp(path.join(await realpath(tmpdir()), prefix));
 }
 
 test('precise edit range helper resolves bounded unique, contextual and occurrence matches', () => {

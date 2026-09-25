@@ -102,7 +102,7 @@ function validateExecutable(candidate: string, platform: BrowserPlatform, source
     }
     return canonicalTarget;
   }
-  if (!stat.isFile() || stat.nlink !== 1) throw new Error("browser_executable_invalid");
+  if (!stat.isFile() || (stat.nlink !== 1 && !macApplicationExecutable(absolute, platform))) throw new Error("browser_executable_invalid");
   let resolved: string;
   let parentReal: string;
   try {
@@ -123,6 +123,14 @@ function validateExecutable(candidate: string, platform: BrowserPlatform, source
     throw new Error("browser_executable_not_executable");
   }
   return resolved;
+}
+
+/** A running macOS Chrome/Edge hard-links its bundle executable into a private
+ * code-signing clone, so nlink is 2 whenever any instance (including the
+ * operator's own browser) is open. Only an app bundle's main executable gets
+ * that allowance; any other multiply-linked file still fails closed. */
+export function macApplicationExecutable(absolute: string, platform: NodeJS.Platform): boolean {
+  return platform === "darwin" && /\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/u.test(path.posix.normalize(absolute));
 }
 
 function supportedPlatform(value: NodeJS.Platform): BrowserPlatform {

@@ -64,17 +64,29 @@ function assertPathSafety(file: string): { path: string; stat: fs.Stats } {
   const parsed = pathApi.parse(normalized);
   let current = parsed.root;
   const components = normalized.slice(parsed.root.length).split(pathApi.sep).filter(Boolean);
-  for (const component of components) {
+  for (const [index, component] of components.entries()) {
     current = pathApi.join(current, component);
     const componentStat = fs.lstatSync(current, { throwIfNoEntry: false });
     if (!componentStat) fail("file_not_found");
-    if (componentStat.isSymbolicLink()) fail("symlink_not_allowed");
+    if (componentStat.isSymbolicLink()) {
+      if (index === components.length - 1 || !trustedSystemLink(current, componentStat)) fail("symlink_not_allowed");
+      current = pathApi.normalize(fs.realpathSync.native(current));
+    }
   }
   const canonical = pathApi.normalize(fs.realpathSync.native(normalized));
-  if (!sameCanonicalPath(canonical, normalized)) fail("invalid_file_path");
-  const stat = fs.lstatSync(normalized, { throwIfNoEntry: false });
+  if (!sameCanonicalPath(canonical, current)) fail("invalid_file_path");
+  const stat = fs.lstatSync(current, { throwIfNoEntry: false });
   if (!stat || !stat.isFile()) fail("file_not_found");
-  return { path: normalized, stat };
+  return { path: current, stat };
+}
+
+/** macOS roots /var, /tmp and /etc are root-owned links inside a root-owned,
+ * non-group/world-writable directory; no other local user can retarget them.
+ * Any other directory link, and every file-leaf link, remains refused. */
+function trustedSystemLink(link: string, stat: fs.Stats): boolean {
+  if (process.platform === "win32" || stat.uid !== 0) return false;
+  const parent = fs.lstatSync(path.posix.dirname(link), { throwIfNoEntry: false });
+  return Boolean(parent?.isDirectory() && parent.uid === 0 && (parent.mode & 0o022) === 0);
 }
 
 function hasAllowedSignature(descriptor: number, extension: string): boolean {

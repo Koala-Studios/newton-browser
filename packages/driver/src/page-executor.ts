@@ -440,7 +440,7 @@ export class PageExecutor implements EngineExecutor {
       try {
         const option = await context.read(() => this.send(binding, "Runtime.callFunctionOn", {
           objectId,
-          functionDeclaration: "function(value){if(!this.options||this.options.length>4096)return {limited:true};const options=[];for(let index=0;index<this.options.length;index++){const option=this.options[index],label=String(option.textContent||'').trim(),candidate=String(option.value);if(label.length>65536||candidate.length>65536)return {limited:true};options.push({index,value:candidate,label,disabled:!!option.disabled||(option.parentElement?.localName==='optgroup'&&option.parentElement.disabled)});}return {matches:options.filter(option=>option.value===value||option.label===value),enabled:options.filter(option=>!option.disabled).map(option=>({index:option.index}))};}",
+          functionDeclaration: "function(value){if(!this.options||this.options.length>4096)return {limited:true};const options=[];for(let index=0;index<this.options.length;index++){const option=this.options[index],label=String(option.textContent||'').trim(),candidate=String(option.value);if(label.length>65536||candidate.length>65536)return {limited:true};options.push({index,value:candidate,label,disabled:!!option.disabled||(option.parentElement?.localName==='optgroup'&&option.parentElement.disabled)});}return {matches:options.filter(option=>option.value===value||option.label===value),enabled:options.filter(option=>!option.disabled).map(option=>({index:option.index,label:option.label}))};}",
           arguments: [{ value }], returnByValue: true, silent: true, throwOnSideEffect: true,
         }));
         const details = object(object(option.result).value);
@@ -454,11 +454,23 @@ export class PageExecutor implements EngineExecutor {
         const enabled = array(details.enabled);
         const enabledIndex = enabled.findIndex(candidate => Number(candidate.index) === Number(selected.index));
         if (enabledIndex < 0) throw new EngineError("target_not_editable");
-        context.ensureInputCapacity(1 + 2 + enabledIndex * 2 + 3);
-        await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
-        await this.key(context, binding, "Home");
-        for (let step = 0; step < enabledIndex; step += 1) await this.key(context, binding, "ArrowDown");
-        await this.key(context, binding, "Enter");
+        if (process.platform === "darwin") {
+          // macOS menu-list selects ignore arrow keys while closed and open a
+          // popup instead; the platform's native keyboard path is type-ahead.
+          const label = String(selected.label ?? "");
+          const folded = label.toLocaleLowerCase();
+          if (!/^[\x20-\x7e]{1,256}$/.test(label) || label.startsWith(" ")) throw new EngineError("unsupported_capability");
+          if (enabled.some(candidate => Number(candidate.index) !== Number(selected.index) && String(candidate.label ?? "").toLocaleLowerCase().startsWith(folded))) throw new EngineError("ambiguous");
+          context.ensureInputCapacity(1 + label.length * 3);
+          await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
+          for (const character of label) await this.key(context, binding, character);
+        } else {
+          context.ensureInputCapacity(1 + 2 + enabledIndex * 2 + 3);
+          await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
+          await this.key(context, binding, "Home");
+          for (let step = 0; step < enabledIndex; step += 1) await this.key(context, binding, "ArrowDown");
+          await this.key(context, binding, "Enter");
+        }
         const after = await this.resolver.inspect(context, binding, { editable: false });
         return { state: after.value === String(selected.value) ? "met" : "not_met", kind: "value" };
       } finally { void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
@@ -1270,7 +1282,14 @@ export class PageExecutor implements EngineExecutor {
   }
   private async selectAll(context: CommandContext, binding: NodeBinding): Promise<void> {
     context.checkpoint();
-    await this.input!.chord(binding, [process.platform === "darwin" ? "Meta" : "Control", "a"], async () => { await this.focusedFacts(context, binding, true); });
+    if (process.platform === "darwin") {
+      // A keyless editing command: macOS never routes Command shortcuts from
+      // CDP into the renderer, and held Meta events can stall headless input.
+      await this.focusedFacts(context, binding, true);
+      await this.input!.selectRange(binding, ["selectAll"]);
+      return;
+    }
+    await this.input!.chord(binding, ["Control", "a"], async () => { await this.focusedFacts(context, binding, true); });
   }
   private async focusedFacts(context: CommandContext, binding: NodeBinding, editable: boolean) {
     const facts = await this.resolver.inspect(context, binding, { editable });

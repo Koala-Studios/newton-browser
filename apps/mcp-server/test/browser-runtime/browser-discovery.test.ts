@@ -121,3 +121,25 @@ test("Linux system symlink targets are confined to exact trusted installation pr
   assert.equal(trustedLinuxSystemBrowserTarget("/tmp/google-chrome", "/opt/google/chrome/chrome"), false);
   assert.equal(trustedLinuxSystemBrowserTarget("/usr/bin/chromium", "/snap/bin/chromium"), false);
 });
+
+test("a running macOS browser's code-sign clone link does not reject its bundle executable", (context) => {
+  if (process.platform === "win32") { context.skip("POSIX hard links"); return; }
+  const root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "newton-browser-discovery-bundle-"));
+  try {
+    const macos = path.join(root, "Google Chrome.app", "Contents", "MacOS");
+    fs.mkdirSync(macos, { recursive: true });
+    const executable = path.join(macos, "Google Chrome");
+    fs.writeFileSync(executable, "fixture", { mode: 0o700 });
+    fs.linkSync(executable, path.join(root, "code-sign-clone"));
+    const platform = "darwin" as const;
+    assert.equal(discoverBrowserExecutable({ family: "chrome", explicitPath: executable, platform })?.path, fs.realpathSync.native(executable));
+    assert.throws(() => discoverBrowserExecutable({ family: "chrome", explicitPath: executable, platform: "linux" }), /browser_executable_invalid/);
+
+    const loose = path.join(root, "browser");
+    fs.writeFileSync(loose, "fixture", { mode: 0o700 });
+    fs.linkSync(loose, path.join(root, "second-link"));
+    assert.throws(() => discoverBrowserExecutable({ family: "chrome", explicitPath: loose, platform }), /browser_executable_invalid/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

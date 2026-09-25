@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { nativeSocketEndpoint } from "../apps/mcp-server/src/native-endpoint.ts";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -38,10 +39,8 @@ test('malformed native result envelopes cannot acknowledge an input command',asy
   }
 });
 
-function endpointFor(root, epoch) {
-  return process.platform === "win32"
-    ? `\\\\.\\pipe\\newton-browser-${epoch}`
-    : path.join(root, `socket-${epoch}`);
+function endpointFor(_root, epoch) {
+  return nativeSocketEndpoint(epoch);
 }
 
 async function temporaryRoot(t, label) {
@@ -52,7 +51,7 @@ async function temporaryRoot(t, label) {
 
 async function createFakePeer(t, root, { hello = { epoch: "browser-instance", digest: DIGEST, protocolMajor: 1, capabilities: ["tab_claim", "inventory"] }, onRequest = () => {} } = {}) {
   const epoch = randomUUID();
-  const endpoint = endpointFor(root, epoch);
+  const endpoint = await endpointFor(root, epoch);
   const advertisement = path.join(root, "connection.json");
   const token = "b".repeat(64);
   const sockets = new Set();

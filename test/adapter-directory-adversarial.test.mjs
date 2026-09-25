@@ -23,7 +23,7 @@ function extensionId(key) {
 }
 
 async function makeTempRoot(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "newton-adapter-test-"));
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "newton-adapter-test-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }

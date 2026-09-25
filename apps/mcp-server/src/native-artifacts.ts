@@ -54,7 +54,7 @@ export async function buildNativeRuntime(
   try {
     await fs.writeFile(path.join(stage, "native-host.js"), entry, { flag: "wx", mode: 0o600 });
     await fs.copyFile(runtime, path.join(stage, runtimeName));
-    if (process.platform === "linux") {
+    if (process.platform !== "win32") {
       await fs.chmod(path.join(stage, runtimeName), 0o700);
     }
     if (await hashNativeFile(path.join(stage, runtimeName)) !== runtimeDigest) throw new Error("native_file_changed");

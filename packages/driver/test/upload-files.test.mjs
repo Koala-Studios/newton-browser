@@ -39,7 +39,7 @@ test("prepares every supported media signature and preserves names", (t) => {
   const files = Object.keys(HEADERS).map((extension, index) => writeAsset(root, `asset-${index}${extension}`));
   const prepared = prepareUploadFiles(files);
 
-  assert.deepEqual(prepared.paths, files);
+  assert.deepEqual(prepared.paths, files.map((file) => fs.realpathSync.native(file)));
   assert.deepEqual(prepared.names, files.map((file) => path.basename(file)));
   assert.ok(Object.isFrozen(prepared.paths));
   assert.ok(Object.isFrozen(prepared.names));
@@ -173,4 +173,19 @@ test("closes all prepared handles and rejects use after close", (t) => {
   prepared.close();
   prepared.close();
   expectCode(() => prepared.assertUnchanged(), "upload_closed");
+});
+
+test("root-owned system links such as macOS /var resolve while user links stay refused", (t) => {
+  const root = tempRoot(t);
+  if (process.platform === "win32" || fs.realpathSync.native(root) === root) { t.skip("temporary directory has no system directory link"); return; }
+  const asset = writeAsset(root, "asset.png");
+  const prepared = prepareUploadFiles([asset]);
+  try {
+    assert.deepEqual(prepared.paths, [fs.realpathSync.native(asset)]);
+    assert.deepEqual(prepared.names, ["asset.png"]);
+    prepared.assertUnchanged();
+  } finally { prepared.close(); }
+  const userLink = path.join(root, "user-link");
+  fs.symlinkSync(root, userLink, "dir");
+  expectCode(() => prepareUploadFiles([path.join(userLink, "asset.png")]), "symlink_not_allowed");
 });

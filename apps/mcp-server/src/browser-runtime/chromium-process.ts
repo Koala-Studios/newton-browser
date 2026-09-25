@@ -4,6 +4,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:c
 import { fileURLToPath } from "node:url";
 import type { Readable, Writable } from "node:stream";
 
+import { macApplicationExecutable } from "./browser-discovery.ts";
 import { CdpPipeTransport, type PrivateCdpTransport } from "./cdp-pipe.ts";
 import type { GuardianProfileCleanupPlan } from "./profile-store.ts";
 import { ProcessCleanupError, ProcessSupervisor, type SupervisedChild } from "./process-supervisor.ts";
@@ -249,7 +250,7 @@ function validateExecutablePath(value: string, platform: NodeJS.Platform): void 
   try {
     if (!path.isAbsolute(value) || value.includes("\0")) throw new Error();
     const stat = fs.lstatSync(value);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error();
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.nlink !== 1 && !macApplicationExecutable(path.resolve(value), platform))) throw new Error();
     const resolved = fs.realpathSync.native(value);
     const parentReal = fs.realpathSync.native(path.dirname(value));
     if (path.relative(resolved, path.join(parentReal, path.basename(path.resolve(value)))) !== "") throw new Error();

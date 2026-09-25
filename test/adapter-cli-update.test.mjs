@@ -13,7 +13,7 @@ const instance = "cli-test-epoch";
 const tab = "1";
 
 async function makeTempRoot(t, name) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), `newton-adapter-cli-${name}-`));
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), `newton-adapter-cli-${name}-`));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }

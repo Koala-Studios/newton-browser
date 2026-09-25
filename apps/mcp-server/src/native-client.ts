@@ -1,7 +1,7 @@
 import net from 'node:net';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import {NativeChannel} from './native-wire.ts';
+import {nativeSocketEndpoint} from './native-endpoint.ts';
 import {channel as diagnosticChannel} from 'node:diagnostics_channel';
 const nativeTrace=diagnosticChannel('newton-browser.native-command');
 let nextTraceConnection=0;
@@ -24,7 +24,7 @@ export async function connectNative(advertisement:string,expectedInstanceId?:str
   if(!stat.isFile()||stat.isSymbolicLink()||stat.size>4096)throw new Error('native_advertisement_invalid');
   const info=JSON.parse(await fs.readFile(advertisement,'utf8'));
   if(info?.version!==1||typeof info.endpoint!=='string'||typeof info.token!=='string'||!/^[a-f0-9]{64}$/.test(info.token)||typeof info.epoch!=='string'||!/^[a-f0-9-]{36}$/.test(info.epoch))throw new Error('native_advertisement_invalid');
-  const endpoint=process.platform==='win32'?`\\\\.\\pipe\\newton-browser-${info.epoch}`:path.join(path.dirname(path.resolve(advertisement)),`socket-${info.epoch}`);
+  const endpoint=await nativeSocketEndpoint(info.epoch);
   if(info.endpoint!==endpoint)throw new Error('native_advertisement_invalid');
   const socket=net.connect(endpoint),controller=new AbortController();
   const pending=new Map<number,{resolve(value:Value):void;reject(error:Error):void;timer:ReturnType<typeof setTimeout>;method:string}>();

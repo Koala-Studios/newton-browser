@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { NativeChannel } from "./native-wire.ts";
+import { nativeSocketEndpoint } from "./native-endpoint.ts";
 
 /** Chrome-launched, port-owned private IPC. It is never installed as a daemon. */
 export async function startNativeBroker(directory: string, input: Readable, output: Writable) {
@@ -11,7 +12,7 @@ export async function startNativeBroker(directory: string, input: Readable, outp
   if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("native_directory_invalid");
   // Installer restricts this directory to the current OS user. The capability is never sent to Chrome or the model.
   const token = randomBytes(32).toString("hex"); const epoch = randomUUID();
-  const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\newton-browser-${epoch}` : path.join(root, `socket-${epoch}`);
+  const endpoint = await nativeSocketEndpoint(epoch);
   const connections = new Map<string, NativeChannel>();
   const requests=new Map<string,Set<number>>();
   let disposed = false;

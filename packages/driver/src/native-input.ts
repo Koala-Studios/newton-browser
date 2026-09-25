@@ -11,6 +11,18 @@ interface Transport {
   release(route: string, method: string, params: Params): Promise<unknown>;
 }
 const modifiers: Record<string, number> = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+/** On macOS, Chromium resolves Command shortcuts through the application menu,
+ * which trusted CDP key events never reach; the renderer only performs the
+ * editing command when the key event names it. Other platforms bind these
+ * shortcuts in the renderer and must not receive duplicate commands. */
+const macEditingCommands: Record<string, string> = { 'Meta+a': 'selectAll', 'Meta+c': 'copy', 'Meta+x': 'cut', 'Meta+v': 'paste', 'Meta+z': 'undo', 'Meta+Shift+z': 'redo' };
+function macEditingCommand(keys: readonly string[], platform: NodeJS.Platform): string | undefined {
+  if (platform !== 'darwin') return undefined;
+  const normalized = keys.map(normalizeKey), key = normalized.at(-1)!.toLowerCase();
+  const held = ['Meta', 'Shift'].filter(modifier => normalized.slice(0, -1).includes(modifier));
+  if (held.length !== normalized.length - 1) return undefined;
+  return macEditingCommands[[...held, key].join('+')];
+}
 function describeChord(keys: readonly string[]) {
   const normalized = keys.map(normalizeKey);
   if (!normalized.length || normalized.length > 8 || new Set(normalized).size !== normalized.length
@@ -34,8 +46,9 @@ export class NativeInput {
     const { descriptions, mask } = describeChord(keys);
     this.context.ensureInputCapacity(additionalInputs + descriptions.length * 2 + (descriptions.at(-1)?.text && !(mask & 7) ? 1 : 0));
   }
-  async chord(binding: NodeBinding, keys: readonly string[], beforeInput?: () => Promise<void>): Promise<void> {
+  async chord(binding: NodeBinding, keys: readonly string[], beforeInput?: () => Promise<void>, platform: NodeJS.Platform = process.platform): Promise<void> {
     const { descriptions, mask } = describeChord(keys);
+    const command = macEditingCommand(keys, platform);
     this.context.ensureInputCapacity(descriptions.length * 2 + (descriptions.at(-1)?.text && !(mask & 7) ? 1 : 0));
     const route = this.transport.route(binding);
     for (const descriptor of descriptions) {
@@ -43,7 +56,8 @@ export class NativeInput {
       const { text: _text, unmodifiedText: _unmodified, ...key } = descriptor;
       this.context.checkpoint();
       this.held.set(`key:${descriptor.key}`, { route, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...key, modifiers: descriptor.modifiers & ~(modifiers[descriptor.key] ?? 0) } });
-      await this.context.input(() => this.transport.send(binding, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key }));
+      const commands = command && descriptor === descriptions.at(-1) ? { commands: [command] } : {};
+      await this.context.input(() => this.transport.send(binding, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key, ...commands }));
     }
     const last = descriptions.at(-1)!;
     if (last.text && !(mask & 7)) { await beforeInput?.(); await this.context.input(() => this.transport.send(binding, 'Input.dispatchKeyEvent', { type: 'char', ...last })); }
@@ -69,7 +83,7 @@ export class NativeInput {
     }
   }
   async selectRange(binding:NodeBinding,commands:readonly string[]):Promise<void>{
-    const allowed=new Set(['moveToBeginningOfDocument','moveToEndOfDocument','moveForward','moveBackward','moveForwardAndModifySelection','moveBackwardAndModifySelection']);
+    const allowed=new Set(['selectAll','moveToBeginningOfDocument','moveToEndOfDocument','moveForward','moveBackward','moveForwardAndModifySelection','moveBackwardAndModifySelection']);
     if(!commands.length||commands.length>4096||commands.some(command=>!allowed.has(command)))throw new EngineError('invalid_arguments');
     this.context.ensureInputCapacity(2);
     const route=this.transport.route(binding),params={type:'keyUp',key:'Unidentified'};

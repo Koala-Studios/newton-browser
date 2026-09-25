@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { ensureNativeRuntimeBuild, hashNativeFile } from "../apps/mcp-server/src/native-runtime-build.ts";
 
+const RUNTIME = process.platform === "win32" ? "node.exe" : "node";
+
 async function makeTempRoot(t, name = "root") {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), `newton-native-build-${name}-`));
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), `newton-native-build-${name}-`));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -18,7 +20,7 @@ async function makeRuntime(root, bytes = Buffer.from("inert-runtime-v1\n")) {
 }
 
 async function statSnapshot(directory) {
-  const names = ["native-host.js", "node.exe", "build.json"];
+  const names = ["native-host.js", RUNTIME, "build.json"];
   return Object.fromEntries(await Promise.all(names.map(async (name) => {
     const stat = await fs.stat(path.join(directory, name));
     return [name, { ino: stat.ino, dev: stat.dev, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }];
@@ -38,7 +40,7 @@ test("repeated setup does not rewrite verified build files", async (t) => {
   assert.deepEqual(second, first);
   assert.deepEqual(after, before);
   assert.deepEqual(await fs.readFile(path.join(first.directory, "native-host.js")), entry);
-  assert.deepEqual(await fs.readFile(path.join(first.directory, "node.exe")), await fs.readFile(runtime));
+  assert.deepEqual(await fs.readFile(path.join(first.directory, RUNTIME)), await fs.readFile(runtime));
 });
 
 test("source runtime changes do not mutate an existing verified build", async (t) => {
@@ -53,7 +55,7 @@ test("source runtime changes do not mutate an existing verified build", async (t
 
   assert.deepEqual(second, first);
   assert.deepEqual(await statSnapshot(second.directory), before);
-  assert.deepEqual(await fs.readFile(path.join(second.directory, "node.exe")), Buffer.from("runtime-before\n"));
+  assert.deepEqual(await fs.readFile(path.join(second.directory, RUNTIME)), Buffer.from("runtime-before\n"));
 });
 
 test("changed entry content gets a separate immutable build", async (t) => {
@@ -88,7 +90,7 @@ test("concurrent first install converges and removes every losing stage", async 
 test("partial and tampered existing builds fail closed", async (t) => {
   const cases = [
     ["missing metadata", async (directory) => fs.unlink(path.join(directory, "build.json"))],
-    ["missing runtime", async (directory) => fs.unlink(path.join(directory, "node.exe"))],
+    ["missing runtime", async (directory) => fs.unlink(path.join(directory, RUNTIME))],
     ["tampered entry", async (directory) => fs.writeFile(path.join(directory, "native-host.js"), "tampered\n")],
     ["tampered metadata", async (directory) => {
       const metadata = JSON.parse(await fs.readFile(path.join(directory, "build.json"), "utf8"));

@@ -7,7 +7,7 @@ export async function ensureNativeRuntimeBuild(
   entry: Buffer,
   runtime: string,
 ): Promise<{ digest: string; directory: string; }> {
-  const runtimeName = process.platform === "win32" ? "node.exe" : process.platform === "linux" ? "node" : null;
+  const runtimeName = process.platform === "win32" ? "node.exe" : process.platform === "linux" || process.platform === "darwin" ? "node" : null;
   if (runtimeName === null) throw new Error("native_install_arguments");
   return buildNativeRuntime(root, entry, runtime, runtimeName);
 }

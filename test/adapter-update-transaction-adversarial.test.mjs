@@ -14,7 +14,7 @@ import {
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 async function makeTempRoot(t, name) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), `newton-update-transaction-${name}-`));
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), `newton-update-transaction-${name}-`));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }

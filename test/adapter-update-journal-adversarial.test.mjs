@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { openUpdateJournal } from "../apps/mcp-server/src/adapter-update-journal.ts";
 
 async function makeTempRoot(t, name) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), `newton-update-journal-${name}-`));
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), `newton-update-journal-${name}-`));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
