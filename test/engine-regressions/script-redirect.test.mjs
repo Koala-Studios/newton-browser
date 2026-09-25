@@ -4,7 +4,7 @@ import http from 'node:http';
 import { temporaryRoot } from '../../scripts/prototypes/support.mjs';
 import { createBrowserEngine } from '../../apps/mcp-server/src/embedding.ts';
 
-// Sign-in pages (Shopify admin among them) replace themselves by script while still parsing, so the document
+// Some store admin sign-in pages replace themselves by script while still parsing, so the document
 // Page.navigate started never reaches DOMContentLoaded. Start and navigate must settle on the replacing document
 // instead of waiting for the abandoned one until the deadline.
 test('start and navigate settle on a document that replaced the requested one by script', async () => {
