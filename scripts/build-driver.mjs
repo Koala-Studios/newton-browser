@@ -32,10 +32,6 @@ export function buildDriver({ destination = defaultDestination, quiet = false } 
     "false",
   ], quiet, "driver_typescript_build_failed");
 
-  // `types.ts` contains declarations only. TypeScript emits an empty `export {}`
-  // module for it, but no runtime imports reference that file after type erasure.
-  fs.rmSync(path.join(resolvedDestination, "types.js"), { force: true });
-
   if (!quiet) console.log("newton browser driver build ok");
   return resolvedDestination;
 }

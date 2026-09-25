@@ -1,43 +1,17 @@
-# Newton Browser 0.6.4 tool reference
+# Newton Browser tool reference
 
-This contract applies only to the immutable 0.6.4 entrypoint configured in the MCP
-client. A repository/worktree build, global command, or older cached package must not be
-used for live browser or identity-login work.
+`tools/list` is authoritative; this summarizes the engine contract.
 
-Newton exposes ten stateless MCP tools: `browser.status`, `browser.session.start`,
-`browser.observe`, `browser.act`, `browser.screenshot`, `browser.console`,
-`browser.network`, `browser.sessions.list`, `browser.session.stop`, and `browser.stop_all`.
+- `browser.session.start`: `url` (complete HTTP(S) URL), optional `loginSource`, `viewport`, `locale`, `timezone`, `timeoutMs`, `collect`. Returns `sessionId`, the first page and `nextCommandId`. The URL is the first navigation, not an allowlist.
+- `browser.observe`: bounded controls with context and validation. `query` and `scope` narrow; `mode: "records"` with `recordShape` (`controls`, `links`, `table`, `form`); `previousSnapshotId` returns a delta.
+- `browser.document.read` / `browser.document.continue`: redacted text with an opaque cursor; snapshots expire after five minutes or when the document changes.
+- `browser.act`: `{ sessionId, command: { commandId, action } }`. Actions: `navigate`, `back`, `forward`, `reload`, `click`, `click_at`, `fill`, `type`, `clear`, `edit`, `select`, `press`, `scroll`, `hover`, `wait_for`, `set_files`, `resize`, `dialog_accept`, `dialog_dismiss`, `sequence`. Targets: `ref`, `selector` or `semantic`.
+- Receipt: `reason`, `dispatch`, `postcondition`, optional `observation` (including `navigation`, `newPages`, `cover`), `pageRestarted` after a renderer hang, and `nextCommandId`.
+- `browser.command`: get or cancel a command without waiting behind input.
+- `browser.screenshot`: bounded PNG, `fullPage` or `clip`, masked password and sensitive-autocomplete fields plus optional `sensitiveZones`.
+- `browser.console` / `browser.network`: opt-in records (enabling them is visible to pages); network keeps no headers; bodies only as bounded text from the page's own origin.
+- `browser.pages.list` / `browser.page.select`: session pages; popups never change the selected page.
+- `browser.sessions.list`, `browser.session.stop`.
+- `browser.existing.discover` / `browser.existing.setup`: only when the operator asks to use their own browser.
 
-`browser.session.start` requires one HTTP(S) `origin`, optionally a Chrome/Edge family,
-opaque identity ID, and nested initial-observation object. Use
-`observe: { mode: "full", format: "compact" }`, not `observe: "full"` or top-level
-observation fields. The origin is the initial navigation and
-identity-binding key, not a network grant. Normal redirects and cross-origin resources
-work automatically.
-
-Actions are `navigate`, `back`, `forward`, `reload`, `click`, `fill`, `type`, `select`,
-`clear`, `press`, `scroll`, `hover`, `move`, `wait_for`, `set_files`, `dialog_accept`,
-`dialog_dismiss`, `resize`, and `fill_form`. Target fields are flat and refs must come from
-a fresh observation. Every interactive `full` or `diff` observation starts a new bounded
-ref cycle and releases refs not emitted by that snapshot, including on a same-document
-SPA. `text` mode allocates no refs and preserves the current interactive cycle.
-
-An owned popup or new tab is discovered while provisional and becomes the active page
-inside the same `sessionId` only after it commits to HTTP(S); its fresh observation
-replaces the opener's refs. Closing it restores a freshly rebuilt opener context. There
-is no browser-chrome click or public tab-management tool.
-
-Action results carry host-authored `status`, `outcome`, `retrySafe`, and `decision` fields.
-`prevented` is reserved for a refusal proven before input dispatch. Once input begins, an
-uncertain result is never retry-safe. POST/GraphQL/telemetry traffic is observational and
-cannot fail, verify, or authorize an action. Retain and re-observe the same session after
-`outcome_unknown` or `dispatched_unverified`; do not restart authentication. Page-derived
-payloads are marked `untrusted_page_content`.
-
-`browser.network` returns bounded metadata without headers. Bodies are limited to bounded
-supported UTF-8 text from the current visible origin. Network entries are observational;
-there is no policy-decision or blocked-origin field.
-
-Screenshots are MCP image content only. Sensitive zones are masked after capture without
-pausing scripts or animations. `server/discover` advertises only MCP `2026-07-28`; there
-is no handshake or compatibility transport.
+Errors carry a stable `errorCode`; `invalid_arguments` also names the `field` and what it `expected`.

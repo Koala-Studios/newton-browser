@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { ensureConfigDirectory, configDirectory, loadDirectConfiguration, profileStoreDirectory } from "../config.ts";
+import { ensureConfigDirectory, configDirectory, loadBrowserPreference, profileStoreDirectory } from "../config.ts";
 import { discoverBrowserExecutable, type BrowserFamily } from "./browser-discovery.ts";
 import { collectOrphanedIdentities, openProfileStore } from "./profile-store.ts";
 import fs from "node:fs";
@@ -13,7 +13,7 @@ import { connectExistingTab,createExistingTab,discoverExistingBrowser,discoverEx
 export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): EngineHost {
   const directory = configDirectory(env);
   ensureConfigDirectory(directory);
-  const configuration = loadDirectConfiguration({ directory, env });
+  const browser = loadBrowserPreference({ directory, env });
   const store = openProfileStore(profileStoreDirectory(env, directory));
   const sourceRoot = path.join(directory, "login-sources");
   const configuredSource = env.NEWTON_BROWSER_LOGIN_SOURCE;
@@ -28,7 +28,7 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
   };
 
   const connect = async (sourceId?: string, display?: BrowserDisplay) => {
-    const family = resolveFamily(configuration.browser, env);
+    const family = resolveFamily(browser, env);
     const executable = discoverBrowserExecutable({family,...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE?{explicitPath:env.NEWTON_BROWSER_BROWSER_EXECUTABLE}:{}),env});
     if(!executable)throw new Error('configured_browser_unavailable');
     const source = await LoginSource.open(store, sourceRoot, sourceId ?? configuredSource ?? "default", family);
@@ -55,7 +55,7 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
   };
   // Sign-in for a shared login source runs as an ordinary session; Done publishes, anything else cancels.
   const maintenance: LoginMaintenance = { async begin(sourceId, display) {
-    const family = resolveFamily(configuration.browser, env);
+    const family = resolveFamily(browser, env);
     const executable = discoverBrowserExecutable({family,...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE?{explicitPath:env.NEWTON_BROWSER_BROWSER_EXECUTABLE}:{}),env});
     if(!executable)throw new Error('configured_browser_unavailable');
     const source = await LoginSource.open(store, sourceRoot, sourceId, family);

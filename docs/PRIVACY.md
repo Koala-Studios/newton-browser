@@ -2,7 +2,7 @@
 
 _Last updated: 2026-08-11_
 
-Newton Browser is a local developer tool. Its direct runtime launches isolated Chrome or
+Newton Browser is a local developer tool. Its session engine launches isolated Chrome or
 Edge processes and controls them from a local stdio MCP host through inherited private CDP
 pipes. It has no Newton cloud backend, account service, telemetry, analytics, crash-report
 service, remote relay, or database.

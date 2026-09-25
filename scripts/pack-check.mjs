@@ -94,9 +94,9 @@ export function packCheck() {
     const linkedVersion = run(process.execPath, [path.join(linkedPackage, "dist", "index.js"), "--version"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();
     if (linkedVersion !== version) throw new Error(`symlinked packed version mismatch: ${linkedVersion}`);
     const help = run(process.execPath, [entry, "--help"], { cwd: temp, capture: true, env: isolatedEnv }).stdout;
-    if (!help.includes("setup --browser") || !help.includes("identity login [identity-id]")
-      || help.includes("origin grant --origin") || !help.includes("doctor --live")) {
-      throw new Error("packed direct setup help is incomplete");
+    if (!help.includes("setup --browser") || !help.includes("source login --id")
+      || help.includes("identity login") || help.includes("origin grant --origin") || !help.includes("doctor [--live]")) {
+      throw new Error("packed setup help is incomplete");
     }
     const doctorResult = run(process.execPath, [entry, "doctor"], { cwd: temp, capture: true, env: isolatedEnv }).stdout.trim();
     const doctor = JSON.parse(doctorResult);

@@ -1,5 +1,7 @@
 # P13 Legacy Runtime Migration Inventory
 
+> Completed 2026-09-25: the legacy runtime is retired (audit D16). Every RETIRE row below is done; the MISSING rows were covered by engine regressions (dialog-lifecycle, renderer-hang, resize-files, pointer-actions, popup-ownership, frames, diagnostics) or removed with the old surface. The rest of this file is historical.
+>
 > Status reconciliation, 2026-09-25: this file retains historical implementation/handoff evidence. Current facts and unresolved gates are in [PROGRESS_LEDGER.md](../PROGRESS_LEDGER.md). Default engine cutover and precise editing are now implemented; legacy deletion and full replacement release acceptance are not. Earlier three-pass or completion statements apply only to their narrower historical candidate. No worker instructions here override the current solo-only rule.
 
 

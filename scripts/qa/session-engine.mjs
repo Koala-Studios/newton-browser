@@ -76,7 +76,6 @@ const GROUPS = Object.freeze({
     "test/native-runtime-build-adversarial.test.mjs",
     "apps/mcp-server/test/modern-mcp-stdio.test.ts",
     "apps/mcp-server/test/mcp-contract.test.ts",
-    "apps/mcp-server/test/identity-binding-cli.test.ts",
     "apps/mcp-server/test/browser-runtime/profile-store.test.ts",
     "apps/mcp-server/test/browser-runtime/profile-closure.test.ts",
     "apps/mcp-server/test/browser-runtime/process-supervisor.test.ts",

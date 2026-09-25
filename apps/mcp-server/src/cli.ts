@@ -7,25 +7,18 @@ import {developmentUpdateControl} from './adapter-update-control.ts';
 import {updateInstalledAdapter,recoverInstalledAdapter} from './adapter-update-transaction.ts';
 import {openUpdateJournal} from './adapter-update-journal.ts';
 import { discoverBrowserExecutable } from "./browser-runtime/browser-discovery.ts";
-import { createDefaultDirectBrowserHost } from "./browser-runtime/default-direct-host.ts";
 import { dispatchIdentityCommand } from "./browser-runtime/identity-cli.ts";
 import { createIdentityLeaseClosureVerifier } from "./browser-runtime/identity-lease-closure.ts";
 import { createProfileSourceClosureVerifier } from "./browser-runtime/profile-closure.ts";
-import { listNewtonIdentities, openProfileStore } from "./browser-runtime/profile-store.ts";
+import { openProfileStore } from "./browser-runtime/profile-store.ts";
 import { LoginSource } from "./browser-runtime/login-source.ts";
-import {
-  runDirectIdentityLogin,
-  runDirectLiveDoctor,
-  setupDirectBrowser,
-} from "./browser-runtime/direct-setup-cli.ts";
+import { runLiveDoctor, setupBrowser } from "./browser-runtime/setup-cli.ts";
 import {
   configDirectory,
   ensureConfigDirectory,
-  loadDirectConfiguration,
+  loadBrowserPreference,
   profileStoreDirectory,
-  removeIdentityBinding,
   resolveConfigDirectory,
-  writeIdentityBinding,
 } from "./config.ts";
 import { INSTALL_CLIENTS, type InstallClient, runInstall } from "./install.ts";
 import { MAX_MCP_IN_FLIGHT_REQUESTS, MAX_MCP_LINE_BYTES, MODERN_MCP_PROTOCOL_VERSION } from "./modern-mcp-stdio.ts";
@@ -91,14 +84,14 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
   if (args[0] === "setup") {
     const flags = parseUtilityFlags(args.slice(1), new Set(["--browser"]));
     const browser = flags.single("--browser");
-    if (browser !== "chrome" && browser !== "edge") throw utilityError("direct_setup_invalid_arguments");
-    const output = setupDirectBrowser({ browserFamily: browser });
+    if (browser !== "chrome" && browser !== "edge") throw utilityError("setup_invalid_arguments");
+    const output = setupBrowser({ browserFamily: browser });
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     return true;
   }
   if (args[0] === "doctor") {
-    if (args.length > 2 || (args.length === 2 && args[1] !== "--live")) throw utilityError("direct_doctor_invalid_arguments");
-    const report = args[1] === "--live" ? await runDirectLiveDoctor() : await collectDoctorReport();
+    if (args.length > 2 || (args.length === 2 && args[1] !== "--live")) throw utilityError("doctor_invalid_arguments");
+    const report = args[1] === "--live" ? await runLiveDoctor() : await collectDoctorReport();
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return true;
   }
@@ -156,61 +149,6 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
       return true;
     }
     const identityDirectory = ensureConfigDirectory(configDirectory());
-    if (identityArgs[0] === "bindings" && identityArgs.length === 1) {
-      const bindings = loadDirectConfiguration({ directory: identityDirectory, env: process.env }).identityBindings;
-      process.stdout.write(`${JSON.stringify(bindings, null, 2)}\n`);
-      return true;
-    }
-    if (identityArgs[0] === "bind") {
-      const flags = parseUtilityFlags(identityArgs.slice(1), new Set(["--id", "--origin"]));
-      const id = flags.single("--id");
-      const origin = flags.single("--origin");
-      if (!id || !origin || !/^nbi_[a-f0-9]{32}$/u.test(id)) throw utilityError("identity_binding_invalid_arguments");
-      const store = openProfileStore(profileStoreDirectory(process.env, identityDirectory));
-      if (!listNewtonIdentities(store).some((identity) => identity.id === id)) {
-        throw utilityError("identity_binding_identity_missing");
-      }
-      try {
-        const output = writeIdentityBinding({ directory: identityDirectory, origin, identityId: id });
-        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-      } catch { throw utilityError("identity_binding_failed"); }
-      return true;
-    }
-    if (identityArgs[0] === "unbind") {
-      const flags = parseUtilityFlags(identityArgs.slice(1), new Set(["--origin"]));
-      const origin = flags.single("--origin");
-      if (!origin) throw utilityError("identity_binding_invalid_arguments");
-      try {
-        const output = removeIdentityBinding({ directory: identityDirectory, origin });
-        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-      } catch { throw utilityError("identity_binding_failed"); }
-      return true;
-    }
-    if (identityArgs[0] === "login") {
-      const explicitId = identityArgs[1]?.startsWith("--") ? undefined : identityArgs[1];
-      const flags = parseUtilityFlags(identityArgs.slice(explicitId ? 2 : 1), new Set(["--origin"]));
-      const origin = flags.single("--origin");
-      if (!origin) throw utilityError("identity_login_invalid_arguments");
-      const id = explicitId ?? loadDirectConfiguration({ directory: identityDirectory, env: process.env }).identityBindings
-        .find((binding) => binding.origin === origin)?.identityId;
-      if (!id) throw utilityError("identity_login_binding_missing");
-      const output = await runDirectIdentityLogin({
-        identityId: id,
-        origin,
-        directory: identityDirectory,
-        onReady: (receipt) => process.stdout.write(`${JSON.stringify(receipt)}\n`),
-      });
-      process.stdout.write(`${JSON.stringify(output)}\n`);
-      return true;
-    }
-    if (identityArgs[0] === "delete") {
-      const idIndex = identityArgs.indexOf("--id");
-      const id = idIndex >= 0 ? identityArgs[idIndex + 1] : undefined;
-      if (id && loadDirectConfiguration({ directory: identityDirectory, env: process.env }).identityBindings
-        .some((binding) => binding.identityId === id)) {
-        throw utilityError("identity_delete_binding_active");
-      }
-    }
     const browserFamily = identityImportBrowserFamily(identityArgs);
     const output = dispatchIdentityCommand({
       store: openProfileStore(profileStoreDirectory(process.env, identityDirectory)),
@@ -237,10 +175,6 @@ function identityHelp(): string {
     "",
     "  newton-browser identity create --browser <chrome|edge>",
     "  newton-browser identity list",
-    "  newton-browser identity login [identity-id] --origin <origin>",
-    "  newton-browser identity bind --id <identity-id> --origin <origin>",
-    "  newton-browser identity unbind --origin <origin>",
-    "  newton-browser identity bindings",
     "  newton-browser identity import --browser <chrome|edge> --user-data-root <path> --profile-directory <name>",
     "  newton-browser identity lease-inspect --id <identity-id>",
     "  newton-browser identity lease-recover --id <identity-id>",
@@ -266,11 +200,8 @@ function utilityHelp(): string {
     "  newton-browser source collect --id <name> --browser <chrome|edge>  (remove retired generations)",
     "  newton-browser source recover --id <name> --browser <chrome|edge>",
     "",
-    "Optional persistent identity:",
-    "  newton-browser identity create --browser <chrome|edge>",
-    "  newton-browser identity login [identity-id] --origin <https-origin>",
-    "  newton-browser identity bind --id <identity-id> --origin <https-origin>",
-    "  newton-browser doctor --live",
+    "Identities (operator-only):",
+    "  newton-browser identity --help",
     "",
     "MCP client setup:",
     "  newton-browser install <codex|generic> [--dry-run] [--force]",
@@ -375,32 +306,29 @@ function runInstallCommand(args: string[]): string {
 export async function collectDoctorReport(input: { directory?: string; env?: NodeJS.ProcessEnv } = {}) {
   const env = input.env ?? process.env;
   const directory = resolveConfigDirectory(input.directory ?? configDirectory(env));
-  return collectDirectDoctorReport(directory, env);
+  return collectEngineDoctorReport(directory, env);
 }
 
-async function collectDirectDoctorReport(directory: string, env: NodeJS.ProcessEnv) {
+async function collectEngineDoctorReport(directory: string, env: NodeJS.ProcessEnv) {
   const nodeMajor = Number(process.versions.node.split(".")[0]);
-  let host: ReturnType<typeof createDefaultDirectBrowserHost> | null = null;
-  let runtimeErrorCode: string | null = null;
+  let browserErrorCode: string | null = null;
   try {
-    host = createDefaultDirectBrowserHost({
-      ...env,
-      NEWTON_BROWSER_CONFIG_DIR: directory,
-    });
+    const preference = loadBrowserPreference({ directory, env });
+    const families = preference === "auto" ? ["chrome", "edge"] as const : [preference];
+    if (!families.some(family => discoverBrowserExecutable({ family, ...(env.NEWTON_BROWSER_BROWSER_EXECUTABLE ? { explicitPath: env.NEWTON_BROWSER_BROWSER_EXECUTABLE } : {}), env })))
+      browserErrorCode = "browser_unavailable";
   } catch (error) {
-    runtimeErrorCode = safeUtilityCode(error, "direct_runtime_unavailable");
+    browserErrorCode = safeUtilityCode(error, "configuration_invalid");
   }
-  const configured = host?.getStatus().configured === true;
-  if (host) await host.close().catch(() => { runtimeErrorCode = "direct_cleanup_uncertain"; });
+  const ready = browserErrorCode === null;
   return {
-    ok: nodeMajor >= MINIMUM_NODE_MAJOR && configured && runtimeErrorCode === null,
-    ready: configured && runtimeErrorCode === null,
+    ok: nodeMajor >= MINIMUM_NODE_MAJOR && ready,
+    ready,
     version: NEWTON_BROWSER_VERSION,
     architecture: "owned_process_private_cdp",
     checks: {
       node: { ok: nodeMajor >= MINIMUM_NODE_MAJOR, version: process.version, required: MINIMUM_NODE_RANGE },
-      directConfiguration: { ok: configured && runtimeErrorCode === null, ...(runtimeErrorCode ? { errorCode: runtimeErrorCode } : {}) },
-      directRuntime: { checked: false, state: "not_started" },
+      browser: { ok: ready, ...(browserErrorCode ? { errorCode: browserErrorCode } : {}) },
       protocol: { ok: true, supported: [MODERN_MCP_PROTOCOL_VERSION], stateless: true },
       framing: {
         ok: true,
@@ -409,7 +337,7 @@ async function collectDirectDoctorReport(directory: string, env: NodeJS.ProcessE
         inFlightRequests: MAX_MCP_IN_FLIGHT_REQUESTS,
       },
     },
-    nextAction: configured && runtimeErrorCode === null ? "run_doctor_live" : "fix_direct_runtime_configuration",
+    nextAction: ready ? "run_doctor_live" : "run_setup",
     note: "Ready means Newton can start an isolated session; no browser process is kept alive while idle.",
   };
 }

@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
+const EXPECTED_TOOLS = ["browser.session.start", "browser.existing.discover", "browser.existing.setup", "browser.act", "browser.observe",
+  "browser.document.read", "browser.document.continue", "browser.screenshot", "browser.console", "browser.network", "browser.pages.list",
+  "browser.page.select", "browser.sessions.list", "browser.command", "browser.session.stop"];
 const entryIndex = process.argv.indexOf("--entry");
 const entry = entryIndex >= 0 ? process.argv[entryIndex + 1] : null;
 if (!entry || !path.isAbsolute(entry)) throw new Error("packed_catalog_entry_required");
@@ -47,7 +50,9 @@ child.stdout.on("data", (chunk) => {
       send(request(2, "tools/list", {}));
     } else if (message.id === 2) {
       const tools = message.result?.tools;
-      if (!Array.isArray(tools) || tools.length !== 13 || tools.some((tool) => typeof tool?.name !== "string" || !tool.name.startsWith("browser."))) {
+      const names = Array.isArray(tools) ? tools.map((tool) => tool?.name) : [];
+      if (!Array.isArray(tools) || names.some((name) => typeof name !== "string" || !name.startsWith("browser."))
+        || EXPECTED_TOOLS.some((name) => !names.includes(name)) || names.length !== EXPECTED_TOOLS.length) {
         terminalError ??= new Error("packed_catalog_tools_invalid");
         child.kill();
         return;

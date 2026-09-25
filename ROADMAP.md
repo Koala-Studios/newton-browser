@@ -4,7 +4,7 @@ Updated 2026-09-25. The shared engine is now the default source implementation; 
 
 1. Finish the model interaction loop: compact contextual next-state feedback, actionable navigation results, bounded complete/partial reading, closed-shadow coverage and precise-edit conformance. Keep original deadlines and never replay uncertain input.
 2. Close lifecycle and backend gaps: pending startup/stop bounds, renderer/host loss, visual cleanup, per-worker tab isolation, real shared-login refresh/revocation, Windows Chrome/Edge and Linux installation/effect parity.
-3. Retire the old implementation: migrate doctor/CLI and test/script consumers, then delete old direct-host dispatch/parser/exports. Preserve behavioral coverage; do not treat deletion or fewer files as proof of correctness.
+3. ~~Retire the old implementation~~ — done 2026-09-25 (audit D16): one engine path; CLI setup and doctor run on it.
 4. Complete release tooling: reviewed engine/reader/connection groups, critical-skip failure, packed content assertions, immutable candidate identity and update/recovery evidence.
 5. Freeze and accept the product: everyday authenticated forms, persisted rich editing, visual/embedded UI, shared login and real model-directed tasks in owned and existing-browser modes. Measure turns, tokens, waits, recovery, elapsed time and actual effects. Pass packed platform gates three consecutive times unchanged.
 

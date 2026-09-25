@@ -6,7 +6,7 @@ Reconciled 2026-09-25 against the consolidated replacement source. [PROGRESS_LED
 
 The default MCP path uses `EngineHost`, `SessionEngine` and `PageExecutor`. One session queue owns mutations and reads; `PageDirectory` owns page/frame generations and public refs. Commands use monotonic IDs and distinct dispatch, postcondition and observation facts. Identical retries join/retrieve the original command rather than replay input. Sequences preserve partial effect truth; they are not transactions.
 
-Public transport is stateless MCP 2026-07-28 over newline-delimited stdio JSON, with per-request metadata and no initialization-era fallback. Stdout contains only protocol frames. The remaining legacy direct-host branch, exports and doctor/test consumers are retirement debt, not another supported architecture.
+Public transport is stateless MCP 2026-07-28 over newline-delimited stdio JSON, with per-request metadata and no initialization-era fallback. Stdout contains only protocol frames. The legacy direct host was retired on 2026-09-25; there is one engine path.
 
 ## Browser connections
 

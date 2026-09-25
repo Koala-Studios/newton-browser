@@ -8,11 +8,11 @@ const requiredFiles = [
   "packages/core/package.json",
   "packages/core/src/index.ts",
   "packages/driver/package.json",
-  "packages/driver/src/driver.ts",
+  "packages/driver/src/session-engine.ts",
   "apps/mcp-server/package.json",
   "apps/mcp-server/src/index.ts",
   "apps/mcp-server/src/browser-runtime/owned-browser-runtime.ts",
-  "packages/driver/src/direct-session-runtime.ts",
+  "apps/mcp-server/src/engine-mcp.ts",
   "skills/newton-browser/SKILL.md",
   "docs/DECISIONS.md",
   "scripts/release-three-pass.mjs",
@@ -55,7 +55,7 @@ if (hostPackage?.dependencies?.["@newton-browser/core"]) {
   failures.push("apps/mcp-server/package.json: packed executable must bundle core instead of depending on the workspace package");
 }
 
-const hostSources = ["apps/mcp-server/src/mcp-server.ts", "apps/mcp-server/src/floor-gate.ts", "apps/mcp-server/src/browser-runtime/direct-browser-host.ts"]
+const hostSources = ["apps/mcp-server/src/mcp-server.ts", "apps/mcp-server/src/engine-mcp.ts"]
   .map(readText).join("\n");
 if (!hostSources.includes('from "@newton-browser/core"')) {
   failures.push("MCP server must import @newton-browser/core by package name");
@@ -83,8 +83,6 @@ const identitySpecificTerms = [
   ["meta ", "ads"],
 ].map((parts) => parts.join(""));
 const identitySpecificQaFiles = new Set([
-  "scripts/smoke/direct-real-sites-live.mjs",
-  "test/direct-live-config.test.mjs",
   "test/evidence/bugs.md",
 ]);
 const blockedExact = ["shared" + ".mjs", "newton_browser_host_" + "policies", "browser_" + "bridge_host_policies"];
@@ -114,13 +112,25 @@ const removedArchitecturePaths = [
   "packages/driver/dist/direct-page-effects-port.d.ts",
   "packages/driver/dist/session-transaction.js",
   "packages/driver/dist/session-transaction.d.ts",
+  // Legacy direct runtime, retired in favor of the session engine.
+  "apps/mcp-server/src/agent-output.ts",
+  "apps/mcp-server/src/floor-gate.ts",
+  "apps/mcp-server/src/mcp-contract.ts",
+  "apps/mcp-server/src/browser-runtime/direct-browser-host.ts",
+  "apps/mcp-server/src/browser-runtime/configured-direct-host.ts",
+  "apps/mcp-server/src/browser-runtime/default-direct-host.ts",
+  "apps/mcp-server/src/browser-runtime/direct-setup-cli.ts",
+  ...["action-json-schema", "action-schema", "host-policy", "protocol", "redaction", "risk", "transport"]
+    .flatMap(name => [`packages/core/src/${name}.ts`, `packages/core/dist/${name}.js`, `packages/core/dist/${name}.d.ts`]),
+  ...["driver", "types", "target-registry", "input-dispatcher", "renderer-liveness", "session-command-pump", "direct-session-runtime", "direct-debugger-port"]
+    .flatMap(name => [`packages/driver/src/${name}.ts`, `packages/driver/dist/${name}.js`, `packages/driver/dist/${name}.d.ts`]),
   "site",
 ];
 for (const relative of removedArchitecturePaths) {
   if (fs.existsSync(path.join(root, relative))) failures.push(`${relative}: removed architecture or publication path remains`);
 }
 validateFlatCompiledOutput("packages/core/src", "packages/core/dist", { declarationOnly: new Set() });
-validateFlatCompiledOutput("packages/driver/src", "packages/driver/dist", { declarationOnly: new Set(["types"]) });
+validateFlatCompiledOutput("packages/driver/src", "packages/driver/dist", { declarationOnly: new Set() });
 validateExactFlatOutput("apps/mcp-server/dist", new Set(["browser-guardian.js", "index.js", "profile-copy-worker.js", "native-host.js", "native-install.js", "native-launcher.cjs", "embedding.js"]),new Map([['tab-adapter',new Set(['manifest.json','setup.html','worker.js'])]]));
 if (fs.existsSync(path.join(root, "server.json")) || hostPackage?.mcpName !== undefined) {
   failures.push("public MCP registry metadata requires separate publication approval");
@@ -138,29 +148,23 @@ if (readText("apps/mcp-server/src/cli.ts").includes("config print")) {
   failures.push("CLI retains the removed config print alias");
 }
 
-const mcpContractSource = readText("apps/mcp-server/src/mcp-contract.ts");
 const mcpServerSource = readText("apps/mcp-server/src/mcp-server.ts");
+const engineMcpSource = readText("apps/mcp-server/src/engine-mcp.ts");
 for (const requiredTool of ["browser.sessions.list", "browser.session.stop"]) {
-  if (!mcpContractSource.includes(`"${requiredTool}"`) || !mcpServerSource.includes(`"${requiredTool}"`)) {
-    failures.push(`direct-only public tool missing: ${requiredTool}`);
-  }
+  if (!engineMcpSource.includes(`"${requiredTool}"`)) failures.push(`public tool missing: ${requiredTool}`);
 }
-if (/\btransport\s*:/u.test(mcpServerSource.slice(mcpServerSource.indexOf("export function toolList")))) {
-  failures.push("public MCP tool schemas must not expose a transport selector");
-}
-if (!mcpServerSource.includes('method === "server/discover"') || mcpServerSource.includes('method === "initialize"')) {
+if (!engineMcpSource.includes('method === "server/discover"') || engineMcpSource.includes('method === "initialize"')) {
   failures.push("MCP server must implement only modern stateless discovery");
+}
+if (!driverPackage?.exports || Object.keys(driverPackage.exports).some(key => key.includes("direct"))) {
+  failures.push("packages/driver/package.json: the retired direct runtime must not be exported");
 }
 const modernStdioSource = readText("apps/mcp-server/src/modern-mcp-stdio.ts");
 if (/protocolError\(null/u.test(modernStdioSource) || modernStdioSource.includes("id: JsonRpcId | null")) {
   failures.push("modern MCP errors retain legacy null request IDs");
 }
-if (readText("scripts/measure-agent-cost.mjs").includes("AGENT_OUTPUT_TOKEN_COUNTER")
-  || readText("scripts/evals/token-budget.mjs").includes("utf8_byte_upper_bound")) {
+if (readText("scripts/evals/token-budget.mjs").includes("utf8_byte_upper_bound")) {
   failures.push("agent-cost gate retains a tokenizer override or heuristic fallback");
-}
-if (readText("apps/mcp-server/src/floor-gate.ts").includes("loadHostPolicies")) {
-  failures.push("command floor reloads process-global host policy");
 }
 const unsupportedVersionBlock = mcpServerSource.slice(
   mcpServerSource.indexOf('if (requested !== MODERN_MCP_PROTOCOL_VERSION)'),
@@ -180,27 +184,13 @@ for (const retired of ["loadDirectBrowserConfig", "writeDirectBrowserConfig", "N
 for (const retired of ["additionalArgs", "chromiumAdditionalArgs"]) {
   if (hostSources.includes(retired)
     || readText("apps/mcp-server/src/browser-runtime/chromium-process.ts").includes(retired)
-    || readText("apps/mcp-server/src/browser-runtime/owned-browser-runtime.ts").includes(retired)
-    || readText("apps/mcp-server/src/browser-runtime/configured-direct-host.ts").includes(retired)) {
+    || readText("apps/mcp-server/src/browser-runtime/owned-browser-runtime.ts").includes(retired)) {
     failures.push(`production browser launch retains arbitrary switch injection: ${retired}`);
   }
 }
 const chromiumSource = readText("apps/mcp-server/src/browser-runtime/chromium-process.ts");
 if (chromiumSource.includes("browser-guardian.ts") || chromiumSource.includes("--experimental-strip-types")) {
   failures.push("production browser launch retains a raw-TypeScript guardian fallback");
-}
-const publicDecisionSource = mcpServerSource.slice(
-  mcpServerSource.indexOf("function publicDecision"),
-  mcpServerSource.indexOf("function strongestDecision"),
-);
-if (/\breasons\s*:/u.test(publicDecisionSource)) {
-  failures.push("public decisions must expose one bounded reason, not an internal reasons array");
-}
-if (mcpServerSource.includes("redactBrowserResult(result) ?? result")) {
-  failures.push("MCP redaction boundary contains a raw-result fallback");
-}
-if (readText("packages/core/src/action-json-schema.ts").includes('value: { type: "string" }')) {
-  failures.push("public action values must have an explicit length bound");
 }
 
 const inventory = sourceInventory(root);

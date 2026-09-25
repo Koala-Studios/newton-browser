@@ -8,7 +8,7 @@ Continuation entry point: [in-depth worker handoff](implementation/CONTINUATION_
 
 The replacement lives in the `421a` worktree, based on `f2ae1ee` (package version remains 0.6.4). The older `C:\DEV\newton-browser` checkout contains an earlier dirty copy and must not overwrite this implementation. The approved architecture is [SESSION_ENGINE_DESIGN.md](SESSION_ENGINE_DESIGN.md); the detailed remaining checklist is [final push.md](../final%20push.md). All implementation and QA are solo. Earlier worker handoff instructions are superseded.
 
-The default MCP path now constructs `EngineHost` and uses `SessionEngine`/`PageExecutor`. Claims that it is still fill-only, accepts only an origin, or has not cut over are obsolete. The old direct host, parser and several CLI/test consumers still survive: default cutover is implemented; legacy retirement is not.
+The default MCP path now constructs `EngineHost` and uses `SessionEngine`/`PageExecutor`. Claims that it is still fill-only, accepts only an origin, or has not cut over are obsolete. The legacy direct runtime was retired on 2026-09-25 (audit D16): the engine is the only action, receipt and ref authority, and the CLI's setup and doctor run on it.
 
 ## Implemented and exercised
 
@@ -31,6 +31,7 @@ The default MCP path now constructs `EngineHost` and uses `SessionEngine`/`PageE
 
 ## Verification register
 
+- 2026-09-25 legacy retirement (D16): full suite 487 passed, 0 failed, 2 platform skips (the drop from ~860 is the deleted legacy tests); `pack:check` and `doctor --live` pass.
 - 2026-09-25 (branch `claude/macos-owned-runtime`): unit and live suites 859–860 passing per run; the only failure seen is the live MDN search test (`target_moved` on the live site), which also fails on the pre-change base.
 
 - 2026-09-25 macOS audit: [AUDIT_2026-09-25.md](AUDIT_2026-09-25.md) records fixed defects M1–M8, open defects D1–D21 (including model-facing feedback, viewport, observation ranking, overlays, and a missing console/network regression) and the gaps for unattended worker use.

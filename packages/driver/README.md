@@ -1,27 +1,18 @@
 # Newton Browser Driver
 
-Strict TypeScript browser-control runtime for the direct owned-browser host.
+The session engine behind every Newton Browser session: one command queue, page and ref authority, typed actions, observations and cleanup over a private CDP connection.
 
-See the [2026-09-07 adversarial audit](../../docs/ADVERSARIAL_AUDIT_2026-09-07.md) for
-current input, wait, observation, ref and timeout defects. Strict compilation proves type
-conformance, not that the browser performed the requested application action.
+## Modules
 
-## Primary modules
-
-- `driver`: CDP observe, screenshot, action, input, dialog, and target logic.
-- `direct-session-runtime`: composes a direct debugger port, command pump, initial HTTP(S)
-  navigation, and deterministic cleanup for one owned browser target.
-- `direct-debugger-port`: maps private browser-level CDP transport to the driver contract.
+- `session-engine`: per-session command queue (`CommandContext`, `CommandStore`), receipts, reconcile and independent `stop()`.
+- `page-executor`: page, frame and ref resolution, typed actions (including uploads, dialogs, hover and resize), observations, screenshots and renderer-hang recovery.
+- `page-directory` and `target-resolver`: page and ref ownership.
+- `session-live`: frames, operator input and pause/resume for a person watching or taking control.
+- `session-diagnostics`: console and network records, collected only when asked for.
 - `raster-mask`: bounded trusted post-capture PNG redaction for sensitive zones.
-- `target-registry`: bounded target/frame/session/ref topology for same-process frames,
-  workers, and nested OOPIFs.
 
-The package publishes only `@newton-browser/driver/direct-session-runtime`; the remaining
-modules are implementation details of that strict composition.
+Package exports: `session-engine`, `page-executor`, `connection`, `session-live`.
 
 ## Boundary
 
-The driver must not own MCP framing, browser process creation, identity storage, network
-proxying, application routes, model calls, or provider credentials. It receives explicit
-private-CDP ports. Production TypeScript
-must compile strictly and emitted artifacts must remain deterministic and source-free.
+The driver must not own MCP framing, browser process creation, identity storage, network proxying, application routes, model calls, or provider credentials. It receives an explicit private-CDP connection. Production TypeScript must compile strictly and emitted artifacts must remain deterministic and source-free.

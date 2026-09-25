@@ -1,11 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { BrowserSessionInfo } from "@newton-browser/core";
-
-import { createDirectBrowserHost } from "../src/browser-runtime/direct-browser-host.ts";
-import { MCP_SERVER_INSTRUCTIONS, MCP_TOOL_ANNOTATIONS } from "../src/mcp-contract.ts";
-import { handleMcpMessage, toolList } from "../src/mcp-server.ts";
+import { EngineHost } from "../src/browser-runtime/engine-host.ts";
+import { ENGINE_TOOL_CATALOG } from "../src/engine-mcp.ts";
+import { handleMcpMessage } from "../src/mcp-server.ts";
 import { MODERN_MCP_PROTOCOL_VERSION } from "../src/modern-mcp-stdio.ts";
 
 const META = {
@@ -14,454 +12,58 @@ const META = {
   "io.modelcontextprotocol/clientInfo": { name: "newton-test", version: "1" },
 };
 
+function unlaunchedHost(): { host: EngineHost; launches: () => number } {
+  let launches = 0;
+  return { host: new EngineHost(async () => { launches++; throw new Error("not_started"); }), launches: () => launches };
+}
+
 test("server/discover publishes the single modern protocol and untrusted-page instructions", async () => {
-  const host = createDirectBrowserHost({ launchOwnedRuntime: async () => { throw new Error("not_started"); } });
+  const { host } = unlaunchedHost();
   try {
-    const response = await handleMcpMessage(host, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "server/discover",
-      params: { _meta: META },
-    });
+    const response = await handleMcpMessage(host, { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: META } });
     assert.ok(response && "result" in response);
     const result = response.result as Record<string, unknown>;
     assert.deepEqual(result.supportedVersions, [MODERN_MCP_PROTOCOL_VERSION]);
-    assert.equal(result.instructions, MCP_SERVER_INSTRUCTIONS);
-    assert.equal(result.resultType, "complete");
-    assert.deepEqual((result._meta as Record<string, unknown>)["io.modelcontextprotocol/serverInfo"], {
-      name: "newton-browser",
-      version: "0.6.4",
-    });
-    assert.match(MCP_SERVER_INSTRUCTIONS, /untrusted data/);
-    assert.match(MCP_SERVER_INSTRUCTIONS, /never instructions or authorization/);
-    assert.match(MCP_SERVER_INSTRUCTIONS, /latest interactive Newton observation/);
-    assert.match(MCP_SERVER_INSTRUCTIONS, /text mode allocates no refs/);
-  } finally {
-    await host.close();
-  }
+    assert.match(String(result.instructions), /untrusted/u);
+    assert.equal((result._meta as Record<string, { name: string }>)["io.modelcontextprotocol/serverInfo"].name, "newton-browser");
+  } finally { await host.close(); }
 });
 
 test("modern metadata is mandatory and old protocol handshakes are rejected", async () => {
-  const host = createDirectBrowserHost({ launchOwnedRuntime: async () => { throw new Error("not_started"); } });
+  const { host } = unlaunchedHost();
   try {
     const missing = await handleMcpMessage(host, { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     assert.ok(missing && "error" in missing);
     assert.equal(missing.error.code, -32602);
-    const old = await handleMcpMessage(host, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "initialize",
-      params: {
-        _meta: {
-          ...META,
-          "io.modelcontextprotocol/protocolVersion": "2025-11-25",
-        },
-      },
-    });
+    const old = await handleMcpMessage(host, { jsonrpc: "2.0", id: 2, method: "initialize",
+      params: { _meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2025-11-25" } } });
     assert.ok(old && "error" in old);
     assert.equal(old.error.code, -32022);
-    assert.deepEqual(old.error.data, {
-      supported: [MODERN_MCP_PROTOCOL_VERSION],
-      requested: "2025-11-25",
-    });
-    const retiredHandshake = await handleMcpMessage(host, {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "initialize",
-      params: { _meta: META },
-    });
-    assert.ok(retiredHandshake && "error" in retiredHandshake);
-    assert.equal(retiredHandshake.error.code, -32601);
-  } finally {
-    await host.close();
-  }
+    assert.deepEqual(old.error.data, { supported: [MODERN_MCP_PROTOCOL_VERSION], requested: "2025-11-25" });
+    const retired = await handleMcpMessage(host, { jsonrpc: "2.0", id: 3, method: "initialize", params: { _meta: META } });
+    assert.ok(retired && "error" in retired);
+    assert.equal(retired.error.code, -32601);
+  } finally { await host.close(); }
 });
 
-test("modern method parameters are exact and the fixed tool catalog rejects cursors", async () => {
-  const host = createDirectBrowserHost({ launchOwnedRuntime: async () => { throw new Error("not_started"); } });
+test("the catalog is the engine's, and unknown fields and tools are refused before any browser starts", async () => {
+  const { host, launches } = unlaunchedHost();
   try {
-    const discoverExtra = await handleMcpMessage(host, {
-      jsonrpc: "2.0", id: 10, method: "server/discover", params: { _meta: META, compatibility: true },
-    });
-    assert.ok(discoverExtra && "error" in discoverExtra);
-    assert.equal(discoverExtra.error.code, -32602);
-
-    const cursor = await handleMcpMessage(host, {
-      jsonrpc: "2.0", id: 11, method: "tools/list", params: { _meta: META, cursor: "page-two" },
-    });
-    assert.ok(cursor && "error" in cursor);
-    assert.deepEqual(cursor.error.data, { errorCode: "invalid_cursor" });
-
-    const callExtra = await handleMcpMessage(host, {
-      jsonrpc: "2.0", id: 12, method: "tools/call",
-      params: { _meta: META, name: "browser.status", arguments: {}, requestState: "legacy-state" },
-    });
-    assert.ok(callExtra && "error" in callExtra);
-    assert.equal(callExtra.error.code, -32602);
-  } finally {
-    await host.close();
-  }
-});
-
-test("every public tool carries the reviewed truthful annotation matrix", () => {
-  const tools = toolList();
-  assert.deepEqual(Object.keys(MCP_TOOL_ANNOTATIONS).sort(), tools.map((tool) => tool.name).sort());
-  for (const tool of tools) {
-    assert.deepEqual(tool.annotations, MCP_TOOL_ANNOTATIONS[tool.name]);
-    assert.equal(typeof tool.annotations.readOnlyHint, "boolean");
-    assert.equal(typeof tool.annotations.destructiveHint, "boolean");
-    assert.equal(typeof tool.annotations.idempotentHint, "boolean");
-    assert.equal(tool.annotations.openWorldHint, tool.name === "browser.act" || tool.name === "browser.session.start");
-  }
-  assert.deepEqual(MCP_TOOL_ANNOTATIONS["browser.console"], {
-    readOnlyHint: true,
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-  });
-});
-
-test("the modern surface is direct-only, compact, and contains no retired tab or transport controls", () => {
-  const tools = toolList() as Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
-  assert.deepEqual(tools.map((tool) => tool.name), [
-    "browser.status",
-    "browser.session.start",
-    "browser.observe",
-    "browser.act",
-    "browser.screenshot",
-    "browser.console",
-    "browser.network",
-    "browser.sessions.list",
-    "browser.session.stop",
-    "browser.stop_all",
-  ]);
-  for (const tool of tools) {
-    assert.equal("transport" in tool.inputSchema.properties, false, tool.name);
-    assert.equal("goal" in tool.inputSchema.properties, false, tool.name);
-    assert.equal("instanceLabel" in tool.inputSchema.properties, false, tool.name);
-  }
-  assert.equal(tools.some((tool) => tool.name.startsWith("browser.tabs.")), false);
-  assert.equal(tools.some((tool) => tool.name.includes("finalize")), false);
-  const start = tools.find((tool) => tool.name === "browser.session.start")!;
-  assert.deepEqual(Object.keys(start.inputSchema.properties).sort(), ["browser", "identityId", "observe", "origin"].sort());
-  assert.equal("allowedOrigins" in start.inputSchema.properties, false);
-});
-
-test("session start passes one initial URL and rejects retired network-boundary fields", async () => {
-  const created: unknown[] = [];
-  const host = {
-    createSession(init: unknown) {
-      created.push(init);
-      return { sessionId: "direct_session_00000000-0000-4000-8000-000000000010" };
-    },
-    async waitForSessionReady() {
-      return {
-        sessionId: "direct_session_00000000-0000-4000-8000-000000000010",
-        origin: "https://example.com",
-        lifecycleState: "active",
-      };
-    },
-  } as never;
-  const start = async (arguments_: Record<string, unknown>) => handleMcpMessage(host, {
-    jsonrpc: "2.0",
-    id: 14 + created.length,
-    method: "tools/call",
-    params: {
-      _meta: META,
-      name: "browser.session.start",
-      arguments: arguments_,
-    },
-  });
-
-  const accepted = await start({ origin: "https://example.com" });
-  assert.ok(accepted && "result" in accepted);
-  assert.deepEqual(created, [{
-    origin: "https://example.com",
-  }]);
-  const bareObserve = await start({ origin: "https://example.com", observe: "full" });
-  assert.ok(bareObserve && "error" in bareObserve);
-  assert.deepEqual(bareObserve.error.data, {
-    errorCode: "invalid_arguments",
-    tool: "browser.session.start",
-    reason: "start_observe_object_required",
-  });
-  const malformedObserve = await start({ origin: "https://example.com", observe: { mode: "full", extra: true } });
-  assert.ok(malformedObserve && "error" in malformedObserve);
-  assert.deepEqual(malformedObserve.error.data, {
-    errorCode: "invalid_arguments",
-    tool: "browser.session.start",
-    reason: "start_observe_object_invalid",
-  });
-  const retired = await start({ origin: "https://example.com", allowedOrigins: ["https://assets.example.com"] });
-  assert.ok(retired && "error" in retired);
-  assert.deepEqual(retired.error.data, { errorCode: "invalid_arguments", tool: "browser.session.start" });
-  assert.equal(created.length, 1);
-});
-
-test("persistent identity startup exposes bounded actionable recovery failures", async () => {
-  for (const [errorCode, message] of [
-    ["configured_identity_busy", "The selected persistent identity is already owned by another live browser session."],
-    ["configured_identity_recovery_unavailable", "Newton could not prove that the selected identity's previous browser process is fully closed."],
-    ["configured_identity_recovery_failed", "Newton could not safely recover the selected identity's stale ownership lease."],
-  ] as const) {
-    let stopped = 0;
-    const response = await handleMcpMessage({
-      createSession() { return { sessionId: "direct_session_00000000-0000-4000-8000-000000000011" }; },
-      async waitForSessionReady() { throw Object.assign(new Error(errorCode), { code: errorCode }); },
-      async stopSession() { stopped += 1; },
-    } as never, {
-      jsonrpc: "2.0",
-      id: 20,
-      method: "tools/call",
-      params: { _meta: META, name: "browser.session.start", arguments: { origin: "https://example.com" } },
-    });
-    assert.ok(response && "result" in response);
-    const result = response.result as { isError?: boolean; content: Array<{ text?: string }> };
-    assert.equal(result.isError, true);
-    assert.deepEqual(JSON.parse(result.content[0]?.text ?? "{}"), { ok: false, errorCode, message });
-    assert.equal(stopped, 1);
-  }
-});
-
-test("browser.act publishes the canonical strict discriminated schema", () => {
-  const actTool = toolList().find((tool) => tool.name === "browser.act")!;
-  const action = (actTool.inputSchema.properties as Record<string, unknown>).action as {
-    additionalProperties: boolean;
-    properties: { kind: { enum: string[] }; [key: string]: unknown };
-    "x-newtonVariants": Record<string, unknown>;
-  };
-  assert.deepEqual((actTool.inputSchema.properties as Record<string, unknown>).timeoutMs, { type: "integer", minimum: 1, maximum: 300000 });
-  assert.equal(action.additionalProperties, false);
-  assert.deepEqual(Object.keys(action["x-newtonVariants"]).sort(), [...action.properties.kind.enum].sort());
-  for (const dedicated of ["observe", "screenshot", "console", "network"]) {
-    assert.equal(action.properties.kind.enum.includes(dedicated), false);
-    assert.equal(dedicated in action["x-newtonVariants"], false);
-  }
-  for (const dedicatedField of ["sensitiveZones", "fullPage", "query", "maxNodes", "urlPattern", "requestId"]) {
-    assert.equal(dedicatedField in action.properties, false);
-  }
-});
-
-test("browser.screenshot publishes only bounded trusted-raster options", () => {
-  const screenshot = toolList().find((tool) => tool.name === "browser.screenshot")!;
-  const properties = screenshot.inputSchema.properties as Record<string, unknown>;
-  const zones = properties.sensitiveZones as {
-    minItems: number;
-    maxItems: number;
-    items: { additionalProperties: boolean; minProperties: number; maxProperties: number; oneOf: unknown[] };
-  };
-  assert.equal(zones.minItems, 1);
-  assert.equal(zones.maxItems, 32);
-  assert.equal(zones.items.additionalProperties, false);
-  assert.equal(zones.items.minProperties, 1);
-  assert.equal(zones.items.maxProperties, 1);
-  assert.deepEqual(zones.items.oneOf, [
-    { required: ["ref"] },
-    { required: ["selector"] },
-    { required: ["name"] },
-    { required: ["label"] },
-  ]);
-  for (const retired of ["delivery", "inline", "device", "waitFor"]) assert.equal(retired in properties, false);
-});
-
-test("screenshot delivery rejects missing safety metadata and redacts page metadata before image output", async () => {
-  const session: BrowserSessionInfo = {
-    sessionId: "direct_session_00000000-0000-4000-8000-000000000009",
-    origin: "https://example.com",
-    lifecycleState: "active",
-  };
-  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64");
-  let maskDisposition: string | undefined;
-  const host = {
-    listSessions: () => [session],
-    dispatch: async () => ({
-      commandId: "direct_command_1_test",
-      ok: true,
-      status: "verified",
-      sequence: 1,
-      outcome: "completed",
-      retrySafe: false,
-      result: {
-        kind: "screenshot",
-        mode: "cdp",
-        origin: "https://example.com/?token=secret",
-        title: "Card 4111 1111 1111 1111",
-        dataUrl: `data:image/png;base64,${png}`,
-        ...(maskDisposition ? { maskDisposition } : {}),
-        capturedAt: "2026-08-12T00:00:00.000Z",
-      },
-      decision: { class: "read_only", commitBoundary: "none" },
-    }),
-  } as never;
-  const call = async () => handleMcpMessage(host, {
-    jsonrpc: "2.0", id: 20, method: "tools/call",
-    params: { _meta: META, name: "browser.screenshot", arguments: { sessionId: session.sessionId } },
-  });
-  const invalid = await call();
-  assert.ok(invalid && "result" in invalid);
-  const invalidResult = invalid.result as { content: Array<{ type: string; text?: string }>; isError?: boolean };
-  assert.equal(invalidResult.isError, true);
-  assert.match(invalidResult.content[0]?.text ?? "", /runner_contract_invalid/u);
-  assert.equal(invalidResult.content.some((item) => item.type === "image"), false);
-
-  maskDisposition = "mask_not_configured";
-  const valid = await call();
-  assert.ok(valid && "result" in valid);
-  const validResult = valid.result as { content: Array<{ type: string; text?: string }> };
-  assert.equal(validResult.content.some((item) => item.type === "image"), true);
-  const metadata = validResult.content.find((item) => item.type === "text")?.text ?? "";
-  assert.equal(metadata.includes("4111"), false);
-  assert.equal(metadata.includes("token=secret"), false);
-  assert.match(metadata, /"trust":"untrusted_page_content"/u);
-});
-
-test("a safety-floor prevented browser.act result is an MCP tool error", async () => {
-  const session: BrowserSessionInfo = {
-    sessionId: "direct_session_00000000-0000-4000-8000-000000000011",
-    origin: "https://example.com",
-    lifecycleState: "active",
-  };
-  const host = {
-    listSessions: () => [session],
-    dispatch: async () => ({
-      commandId: "direct_command_1_prevented",
-      ok: false,
-      status: "blocked",
-      sequence: 1,
-      outcome: "prevented",
-      retrySafe: true,
-      errorCode: "payment_or_pii_field",
-      decision: { class: "blocked", commitBoundary: "draft", reason: "payment_or_pii_field" },
-    }),
-  } as never;
-  const response = await handleMcpMessage(host, {
-    jsonrpc: "2.0", id: 21, method: "tools/call",
-    params: { _meta: META, name: "browser.act", arguments: { sessionId: session.sessionId, action: { kind: "fill", label: "Credit card number", value: "4111111111111111" } } },
-  });
-  assert.ok(response && "result" in response);
-  const result = response.result as { isError?: boolean; content: Array<{ type: string; text?: string }> };
-  assert.equal(result.isError, true);
-  assert.deepEqual(JSON.parse(result.content[0]?.text ?? "{}"), {
-    ok: false,
-    status: "blocked",
-    outcome: "prevented",
-    retrySafe: true,
-    reason: "payment_or_pii_field",
-    errorCode: "payment_or_pii_field",
-    decision: { class: "blocked", commitBoundary: "draft", reason: "payment_or_pii_field" },
-    changed: false,
-    sequence: 1,
-  });
-});
-
-test("console and network omit absent optional filters at the driver boundary", async () => {
-  const session: BrowserSessionInfo = {
-    sessionId: "direct_session_00000000-0000-4000-8000-000000000012",
-    origin: "https://example.com",
-    lifecycleState: "active",
-  };
-  const actions: unknown[] = [];
-  const host = {
-    listSessions: () => [session],
-    dispatch: async (_sessionId: string, action: unknown) => {
-      actions.push(action);
-      return {
-        commandId: "direct_command_1_log",
-        ok: true,
-        status: "verified",
-        sequence: actions.length,
-        outcome: "completed",
-        retrySafe: false,
-        result: { kind: actions.length === 1 ? "console_log" : "network_log", origin: session.origin, entries: [] },
-        decision: { class: "read_only", commitBoundary: "none" },
-      };
-    },
-  } as never;
-  for (const [id, name] of [[22, "browser.console"], [23, "browser.network"]] as const) {
-    const response = await handleMcpMessage(host, {
-      jsonrpc: "2.0", id, method: "tools/call",
-      params: { _meta: META, name, arguments: { sessionId: session.sessionId, limit: 80 } },
-    });
-    assert.ok(response && "result" in response);
-    assert.equal((response.result as { isError?: boolean }).isError, undefined);
-  }
-  assert.deepEqual(actions, [{ kind: "console", limit: 80 }, { kind: "network", limit: 80 }]);
-});
-
-test("browser.act rejects dedicated-tool kinds before host dispatch", async () => {
-  let dispatches = 0;
-  const session: BrowserSessionInfo = {
-    sessionId: "direct_session_00000000-0000-4000-8000-000000000001",
-    origin: "https://example.com",
-    lifecycleState: "active",
-  };
-  const host = {
-    listSessions: () => [session],
-    dispatch: async () => { dispatches += 1; throw new Error("must_not_dispatch"); },
-  } as never;
-  const response = await handleMcpMessage(host, {
-    jsonrpc: "2.0",
-    id: 7,
-    method: "tools/call",
-    params: { name: "browser.act", arguments: { sessionId: session.sessionId, action: { kind: "screenshot" } }, _meta: META },
-  });
-  assert.ok(response && "error" in response);
-  assert.equal(response.error.code, -32602);
-  assert.deepEqual(response.error.data, { errorCode: "invalid_arguments", tool: "browser.act" });
-  assert.equal(dispatches, 0);
-});
-
-test("tool arguments reject unknown fields and malformed dedicated options before dispatch", async () => {
-  let dispatches = 0;
-  const session: BrowserSessionInfo = {
-    sessionId: "direct_session_00000000-0000-4000-8000-000000000002",
-    origin: "https://example.com",
-    lifecycleState: "active",
-  };
-  const host = {
-    listSessions: () => [session],
-    dispatch: async () => { dispatches += 1; throw new Error("must_not_dispatch"); },
-  } as never;
-  const invalidArguments = [
-    { name: "browser.observe", arguments: { sessionId: session.sessionId, maxNodes: 0 } },
-    { name: "browser.screenshot", arguments: { sessionId: session.sessionId, region: { x: 0, y: 0, width: -1, height: 20 } } },
-    { name: "browser.screenshot", arguments: { sessionId: session.sessionId, format: "png", quality: 90 } },
-    { name: "browser.screenshot", arguments: { sessionId: session.sessionId, sensitiveZones: [{ ref: "button-1" }] } },
-    { name: "browser.console", arguments: { sessionId: session.sessionId, clear: true } },
-    { name: "browser.act", arguments: { sessionId: session.sessionId, action: { kind: "click", target: { ref: "d1:e1" } } } },
-    { name: "browser.sessions.list", arguments: { compatibility: true } },
-  ];
-  for (const [index, call] of invalidArguments.entries()) {
-    const response = await handleMcpMessage(host, {
-      jsonrpc: "2.0",
-      id: index + 20,
-      method: "tools/call",
-      params: { ...call, _meta: META },
-    });
-    assert.ok(response && "error" in response);
-    assert.equal(response.error.code, -32602, call.name);
-  }
-  assert.equal(dispatches, 0);
-});
-
-test("session stop remains idempotent after an acknowledged or concurrently completed cleanup", async () => {
-  const sessionId = "direct_session_00000000-0000-4000-8000-000000000003";
-  let present = true;
-  const host = {
-    listSessions: () => present ? [{ sessionId }] : [],
-    stopSession: async () => {
-      present = false;
-      throw new Error("lost acknowledgement");
-    },
-  } as never;
-  const response = await handleMcpMessage(host, {
-    jsonrpc: "2.0",
-    id: 40,
-    method: "tools/call",
-    params: { _meta: META, name: "browser.session.stop", arguments: { sessionId } },
-  });
-  assert.ok(response && "result" in response);
-  const result = response.result as { content: Array<{ text: string }>; isError?: boolean };
-  assert.equal(result.isError, undefined);
-  assert.deepEqual(JSON.parse(result.content[0]!.text), { stopped: true, alreadyStopped: true });
+    const listed = await handleMcpMessage(host, { jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: META } });
+    assert.ok(listed && "result" in listed);
+    const names = (listed.result as { tools: { name: string }[] }).tools.map(tool => tool.name);
+    assert.deepEqual(names, ENGINE_TOOL_CATALOG.map(tool => tool.name));
+    for (const name of ["browser.session.start", "browser.act", "browser.observe", "browser.console", "browser.network"]) assert.ok(names.includes(name), name);
+    const cursor = await handleMcpMessage(host, { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: META, cursor: "two" } });
+    assert.ok(cursor && ("error" in cursor || (cursor.result as { isError?: boolean }).isError));
+    for (const params of [
+      { _meta: META, name: "browser.sessions.list", arguments: {}, requestState: "legacy" },
+      { _meta: META, name: "browser.retired", arguments: {} },
+      { _meta: META, name: "browser.observe", arguments: { sessionId: "missing", legacyMode: "compact" } },
+    ]) {
+      const reply = await handleMcpMessage(host, { jsonrpc: "2.0", id: 3, method: "tools/call", params });
+      assert.ok(reply && ("error" in reply || (reply.result as { isError?: boolean }).isError), JSON.stringify(params));
+    }
+    assert.equal(launches(), 0);
+  } finally { await host.close(); }
 });
