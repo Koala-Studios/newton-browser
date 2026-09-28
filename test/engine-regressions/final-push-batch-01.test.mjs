@@ -184,7 +184,7 @@ test('oversized select acquisition refuses before focus/input while normal trust
       assert.equal(normal.state,'met');
       const normalState=await evaluate(connection,executor,'({value:document.querySelector("#normal-select").value,changed:document.querySelector("#normal-select").dataset.changed})');
       assert.deepEqual(normalState,{value:'second',changed:'second'});
-    });
+    },15000); // macOS selects by type-ahead, one trusted key per character.
   });
 });
 
