@@ -106,8 +106,9 @@ claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.
 node "$entry" install codex
 ```
 
-To upgrade, install the newer tarball the same way and rerun both client commands (remove
-the Claude Code entry first with `claude mcp remove --scope user newton-browser`).
+To upgrade, install the newer tarball the same way, remove the Claude Code entry with
+`claude mcp remove --scope user newton-browser`, and rerun both client commands, with
+`install codex --force`.
 
 On Windows (`artifacts/newton-browser-0.7.0.tgz` from `pnpm pack:check`, or a release asset):
 
