@@ -34,7 +34,7 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
     const source = await LoginSource.open(store, sourceRoot, sourceId ?? configuredSource ?? "default", family);
     const clone = await source.clone();
     const proxy = await proxyServer();
-    return ownedEngineConnection({
+    const connection = await ownedEngineConnection({
       ...(proxy ? { proxyServer: proxy } : {}),
       executablePath: executable.path,
       browserFamily: family,
@@ -44,6 +44,7 @@ export function createDefaultEngineHost(env: NodeJS.ProcessEnv = process.env): E
       headless: true,
       ...(display ? { display } : {}),
     });
+    return { ...connection, loginSites: clone.sites };
   };
 
   const connectionsDirectory=path.join(directory,'tab-adapter-native','connections');

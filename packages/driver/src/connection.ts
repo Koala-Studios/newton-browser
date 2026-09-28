@@ -8,6 +8,8 @@ export interface EngineConnection {
   readonly ownsBrowser?: boolean;
   /** The adapter emits only pages already claimed by this connection's owner. */
   readonly tracksOwnedPages?: boolean;
+  /** Sites the cloned login source holds cookies for (domains only), when the session starts from one. */
+  readonly loginSites?: readonly string[];
   readonly wire: EngineWire;
   readonly rootTargetId: string;
   readonly epoch: string;

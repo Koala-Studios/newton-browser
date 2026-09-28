@@ -45,6 +45,7 @@ test('embedding: operator sign-in publishes a login source that new sessions inh
 
     const [a, b] = await Promise.all([engine.call('browser.session.start', { url }), engine.call('browser.session.start', { url })]);
     assert.equal(text(a).observation.title, 'account', 'a worker session starts signed in');
+    assert.deepEqual(text(a).loginSites, ['127.0.0.1'], 'the start names the sites the saved login holds cookies for');
     assert.equal(text(b).observation.title, 'account', 'two workers share the login concurrently');
     await engine.stop(text(a).sessionId); await engine.stop(text(b).sessionId);
     const store = openProfileStore(`${temp.root}/identities`);

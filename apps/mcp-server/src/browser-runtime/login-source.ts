@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import type { BrowserDisplay } from "./chromium-process.ts";
 import { createNewtonIdentity, inspectNewtonIdentityLease, recoverStaleNewtonIdentityLease, removeNewtonIdentity, type NewtonProfileIdentity, type ProfileStore } from "./profile-store.ts";
 import { OwnedBrowserRuntime, launchOwnedBrowserRuntime } from "./owned-browser-runtime.ts";
@@ -40,10 +41,11 @@ export class LoginSource {
     if (owner.sourceId !== sourceId || owner.storeRoot !== store.root || owner.version !== 1) throw new Error("source_invalid");
     return new LoginSource(store, directory, sourceId, family);
   }
-  async clone(): Promise<{ identity: NewtonProfileIdentity; generation: string | null; authentication: "unknown" }> {
+  async clone(): Promise<{ identity: NewtonProfileIdentity; generation: string | null; authentication: "unknown"; sites: readonly string[] }> {
     const current = await this.current();
-    if (!current) return { identity: createNewtonIdentity(this.store, { browserFamily: this.family }), generation: null, authentication: "unknown" };
-    return { identity: await copyIdentity(this.store, current.identityId), generation: current.generation, authentication: "unknown" };
+    if (!current) return { identity: createNewtonIdentity(this.store, { browserFamily: this.family }), generation: null, authentication: "unknown", sites: [] };
+    const identity = await copyIdentity(this.store, current.identityId);
+    return { identity, generation: current.generation, authentication: "unknown", sites: loginSites(identity.path) };
   }
   async status(): Promise<Readonly<{ sourceId: string; browserFamily: "chrome" | "edge"; generation: string | null; authentication: "unknown" }>> {
     const current = await this.current();
@@ -249,4 +251,25 @@ async function waitForCopyAvailability(store: ProfileStore, identityId: string, 
       check();
     } catch { end(new Error("source_copy_unavailable")); }
   });
+}
+
+const SECOND_LEVEL = new Set(["co", "com", "org", "net", "gov", "ac", "edu"]);
+/** Sites a profile holds persistent cookies for, by domain only: never names or values. A listed
+ * site may or may not be signed in; an unlisted one has nothing saved. */
+export function loginSites(profilePath: string): readonly string[] {
+  let db: DatabaseSync;
+  try { db = new DatabaseSync(`file:${path.join(profilePath, "Default", "Cookies")}?immutable=1`, { readOnly: true }); }
+  catch { return []; }
+  try {
+    const sites = new Set<string>();
+    for (const row of db.prepare("SELECT DISTINCT host_key FROM cookies WHERE is_persistent = 1 LIMIT 4096").all()) {
+      const labels = String(row.host_key).replace(/^\./u, "").toLowerCase().split(".").filter(Boolean);
+      if (labels.length < 2) continue;
+      if (labels.every(label => /^\d+$/u.test(label))) { sites.add(labels.join(".")); continue; }
+      const keep = labels.length > 2 && labels.at(-1)!.length === 2 && SECOND_LEVEL.has(labels.at(-2)!) ? 3 : 2;
+      sites.add(labels.slice(-keep).join("."));
+    }
+    return [...sites].sort().slice(0, 256);
+  } catch { return []; }
+  finally { db.close(); }
 }

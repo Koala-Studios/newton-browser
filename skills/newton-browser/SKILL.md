@@ -26,7 +26,7 @@ An `invalid_arguments` error names the `field` and what it `expected`; fix that 
 
 ## Sign-in
 
-Sessions open with whatever the login source holds. Never type passwords, one-time codes, card numbers or other secrets, and never read cookies, storage or profile files. When a site needs signing in, ask the operator to run `newton-browser source login --id default --browser chrome`, sign in in the visible window and confirm; then stop your session and start a new one.
+Sessions open with whatever the login source holds; `session.start` lists its sites in `loginSites` (domains it holds cookies for, which may or may not be signed in). Never type passwords, one-time codes, card numbers or other secrets, and never read cookies, storage or profile files. When a site needs signing in, ask the operator to run `newton-browser source login --id default --browser chrome`, sign in in the visible window and confirm; then stop your session and start a new one.
 
 ## The operator's own Chrome
 
