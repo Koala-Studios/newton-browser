@@ -7,6 +7,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-28
+
+### Changed
+
+- One shared session engine serves owned browsers, the operator's own Chrome (through the
+  tab adapter) and the embedding API; the legacy direct runtime is retired.
+- The published tool catalog is compact (about 16 KB instead of 24 KB); argument errors
+  still name the field and what it expected.
+- Runs on macOS in owned and existing-browser modes, with Claude Code and Codex as MCP
+  clients over stateless MCP `2026-07-28`.
+
+### Added
+
+- `browser.session.start` lists `loginSites`, the sites the login source holds cookies for.
+- Observations report `loading: true` while a page is still loading.
+- `resize` works in the operator's own tabs through device metrics, without resizing
+  their window.
+- Opt-in console and network reads; covering overlays and custom clickable elements in
+  observations; a page that stops responding is reopened on the same identity.
+- Embedding API: live frames, operator takeover, passkeys and shared sign-in.
+
+### Fixed
+
+- Stopping a session in the operator's Chrome closes the tabs it opened and releases theirs.
+- Full reads of large pages are bounded per query instead of timing out.
+- `press` without a target sends keys to the page.
+- Screenshots are captured at page (CSS) pixels, matching `click_at` coordinates.
+- The shared profile store survives macOS volume device renumbering.
+
 ## [0.6.3] - 2026-08-20
 
 ### Fixed

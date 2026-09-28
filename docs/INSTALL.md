@@ -7,10 +7,10 @@ TCP port.
 
 ## Install
 
-This checkout contains version 0.6.4. Local build instructions below do not establish
-current npm/publication or installed-client state. The development task records a prior
-0.6.4 release/install; verify the exact installed entrypoint when diagnosing a client.
-For source testing, build and run the exact compiled entrypoint:
+This checkout contains version 0.7.0. Clients should run an installed release package
+(see **Install a release** below), not a source checkout: a checkout changes under the
+client whenever it is edited or rebuilt. For source testing, build and run the exact
+compiled entrypoint:
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -93,14 +93,27 @@ Point the MCP client at the absolute compiled entrypoint:
 
 Rebuild after source changes.
 
-## Install from a tarball
+## Install a release
 
-Use `artifacts/newton-browser-0.6.4.tgz` only after verifying it was produced by the
-current tree, or use a verified release asset:
+Download the release asset `newton-browser-0.7.0.tgz` and check it against the
+SHA-256 in the release notes. On macOS:
+
+```bash
+root="$HOME/Library/Application Support/NewtonBrowser/package"
+npm install --prefix "$root" --ignore-scripts --no-audit --no-fund --offline /absolute/path/newton-browser-0.7.0.tgz
+entry="$root/node_modules/newton-browser/dist/index.js"
+claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.0 -- node "$entry"
+node "$entry" install codex
+```
+
+To upgrade, install the newer tarball the same way and rerun both client commands (remove
+the Claude Code entry first with `claude mcp remove --scope user newton-browser`).
+
+On Windows (`artifacts/newton-browser-0.7.0.tgz` from `pnpm pack:check`, or a release asset):
 
 ```powershell
 $installRoot = Join-Path $env:LOCALAPPDATA "NewtonBrowser\package"
-npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.6.4.tgz"
+npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.7.0.tgz"
 node "$installRoot\node_modules\newton-browser\dist\index.js" install codex --dry-run
 ```
 
@@ -177,7 +190,8 @@ the connection and instance IDs from discovery:
 Pass this to `browser.session.start`. It creates an inactive blank tab, establishes
 debugger ownership, and navigates through the shared engine. Invalid URLs fail before
 creation. Claiming an existing `kind: "tab"` still leaves its current location intact.
-Stopping a successfully started borrowed session releases claims and preserves its tabs.
+Stopping a successfully started borrowed session closes the tabs it opened and releases
+the operator's tabs, leaving them open.
 
 Borrowed popups inherit the worker that owns the actual source tab. They appear in
 `browser.pages.list` with their opener; opening a popup does not change the selected
