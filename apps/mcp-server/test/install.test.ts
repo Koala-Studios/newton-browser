@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { clientConfigTarget, planClientInstall, runInstall, serverInvocation, verifyCodexCandidate } from "../src/install.ts";
+import { ENGINE_TOOL_CATALOG } from "../src/engine-mcp.ts";
 
 const ENV = { HOME: "/home/tester", USERPROFILE: "/home/tester" };
 const INVOCATION = Object.freeze({
@@ -127,11 +129,7 @@ test("Codex candidate must complete modern discovery, report its exact version, 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-codex-probe-"));
   try {
     const server = path.join(directory, "server.cjs");
-    const toolNames = [
-      "browser.status", "browser.session.start", "browser.observe", "browser.act",
-      "browser.screenshot", "browser.console", "browser.network", "browser.sessions.list",
-      "browser.session.stop", "browser.stop_all",
-    ];
+    const toolNames = ENGINE_TOOL_CATALOG.map((tool) => tool.name);
     fs.writeFileSync(server, [
       "const readline=require('node:readline');",
       "if(process.env.CODEX_MCP_PROTOCOL_VERSION!=='2026-07-28'||!process.env.NEWTON_BROWSER_CONFIG_DIR)process.exit(2);",
@@ -149,7 +147,7 @@ test("Codex candidate must complete modern discovery, report its exact version, 
       compatible: true,
       protocolVersion: "2026-07-28",
       version: "9.8.7",
-      requiredToolCount: 10,
+      requiredToolCount: ENGINE_TOOL_CATALOG.length,
     });
     fs.writeFileSync(server, [
       "const readline=require('node:readline');",
@@ -159,6 +157,9 @@ test("Codex candidate must complete modern discovery, report its exact version, 
       "if(request.id===2)process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:2,result:{tools:[]}})+'\\n');});",
     ].join("\n"));
     assert.throws(() => verifyCodexCandidate(invocation), /codex_mcp_candidate_incompatible/u);
+    const real = { command: process.execPath, args: [fileURLToPath(new URL("../src/index.ts", import.meta.url))],
+      version: JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string };
+    assert.equal(verifyCodexCandidate(real).requiredToolCount, ENGINE_TOOL_CATALOG.length);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

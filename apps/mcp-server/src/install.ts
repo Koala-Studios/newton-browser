@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { ENGINE_TOOL_CATALOG } from "./engine-mcp.ts";
+
 export type InstallClient = "codex" | "generic";
 
 export const INSTALL_CLIENTS: InstallClient[] = ["codex", "generic"];
@@ -11,18 +13,8 @@ export const INSTALL_CLIENTS: InstallClient[] = ["codex", "generic"];
 export const SERVER_KEY = "newton-browser";
 
 const CODEX_PROTOCOL_VERSION = "2026-07-28";
-const REQUIRED_BROWSER_TOOLS = Object.freeze([
-  "browser.status",
-  "browser.session.start",
-  "browser.observe",
-  "browser.act",
-  "browser.screenshot",
-  "browser.console",
-  "browser.network",
-  "browser.sessions.list",
-  "browser.session.stop",
-  "browser.stop_all",
-] as const);
+// The candidate must expose the same catalog this installer ships.
+const REQUIRED_BROWSER_TOOLS = Object.freeze(ENGINE_TOOL_CATALOG.map((tool) => tool.name));
 
 export type ServerInvocation = { command: string; args: string[]; version: string };
 export type CodexCandidateReceipt = Readonly<{

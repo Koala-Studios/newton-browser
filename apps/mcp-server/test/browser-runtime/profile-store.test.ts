@@ -445,3 +445,30 @@ test("orphaned session copies from torn-down sandboxes are collected; live, kept
     assert.equal(fs.readdirSync(store.root).some(name => name.startsWith(".removing-")), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a store and identity renumbered by a macOS restart keep working; a different directory still fails", () => {
+  const fixture = createFixture();
+  try {
+    const identity = createNewtonIdentity(openProfileStore(fixture.storeRoot), { browserFamily: "chrome" });
+    const storeMarker = path.join(fixture.storeRoot, ".newton-browser-profile-store");
+    const identityMarker = path.join(identity.path, ".newton-browser-profile-identity");
+    const rewrite = (file: string, change: Record<string, string>) =>
+      fs.writeFileSync(file, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), ...change })}\n`);
+    const actualDevice = (file: string) => JSON.parse(fs.readFileSync(file, "utf8")).dev as string;
+    const liveDevice = fs.lstatSync(fixture.storeRoot, { bigint: true }).dev.toString();
+    rewrite(storeMarker, { dev: "1" });
+    rewrite(identityMarker, { dev: "1" });
+    if (process.platform === "darwin") {
+      const store = openProfileStore(fixture.storeRoot);
+      assert.deepEqual(listNewtonIdentities(store).map(item => item.id), [identity.id]);
+      assert.equal(actualDevice(storeMarker), liveDevice);
+      assert.equal(actualDevice(identityMarker), liveDevice);
+      rewrite(storeMarker, { ino: "1" });
+      assert.throws(() => openProfileStore(fixture.storeRoot), /profile_store_invalid/);
+    } else {
+      assert.throws(() => openProfileStore(fixture.storeRoot), /profile_store_invalid/);
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});

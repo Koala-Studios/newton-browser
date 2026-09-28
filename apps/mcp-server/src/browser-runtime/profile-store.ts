@@ -851,7 +851,26 @@ function readMarker(directory: string, filename: string, expectedType: Marker["t
   const marker = value as Partial<Marker>;
   if (marker.version !== 1 || marker.type !== expectedType || typeof marker.nonce !== "string" || !/^[a-f0-9]{64}$/.test(marker.nonce)
     || typeof marker.storeNonce !== "string" || typeof marker.dev !== "string" || typeof marker.ino !== "string") fail("profile_owner_marker_invalid");
-  return marker as Marker;
+  return restampDevice(directory, markerPath, marker as Marker);
+}
+
+// macOS renumbers APFS volume devices across restarts and OS updates, so a recorded device
+// goes stale while the directory keeps its inode. Record the current device for that same
+// inode; every other mismatch still fails the identity check.
+function restampDevice(directory: string, markerPath: string, marker: Marker): Marker {
+  if (process.platform !== "darwin") return marker;
+  const current = directoryIdentity(directory);
+  if (current.ino !== marker.ino || current.dev === marker.dev) return marker;
+  const updated = { ...marker, dev: current.dev };
+  const staged = `${markerPath}.${nonce()}.tmp`;
+  try {
+    fs.writeFileSync(staged, `${JSON.stringify(updated)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    fs.renameSync(staged, markerPath);
+  } catch {
+    fs.rmSync(staged, { force: true });
+    fail("profile_owner_marker_failed");
+  }
+  return updated;
 }
 
 function assertMarkerIdentity(directory: string, marker: Marker, code: string): void {

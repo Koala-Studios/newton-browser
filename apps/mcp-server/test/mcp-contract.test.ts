@@ -23,6 +23,7 @@ test("server/discover publishes the single modern protocol and untrusted-page in
     const response = await handleMcpMessage(host, { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: META } });
     assert.ok(response && "result" in response);
     const result = response.result as Record<string, unknown>;
+    assert.equal(result.resultType, "complete");
     assert.deepEqual(result.supportedVersions, [MODERN_MCP_PROTOCOL_VERSION]);
     assert.match(String(result.instructions), /untrusted/u);
     assert.equal((result._meta as Record<string, { name: string }>)["io.modelcontextprotocol/serverInfo"].name, "newton-browser");
@@ -51,6 +52,8 @@ test("the catalog is the engine's, and unknown fields and tools are refused befo
   try {
     const listed = await handleMcpMessage(host, { jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: META } });
     assert.ok(listed && "result" in listed);
+    assert.equal((listed.result as { resultType: string }).resultType, "complete");
+    for (const tool of ENGINE_TOOL_CATALOG) assert.equal((tool.inputSchema as { type?: string }).type, "object", tool.name);
     const names = (listed.result as { tools: { name: string }[] }).tools.map(tool => tool.name);
     assert.deepEqual(names, ENGINE_TOOL_CATALOG.map(tool => tool.name));
     for (const name of ["browser.session.start", "browser.act", "browser.observe", "browser.console", "browser.network"]) assert.ok(names.includes(name), name);
