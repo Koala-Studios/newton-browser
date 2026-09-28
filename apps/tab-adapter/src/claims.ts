@@ -6,7 +6,9 @@ export interface DebuggerApi {
 type Owner = object;
 type HeldInput = { sessionId: string | undefined; method: string; params: Record<string, unknown> };
 type Claim = { owner: Owner; tabId: number; generation: number; state: "reserved" | "attached" | "revoking" | "quarantined";
-  attachment: Promise<void>; active: Set<Promise<unknown>>; cancellations:Map<(error:Error)=>void,string|undefined>; routes: Map<string,object>; heldInputs: Map<string, HeldInput> };
+  attachment: Promise<void>; active: Set<Promise<unknown>>; cancellations:Map<(error:Error)=>void,string|undefined>; routes: Map<string,object>; heldInputs: Map<string, HeldInput>;
+  /** Opened for the session (a new tab, or a popup of one of its tabs) rather than an operator tab it took over. */
+  created?: boolean };
 export type ClaimToken = Readonly<{ tabId: number; epoch: string; generation: number }>;
 const methods = new Set([
   "Page.enable", "Page.setLifecycleEventsEnabled", "Page.getFrameTree", "Page.navigate", "Page.captureScreenshot",
@@ -17,7 +19,7 @@ const methods = new Set([
   "DOM.getFrameOwner", "DOM.pushNodesByBackendIdsToFrontend", "DOM.setFileInputFiles",
   "DOM.getContentQuads", "DOM.getNodeForLocation", "DOM.scrollIntoViewIfNeeded",
   "DOM.performSearch", "DOM.getSearchResults", "DOM.discardSearchResults", "DOM.getBoxModel",
-  "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Target.setAutoAttach",
+  "Emulation.setDeviceMetricsOverride", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Target.setAutoAttach",
 ]);
 
 /** Browser-local authority. Owner capabilities are created by bound native connections. */
@@ -47,7 +49,9 @@ export class TabClaims {
       const tab=await tabs.create({url:'about:blank',active:false});
       if(!Number.isSafeInteger(tab.id)||tab.id!<=0)throw new Error('invalid_tab');
       tabId=tab.id!;this.creating--;reserved=false;
-      return await this.claim(owner,tabId);
+      const token=await this.claim(owner,tabId);
+      const claim=this.claims.get(tabId);if(claim?.generation===token.generation)claim.created=true;
+      return token;
     }catch(error){
       // Only the tab just created by this request can be removed on failed setup.
       // An intervening owner or quarantined attachment must never be overwritten.
@@ -65,6 +69,7 @@ export class TabClaims {
     if(!opener||opener.state!=='attached'||!this.owners.has(opener.owner))return;
     const openerToken={tabId:openerTabId,epoch:this.epoch,generation:opener.generation};
     const token=await this.claim(opener.owner,tabId);
+    const child=this.claims.get(tabId);if(child?.generation===token.generation)child.created=true;
     // Opener revocation while debugger attachment was pending cannot transfer
     // a late popup into a session that has already released its parent.
     if(this.claims.get(openerTabId)!==opener||opener.state!=='attached'||!this.owners.has(opener.owner)){
@@ -152,9 +157,13 @@ export class TabClaims {
     this.endCommands(claim,'connection_lost');
     claim.heldInputs.clear();this.claims.delete(tabId);
   }
-  async release(owner: Owner, token: ClaimToken): Promise<void> {
+  /** Releases a claim. With close, a tab opened for the session is also closed; an operator tab is only released. */
+  async release(owner: Owner, token: ClaimToken, close?: { remove(tabId: number): Promise<void> }): Promise<void> {
     const claim = this.require(owner, token);
     await this.revoke(claim);
+    if (!close || !claim.created || this.claims.has(claim.tabId)) return;
+    this.closingCreatedTabs.add(claim.tabId);
+    try { await close.remove(claim.tabId); } catch { /* already closed by the operator */ } finally { this.closingCreatedTabs.delete(claim.tabId); }
   }
   async disconnect(owner: Owner): Promise<void> {
     this.owners.delete(owner);

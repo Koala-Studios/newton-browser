@@ -99,6 +99,8 @@ export type EngineObservation =
       newPages?: readonly (EnginePageStamp & {openerPageId?:string;selected:boolean;title?:string;url?:string})[];
       newPagesIncomplete?: boolean;
       navigation?: Readonly<{ state: "pending"; url?: string }>;
+      /** The page or one of its frames is still loading; observe again for its content. */
+      loading?: true;
       /** A fixed layer covers the page (a promotion, consent or sign-up prompt without dialog semantics); its controls come first. */
       cover?: Readonly<{ text: string }>;
       dialog?: Readonly<{ dialogId: string; type: "alert" | "confirm" | "prompt" | "beforeunload"; message: string }>;

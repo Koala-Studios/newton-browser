@@ -416,8 +416,8 @@ export class PageExecutor implements EngineExecutor {
     }finally{prepared.close();}
   }
   private async resize(context:CommandContext,page:EnginePageStamp,width:number,height:number):Promise<EnginePostcondition>{
-    if(!this.connection.ownsBrowser)throw new EngineError('unsupported_capability');
     const root=this.directory.binding(page,1);
+    if(!this.connection.ownsBrowser)return this.emulateWidth(context,page,root,width,height);
     const window=await context.read(()=>this.connection.wire.send('Browser.getWindowForTarget',{targetId:page.pageId}));
     if(!Number.isSafeInteger(window.windowId))throw new EngineError('unsupported_capability');
     this.directory.route(root);
@@ -428,6 +428,18 @@ export class PageExecutor implements EngineExecutor {
       const metrics=await context.read(()=>this.send(current,'Page.getLayoutMetrics',{}));
       const viewport=object(metrics.cssLayoutViewport);
       if(viewport.clientWidth===width&&viewport.clientHeight===height)return {state:'met',kind:'viewport'};
+      await this.waitForCondition(context,context.deadline);
+    }
+  }
+  // The operator's own window is never resized: the tab renders at the requested size through
+  // device metrics, which Chrome drops when the tab is released.
+  private async emulateWidth(context:CommandContext,page:EnginePageStamp,root:NodeBinding,width:number,height:number):Promise<EnginePostcondition>{
+    await context.input(()=>this.dialogAware(this.send(root,'Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:0,mobile:false}),page.pageId));
+    for(;;){
+      const current=this.directory.binding(this.directory.stamp(page.pageId),1);
+      const viewport=object((await context.read(()=>this.send(current,'Page.getLayoutMetrics',{}))).cssLayoutViewport);
+      // A classic scrollbar takes its width out of the layout viewport.
+      if(typeof viewport.clientWidth==='number'&&viewport.clientWidth<=width&&viewport.clientWidth>=width-24)return {state:'met',kind:'viewport'};
       await this.waitForCondition(context,context.deadline);
     }
   }
@@ -464,7 +476,15 @@ export class PageExecutor implements EngineExecutor {
   }
 
   private async pressGlobal(context: CommandContext, page: EnginePageStamp, keys: readonly string[] | undefined, text: string | undefined): Promise<EnginePostcondition> {
-    const binding = await this.resolver.focused(context, page);
+    let binding: NodeBinding;
+    try { binding = await this.resolver.focused(context, page); }
+    catch (error) {
+      // Nothing has focus (after a click on empty space): keys go to the page, as from a keyboard,
+      // so Tab reaches the first control. Text still needs a focused field.
+      if (!(error instanceof EngineError && error.code === "not_found") || text !== undefined || !keys?.length) throw error;
+      await this.input!.chord(this.directory.binding(page, 1), keys, async () => undefined);
+      return { state: "not_requested" };
+    }
     return this.press(context, binding, keys, text);
   }
 
@@ -1093,8 +1113,17 @@ export class PageExecutor implements EngineExecutor {
     context.checkpoint();
     this.directory.describe(page,{title,url});
     const published = this.directory.publish(bindings);
+    // Frames still attaching, or an empty page whose document has not finished loading: say so, so an
+    // early read is not mistaken for the page's content.
+    let loading = this.pendingFrames.size > 0 || this.pendingAttachments.size > 0;
+    if (!loading && !scoped && nodes.length === 0) {
+      try {
+        const ready = await context.read(() => this.send(this.directory.binding(page, 1), 'Runtime.evaluate', { expression: 'document.readyState', returnByValue: true, silent: true }));
+        loading = object(ready.result).value !== 'complete';
+      } catch { /* the observation stands without the hint */ }
+    }
     return { state: incomplete || nodes.length < candidates.length ? "incomplete" : "available", trust: "untrusted_page_content", scope: scoped ? "target" : "page",
-      page, ...(title === undefined ? {} : { title }), ...(url === undefined ? {} : { url }), ...(cover ? { cover } : {}),
+      page, ...(title === undefined ? {} : { title }), ...(url === undefined ? {} : { url }), ...(cover ? { cover } : {}), ...(loading ? { loading: true as const } : {}),
       ...(outputLimited?{incompleteReason:"output_limit" as const}:readFailed?{incompleteReason:"evidence_unavailable" as const}:incomplete?{incompleteReason:"rendered_subset" as const}:nodes.length<candidates.length?{incompleteReason:"work_limit" as const}:{}),
       snapshotId: published.snapshotId, expiredSnapshots: published.expiredSnapshots,
       nodes: nodes.map((node, i) => ({ ...node, ref: published.refs[i]! })) };
@@ -1307,7 +1336,8 @@ export class PageExecutor implements EngineExecutor {
     const collected=await collectRegions(),regions=collected.regions;
     const result = await context.read(() => this.send(root, "Page.captureScreenshot", {
       format: "png", fromSurface: true, captureBeyondViewport: options.fullPage === true,
-      clip: { ...clip, scale: 1 },
+      // One image pixel per CSS pixel, so positions in the image are the ones click_at takes.
+      clip: { ...clip, scale: 1 / spatial.deviceScaleFactor },
     }));
     const data = string(result.data);
     if (!data) throw new EngineError("evidence_unavailable");
@@ -1483,7 +1513,7 @@ export class PageExecutor implements EngineExecutor {
     if (!sameCaptureSpatial(capture.spatial, currentSpatial)) throw new EngineError("stale_target");
     const currentShot = await context.read(() => this.send(root, "Page.captureScreenshot", {
       format: "png", fromSurface: true, captureBeyondViewport: capture.captureBeyondViewport===true,
-      clip: { ...capture.clip, scale: 1 },
+      clip: { ...capture.clip, scale: 1 / capture.spatial.deviceScaleFactor },
     }));
     const currentData = string(currentShot.data);
     if (!currentData) throw new EngineError("evidence_unavailable");

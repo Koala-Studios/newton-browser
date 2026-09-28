@@ -153,3 +153,21 @@ test("releasing one connection's tabs leaves another connection's claims usable"
   await authority.command(second, kept, "Runtime.evaluate", { expression: "1" });
   await authority.claim(first, 13);
 });
+
+test("stopping closes a tab opened for the session and only releases an operator tab", async () => {
+  const debug = debuggerApi();
+  const removes = [];
+  const tabs = { async create() { return { id: 21 }; }, async remove(tabId) { removes.push(tabId); } };
+  const authority = new TabClaims(debug.api, "epoch");
+  const owner = authority.bindPort();
+  const created = await authority.createTab(owner, tabs);
+  const operatorTab = await authority.claim(owner, 5);
+  await authority.release(owner, operatorTab, tabs);
+  await authority.release(owner, created, tabs);
+  assert.deepEqual(removes, [21]);
+  assert.deepEqual(debug.detached, [5, 21]);
+  assert.equal(authority.isClaimed(21), false);
+  const kept = await authority.createTab(owner, { async create() { return { id: 22 }; }, async remove(tabId) { removes.push(tabId); } });
+  await authority.release(owner, kept);
+  assert.deepEqual(removes, [21], "release without close leaves the tab open");
+});

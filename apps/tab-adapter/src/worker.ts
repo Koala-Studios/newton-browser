@@ -56,7 +56,7 @@ native.onMessage.addListener(raw => {
     void (async () => {
       if (request.method === "claim") return authority.claim(owner, Number(args.tabId));
       if (request.method === 'create_tab') return authority.createTab(owner,chrome.tabs);
-      if (request.method === "release") { await authority.release(owner, args.token as ClaimToken); return {}; }
+      if (request.method === "release") { await authority.release(owner, args.token as ClaimToken, args.close === true ? chrome.tabs : undefined); return {}; }
       if (request.method === "command") return authority.command(owner, args.token as ClaimToken, String(args.method), args.params as Record<string, unknown>, args.sessionId as string | undefined);
       // A connection quiesces only its own tabs; only a connection inside a proven update may quiesce or reload the adapter.
       if (request.method === "quiesce") { if (updaters.has(owner)) await authority.quiesce(); else await authority.releaseAll(owner); return { state: "quiescent" }; }

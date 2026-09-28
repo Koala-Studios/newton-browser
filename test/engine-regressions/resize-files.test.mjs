@@ -56,12 +56,15 @@ test('owned resize and file selection verify actual renderer effects through MCP
   }finally{await host.close();await new Promise(resolve=>server.close(resolve));temp.remove();}
 });
 
-test('borrowed resize refuses before any browser command or input',async()=>{
-  let sends=0;
-  const executor=new PageExecutor({epoch:'borrowed',claimGeneration:1,signal:new AbortController().signal,wire:{send:async()=>{sends++;return {};},onEvent:()=>()=>{}},close:async()=>{}});
+test('borrowed resize sets the tab size through device metrics and never resizes the operator window',async()=>{
+  const sent=[];
+  const wire={send:async(method,params)=>{sent.push({method,params});return method==='Page.getLayoutMetrics'?{cssLayoutViewport:{clientWidth:625,clientHeight:480}}:{};},onEvent:()=>()=>{}};
+  const executor=new PageExecutor({epoch:'borrowed',claimGeneration:1,signal:new AbortController().signal,wire,close:async()=>{}});
   executor.directory.registerRoute('r');executor.directory.addPage('p');executor.directory.navigate('p',{frameId:'f',route:'r',loaderId:'l'});
   const engine=new SessionEngine('borrowed-resize',executor);
   const receipt=await engine.submit({commandId:1,action:{kind:'resize',width:640,height:480},observe:'none'});
-  assert.equal(receipt.errorCode,'unsupported_capability');assert.equal(receipt.dispatch,'not_started');assert.equal(sends,0);
+  assert.equal(receipt.reason,'completed',JSON.stringify(receipt));assert.deepEqual(receipt.postcondition,{state:'met',kind:'viewport'});
+  assert.deepEqual(sent.find(entry=>entry.method==='Emulation.setDeviceMetricsOverride')?.params,{width:640,height:480,deviceScaleFactor:0,mobile:false});
+  assert.ok(!sent.some(entry=>entry.method.startsWith('Browser.')));
   await engine.stop();
 });

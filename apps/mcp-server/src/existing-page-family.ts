@@ -72,7 +72,7 @@ export function existingPageConnection(client:NativeClient,root:Token,initial:Va
       if(closed)return;closed=true;unsubscribe();listeners.clear();queued.length=0;
       try{
         if(client.signal.aborted)return;
-        const results=await Promise.allSettled([...claims.values()].map(token=>client.call('release',{token})));
+        const results=await Promise.allSettled([...claims.values()].map(token=>client.call('release',{token,close:true})));
         const failed=results.find(result=>result.status==='rejected');if(failed?.status==='rejected')throw failed.reason;
       }finally{claims.clear();routes.clear();client.close();}
     },

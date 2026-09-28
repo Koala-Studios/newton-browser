@@ -2,6 +2,14 @@ type Ax = Record<string, unknown>;
 type Send = (method: string, params: Ax) => Promise<Ax>;
 const object = (value: unknown): Ax => value && typeof value === 'object' && !Array.isArray(value) ? value as Ax : {};
 const nodes = (value: unknown): Ax[] => Array.isArray(value) ? value.map(object) : [];
+// Chromium can withhold a role query's reply on pages with embedded frames. A query that does
+// not answer in time leaves the snapshot incomplete instead of holding it to the command deadline.
+const ROLE_QUERY_MS = 2500;
+const bounded = (reply: Promise<Ax>): Promise<Ax> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([reply, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('role_query_timeout')), ROLE_QUERY_MS); })])
+    .finally(() => clearTimeout(timer));
+};
 const terminalRoles = new Set(['StaticText', 'InlineTextBox', 'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'option', 'tab', 'menuitem']);
 
 /** Bound tree expansion before requesting the full rendered article from CDP.
@@ -38,7 +46,14 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
     // Deep action controls (add to cart, quantity, options) sit below any
     // breadth-first bound on real storefronts, so query them directly too.
     const queried: [string, number][] = [['searchbox',16],['textbox',16],['combobox',16],['spinbutton',16],['button',64],['checkbox',16],['radio',24],['switch',8],['tab',16],['slider',8]];
-    const matches = await Promise.allSettled(queried.map(([role]) => send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role})));
+    // The main-content links run alongside the role queries so a withheld reply costs one bound, not several.
+    const mainLinks = scopeBackendNodeId === undefined ? bounded(send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role:'main'})).then(async reply => {
+      const landmarks=nodes(reply.nodes).filter(node=>!node.ignored);
+      if(landmarks.length!==1||!Number.isSafeInteger(landmarks[0]!.backendDOMNodeId))return undefined;
+      return nodes((await bounded(send('Accessibility.queryAXTree',{backendNodeId:landmarks[0]!.backendDOMNodeId,role:'link'}))).nodes);
+    }) : undefined;
+    void mainLinks?.catch(() => undefined);
+    const matches = await Promise.allSettled(queried.map(([role]) => bounded(send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role}))));
     const fields: Ax[] = [];
     matches.forEach((result, index) => {
       if (result.status === 'rejected') { incomplete = true; return; }
@@ -56,9 +71,8 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
       // fills a compact view. Semantic landmarks work across ordinary sites;
       // there are no URL-specific selectors or site-specific ranking rules.
       try {
-        const landmarks=nodes((await send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role:'main'})).nodes).filter(node=>!node.ignored);
-        if(landmarks.length===1&&Number.isSafeInteger(landmarks[0]!.backendDOMNodeId)) {
-          const links=nodes((await send('Accessibility.queryAXTree',{backendNodeId:landmarks[0]!.backendDOMNodeId,role:'link'})).nodes);
+        const links=await mainLinks!;
+        if(links) {
           if(links.length>128)incomplete=true;
           add(links.slice(0,128));
           for(const node of links.slice(0,128))if(Number.isSafeInteger(node.backendDOMNodeId))primary.add(Number(node.backendDOMNodeId));
