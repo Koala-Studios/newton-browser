@@ -1,6 +1,6 @@
 # Release process
 
-Updated 2026-09-25. This tree is an unreleased replacement checkpoint. [PROGRESS_LEDGER.md](PROGRESS_LEDGER.md) records implementation and gaps; [the consolidation record](implementation/CONSOLIDATION_2026-09-25.md) records fresh verification. 0.7.0 (2026-09-28) is a GitHub prerelease of the consolidated engine, published so clients run an installed package instead of a checkout. It carries the macOS Chrome `release:check` receipt only; the Windows/Linux and three-pass closure below still applies before a full release.
+Updated 2026-09-25. This tree is an unreleased replacement checkpoint. [PROGRESS_LEDGER.md](PROGRESS_LEDGER.md) records implementation and gaps; [the consolidation record](implementation/CONSOLIDATION_2026-09-25.md) records fresh verification. 0.7.x (2026-09-28) are GitHub prereleases of the consolidated engine, published so clients run an installed package instead of a checkout. It carries the macOS Chrome `release:check` receipt only; the Windows/Linux and three-pass closure below still applies before a full release.
 
 The package build now includes the shared-engine candidate, guardian/profile worker, native host/installer/launcher and optional tab-adapter assets. The former five-file/direct-only descriptions are obsolete. A Git branch push is not npm publication, a browser-store submission or proof of release readiness.
 

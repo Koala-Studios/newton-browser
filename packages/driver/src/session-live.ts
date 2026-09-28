@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import { EngineError } from "@newton-browser/core";
 import type { EngineWire } from "./connection.ts";
 import type { PageDirectory } from "./page-directory.ts";
@@ -40,6 +42,8 @@ export class SessionLive {
   private readonly listeners = new Set<(event: EngineSessionEvent) => void>();
   private readonly frames = new Map<string, FrameSubscription>();
   private readonly authenticators = new Map<string, string>();
+  private readonly passkeyScripts = new Map<string, string>();
+  private readonly passkeySites = `__newtonPasskeySites_${randomBytes(8).toString("hex")}`;
   private credentials: EngineWebAuthnCredential[] | undefined;
   constructor(wire: EngineWire, directory: PageDirectory, ownsBrowser: boolean) {
     this.wire = wire; this.directory = directory; this.ownsBrowser = ownsBrowser;
@@ -63,7 +67,11 @@ export class SessionLive {
 
   /** Called for each attached page session before navigation, like other domain enables. */
   async attachPage(route: string, send: (method: string, params?: RecordValue) => Promise<RecordValue>): Promise<void> {
-    if (!this.credentials) return;
+    if (!this.credentials) {
+      // Headless Chrome has no passkey prompt; without an authenticator a site's request would hang.
+      if (this.ownsBrowser) await send("Page.addScriptToEvaluateOnNewDocument", { source: passkeyRefusal([], this.passkeySites, true), runImmediately: true });
+      return;
+    }
     await send("WebAuthn.enable", { enableUI: false });
     const created = await send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", transport: "internal",
       hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
@@ -71,6 +79,8 @@ export class SessionLive {
     if (!authenticatorId) throw new EngineError("evidence_unavailable");
     this.authenticators.set(route, authenticatorId);
     for (const credential of this.credentials) await send("WebAuthn.addCredential", { authenticatorId, credential: cdpCredential(credential) });
+    const added = await send("Page.addScriptToEvaluateOnNewDocument", { source: passkeyRefusal(this.credentials, this.passkeySites), runImmediately: true });
+    this.passkeyScripts.set(route, string(added.identifier));
   }
 
   handle(event: { method: string; params: RecordValue; sessionId?: string | null }, pageOf: (route: string) => string | undefined): void {
@@ -92,8 +102,8 @@ export class SessionLive {
       this.credentials = [...this.credentials.filter(item => item.credentialId !== credential.credentialId), credential];
       // Other pages of the session (a sign-in popup, a second tab) get the new key too.
       for (const [other, authenticatorId] of this.authenticators) {
-        if (other === route) continue;
-        void this.wire.send("WebAuthn.addCredential", { authenticatorId, credential: cdpCredential(credential) }, other).catch(() => undefined);
+        if (other !== route) void this.wire.send("WebAuthn.addCredential", { authenticatorId, credential: cdpCredential(credential) }, other).catch(() => undefined);
+        void this.refreshPasskeyRefusal(other, credential.rpId);
       }
       this.emit({ type: "credential_created", credential });
       return;
@@ -105,7 +115,22 @@ export class SessionLive {
       this.emit({ type: "credential_used", rpId: credential.rpId, credentialId: credential.credentialId, signCount: credential.signCount });
       return;
     }
-    if (event.method === "Target.detachedFromTarget") { this.authenticators.delete(string(event.params.sessionId)); this.frames.delete(string(event.params.sessionId)); }
+    if (event.method === "Target.detachedFromTarget") {
+      const detached = string(event.params.sessionId);
+      this.authenticators.delete(detached); this.passkeyScripts.delete(detached); this.frames.delete(detached);
+    }
+  }
+
+  /** A passkey created during the session counts for the current document and later ones. */
+  private async refreshPasskeyRefusal(route: string, rpId: string): Promise<void> {
+    if (!this.credentials) return;
+    try {
+      await this.wire.send("Runtime.evaluate", { expression: `globalThis[${JSON.stringify(this.passkeySites)}]?.add(${JSON.stringify(rpId.toLowerCase())})`, silent: true }, route);
+      const previous = this.passkeyScripts.get(route);
+      if (previous) await this.wire.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: previous }, route);
+      const added = await this.wire.send("Page.addScriptToEvaluateOnNewDocument", { source: passkeyRefusal(this.credentials, this.passkeySites) }, route);
+      this.passkeyScripts.set(route, string(added.identifier));
+    } catch { /* a closed page needs no refresh */ }
   }
 
   /** JPEG frames of one page while it changes. A slow listener receives only the latest frame. */
@@ -194,6 +219,33 @@ function validCredential(value: EngineWebAuthnCredential): EngineWebAuthnCredent
     || (value.userHandle !== undefined && (typeof value.userHandle !== "string" || !base64.test(value.userHandle) || value.userHandle.length > 1024))
     || !Number.isSafeInteger(value.signCount) || value.signCount < 0) invalid();
   return { rpId: value.rpId, credentialId: value.credentialId, privateKey: value.privateKey, ...(value.userHandle ? { userHandle: value.userHandle } : {}), signCount: value.signCount };
+}
+
+/**
+ * Headless Chrome shows no passkey prompt a person could cancel. A session without an
+ * authenticator (a person's sign-in) would keep a site's passkey request pending until the
+ * site's own timeout, with its other sign-in options disabled meanwhile, so such requests
+ * are refused at once, as cancelling the prompt would; creating a passkey is refused too
+ * rather than stored nowhere. With an authenticator, a sign-in for a site it holds no key for
+ * is refused the same way. Autofill (conditional) requests stay pending as usual.
+ */
+function passkeyRefusal(credentials: readonly EngineWebAuthnCredential[], key: string, refuseCreate = false): string {
+  const rpIds = JSON.stringify([...new Set(credentials.map(credential => credential.rpId.toLowerCase()))]);
+  return `(() => { const container = navigator.credentials; if (!container || typeof container.get !== "function") return;
+  const held = new Set(${rpIds}), original = container.get.bind(container);
+  Object.defineProperty(globalThis, ${JSON.stringify(key)}, { value: held, configurable: true });
+  const get = function get(options) {
+    const publicKey = options && options.publicKey;
+    if (publicKey && options.mediation !== "conditional" && !held.has(String(publicKey.rpId || location.hostname).toLowerCase()))
+      return Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"));
+    return original(options);
+  };
+  Object.defineProperty(container, "get", { value: get, configurable: true, writable: true });${refuseCreate ? `
+  const create = function create(options) {
+    if (options && options.publicKey) return Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"));
+    return container.constructor.prototype.create.call(container, options);
+  };
+  Object.defineProperty(container, "create", { value: create, configurable: true, writable: true });` : ""} })();`;
 }
 
 function cdpCredential(credential: EngineWebAuthnCredential): RecordValue {

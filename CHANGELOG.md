@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-28
+
+### Fixed
+
+- A passkey request no longer hangs in a headless session. Headless Chrome has no prompt a
+  person could cancel, so a session without passkeys (a person's sign-in) refuses passkey
+  requests at once, as cancelling would, and a session with passkeys refuses a sign-in for a
+  site it holds none for. Sites no longer sit with their other sign-in options disabled.
+
 ## [0.7.0] - 2026-09-28
 
 ### Changed

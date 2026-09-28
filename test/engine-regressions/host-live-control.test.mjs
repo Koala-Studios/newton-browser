@@ -59,8 +59,14 @@ test('embedding host: live frames, operator takeover on the same page, and passk
     const read = await call('browser.act', { sessionId, command: { commandId: 1, action: { kind: 'type', target: { kind: 'selector', selector: '#field' }, value: '!' } } });
     assert.equal(read.observation.nodes.find(node => node.name === 'Name').value, 'operator!', 'the operator typed into the same page the model continues on');
 
-    await call('browser.act', { sessionId, command: { commandId: 2, action: { kind: 'click', target: { kind: 'semantic', role: 'button', name: 'Create passkey' } } } });
+    const refusedAt = Date.now();
+    await call('browser.act', { sessionId, command: { commandId: 2, action: { kind: 'click', target: { kind: 'semantic', role: 'button', name: 'Sign in with passkey' } } } });
+    assert.ok(await until(async () => (await title(sessionId)) === 'login failed NotAllowedError', 3000), `no passkey held: ${await title(sessionId)}`);
+    assert.ok(Date.now() - refusedAt < 3000, 'a sign-in for a site with no passkey is refused at once, not left to time out');
+    await call('browser.act', { sessionId, command: { commandId: 3, action: { kind: 'click', target: { kind: 'semantic', role: 'button', name: 'Create passkey' } } } });
     assert.ok(await until(async () => (await title(sessionId)) === 'enrolled'), `enrollment: ${await title(sessionId)}`);
+    await call('browser.act', { sessionId, command: { commandId: 4, action: { kind: 'click', target: { kind: 'semantic', role: 'button', name: 'Sign in with passkey' } } } });
+    assert.ok(await until(async () => (await title(sessionId)) === 'signed in'), `the new passkey signs in on the same page: ${await title(sessionId)}`);
     const created = events.find(event => event.type === 'credential_created');
     assert.ok(created, JSON.stringify(events.map(event => event.type)));
     assert.equal(created.credential.rpId, 'localhost');
@@ -73,6 +79,15 @@ test('embedding host: live frames, operator takeover on the same page, and passk
     assert.ok(await until(async () => (await title(second.sessionId)) === 'signed in'), `sign-in: ${await title(second.sessionId)}`);
     const assertion = used.find(event => event.type === 'credential_used');
     assert.ok(assertion && assertion.signCount > created.credential.signCount);
+
+    // A person's sign-in session has no authenticator: headless Chrome has no prompt, so requests are refused, not left pending.
+    const plain = await host.start({ url }, {});
+    const plainAt = Date.now();
+    await call('browser.act', { sessionId: plain.sessionId, command: { commandId: 1, action: { kind: 'click', target: { kind: 'semantic', role: 'button', name: 'Sign in with passkey' } } } });
+    assert.ok(await until(async () => (await title(plain.sessionId)) === 'login failed NotAllowedError', 3000), `no authenticator, sign-in: ${await title(plain.sessionId)}`);
+    await call('browser.act', { sessionId: plain.sessionId, command: { commandId: 2, action: { kind: 'click', target: { kind: 'semantic', role: 'button', name: 'Create passkey' } } } });
+    assert.ok(await until(async () => (await title(plain.sessionId)) === 'enroll failed NotAllowedError', 3000), `no authenticator, create: ${await title(plain.sessionId)}`);
+    assert.ok(Date.now() - plainAt < 8000);
 
     const combined = modelOutput.join('\n');
     assert.ok(!combined.includes(created.credential.privateKey) && !combined.includes(created.credential.credentialId), 'no key material reaches the model');
