@@ -16,10 +16,10 @@ Newton Browser is a local MCP server (stateless MCP `2026-07-28` over stdio). Ea
 ## Loop
 
 1. **Start.** `browser.session.start` with the complete `url`. Keep `sessionId` and `nextCommandId`. Pass `collect: ["console", "network"]` to record the first page load.
-2. **Observe.** `browser.observe` returns controls with `ref` values; narrow with `query: { role, text }` or `scope`; `mode: "records"` reads links, tables and forms. `browser.document.read` (then `browser.document.continue` with its cursor) reads prose. Refs stay stable while the element exists.
+2. **Observe.** `browser.observe` returns controls with `ref` values (`loading: true` means the page is still loading: observe again). `incompleteReason: "rendered_subset"` means part of a large page was not read; narrow with `query` or `scope` to reach it; narrow with `query: { role, text }` or `scope`; `mode: "records"` reads links, tables and forms. `browser.document.read` (then `browser.document.continue` with its cursor) reads prose. Refs stay stable while the element exists.
 3. **Act.** One `browser.act` at a time: `{ sessionId, command: { commandId, action } }`, with `commandId` from the previous `nextCommandId` and one action `kind` (`navigate`, `click`, `fill`, `type`, `select`, `press`, `scroll`, `hover`, `set_files`, `resize`, `dialog_accept`, `dialog_dismiss`, `sequence`, …) with a `target` such as `{ kind: "ref", ref }`. Reuse a `commandId` only to repeat the identical command.
 4. **Read the receipt.** `reason` (`completed`, `rejected`, `failed`, `timed_out`, `cancelled`), `dispatch` (whether input reached the page), `postcondition` and the fresh `observation`. `observation.navigation.state: "pending"` means the page is still loading; observe again. `browser.command` gets or cancels a running command.
-5. **Check.** `browser.screenshot` for visual evidence (passwords and sensitive fields are masked). `browser.pages.list` and `browser.page.select` handle popups and new tabs. `browser.console` (`level: "error"`) and `browser.network` (`failedOnly: true`; `requestId` reads one same-origin text body) record from their first call.
+5. **Check.** `browser.screenshot` for visual evidence (passwords and sensitive fields are masked); its pixels are page coordinates for `click_at`. `browser.pages.list` and `browser.page.select` handle popups and new tabs. `browser.console` (`level: "error"`) and `browser.network` (`failedOnly: true`; `requestId` reads one same-origin text body) record from their first call.
 6. **Stop.** `browser.session.stop`. `browser.sessions.list` shows what is running.
 
 An `invalid_arguments` error names the `field` and what it `expected`; fix that field and resend with the same `nextCommandId`.
@@ -35,7 +35,9 @@ Only when the operator asks you to use their browser, and only once the Chrome a
 1. `browser.existing.discover` lists their open tabs with `connectionId`, `instanceId` and `tabId`. It claims nothing.
 2. `browser.session.start` with `{ mode: "existing", connectionId, target: { kind: "new_tab", url, instanceId } }` opens your own background tab, or `target: { kind: "tab", tabId, instanceId }` takes the one tab they named. Never take a tab they did not name.
 3. Work with the same loop. Their tab keeps their real signed-in account, so every consequential change needs their say-so.
-4. `browser.session.stop` releases the tabs and leaves them open.
+4. `browser.session.stop` closes the tabs you opened and releases theirs, leaving them open.
+
+`resize` works in their tabs too: the page renders at that width without resizing their window.
 
 ## Uncertain actions and errors
 
