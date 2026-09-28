@@ -2,7 +2,8 @@ import { ENGINE_LIMITS, ENGINE_COMMAND_SCHEMA, ENGINE_TARGET_SCHEMA, EngineError
 import type { EngineHost } from "./browser-runtime/engine-host.ts";
 import { MODERN_MCP_PROTOCOL_VERSION, type ModernMcpRequest, type ModernMcpRequestContext, type ModernMcpResponse } from "./modern-mcp-stdio.ts";
 
-export const ENGINE_TOOL_CATALOG = [
+// The full schemas validate and explain arguments; models get the compact form below.
+const FULL_TOOL_CATALOG = [
   { name: "browser.session.start", description: "Default: isolated headless browser at a complete URL. Only when the operator requests their browser, claim a specific existing tab or create an owned background tab using target kind new_tab and a complete URL.", inputSchema: { type: "object", oneOf: [
     { type: "object", properties: { url: { type: "string" }, mode: { const: "owned" }, sourceId: { type: "string" }, viewport: { type: "object", description: "Page area; default 1280x900.", properties: { width: { type: "integer", minimum: 320, maximum: 3840 }, height: { type: "integer", minimum: 240, maximum: 2160 } }, required: ["width", "height"], additionalProperties: false }, locale: { type: "string", description: "BCP 47, e.g. en-CA." }, timezone: { type: "string", description: "IANA, e.g. America/Toronto." }, collect: { type: "array", description: "Record console and/or network from the first page load. Off by default.", items: { enum: ["console", "network"] }, maxItems: 2, uniqueItems: true }, timeoutMs: { type: "integer", minimum: 1000, maximum: 120000, description: "Start budget; default 30000." } }, required: ["url"], additionalProperties: false },
     { type: "object", properties: { mode: { const: "existing" }, connectionId: { type: "string" }, target: { type: "object", properties: { kind: { const: "tab" }, tabId: { type: "integer", minimum: 1 }, instanceId: { type: "string" } }, required: ["kind", "tabId", "instanceId"], additionalProperties: false } }, required: ["mode", "target"], additionalProperties: false },
@@ -23,6 +24,26 @@ export const ENGINE_TOOL_CATALOG = [
   { name: "browser.command", description: "Get or cancel a command without waiting behind input.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, commandId: { type: "integer", minimum: 1 }, cancel: { type: "boolean" } }, required: ["sessionId", "commandId"], additionalProperties: false } },
   { name: "browser.session.stop", description: "Stop this owned session independently of its action queue.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
 ];
+
+/** Published catalog: string length bounds (enforced server-side) are dropped and a sequence
+ * step points back at the action shapes instead of repeating them. */
+export const ENGINE_TOOL_CATALOG = FULL_TOOL_CATALOG.map(tool => ({ ...tool, inputSchema: compactSchema(tool.inputSchema) as typeof tool.inputSchema }));
+
+function compactSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(compactSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const entries = Object.entries(schema as Record<string, unknown>).filter(([key]) => key !== "minLength" && key !== "maxLength");
+  const compact = Object.fromEntries(entries.map(([key, value]) => [key, compactSchema(value)])) as Record<string, unknown>;
+  const properties = compact.properties as Record<string, Record<string, unknown>> | undefined;
+  if (Array.isArray(compact.allOf) && properties?.state && properties.url) {
+    delete compact.allOf;
+    compact.description = "Give one of url, title, text, ref, selector, or role with name. state needs ref, selector or role; value needs state \"value\".";
+  }
+  if (properties?.kind?.const === "sequence" && properties.steps) {
+    compact.properties = { ...properties, steps: { ...properties.steps, items: { type: "object", description: "One action of any kind except sequence, shaped as above." } } };
+  }
+  return compact;
+}
 
 function parseControlQuery(raw: unknown) {
   const query = exactObject(raw, ["role", "text"]);
@@ -126,7 +147,7 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
     if (context.signal.aborted) return null;
     const errorCode = engineErrorCode(error);
     // Name the field and what it expects, and the command ID the session still expects.
-    const issue = errorCode === "invalid_arguments" ? explainArguments(ENGINE_TOOL_CATALOG.find(tool => tool.name === toolName)?.inputSchema, toolArguments) : undefined;
+    const issue = errorCode === "invalid_arguments" ? explainArguments(FULL_TOOL_CATALOG.find(tool => tool.name === toolName)?.inputSchema, toolArguments) : undefined;
     let nextCommandId: number | undefined;
     if (toolName === "browser.act" && toolArguments && typeof toolArguments === "object") {
       try { nextCommandId = host.session((toolArguments as Record<string, unknown>).sessionId).nextCommandId; } catch { /* no such session */ }
