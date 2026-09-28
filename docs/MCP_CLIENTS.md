@@ -30,6 +30,15 @@ tool_timeout_sec = 150
 Prefer `newton-browser install codex`, which verifies the exact entrypoint and version
 before atomically replacing the configuration. There is no older-protocol fallback.
 
+## Claude Code
+
+```bash
+claude mcp add --scope user newton-browser -- node /absolute/path/newton-browser/apps/mcp-server/dist/index.js
+claude mcp list
+```
+
+`claude mcp list` should report the server connected. Start a new session to load its tools.
+
 ## Operational model
 
 Each `browser.session.start` creates one isolated browser process, private CDP pipe,
@@ -55,7 +64,8 @@ shape alias.
 
 Public MCP sessions are headless for deterministic agent input. `identity login` is the
 separate visible operator workflow for preparing a persistent identity. Both use normal
-Chromium networking, and Newton never attaches to an ordinary Chrome tab.
+Chromium networking. Newton attaches to an ordinary Chrome tab only in existing mode, when
+the operator asks for their browser (see the optional adapter in `INSTALL.md`).
 
 Use compact observations with queries and role filters. Refs belong to the latest fresh
 interactive observation and must not be synthesized; starting another interactive

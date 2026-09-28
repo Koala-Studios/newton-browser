@@ -28,6 +28,15 @@ An `invalid_arguments` error names the `field` and what it `expected`; fix that 
 
 Sessions open with whatever the login source holds. Never type passwords, one-time codes, card numbers or other secrets, and never read cookies, storage or profile files. When a site needs signing in, ask the operator to run `newton-browser source login --id default --browser chrome`, sign in in the visible window and confirm; then stop your session and start a new one.
 
+## The operator's own Chrome
+
+Only when the operator asks you to use their browser, and only once the Chrome add-on reports `ready` ([setup and troubleshooting](references/setup-and-troubleshooting.md)):
+
+1. `browser.existing.discover` lists their open tabs with `connectionId`, `instanceId` and `tabId`. It claims nothing.
+2. `browser.session.start` with `{ mode: "existing", connectionId, target: { kind: "new_tab", url, instanceId } }` opens your own background tab, or `target: { kind: "tab", tabId, instanceId }` takes the one tab they named. Never take a tab they did not name.
+3. Work with the same loop. Their tab keeps their real signed-in account, so every consequential change needs their say-so.
+4. `browser.session.stop` releases the tabs and leaves them open.
+
 ## Uncertain actions and errors
 
 - A receipt whose input may have reached the page without a finished result is uncertain: do not repeat it. Observe the same session, check the site, and continue only when you know what happened.

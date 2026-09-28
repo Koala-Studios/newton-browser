@@ -9,6 +9,13 @@ newton-browser doctor --live
 
 `doctor --live` starts one session on a loopback page in a throwaway store, observes it and proves cleanup.
 
+Register the compiled entrypoint with the client, then restart it:
+
+- Codex: `newton-browser install codex` (verifies the exact build before editing `config.toml`).
+- Claude Code: `claude mcp add --scope user newton-browser -- node /absolute/path/apps/mcp-server/dist/index.js`, then `claude mcp list` shows it connected.
+
+For the operator's own Chrome, run `newton-browser adapter prepare` and `newton-browser adapter setup`. The operator then opens `chrome://extensions`, turns on Developer mode, chooses Load unpacked and selects the printed folder (macOS: `~/Library/Application Support/NewtonBrowser/tab-adapter`). `newton-browser adapter status` reports `ready` while Chrome runs.
+
 Sign-in for later sessions is an operator step:
 
 ```text

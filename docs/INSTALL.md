@@ -146,9 +146,12 @@ newton-browser adapter status
 `prepare` copies the packaged worker unchanged into the Newton configuration directory
 and establishes a stable unpacked extension ID. Repeating it preserves the ID and code;
 it does not silently update an existing installation. `setup` additionally registers
-the Windows Chrome native host. First setup currently requires Node 25.5 or newer to
-build the stable native launcher. Chrome's one-time Developer mode / Load unpacked
-installation uses the directory returned by the command. Newton adds no approval prompts.
+the browser's native host: a registry key on Windows, a per-user host manifest in the
+browser's `NativeMessagingHosts` directory on macOS and Linux. First setup on Windows
+requires Node 25.5 or newer to build the stable native launcher; macOS runs on Node 24
+(Chrome reached `ready` on macOS 2026-09-28). Chrome's one-time Developer mode / Load
+unpacked installation uses the directory returned by the command; on macOS that is
+`~/Library/Application Support/NewtonBrowser/tab-adapter`. Newton adds no approval prompts.
 
 `status` probes live native connections and reports `ready` only when a compatible
 browser responds. MCP existing-browser discovery uses the installed connection directory;
