@@ -23,7 +23,6 @@ test('embedding: operator sign-in publishes a login source that new sessions inh
     assert.ok(!engine.tools().some(tool => tool.name.startsWith('browser.existing.')));
     const before = text(await engine.call('browser.session.start', { url }));
     assert.equal(before.observation.title, 'anonymous');
-    await engine.stop(before.sessionId);
 
     const signIn = text(await engine.beginSignIn('access', { url }));
     await engine.pause(signIn.sessionId, 'sign_in');
@@ -40,6 +39,12 @@ test('embedding: operator sign-in publishes a login source that new sessions inh
     assert.equal(title, 'signed in');
     assert.ok(frames.length > 0);
     await stopFrames();
+    // The worker's own session, started before the sign-in, takes it over and reloads: no restart needed.
+    await engine.adoptSignIn(signIn.sessionId, before.sessionId);
+    const adoptedBy = Date.now() + 5000; let adopted = '';
+    while (Date.now() < adoptedBy && adopted !== 'account') { adopted = text(await engine.call('browser.observe', { sessionId: before.sessionId, maxBytes: 2048 })).observation.title; if (adopted !== 'account') await new Promise(r => setTimeout(r, 100)); }
+    assert.equal(adopted, 'account', 'the running worker session is signed in after Done');
+    await engine.stop(before.sessionId);
     const published = await engine.finishSignIn(signIn.sessionId, true);
     assert.match(published.generation, /^[0-9a-f-]{36}$/);
 

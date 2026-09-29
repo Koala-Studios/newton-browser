@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-28
+
+### Added
+
+- Embedding `adoptSignIn`: a running session takes a person's new sign-in and reloads its
+  page, so a worker continues signed in without restarting.
+
+### Fixed
+
+- Browsers starting at the same moment no longer fail with `browser_launch_failed`
+  (`identity_lease`): the profile store lock waits briefly for another process instead of
+  failing at once.
+
 ## [0.7.1] - 2026-09-28
 
 ### Fixed

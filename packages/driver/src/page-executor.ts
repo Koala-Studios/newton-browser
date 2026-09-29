@@ -862,6 +862,29 @@ export class PageExecutor implements EngineExecutor {
     if ((input.type === "mouse" && input.action === "down") || (input.type === "key" && input.action === "down") || input.type === "text") await this.front(page);
     await this.live.operatorInput(this.directory.route(this.directory.binding(page, 1)), input);
   }
+  /** Host-only: this owned browser's cookies, to carry a person's sign-in into another session. Never model-facing. */
+  async signInCookies(): Promise<RecordValue[]> {
+    if (this.closed) throw new EngineError("session_closed");
+    if (!this.connection.ownsBrowser) throw new EngineError("unsupported_capability");
+    return array((await this.connection.wire.send("Storage.getCookies", {})).cookies);
+  }
+  /** Host-only: take cookies from another session (a person's sign-in) and reload the selected page with them. */
+  async adoptSignInCookies(cookies: readonly RecordValue[]): Promise<void> {
+    if (this.closed) throw new EngineError("session_closed");
+    if (!this.connection.ownsBrowser) throw new EngineError("unsupported_capability");
+    const params = cookies.slice(0, 4096).map(cookie => ({
+      name: string(cookie.name), value: string(cookie.value), domain: string(cookie.domain), path: string(cookie.path) || "/",
+      secure: cookie.secure === true, httpOnly: cookie.httpOnly === true,
+      ...(typeof cookie.sameSite === "string" ? { sameSite: cookie.sameSite } : {}),
+      ...(typeof cookie.priority === "string" ? { priority: cookie.priority } : {}),
+      ...(cookie.session !== true && typeof cookie.expires === "number" && cookie.expires > 0 ? { expires: cookie.expires } : {}),
+      ...(cookie.partitionKey && typeof cookie.partitionKey === "object" ? { partitionKey: cookie.partitionKey } : {}),
+    })).filter(cookie => cookie.name && cookie.domain);
+    if (params.length) await this.connection.wire.send("Storage.setCookies", { cookies: params });
+    const page = this.bindPage();
+    await this.front(page);
+    await this.connection.wire.send("Page.reload", {}, this.directory.route(this.directory.binding(page, 1)));
+  }
   /**
    * Chrome paints, screencasts and fully runs only the tab in front. A tab the site opens takes the front while the
    * session may keep working on another page, whose reads then stall and whose live view goes blank.

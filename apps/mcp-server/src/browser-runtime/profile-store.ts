@@ -742,20 +742,34 @@ function describeIdentity(store: ProfileStore, target: string, identity: string)
   return Object.freeze({ ...manifest, path: target });
 }
 
+const STORE_LOCK_WAIT_MS = 3000;
+const STORE_LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+
 function withStoreLock<T>(store: ProfileStore, operation: () => T): T {
   const lock = path.join(store.root, STORE_LOCK);
   const value = JSON.stringify({ version: 1, nonce: nonce(), pid: process.pid, storeNonce: requireStore(store).nonce,
     createdAt: new Date().toISOString(), ...(PID_NAMESPACE === null ? {} : { pidNamespace: PID_NAMESPACE }) });
-  let handle: number;
-  try {
-    handle = fs.openSync(lock, "wx", 0o600);
+  // Other processes (profile copies, other hosts on this store) hold the lock only briefly; wait a little rather than
+  // failing a browser start that merely coincided with another.
+  const deadline = Date.now() + STORE_LOCK_WAIT_MS;
+  for (;;) {
+    let handle: number | undefined;
+    try {
+      handle = fs.openSync(lock, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "EEXIST" || Date.now() >= deadline) fail("profile_store_busy");
+      Atomics.wait(STORE_LOCK_SLEEP, 0, 0, 20);
+      continue;
+    }
     try {
       fs.writeFileSync(handle, value);
-    } finally {
+    } catch {
       fs.closeSync(handle);
+      try { fs.unlinkSync(lock); } catch { /* nothing further to undo */ }
+      fail("profile_store_busy");
     }
-  } catch {
-    fail("profile_store_busy");
+    fs.closeSync(handle);
+    break;
   }
   try {
     return operation();

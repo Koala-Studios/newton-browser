@@ -122,6 +122,8 @@ export class EngineHost {
   events(id: unknown, listener: (event: EngineSessionEvent) => void): () => void { return this.executor(id).subscribeEvents(listener); }
   frames(id: unknown, listener: (frame: EngineFrame) => void | Promise<void>, options: EngineFrameOptions & { pageId?: string } = {}) { return this.executor(id).subscribeFrames(listener, options); }
   /** Operator takeover: model actions fail with operator_control until resume; the page and sign-in state stay. */
+  /** Carry a person's sign-in session's cookies into another running session and reload its page there. */
+  async adoptSignIn(fromId: unknown, toId: unknown): Promise<void> { await this.executor(toId).adoptSignInCookies(await this.executor(fromId).signInCookies()); }
   async pause(id: unknown, reason: string): Promise<void> { await this.session(id).pause(reason); }
   resume(id: unknown): void { this.session(id).resume(); }
   async operatorInput(id: unknown, input: EngineOperatorInput, pageId?: string): Promise<void> {

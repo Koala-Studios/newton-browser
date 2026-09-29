@@ -36,6 +36,8 @@ export type BrowserEngine = Readonly<{
   beginSignIn(sourceId: string, args: unknown, options?: Pick<BrowserSessionOptions, "onEvent">): Promise<BrowserToolResult>;
   /** Done (publish) or cancel. Publishing makes the signed-in state the source's next generation; running sessions keep their copies. */
   finishSignIn(sessionId: string, publish: boolean): Promise<{ generation: string } | undefined>;
+  /** Before publishing a sign-in: give a running session the same signed-in state and reload its page, so it need not restart. */
+  adoptSignIn(signInSessionId: string, sessionId: string): Promise<void>;
   sessions(): readonly { sessionId: string; state: string }[];
   /** Remove session copies left by crashed hosts; pass the PID namespaces of every host still running on this store. */
   collectOrphans(liveNamespaces: readonly string[]): number;
@@ -74,6 +76,7 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
     operatorInput: (sessionId, input, pageId) => host.operatorInput(sessionId, input, pageId),
     beginSignIn: (sourceId, args, sessionOptions = {}) => started(() => host.start(args, { ...sessionOptions, maintenanceOf: sourceId })),
     finishSignIn: (sessionId, publish) => host.finishMaintenance(sessionId, publish),
+    adoptSignIn: (signInSessionId, sessionId) => host.adoptSignIn(signInSessionId, sessionId),
     sessions: () => host.list(),
     collectOrphans: liveNamespaces => collectOrphanedSessionCopies(env, liveNamespaces),
     stop: sessionId => host.stop(sessionId),

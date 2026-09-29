@@ -14,7 +14,7 @@ The default source runtime now uses the replacement shared engine, with isolated
 
 The legacy direct runtime is retired (2026-09-25): the session engine is the only action, receipt and ref authority. Build, typecheck, boundary lint and the full suite pass. Feedback/reading refinements, platform and authenticated task QA, and three unchanged packed release gates remain open. See the [current progress ledger](docs/PROGRESS_LEDGER.md), [remaining roadmap](ROADMAP.md) and [consolidation record](docs/implementation/CONSOLIDATION_2026-09-25.md).
 
-Version 0.7.1 is published as a GitHub prerelease tarball verified on macOS Chrome; Windows and Linux receipts for it remain open. No npm or browser-store release exists.
+Version 0.7.2 is published as a GitHub prerelease tarball verified on macOS Chrome; Windows and Linux receipts for it remain open. No npm or browser-store release exists.
 
 Newton implements only stateless MCP `2026-07-28` over newline-delimited stdio JSON.
 Clients send protocol version and capabilities in every request. Newton exposes no legacy
