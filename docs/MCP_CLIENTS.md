@@ -22,7 +22,7 @@ mcp_2026_07_28 = true
 [mcp_servers.newton-browser]
 command = "node"
 args = ["/absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js"]
-env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.7.2" }
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.7.3" }
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -32,9 +32,18 @@ before atomically replacing the configuration. There is no older-protocol fallba
 
 ## Claude Code
 
+Claude Code sends the stateless `2026-07-28` metadata. Prefer the installer, which verifies the
+candidate and registers it through Claude Code's own CLI:
+
 ```bash
-claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.2 -- node /absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js
+newton-browser install claude-code
 claude mcp list
+```
+
+The equivalent manual entry:
+
+```bash
+claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.3 -- node /absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js
 ```
 
 Point both clients at an installed release package (see `INSTALL.md`), not a source

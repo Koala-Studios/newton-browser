@@ -6,9 +6,9 @@ import path from "node:path";
 
 import { ENGINE_TOOL_CATALOG } from "./engine-mcp.ts";
 
-export type InstallClient = "codex" | "generic";
+export type InstallClient = "codex" | "claude-code" | "generic";
 
-export const INSTALL_CLIENTS: InstallClient[] = ["codex", "generic"];
+export const INSTALL_CLIENTS: InstallClient[] = ["codex", "claude-code", "generic"];
 
 export const SERVER_KEY = "newton-browser";
 
@@ -208,7 +208,17 @@ function exactInvocationFile(value: string, executable: boolean): string {
 
 export type ClientConfigTarget =
   | { kind: "file"; format: "toml"; path: string }
+  | { kind: "client_command"; program: string; scope: "user"; entry: string }
   | { kind: "manual"; command: string };
+
+/** Runs the client's own CLI; injectable so the install is testable without the client. */
+export type ClientCommandRunner = (program: string, args: string[]) => { status: number | null; stdout: string; stderr: string };
+
+const runClientCommand: ClientCommandRunner = (program, args) => {
+  const result = spawnSync(program, args, { encoding: "utf8", windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 });
+  if (result.error) throw new Error("client_cli_unavailable");
+  return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+};
 
 // Codex has one known local config path. Generic clients receive an exact entry without
 // any guess about where or how their configuration is stored.
@@ -222,6 +232,9 @@ export function clientConfigTarget(
   switch (client) {
     case "codex":
       return { kind: "file", format: "toml", path: path.join(home, ".codex", "config.toml") };
+    // Claude Code keeps user servers in a large state file of its own; its CLI is the supported way to change it.
+    case "claude-code":
+      return { kind: "client_command", program: "claude", scope: "user", entry: renderGenericConfig(invocation, false) };
     case "generic":
       return { kind: "manual", command: `Add this server entry to your client:\n${renderGenericConfig(invocation)}` };
     default:
@@ -240,6 +253,8 @@ export type InstallPlan = {
   nextContent?: string;
   entryExists: boolean;
   manualCommand?: string;
+  /** The client CLI call that registers the server (Claude Code). */
+  clientCommand?: string[];
   message: string;
 };
 
@@ -252,10 +267,25 @@ export function planClientInstall(input: {
   platform?: NodeJS.Platform;
   force?: boolean;
   invocation?: ServerInvocation;
+  /** Claude Code only: whether `claude mcp get` already finds the server. */
+  claudeEntryExists?: boolean;
 }): InstallPlan {
   const env = input.env ?? process.env;
   const invocation = input.invocation ?? serverInvocation();
   const target = clientConfigTarget(input.client, env, input.platform ?? process.platform, invocation);
+  if (target.kind === "client_command") {
+    const entryExists = Boolean(input.claudeEntryExists);
+    const command = claudeAddArgs(target);
+    return {
+      client: input.client,
+      action: entryExists && !input.force ? "conflict" : entryExists ? "update" : "create",
+      entryExists,
+      clientCommand: [target.program, ...command],
+      message: entryExists && !input.force
+        ? `Claude Code already has a user-scope "${SERVER_KEY}" server. Re-run with --force to replace it.`
+        : `${entryExists ? "Replaced" : "Added"} the user-scope "${SERVER_KEY}" server in Claude Code.`,
+    };
+  }
   if (target.kind === "manual") {
     return {
       client: input.client,
@@ -296,10 +326,12 @@ export function runInstall(input: {
   dryRun?: boolean;
   invocation?: ServerInvocation;
   verifyCandidate?: (invocation: ServerInvocation) => CodexCandidateReceipt;
+  runClient?: ClientCommandRunner;
 }): InstallResult {
   const env = input.env ?? process.env;
   const invocation = input.invocation ?? serverInvocation();
   const target = clientConfigTarget(input.client, env, input.platform ?? process.platform, invocation);
+  if (target.kind === "client_command") return runClaudeInstall({ ...input, env, invocation }, target, input.runClient ?? runClientCommand);
   if (target.kind === "manual") {
     const plan = planClientInstall({ ...input, env });
     return { ...plan, wrote: false };
@@ -454,12 +486,38 @@ function replaceTomlTable(body: string, header: string, block: string): string {
   return `${parts.join("\n\n")}\n`;
 }
 
-function renderGenericConfig(invocation: ServerInvocation): string {
+function renderGenericConfig(invocation: ServerInvocation, pretty = true): string {
   return JSON.stringify({
+    type: "stdio",
     command: invocation.command,
     args: invocation.args,
     env: { NEWTON_BROWSER_EXPECTED_VERSION: invocation.version },
-  }, null, 2);
+  }, null, pretty ? 2 : undefined);
+}
+
+function claudeAddArgs(target: Extract<ClientConfigTarget, { kind: "client_command" }>): string[] {
+  return ["mcp", "add-json", SERVER_KEY, target.entry, "--scope", target.scope];
+}
+
+// Registers through Claude Code's own CLI after the same modern-protocol probe Codex gets; Claude Code sends 2026-07-28 metadata.
+function runClaudeInstall(
+  input: { client: InstallClient; env: NodeJS.ProcessEnv; force?: boolean; dryRun?: boolean; invocation: ServerInvocation;
+    verifyCandidate?: (invocation: ServerInvocation) => CodexCandidateReceipt },
+  target: Extract<ClientConfigTarget, { kind: "client_command" }>,
+  runClient: ClientCommandRunner,
+): InstallResult {
+  const existing = runClient(target.program, ["mcp", "get", SERVER_KEY]);
+  const plan = planClientInstall({ client: input.client, env: input.env, invocation: input.invocation,
+    ...(input.force === undefined ? {} : { force: input.force }), claudeEntryExists: existing.status === 0 });
+  if (input.dryRun || plan.action === "conflict") return { ...plan, wrote: false };
+  const compatibility = (input.verifyCandidate ?? verifyCodexCandidate)(input.invocation);
+  if (plan.entryExists) {
+    const removed = runClient(target.program, ["mcp", "remove", SERVER_KEY, "--scope", target.scope]);
+    if (removed.status !== 0) throw new Error("claude_code_config_write_failed");
+  }
+  const added = runClient(target.program, claudeAddArgs(target));
+  if (added.status !== 0) throw new Error("claude_code_config_write_failed");
+  return { ...plan, wrote: true, candidateVersion: compatibility.version, compatibilityVerified: true };
 }
 
 function enableModernCodexFeature(body: string): string {

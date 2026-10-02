@@ -204,7 +204,7 @@ function utilityHelp(): string {
     "  newton-browser identity --help",
     "",
     "MCP client setup:",
-    "  newton-browser install <codex|generic> [--dry-run] [--force]",
+    "  newton-browser install <codex|claude-code|generic> [--dry-run] [--force]",
     "",
     "Diagnostics:",
     "  newton-browser doctor [--live]",
@@ -252,6 +252,10 @@ function identityImportBrowserFamily(args: readonly string[]): "chrome" | "edge"
   return value === "chrome" || value === "edge" ? value : null;
 }
 
+function shellQuote(value: string): string {
+  return /^[A-Za-z0-9_./:=-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function runInstallCommand(args: string[]): string {
   const client = args[0] as InstallClient | undefined;
   if (!client || !INSTALL_CLIENTS.includes(client)) {
@@ -271,6 +275,10 @@ function runInstallCommand(args: string[]): string {
   }
   if (result.action === "conflict") {
     lines.push(result.message);
+    return lines.join("\n");
+  }
+  if (dryRun && result.clientCommand) {
+    lines.push(`Dry run - nothing changed. Planned: ${result.message}`, "", result.clientCommand.map(shellQuote).join(" "));
     return lines.join("\n");
   }
   if (dryRun) {

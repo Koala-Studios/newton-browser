@@ -3144,3 +3144,23 @@ Real Chrome header/hidden exclusion regression passes. Fresh same-site wait comp
 the bounded read or hidden-frame owner coverage. Navigation feedback on that flow
 still returns zero controls during destination load; generation refresh alone is not
 a complete feedback-loop fix.
+# Existing-browser add-on stayed asleep while Chrome ran — fixed in 0.7.3
+
+Observed 2026-09-29 and 2026-10-01 on macOS Chrome: adapter status reported
+adapter_unavailable while Chrome was open; opening and closing any tab made it ready.
+Root cause: the MV3 worker registered no runtime.onStartup listener and no listener for
+ordinary browsing, so Chrome did not start it at launch, and a worker that lost its
+native port idled out until a tab was created or removed. The worker now listens to
+runtime.onStartup, runtime.onInstalled, tabs.onActivated and tabs.onUpdated; the manifest
+is unchanged, so adapter update applies it. Regression: tab-adapter-response "adapter
+worker starts with the browser and on tab activity". Applied with adapter update on the
+operator's Chrome 2026-10-02 (state updated, then ready). A live check of Chrome stopping
+the idle worker and the next tab switch reconnecting it remains to record.
+# Claude Code had no installer target — added in 0.7.3
+
+Claude Code configuration was manual. install claude-code verifies the candidate over
+stateless 2026-07-28 discovery, then registers a user-scope entry through claude mcp
+add-json (conflict without --force, remove then add with it). Regression: install.test
+"Claude Code install registers one user-scope server". Applied on macOS 2026-10-02;
+claude mcp get reported the 0.7.3 server connected, and current Claude Code connects to
+the stateless server without a shim.

@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-02
+
+### Added
+
+- `newton-browser install claude-code` verifies the exact candidate over stateless MCP
+  `2026-07-28`, then registers a user-scope server through `claude mcp add-json`
+  (`--force` replaces an existing entry).
+
+### Fixed
+
+- The existing-browser add-on starts with Chrome and on any tab switch or page load, so its
+  native connection comes back on its own instead of reporting `adapter_unavailable` until a
+  tab opened or closed. Its manifest is unchanged, so `adapter update` applies it.
+
 ## [0.7.2] - 2026-09-28
 
 ### Added

@@ -12,14 +12,14 @@ test('actual adapter worker returns an oversized-response error and retains the 
   const pending=new Map(),assembly=new NativeAssembly();
   const listener={addListener(){}};
   const chrome={
-    runtime:{id:'a'.repeat(32),getURL:file=>'chrome-extension://'+'a'.repeat(32)+'/'+file,reload(){},onMessage:listener,
+    runtime:{id:'a'.repeat(32),getURL:file=>'chrome-extension://'+'a'.repeat(32)+'/'+file,reload(){},onMessage:listener,onStartup:listener,onInstalled:listener,
       connectNative:name=>{assert.equal(name,'newton.browser.'+'a'.repeat(32));return {onMessage:{addListener(fn){receive=fn;}},onDisconnect:listener,postMessage(packet){
         const result=assembly.accept(packet)?.value;if(result?.payload?.type!=='response')return;
         const resolve=pending.get(result.payload.id);pending.delete(result.payload.id);resolve?.(result.payload);
       }};}},
     debugger:{attach:async()=>{},detach:async()=>{detached++;},onEvent:listener,onDetach:listener,
       sendCommand:async(_target,method)=>method==='Accessibility.getFullAXTree'?{nodes:[{name:{value:'x'.repeat(5*1024*1024)}}]}:{root:{nodeId:1}}},
-    tabs:{query:async()=>[],onCreated:listener,onRemoved:listener},
+    tabs:{query:async()=>[],onCreated:listener,onRemoved:listener,onActivated:listener,onUpdated:listener},
     webNavigation:{onCreatedNavigationTarget:listener},
   };
   vm.runInNewContext(bundled.outputFiles[0].text,{chrome,crypto:webcrypto,fetch:async()=>({arrayBuffer:async()=>new ArrayBuffer(0)}),URL,TextEncoder,TextDecoder,performance,setTimeout,clearTimeout});
@@ -32,4 +32,21 @@ test('actual adapter worker returns an oversized-response error and retains the 
   const following=await request('command',{token:claim.result,method:'DOM.getDocument',params:{depth:0}});
   assert.equal(following.result.root.nodeId,1);assert.equal(detached,0);
   await request('release',{token:claim.result});assert.equal(detached,1);assert.equal(pending.size,0);
+});
+
+// Chrome runs the worker only for events it listens to, so it must listen at browser launch and on ordinary browsing.
+test('adapter worker starts with the browser and on tab activity so its native connection comes back on its own',{timeout:5000},async()=>{
+  const bundled=await build({entryPoints:[fileURLToPath(new URL('../apps/tab-adapter/src/worker.ts',import.meta.url))],bundle:true,write:false,platform:'browser',format:'iife',logLevel:'silent'});
+  const registered=new Set();let connections=0;
+  const listen=name=>({addListener(){registered.add(name);}});const listener={addListener(){}};
+  const chrome={
+    runtime:{id:'a'.repeat(32),getURL:file=>'chrome-extension://'+'a'.repeat(32)+'/'+file,reload(){},onMessage:listener,onStartup:listen('startup'),onInstalled:listen('installed'),
+      connectNative:()=>{connections++;return {onMessage:listener,onDisconnect:listener,postMessage(){}};}},
+    debugger:{attach:async()=>{},detach:async()=>{},onEvent:listener,onDetach:listener,sendCommand:async()=>({})},
+    tabs:{query:async()=>[],onCreated:listener,onRemoved:listener,onActivated:listen('activated'),onUpdated:listen('updated')},
+    webNavigation:{onCreatedNavigationTarget:listener},
+  };
+  vm.runInNewContext(bundled.outputFiles[0].text,{chrome,crypto:webcrypto,fetch:async()=>({arrayBuffer:async()=>new ArrayBuffer(0)}),URL,TextEncoder,TextDecoder,performance,setTimeout,clearTimeout});
+  assert.deepEqual([...registered].sort(),['activated','installed','startup','updated']);
+  assert.equal(connections,1);
 });

@@ -196,3 +196,40 @@ function escapeRegex(value: string): string {
 function serializedString(value: string): string {
   return JSON.stringify(value).slice(1, -1);
 }
+
+test("Claude Code install registers one user-scope server through its own CLI after the protocol probe", () => {
+  const calls: string[][] = [];
+  let registered = false;
+  const runClient = (program: string, args: string[]) => {
+    calls.push([program, ...args]);
+    if (args[1] === "get") return { status: registered ? 0 : 1, stdout: "", stderr: "" };
+    if (args[1] === "add-json") registered = true;
+    if (args[1] === "remove") registered = false;
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  const dryRun = runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, verifyCandidate: VERIFIED, runClient, dryRun: true });
+  assert.equal(dryRun.wrote, false);
+  assert.equal(dryRun.action, "create");
+  assert.deepEqual(calls.map((call) => call[2]), ["get"]);
+
+  const created = runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, verifyCandidate: VERIFIED, runClient });
+  assert.equal(created.wrote, true);
+  assert.equal(created.compatibilityVerified, true);
+  const add = calls.find((call) => call[2] === "add-json")!;
+  assert.deepEqual([add[0], add[3], add[5], add[6]], ["claude", "newton-browser", "--scope", "user"]);
+  assert.deepEqual(JSON.parse(add[4]!), { type: "stdio", command: INVOCATION.command, args: INVOCATION.args,
+    env: { NEWTON_BROWSER_EXPECTED_VERSION: INVOCATION.version } });
+
+  calls.length = 0;
+  const conflict = runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, verifyCandidate: VERIFIED, runClient });
+  assert.equal(conflict.action, "conflict");
+  assert.equal(conflict.wrote, false);
+  assert.deepEqual(calls.map((call) => call[2]), ["get"]);
+
+  const replaced = runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, verifyCandidate: VERIFIED, runClient, force: true });
+  assert.equal(replaced.action, "update");
+  assert.deepEqual(calls.map((call) => call[2]), ["get", "get", "remove", "add-json"]);
+
+  assert.throws(() => runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, runClient: () => ({ status: 1, stdout: "", stderr: "" }),
+    verifyCandidate: () => { throw new Error("codex_mcp_candidate_incompatible"); } }), /candidate_incompatible/u);
+});

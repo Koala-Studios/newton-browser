@@ -12,9 +12,9 @@ newton-browser doctor --live
 Register the compiled entrypoint with the client, then restart it:
 
 - Codex: `newton-browser install codex` (verifies the exact build before editing `config.toml`).
-- Claude Code: `claude mcp add --scope user newton-browser -- node /absolute/path/apps/mcp-server/dist/index.js`, then `claude mcp list` shows it connected.
+- Claude Code: `newton-browser install claude-code` (verifies the exact build, then registers a user-scope server through `claude mcp add-json`; `--force` replaces an existing entry). `claude mcp list` then shows it connected.
 
-For the operator's own Chrome, run `newton-browser adapter prepare` and `newton-browser adapter setup`. The operator then opens `chrome://extensions`, turns on Developer mode, chooses Load unpacked and selects the printed folder (macOS: `~/Library/Application Support/NewtonBrowser/tab-adapter`). `newton-browser adapter status` reports `ready` while Chrome runs.
+For the operator's own Chrome, run `newton-browser adapter prepare` and `newton-browser adapter setup`. The operator then opens `chrome://extensions`, turns on Developer mode, chooses Load unpacked and selects the printed folder (macOS: `~/Library/Application Support/NewtonBrowser/tab-adapter`). `newton-browser adapter status` reports `ready` while Chrome runs. The add-on starts with Chrome and reconnects on the next tab switch or page load after Chrome idles it; `not_ready` that lasts through browsing means the native host is missing, so rerun `adapter setup`. An add-on loaded before 0.7.3 gains this with `newton-browser adapter update`.
 
 Sign-in for later sessions is an operator step:
 

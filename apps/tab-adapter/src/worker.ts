@@ -9,12 +9,15 @@ interface NativePort {
 }
 declare const chrome: {
   runtime: { connectNative(name: string): NativePort; getURL(file: string): string; reload(): void; lastError?: unknown;
+    onStartup: { addListener(fn: () => void): void }; onInstalled: { addListener(fn: () => void): void };
     onMessage: { addListener(fn: (message: unknown, sender: { id?: string; url?: string }, reply: (value: unknown) => void) => boolean): void }; id: string };
   debugger: DebuggerApi & { onEvent: { addListener(fn: (source: { tabId?: number; sessionId?: string }, method: string, params: Record<string, unknown>) => void): void };
     onDetach: { addListener(fn: (source: { tabId?: number }) => void): void } };
-  tabs: UpdateTabs & { query(query: Record<string, unknown>): Promise<{ id?: number; url?: string; title?: string }[]> };
+  tabs: UpdateTabs & { query(query: Record<string, unknown>): Promise<{ id?: number; url?: string; title?: string }[]>;
+    onActivated: { addListener(fn: () => void): void }; onUpdated: { addListener(fn: () => void): void } };
   webNavigation:{onCreatedNavigationTarget:{addListener(fn:(details:{tabId:number;sourceTabId:number})=>void):void}};
 };
+
 const epoch = crypto.randomUUID();
 const authority = new TabClaims(chrome.debugger, epoch);
 const updateBinding=new UpdateBinding(chrome.tabs,chrome.runtime.getURL('update.html'));
@@ -96,6 +99,13 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(details=>{
     post({connectionId,payload:{type:'event',token:claim.opener,event:{method:'Newton.pageCreated',params:{token:claim.token},sessionId:null}}});
   }).catch(()=>{/* Closed, already owned or unattachable popups never grant a claim. */});
 });
+// Chrome starts this worker only for an event it listens to. Browser launch and install start it, and so does any tab
+// switch or page load, so a worker Chrome stopped (or one whose native port dropped and idled out) comes back with a
+// fresh connection on ordinary browsing instead of waiting for a tab to open or close. The manifest stays unchanged.
+chrome.runtime.onStartup.addListener(() => undefined);
+chrome.runtime.onInstalled.addListener(() => undefined);
+chrome.tabs.onActivated.addListener(() => undefined);
+chrome.tabs.onUpdated.addListener(() => undefined);
 // Setup page exposes status/reload only. It is never an alternate browser command channel.
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("setup.html"))) return false;
