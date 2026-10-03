@@ -90,6 +90,7 @@ test("builds a private pipe launch with an exact blank profile and no debug port
   assert.equal(args.some((arg) => arg.startsWith("--proxy-")), false);
   assert.equal(args.some((arg) => arg.startsWith("--remote-debugging-port")), false);
   assert.ok(args.includes("--no-startup-window"));
+  assert.ok(args.includes("--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2"));
   assert.equal(args.includes("about:blank"), false);
   assert.equal(args.includes("--edge-skip-compat-layer-relaunch"), false);
   assert.ok(chromiumLaunchArgs({

@@ -19,6 +19,10 @@ const SAFE_CHROMIUM_ARGS = [
   "--no-default-browser-check",
   "--profile-directory=Default",
   "--no-startup-window",
+  // Owned browsers present as a desktop with a mouse. A host with no pointing device (a
+  // Linux container) otherwise reports pointer:none and hover:none, and sites switch
+  // hover menus to click-only, so hover actions there would do nothing.
+  "--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2",
 ] as const;
 
 export type ChromiumLaunchPhase =

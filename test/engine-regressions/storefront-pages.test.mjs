@@ -16,23 +16,24 @@ function storeMarkup(port) {
   body { margin: 0; font: 16px sans-serif; }
   header { height: 80px; display: flex; gap: 24px; align-items: center; padding: 0 24px; }
   details { position: relative; } .panel { position: absolute; top: 32px; left: 0; width: 300px; background: #eee; padding: 12px; }
-  #slide { position: absolute; top: 400px; left: 600px; width: 200px; height: 120px; }
+  #slide { position: absolute; top: 400px; left: 600px; width: 200px; height: 120px; font: 48px monospace; }
   #signup { display: none; position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,.4); }
   #signup.open { display: block; }
   #sync { width: 0; height: 0; border: 0; position: absolute; }
 </style></head><body>
 <header><details id="menu"><summary>Energy Balls</summary><div class="panel"><a href="/cookie">Cookie Dough</a></div></details><a href="/about">About</a></header>
-<main><h1>Storefront fixture</h1><button id="buy" style="position:absolute;top:200px;left:40px;width:160px;height:40px">Add to cart</button><button id="offer">Show offer</button><p id="log">none</p>
+<main><h1>Storefront fixture</h1><button id="buy" style="position:absolute;top:200px;left:40px;width:160px;height:40px">Add to cart</button><button id="offer">Show offer</button><p id="log">none</p><p id="media"></p>
 <x-reviews></x-reviews><div id="slide"></div></main>
 <iframe id="sync" title="sync" src="http://localhost:${port}/frame"></iframe>
 <div id="signup"><form aria-label="Mystery offer"><p>Mystery offer</p><button type="button">No thanks</button></form></div>
 <script>
+  document.getElementById('media').textContent = 'pointer-fine:' + matchMedia('(pointer: fine)').matches + ' hover:' + matchMedia('(hover: hover)').matches;
   const menu = document.getElementById('menu');
   menu.addEventListener('mouseenter', () => { menu.open = true; document.getElementById('log').textContent = 'menu:open'; });
   document.getElementById('buy').addEventListener('click', () => { document.getElementById('log').textContent = 'buy:clicked'; });
   document.getElementById('offer').addEventListener('click', () => document.getElementById('signup').classList.add('open'));
   customElements.define('x-reviews', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'closed' }).innerHTML = '<p>Closed widget review text</p><slot></slot>'; } });
-  let hue = 0; setInterval(() => { document.getElementById('slide').style.background = 'hsl(' + (hue = (hue + 40) % 360) + ' 80% 50%)'; }, 50);
+  let frame = 0; setInterval(() => { const slide = document.getElementById('slide'); slide.textContent = String(++frame); slide.style.background = 'hsl(' + (frame * 7 % 360) + ' 80% 50%)'; }, 50);
   // Cross-site frames that attach and are removed at once, as storefront apps do while loading.
   let churn = 0;
   const timer = setInterval(() => {
@@ -135,6 +136,8 @@ test('coordinates stay valid while animation runs elsewhere, and go stale where 
 test('document reads include closed shadow roots', async () => {
   await withStore(async ({ engine }) => {
     const read = await engine.observe({ mode: 'document', maxBytes: 16384 });
+    // Hover menus need a fine pointer; a host without a mouse (a Linux container) must still report one.
+    assert.match(read.text, /pointer-fine:true hover:true/);
     assert.match(read.text, /Closed widget review text/);
     assert.equal(read.complete, true);
   });

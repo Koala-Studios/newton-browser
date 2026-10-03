@@ -3224,3 +3224,12 @@ closed root. Pages without closed roots pay one search (measured 23-154 ms total
 Wikipedia, Amazon, GitHub, YouTube and the storefront). A closed root holding only text, with no
 element child, is not detected. Regression: storefront-pages "document reads include
 closed shadow roots" (fails on 0.7.4).
+# Hover opened nothing in a Linux runner — fixed in 0.7.6
+
+Observed 2026-10-03 in an embedding's Linux container on 0.7.5: hover on a storefront's
+header menu acknowledged and left it closed, while the same command opened it on macOS.
+The theme opens the menu on hover only when `(pointer: fine)` matches; the container's
+headless Chrome has no pointing device and reported `pointer: none` and `hover: none`, so
+the site made the menu click-only. Owned launches now pass Blink pointer and hover types
+for a mouse. Regression: chromium-process launch args, and storefront-pages asserts the
+page sees a fine pointer with hover (meaningful on hosts without a mouse).
