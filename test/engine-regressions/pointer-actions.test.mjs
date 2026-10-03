@@ -124,7 +124,8 @@ test('covered targets refuse before pointer down', async () => {
     const receipt = await submit(engine, 1, { kind: 'click', target: { kind: 'selector', selector: '#covered-target' }, button: 'left', clickCount: 1 });
     const after = await readFixture(engine);
     const failures = [];
-    collect(failures, 'covered target refusal code', () => assert.equal(receipt.errorCode, 'target_moved', receiptSummary(receipt)));
+    collect(failures, 'covered target refusal code', () => assert.equal(receipt.errorCode, 'target_covered', receiptSummary(receipt)));
+    collect(failures, 'covered target names the cover', () => assert.equal(receipt.steps[0]?.coveredBy, 'div#cover', receiptSummary(receipt)));
     collect(failures, 'covered target refusal dispatch', () => assert.equal(receipt.dispatch, 'not_started', receiptSummary(receipt)));
     collect(failures, 'covered target no click effect', () => assert.doesNotMatch(`${before}|${after}`, /covered:click/));
     assert.equal(failures.length, 0, failures.join('\n'));

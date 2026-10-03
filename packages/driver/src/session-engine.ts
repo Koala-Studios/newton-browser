@@ -168,7 +168,8 @@ export class SessionEngine {
           if (postcondition.state !== "met" && postcondition.state !== "not_requested") { stoppedAt = index; break; }
         } catch (error) {
           failure = context.cancellation ?? engineErrorCode(error);
-          steps.push({ index, dispatch: context.since(mark), postcondition: { state: "unknown", kind: postconditionKind(actions[index]!) }, errorCode: failure });
+          const coveredBy = failure === "target_covered" && error instanceof EngineError && error.detail ? { coveredBy: error.detail } : {};
+          steps.push({ index, dispatch: context.since(mark), postcondition: { state: "unknown", kind: postconditionKind(actions[index]!) }, errorCode: failure, ...coveredBy });
           break;
         }
       }
@@ -222,7 +223,7 @@ export class SessionEngine {
       : item.mode === 'records' && this.executor.readRecords ? this.executor.readRecords(item.context,page,budget,item.recordShape??'controls',item.scope)
       : this.executor.observe(item.context, page, budget, item.mode === "records", item.scope, item.query);
     }).then(value => { observation = item.mode === "records" ? this.records(value, item.page, item.maxBytes, item.previousSnapshotId, item.scope,item.recordShape) : value; }).catch(error => {
-      observation = { state: "unavailable", errorCode: engineErrorCode(error) };
+      observation = { state: "unavailable", errorCode: engineErrorCode(error), ...(error instanceof EngineError && error.detail && error.code !== "target_covered" ? { detail: error.detail } : {}) };
     });
     await this.reconcile(execution, item.context, () => undefined, item.page);
     item.complete(item.context.cancellation ? { state: "unavailable", errorCode: item.context.cancellation } : observation);

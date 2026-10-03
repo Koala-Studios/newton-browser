@@ -1,7 +1,7 @@
 export const ENGINE_ERRORS = [
   "invalid_arguments", "command_id_conflict", "command_expired", "command_sequence_gap",
   "queue_full", "session_closed", "session_quarantined", "cancelled", "timed_out",
-  "not_found", "ambiguous", "search_incomplete", "stale_target", "target_moved", "target_not_editable",
+  "not_found", "ambiguous", "search_incomplete", "stale_target", "target_moved", "target_covered", "target_not_editable",
   "sensitive_target", "evidence_unavailable", "input_failed", "read_failed",
   "navigation_failed", "connection_lost", "cleanup_uncertain", "unsupported_capability",
   "output_budget", "work_limit", "unknown_command", "unknown_page", "cursor_expired",
@@ -14,7 +14,9 @@ export class EngineError extends Error {
   readonly code: EngineErrorCode;
   /** Where a multi-step operation failed, for example a browser launch phase. */
   readonly phase: string | undefined;
-  constructor(code: EngineErrorCode, phase?: string) { super(code); this.name = "EngineError"; this.code = code; this.phase = phase; }
+  /** Bounded page-derived context, for example what covers a target. Untrusted page content. */
+  readonly detail: string | undefined;
+  constructor(code: EngineErrorCode, phase?: string, detail?: string) { super(code); this.name = "EngineError"; this.code = code; this.phase = phase; this.detail = detail; }
 }
 export function engineErrorCode(error: unknown): EngineErrorCode {
   return error instanceof EngineError ? error.code : "evidence_unavailable";
@@ -58,6 +60,8 @@ export type EngineCommand = Readonly<{
 export type EnginePageStamp = Readonly<{ pageId: string; frameId: string; documentGeneration: number }>;
 export type EngineStepReceipt = Readonly<{
   index: number; dispatch: EngineDispatch; postcondition: EnginePostcondition; errorCode?: EngineErrorCode;
+  /** With target_covered: the page element over the target (untrusted page content). */
+  coveredBy?: string;
 }>;
 export type EngineFieldView = Readonly<{
   ref: string; recordId?: string; role: string; name: string; value?: string; readonly?: boolean; disabled?: boolean;
@@ -91,7 +95,7 @@ export type EngineObservationDelta = Readonly<{
 }>;
 export type EngineObservation =
   | Readonly<{ state: "none" }>
-  | Readonly<{ state: "unavailable"; errorCode: EngineErrorCode }>
+  | Readonly<{ state: "unavailable"; errorCode: EngineErrorCode; /** Which condition failed and whether a retry can help. */ detail?: string }>
   | Readonly<{ state: "available" | "incomplete"; trust: "untrusted_page_content";
       scope: "target" | "page" | "document" | "dialog"; snapshotId?: string; expiredSnapshots?: readonly string[];
       page?: EnginePageStamp; incompleteReason?: "output_limit" | "work_limit" | "rendered_subset" | "evidence_unavailable";
@@ -122,7 +126,7 @@ export const ENGINE_LIMITS = Object.freeze({
   batchSteps: 32, defaultTimeoutMs: 10_000, maxTimeoutMs: 120_000,
   defaultOutputBytes: 8192, maxOutputBytes: 65536, maxInputPrimitives: 256,
   // Image blocks carry base64 pixels rather than model-readable text.
-  defaultScreenshotBytes: 2 * 1024 * 1024, maxScreenshotBytes: 4 * 1024 * 1024,
+  defaultScreenshotBytes: 4 * 1024 * 1024, maxScreenshotBytes: 4 * 1024 * 1024,
 });
 
 export function exactObject(value: unknown, keys: readonly string[]): Record<string, unknown> {

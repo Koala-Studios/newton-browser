@@ -29,7 +29,7 @@ test('screenshot image allowance delivers images above the text ceiling and enfo
   const call=args=>handleEngineMcp(host,{id:1,method:'tools/call',params:{name:'browser.screenshot',arguments:{sessionId:'s',...args}}},context);
   const result=await call({});
   assert.equal(result.result.content.find(block=>block.type==='image').data,imageData);
-  assert.equal(calls[0].maxBytes,2*1024*1024);
+  assert.equal(calls[0].maxBytes,4*1024*1024);
   const limited=await call({maxBytes:65536});
   assert.ok(limited.error||limited.result.isError,'final encoder must not exceed a caller budget');
   const before=calls.length;

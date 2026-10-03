@@ -8,6 +8,7 @@
 - `configured_browser_unavailable` or `browser_launch_failed`: verify Node 24+ and a current Chrome or Edge; `setup --browser chrome|edge` chooses between installed families; `NEWTON_BROWSER_BROWSER_EXECUTABLE` names one exactly. Then run `doctor --live`. A launch failure reports its `phase`.
 - `invalid_arguments`: the error names the `field` and what it `expected`; fix that field and resend with the same `nextCommandId`.
 - `stale_target`, `target_moved`, `ambiguous`, `not_found`: observe again and use a fresh narrower ref. Never synthesize refs.
+- `target_covered`: another element (the step's `coveredBy`, often a popup) covers the target. Dismiss it, then retry.
 - A receipt that may have reached the page without a finished result: do not repeat it. Keep the session, observe, and check the site before acting again; `browser.command` gets or cancels a running command.
 - `pageRestarted` on a receipt: the page hung and was reopened at its last address on the same sign-in. Observe before continuing.
 - A popup or sign-in tab: it is a session page. `browser.pages.list` shows it and `browser.page.select` moves to it; never click browser chrome by coordinates.

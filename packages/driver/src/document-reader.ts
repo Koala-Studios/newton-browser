@@ -34,7 +34,18 @@ export const FRAME_SCOPE_FUNCTION=String.raw`function(owner,useThis=true,preferM
   return node?null:true;
 }`;
 
-export const DOCUMENT_READ_FUNCTION = String.raw`function(maxChars,maxNodes,useThis=false,includeLinks=true,preferMain=true,matchText=null) {
+/** Counts the top-level children of open shadow roots page JS can reach from this document. */
+export const OPEN_SHADOW_CHILDREN_FUNCTION = String.raw`function(maxNodes){
+  let count=0,visited=0;const roots=[document];
+  while(roots.length){
+    for(const element of roots.pop().querySelectorAll('*')){
+      if(++visited>maxNodes)return -1;
+      if(element.shadowRoot){count+=element.shadowRoot.children.length;roots.push(element.shadowRoot);}
+    }
+  }
+  return count;
+}`;
+export const DOCUMENT_READ_FUNCTION = String.raw`function(maxChars,maxNodes,useThis=false,includeLinks=true,preferMain=true,matchText=null,closed=null) {
   const parent=node=>node.assignedSlot||node.parentElement||node.parentNode?.host||null;
   const unrendered=node=>!node.assignedSlot&&(!!node.parentElement?.shadowRoot||(node.parentElement?.tagName==='SLOT'&&node.parentElement.assignedNodes().length>0));
   const doc=this?.ownerDocument||(this?.nodeType===9?this:document);
@@ -100,7 +111,9 @@ export const DOCUMENT_READ_FUNCTION = String.raw`function(maxChars,maxNodes,useT
     // Bound queued traversal as well as visited nodes on exceptionally wide DOMs.
     // Follow rendered open-shadow content; light children enter only through slots.
     // Unflattened assignment keeps nested slots in the bounded traversal itself.
-    let children=node.shadowRoot?node.shadowRoot.childNodes:node.childNodes;
+    // Closed roots page JS cannot see arrive natively resolved in closed (host → root).
+    const shadow=node.shadowRoot||closed&&closed.get(node);
+    let children=shadow?shadow.childNodes:node.childNodes;
     if(tag==='SLOT'){
       const assigned=node.assignedNodes();
       if(assigned.length)children=assigned;

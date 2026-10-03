@@ -5,7 +5,7 @@ import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
 import { TargetResolver } from "./target-resolver.ts";
 import { NativeInput } from "./native-input.ts";
-import { DOCUMENT_READ_FUNCTION, FRAME_SCOPE_FUNCTION, documentChunk, boundDocumentUtf8 } from "./document-reader.ts";
+import { OPEN_SHADOW_CHILDREN_FUNCTION, DOCUMENT_READ_FUNCTION, FRAME_SCOPE_FUNCTION, documentChunk, boundDocumentUtf8 } from "./document-reader.ts";
 import { readAXControls } from "./control-reader.ts";
 import { readAXSnapshot } from "./ax-snapshot.ts";
 import { readStructuredRecords } from './structured-reader.ts';
@@ -16,7 +16,7 @@ import {nativeSelectionCommands,EDIT_SELECTION_READ} from './native-edit-selecti
 import type {EngineEdit} from '@newton-browser/core';
 import type {TargetResolverFacts} from './target-resolver.ts';
 import type {EngineRecordShape,EngineFieldView} from '@newton-browser/core';
-import { maskCapturedPng, MAX_RASTER_PIXELS } from "./raster-mask.ts";
+import { maskCapturedPng, MAX_RASTER_PIXELS, pngTileDigests, sameTilesNear, type TileDigests } from "./raster-mask.ts";
 import {nativeSensitiveRegions} from './native-sensitive-regions.ts';
 import type { EngineExecutor } from "./session-engine.ts";
 import { SessionDiagnostics, type ConsoleEntry, type DiagnosticKind } from "./session-diagnostics.ts";
@@ -47,9 +47,23 @@ type CaptureRecord = Readonly<{
   clip: { x: number; y: number; width: number; height: number };
   spatial: CaptureSpatialState;
   regions: readonly { x: number; y: number; width: number; height: number }[];
-  maskedDigest: string;
+  tiles: TileDigests;
 }>;
 
+// Names what sits over a target: the nearest dialog or form around the hit element, else the
+// element itself, as tag, id, role and a short label. Bounded, untrusted page content.
+const DESCRIBE_COVER = `function(node){
+  const box=node.closest&&node.closest('dialog,[role=dialog],[role=alertdialog],[aria-modal=true],form')||node;
+  const tag=String(box.localName||'element'),id=box.id?'#'+String(box.id).slice(0,40):'',role=box.getAttribute&&box.getAttribute('role');
+  const label=(box.getAttribute&&(box.getAttribute('aria-label')||box.getAttribute('title'))||String(box.innerText||box.textContent||'')).replace(/\\s+/g,' ').trim().slice(0,80);
+  return (tag+id+(role?'[role='+role+']':'')+(label?' "'+label+'"':'')).slice(0,160);
+}`;
+// CSS pixels around a click_at/move point that must look as captured.
+const CAPTURE_POINT_RADIUS = 24;
+// Frames must be still this long before a screenshot proves its masks.
+const FRAME_QUIET_MS = 300;
+// Shadow-root children fetched natively per read to find closed roots.
+const CLOSED_CHILD_LIMIT = 256;
 /** Shared reader/resolver/input vertical. Connections only route and own lifecycle. */
 export class PageExecutor implements EngineExecutor {
   readonly directory: PageDirectory;
@@ -58,12 +72,17 @@ export class PageExecutor implements EngineExecutor {
   private readonly routeParents = new Map<string, string>();
   // Frames seen attaching but not yet committed, with when they were first seen.
   private readonly pendingFrames = new Map<string, number>();
+  // When a frame last attached, committed or went away.
+  private lastFrameChange = 0;
   // Page/frame work skipped under limits or after a child attachment failure: observations say incomplete.
   private degraded = false;
   private readonly pendingAttachments = new Set<Promise<void>>();
   private readonly actionPages=new WeakMap<CommandContext,Set<string>>();
   private readonly attachingPages = new Set<string>();
   private readonly pageAttachments = new Map<string,{controller:AbortController;route:string|undefined}>();
+  // Auto-attached frame/page sessions still initializing. Chromium drops in-flight replies
+  // when such a target goes away, so its detach must settle the attachment instead.
+  private readonly routeAttachments = new Map<string,AbortController>();
   private unsubscribe: (() => void) | undefined;
   private fault: unknown;
   private closed = false;
@@ -160,10 +179,13 @@ export class PageExecutor implements EngineExecutor {
           if ((info.type === "page" || info.type === "iframe") && route) {
             const pageId = info.type === "page" ? string(info.targetId) : this.routes.get(event.sessionId ?? "");
             if (pageId) {
-              const job = this.attach(pageId, route, info.type === "page", string(info.parentFrameId));
-              this.pendingAttachments.add(job);
+              const controller=new AbortController();this.routeAttachments.set(route,controller);
               // Only the root page's own attachment is essential; a child frame or popup failing degrades the view.
-              void job.catch(error => { if (pageId === this.connection.rootTargetId && info.type === "page") this.fault = error; else this.degraded = true; }).finally(() => this.pendingAttachments.delete(job));
+              // A target that detached during attachment is simply gone, not a degraded view.
+              const job = this.attach(pageId, route, info.type === "page", string(info.parentFrameId), controller.signal)
+                .catch(error => { if (controller.signal.aborted) return; if (pageId === this.connection.rootTargetId && info.type === "page") this.fault = error; else this.degraded = true; });
+              this.pendingAttachments.add(job);
+              void job.finally(() => { this.pendingAttachments.delete(job); if (this.routeAttachments.get(route) === controller) this.routeAttachments.delete(route); });
             }
           }
         } else if (event.method === "Page.lifecycleEvent") {
@@ -177,9 +199,11 @@ export class PageExecutor implements EngineExecutor {
           this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Target.detachedFromTarget") {
           const route = string(event.params.sessionId),pageId=this.routes.get(route);
+          this.routeAttachments.get(route)?.abort();this.routeAttachments.delete(route);
           if(pageId&&this.pageAttachments.get(pageId)?.route===route){this.attachingPages.delete(pageId);this.pageAttachments.get(pageId)!.controller.abort();this.directory.removePage(pageId);}
           this.directory.detachRoute(route); this.diagnostics.forgetRoute(route); this.routes.delete(route); this.routeParents.delete(route); this.dialogs.delete(route);
         } else if (event.method === "Page.frameAttached") {
+          this.lastFrameChange = performance.now();
           this.prunePendingFrames();
           if (this.pendingFrames.size >= 128) { this.pendingFrames.delete(this.pendingFrames.keys().next().value!); this.degraded = true; }
           this.pendingFrames.set(string(event.params.frameId), performance.now());
@@ -193,11 +217,13 @@ export class PageExecutor implements EngineExecutor {
           const pageId = this.routes.get(event.sessionId ?? "");
           if (pageId && event.params.frameId === pageId && this.pendingNavigations.delete(pageId)) this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Page.frameNavigated") {
+          this.lastFrameChange = performance.now();
           const pageId = this.routes.get(event.sessionId ?? "");
           if (pageId && object(event.params.frame).id === pageId) { this.pendingNavigations.delete(pageId); if (pageId === this.connection.rootTargetId) this.degraded = false; }
           if (pageId) this.frame(pageId, object(event.params.frame), event.sessionId!);
           this.conditionWaiters.forEach(wake => wake());
         } else if (event.method === "Page.frameDetached") {
+          this.lastFrameChange = performance.now();
           const pageId = this.routes.get(event.sessionId ?? "");
           if (pageId) this.directory.detachFrame(pageId, string(event.params.frameId), event.sessionId!);
           if (event.params.reason === "remove") this.pendingFrames.delete(string(event.params.frameId));
@@ -1286,19 +1312,72 @@ export class PageExecutor implements EngineExecutor {
     const resolved=await context.read(()=>this.send(binding,"DOM.resolveNode",{backendNodeId:binding.backendNodeId}));
     const objectId=string(object(resolved.object).objectId);
     if(!objectId)throw new EngineError("evidence_unavailable");
+    const temporary:string[]=[];
     try {
-      const result=await context.read(()=>this.send(binding,"Runtime.callFunctionOn",{objectId,functionDeclaration:DOCUMENT_READ_FUNCTION,arguments:[{value:maxChars},{value:maxNodes},{value:useThis},{value:matchText===undefined},{value:preferMain},...(matchText===undefined?[]:[{value:matchText}])],returnByValue:true,silent:true}));
+      // Page JS cannot see closed shadow roots; resolve them natively so their text is read.
+      const closed=await this.closedRoots(context,binding,objectId,maxNodes,temporary);
+      const result=await context.read(()=>this.send(binding,"Runtime.callFunctionOn",{objectId,functionDeclaration:DOCUMENT_READ_FUNCTION,arguments:[{value:maxChars},{value:maxNodes},{value:useThis},{value:matchText===undefined},{value:preferMain},{value:matchText??null},closed.mapId?{objectId:closed.mapId}:{value:null}],returnByValue:true,silent:true}));
       if(result.exceptionDetails)throw new EngineError("evidence_unavailable");
       this.directory.route(binding);
-      const read=object(object(result.result).value);
+      let read=object(object(result.result).value);
+      if(closed.incomplete&&read.truncated===false)read={...read,truncated:true};
       if(typeof read.text!=="string"||typeof read.truncated!=="boolean")throw new EngineError("evidence_unavailable");
       if(matchText!==undefined&&!read.loading&&typeof read.matched!=='boolean'&&!(read.text===''&&!read.truncated))throw new EngineError('evidence_unavailable');
       return {text:read.text,truncated:read.truncated,...(typeof read.matched==='boolean'?{matched:read.matched}:{}),...(Number.isSafeInteger(read.characters)&&Number(read.characters)>=0?{characters:Number(read.characters)}:{}),...(Number.isSafeInteger(read.visited)&&Number(read.visited)>=0?{visited:Number(read.visited)}:{}),...(read.loading===true?{loading:true}:{})};
-    } finally {void this.send(binding,"Runtime.releaseObject",{objectId}).catch(()=>undefined);}
+    } finally {for(const id of [objectId,...temporary])void this.send(binding,"Runtime.releaseObject",{objectId:id}).catch(()=>undefined);}
+  }
+  /** Maps host → closed shadow root for this binding's document, in the reading world.
+   * Native CSS search pierces every author shadow root, so the top-level children of all roots
+   * (:host > *) outnumber those of the open roots page JS reaches exactly when closed roots
+   * exist. Only then are those children fetched; each one's root node is its closed root. */
+  private async closedRoots(context:CommandContext,binding:NodeBinding,objectId:string,maxNodes:number,temporary:string[]):Promise<{mapId?:string;incomplete:boolean}>{
+    const open=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration:OPEN_SHADOW_CHILDREN_FUNCTION,arguments:[{value:maxNodes}],returnByValue:true,silent:true}));
+    const openCount=Number(object(open.result).value);
+    if(open.exceptionDetails||!Number.isSafeInteger(openCount))throw new EngineError('evidence_unavailable');
+    if(openCount<0)return {incomplete:true};
+    await context.read(()=>this.send(binding,'DOM.getDocument',{depth:0}));
+    let searchId='';
+    try{
+      const search=await context.read(()=>this.send(binding,'DOM.performSearch',{query:':host > *',includeUserAgentShadowDOM:false}));
+      searchId=string(search.searchId);const total=Number(search.resultCount);
+      if(!searchId||!Number.isSafeInteger(total)||total<0)throw new EngineError('evidence_unavailable');
+      // Same-process child frames are searched too, so more results do not by themselves prove a closed root.
+      if(total<=openCount)return {incomplete:false};
+      const fetched=Math.min(total,CLOSED_CHILD_LIMIT);
+      const found=await context.read(()=>this.send(binding,'DOM.getSearchResults',{searchId,fromIndex:0,toIndex:fetched}));
+      const nodes:{objectId:string}[]=[];
+      for(const nodeId of Array.isArray(found.nodeIds)?found.nodeIds:[]){
+        const resolved=string(object(object(await context.read(()=>this.send(binding,'DOM.resolveNode',{nodeId}))).object).objectId);
+        if(resolved){temporary.push(resolved);nodes.push({objectId:resolved});}
+      }
+      const map=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration:'function(...nodes){const map=new Map();for(const node of nodes){const root=node.getRootNode();if(root instanceof ShadowRoot&&root.mode==="closed")map.set(root.host,root);}return map;}',arguments:nodes,silent:true}));
+      const mapId=string(object(map.result).objectId);
+      if(map.exceptionDetails||!mapId)throw new EngineError('evidence_unavailable');
+      temporary.push(mapId);
+      return {mapId,incomplete:total>fetched};
+    }finally{if(searchId)void this.send(binding,'DOM.discardSearchResults',{searchId}).catch(()=>undefined);}
   }
   async screenshot(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, rawOptions: unknown): Promise<EngineObservation> {
     await this.front(page);
-    const capture=()=>this.captureScreenshot(context,page,budgetValue,rawOptions,false);
+    // Storefronts attach and drop third-party frames for seconds after a load. Masks are
+    // only proven against a still frame set, so wait for one and retry within the budget.
+    const capture=async()=>{
+      for(let attempt=0;;attempt++){
+        await this.frameQuiet(context);
+        try{return await this.captureScreenshot(context,page,budgetValue,rawOptions,false);}
+        catch(error){
+          const phase=error instanceof EngineError?error.phase:undefined;
+          if(phase!=='frame_churn'&&phase!=='geometry'||context.cancellation)throw error;
+          if(attempt>=5||context.deadline-performance.now()<FRAME_QUIET_MS*3){
+            if(phase==='geometry')throw new EngineError('stale_target',undefined,'the page kept scrolling or resizing during capture; retry may help');
+            const pending=this.pendingFrames.size+this.pendingAttachments.size;
+            throw new EngineError('evidence_unavailable',undefined,pending
+              ?`${pending} frame(s) still loading, so password masks could not be proven; retry after the page settles`
+              :'frames kept attaching or detaching during capture, so masks could not be proven; retry may help');
+          }
+        }
+      }
+    };
     if(this.connection.ownsBrowser||object(rawOptions).fullPage!==true)return capture();
     const root=this.directory.binding(page,1);
     const visibility=await context.read(()=>this.send(root,'Runtime.evaluate',{expression:'document.visibilityState',returnByValue:true,silent:true}));
@@ -1328,7 +1407,7 @@ export class PageExecutor implements EngineExecutor {
     const zones = Array.isArray(options.sensitiveZones) ? options.sensitiveZones : [];
     if(this.pendingAttachments.size)await context.read(()=>Promise.all([...this.pendingAttachments]));
     this.prunePendingFrames();
-    if(this.pendingFrames.size)throw new EngineError('evidence_unavailable');
+    if(this.pendingFrames.size)throw new EngineError('evidence_unavailable','frame_churn');
     const root = this.directory.binding(page, 1);
     const spatial = await this.captureSpatialState(context, root);
     const viewport = { width: spatial.width, height: spatial.height };
@@ -1377,9 +1456,9 @@ export class PageExecutor implements EngineExecutor {
         const after=await collectRegions();
         if(!this.pendingAttachments.size&&!this.pendingFrames.size&&JSON.stringify(collected.frames)===JSON.stringify(after.frames))return this.captureScreenshot(context,page,budget,rawOptions,true);
       }
-      throw new EngineError('stale_target');
+      throw new EngineError('stale_target','geometry');
     }
-    if(this.pendingAttachments.size||this.pendingFrames.size||JSON.stringify(collected)!==JSON.stringify(await collectRegions()))throw new EngineError('stale_target');
+    if(this.pendingAttachments.size||this.pendingFrames.size||JSON.stringify(collected)!==JSON.stringify(await collectRegions()))throw new EngineError('stale_target','frame_churn');
     let masked: ReturnType<typeof maskCapturedPng>;
     try { masked = maskCapturedPng(data, clip, regions); } catch { throw new EngineError("evidence_unavailable"); }
     if (Buffer.byteLength(masked.base64, "utf8") > maxBytes) throw new EngineError("output_budget");
@@ -1394,7 +1473,7 @@ export class PageExecutor implements EngineExecutor {
       clip,
       spatial,
       regions,
-      maskedDigest: createHash("sha256").update(masked.base64, "utf8").digest("hex"),
+      tiles: pngTileDigests(masked.base64),
     });
     while (this.captures.size > 32) this.captures.delete(this.captures.keys().next().value!);
     return observation;
@@ -1402,6 +1481,7 @@ export class PageExecutor implements EngineExecutor {
   async close(): Promise<void> {
     this.closed = true; this.unsubscribe?.(); this.live.close(); this.diagnostics.close();
     for(const pending of this.pageAttachments.values())pending.controller.abort();
+    for(const pending of this.routeAttachments.values())pending.abort();this.routeAttachments.clear();
     this.pageAttachments.clear();this.attachingPages.clear();
     this.readonlyWorlds.clear();
     this.documents.clear(); this.documentBytes = 0; this.captures.clear(); this.pointerDocuments.clear(); this.viewportFrames.clear();this.domRevisions.clear();
@@ -1412,9 +1492,13 @@ export class PageExecutor implements EngineExecutor {
   private async attach(pageId: string, route: string, isPage: boolean, parentFrameId?: string, signal?:AbortSignal): Promise<void> {
     const send=async(method:string,params:RecordValue={})=>{
       if(signal?.aborted)throw new EngineError('unknown_page');
-      const result=await this.connection.wire.send(method,params,route);
-      if(signal?.aborted)throw new EngineError('unknown_page');
-      return result;
+      const sent=this.connection.wire.send(method,params,route);
+      if(!signal)return sent;
+      let abort!:()=>void;
+      const aborted=new Promise<never>((_,reject)=>{abort=()=>reject(new EngineError('unknown_page'));signal.addEventListener('abort',abort,{once:true});});
+      void sent.catch(()=>undefined);
+      try{return await Promise.race([sent,aborted]);}
+      finally{signal.removeEventListener('abort',abort);}
     };
     this.directory.registerRoute(route);
     if (parentFrameId) this.routeParents.set(route, parentFrameId);
@@ -1443,6 +1527,16 @@ export class PageExecutor implements EngineExecutor {
     const parentId = string(frame.parentId) || this.routeParents.get(route) || "";
     this.directory.navigate(pageId, { frameId, loaderId, route, url:string(frame.url), ...(parentId ? { parentId } : {}) });
     this.pendingFrames.delete(frameId);
+  }
+  /** Wait, within the command budget, until no frame has changed for FRAME_QUIET_MS and none is attaching. */
+  private async frameQuiet(context: CommandContext): Promise<void> {
+    for(;;){
+      context.checkpoint();
+      this.prunePendingFrames();
+      const wait=Math.max(this.pendingFrames.size||this.pendingAttachments.size?50:0,this.lastFrameChange+FRAME_QUIET_MS-performance.now());
+      if(wait<=0||context.deadline-performance.now()<wait+FRAME_QUIET_MS)return;
+      await context.read(()=>new Promise(resolve=>setTimeout(resolve,Math.min(wait,100))));
+    }
   }
   /** A frame that has not committed within ten seconds is treated as abandoned. */
   private prunePendingFrames(): void {
@@ -1486,10 +1580,12 @@ export class PageExecutor implements EngineExecutor {
     try {
       const result = await context.read(() => this.send(binding, "Runtime.callFunctionOn", {
         objectId, functionDeclaration: `function(x,y){
+          const describe=${DESCRIBE_COVER};
           let target=this;
           for(let depth=0;depth<32;depth++){
             const root=target.getRootNode(),hit=root.elementFromPoint(x,y);
-            if(!hit||(hit!==target&&!target.contains(hit)))return false;
+            if(!hit)return false;
+            if(hit!==target&&!target.contains(hit))return describe(hit);
             if(!root.host)return true;
             target=root.host;
           }
@@ -1497,7 +1593,9 @@ export class PageExecutor implements EngineExecutor {
         }`,
         arguments: [{ value: x }, { value: y }], returnByValue: true, silent: true,
       }));
-      if (object(result.result).value !== true) throw new EngineError("target_moved");
+      const value = object(result.result).value;
+      if (typeof value === "string" && value) throw new EngineError("target_covered", undefined, value);
+      if (value !== true) throw new EngineError("target_moved");
     } finally { void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
   }
   private async pointerPoint(context: CommandContext, binding: NodeBinding): Promise<{ x: number; y: number }> {
@@ -1523,8 +1621,10 @@ export class PageExecutor implements EngineExecutor {
         const hitNode = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: hit.backendNodeId }));
         hitId = string(object(hitNode.object).objectId);
         if (!hitId) throw new EngineError("target_moved");
-        const contains = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: "function(node){if(!this.isConnected)return false;for(let depth=0;node&&depth<128;depth++){if(node===this)return true;node=node.parentNode||node.host;}return false;}", arguments: [{ objectId: hitId }], returnByValue: true, silent: true, throwOnSideEffect: true }));
-        if (object(contains.result).value !== true) throw new EngineError("target_moved");
+        const contains = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: `function(node){if(!this.isConnected)return false;const hit=node;for(let depth=0;node&&depth<128;depth++){if(node===this)return true;node=node.parentNode||node.host;}const describe=${DESCRIBE_COVER};return hit&&hit.nodeType===1?describe(hit):hit&&hit.parentElement?describe(hit.parentElement):false;}`, arguments: [{ objectId: hitId }], returnByValue: true, silent: true }));
+        const value = object(contains.result).value;
+        if (typeof value === "string" && value) throw new EngineError("target_covered", undefined, value);
+        if (value !== true) throw new EngineError("target_moved");
       } finally {
         void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined);
         if (hitId) void this.send(binding, "Runtime.releaseObject", { objectId: hitId }).catch(() => undefined);
@@ -1547,7 +1647,10 @@ export class PageExecutor implements EngineExecutor {
     if (!currentData) throw new EngineError("evidence_unavailable");
     let currentMasked: ReturnType<typeof maskCapturedPng>;
     try { currentMasked = maskCapturedPng(currentData, capture.clip, capture.regions); } catch { throw new EngineError("evidence_unavailable"); }
-    if (createHash("sha256").update(currentMasked.base64, "utf8").digest("hex") !== capture.maskedDigest) throw new EngineError("stale_target");
+    // Animation elsewhere on the page does not invalidate a point: what was captured
+    // around it must still be there, pixel for pixel.
+    const scale = capture.tiles.width / capture.clip.width;
+    if (!sameTilesNear(capture.tiles, pngTileDigests(currentMasked.base64), action.x * scale, action.y * scale, CAPTURE_POINT_RADIUS * scale)) throw new EngineError("stale_target");
     const x = capture.clip.x + action.x-currentSpatial.pageX+currentSpatial.offsetX;
     const y = capture.clip.y + action.y-currentSpatial.pageY+currentSpatial.offsetY;
     if(x<0||y<0||x>=currentSpatial.width||y>=currentSpatial.height)throw new EngineError('target_moved');

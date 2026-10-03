@@ -133,15 +133,14 @@ test('cancelled late capture-observation start is stopped before another capture
   }finally{releaseStart({});context.dispose();next.dispose();}
 });
 
-test('full-page recapture does not cross cancellation, navigation or pending frame attachment',async()=>{
-  for(const fault of ['cancel','navigate','pending']){
+test('full-page recapture does not cross cancellation or navigation',async()=>{
+  for(const fault of ['cancel','navigate']){
     const {executor,connection,page,context,calls}=fixture({spatialReads:[spatial(),spatial({pageX:1})]});
     const send=connection.wire.send.bind(connection.wire);
     connection.wire.send=async(...args)=>{
       const result=await send(...args);
       if(args[0]==='Page.captureScreenshot'){
         if(fault==='cancel')context.cancel();
-        if(fault==='pending')executor.pendingFrames.set('attaching-frame',performance.now());
         if(fault==='navigate')executor.directory.navigate('root',{frameId:'root-frame',route:'root-route',loaderId:'new-document'});
       }
       return result;
@@ -152,6 +151,37 @@ test('full-page recapture does not cross cancellation, navigation or pending fra
       assert.equal(executor.captures.size,0,fault);
     }finally{context.dispose();}
   }
+});
+
+test('a frame attaching during capture discards the image and recaptures once frames settle',async()=>{
+  const {executor,connection,page,context,calls}=fixture({});
+  const send=connection.wire.send.bind(connection.wire);
+  let attached=false;
+  connection.wire.send=async(...args)=>{
+    const result=await send(...args);
+    if(args[0]==='Page.captureScreenshot'&&!attached){
+      attached=true;executor.pendingFrames.set('attaching-frame',performance.now());
+      setTimeout(()=>executor.pendingFrames.delete('attaching-frame'),100);
+    }
+    return result;
+  };
+  try{
+    const result=await executor.screenshot(context,page,1_000_000,{});
+    assert.equal(result.state,'available');
+    assert.equal(calls.filter(call=>call.method==='Page.captureScreenshot').length,2);
+    assert.equal(executor.captures.size,1);
+  }finally{context.dispose();}
+});
+
+test('frames still loading at the deadline refuse with what failed',async()=>{
+  const {executor,page,calls}=fixture({});
+  const context=new CommandContext(1_500);
+  executor.pendingFrames.set('stuck-frame',performance.now());
+  try{
+    await assert.rejects(executor.screenshot(context,page,1_000_000,{}),error=>error.code==='evidence_unavailable'&&/1 frame\(s\) still loading/.test(error.detail));
+    assert.equal(calls.filter(call=>call.method==='Page.captureScreenshot').length,0);
+    assert.equal(executor.captures.size,0);
+  }finally{context.dispose();}
 });
 
 test('full-page spatial transition recaptures once with fresh masks and only one published ID',async()=>{
@@ -168,11 +198,11 @@ test('full-page spatial transition recaptures once with fresh masks and only one
   }finally{context.dispose();}
 });
 
-test('full-page repeated spatial movement refuses without publishing a capture',async()=>{
-  const {executor,page,context,calls}=fixture({spatialReads:[spatial(),spatial({pageX:1}),spatial({pageX:1}),spatial({pageX:2})]});
+test('full-page spatial movement that never stops refuses without publishing a capture',async()=>{
+  const {executor,page,context,calls}=fixture({spatialReads:Array.from({length:200},(_,index)=>spatial({pageX:index}))});
   try{
-    await assert.rejects(executor.screenshot(context,page,1_000_000,{fullPage:true,clip:{x:0,y:0,width:4,height:4}}),{code:'stale_target'});
-    assert.equal(calls.filter(call=>call.method==='Page.captureScreenshot').length,2);
+    await assert.rejects(executor.screenshot(context,page,1_000_000,{fullPage:true,clip:{x:0,y:0,width:4,height:4}}),error=>error.code==='stale_target'&&/kept scrolling/.test(error.detail));
+    assert.ok(calls.filter(call=>call.method==='Page.captureScreenshot').length>=2);
     assert.equal(executor.captures.size,0);
   }finally{context.dispose();}
 });
@@ -214,27 +244,27 @@ test('sensitive-region search overflow refuses capture before Page.captureScreen
   }
 });
 
-test('changed discovered geometry rejects the captured image and registers no capture', async () => {
+test('changed discovered geometry discards the captured image and recaptures with the new masks', async () => {
   const fixtureState = fixture({
     discoveryReads: [
       {regions: [{x: 2, y: 2, width: 1, height: 1}], incomplete: false},
-      {regions: [{x: 2.5, y: 2, width: 1, height: 1}], incomplete: false},
+      {regions: [{x: 1, y: 2, width: 1, height: 1}], incomplete: false},
     ],
   });
   const {executor, page, context, calls} = fixtureState;
   try {
-    await assert.rejects(
-      executor.screenshot(context, page, 1_000_000, {sensitiveZones: zones}),
-      error => error?.code === 'stale_target',
-    );
-    assert.equal(calls.filter(call => call.method === 'Page.captureScreenshot').length, 1);
-    assert.equal(executor.captures.size, 0);
+    const result = await executor.screenshot(context, page, 1_000_000, {sensitiveZones: zones});
+    const pixels = decodeRgba(Buffer.from(result.imageData, 'base64'), 4, 4);
+    assert.deepEqual([...pixel(pixels, 1, 2, 4)], [0, 0, 0, 255]);
+    assert.deepEqual([...pixel(pixels, 2, 2, 4)], [200, 30, 40, 255]);
+    assert.equal(calls.filter(call => call.method === 'Page.captureScreenshot').length, 2);
+    assert.equal(executor.captures.size, 1);
   } finally {
     context.dispose();
   }
 });
 
-test('changed viewport geometry rejects the captured image and registers no capture', async () => {
+test('changed viewport geometry discards the captured image and recaptures', async () => {
   const fixtureState = fixture({
     spatialReads: [spatial(), spatial({pageX: 1})],
     discoveryReads: [
@@ -244,12 +274,10 @@ test('changed viewport geometry rejects the captured image and registers no capt
   });
   const {executor, page, context, calls} = fixtureState;
   try {
-    await assert.rejects(
-      executor.screenshot(context, page, 1_000_000, {sensitiveZones: zones}),
-      error => error?.code === 'stale_target',
-    );
-    assert.equal(calls.filter(call => call.method === 'Page.captureScreenshot').length, 1);
-    assert.equal(executor.captures.size, 0);
+    const result = await executor.screenshot(context, page, 1_000_000, {sensitiveZones: zones});
+    assert.equal(result.state, 'available');
+    assert.equal(calls.filter(call => call.method === 'Page.captureScreenshot').length, 2);
+    assert.equal(executor.captures.size, 1);
   } finally {
     context.dispose();
   }

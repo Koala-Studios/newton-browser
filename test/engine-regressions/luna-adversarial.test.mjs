@@ -76,7 +76,7 @@ test("the session engine refuses unverifiable effects and preserves exact input 
     assert.equal(await evalPage("document.querySelector('#caret').value"), "aXd");
 
     evidence.coveredClick = await run({ kind: "click", target: { kind: "selector", selector: "#covered" } });
-    assert.equal(evidence.coveredClick.errorCode, "target_moved");
+    assert.equal(evidence.coveredClick.errorCode, "target_covered");
     assert.notEqual(await evalPage("document.title"), "clicked");
 
     evidence.disabledSelect = await run({ kind: "select", target: { kind: "selector", selector: "#choice" }, value: "B" });
@@ -119,7 +119,8 @@ test("the session engine refuses unverifiable effects and preserves exact input 
     assert.equal(freshClick.state,'not_requested');
     assert.equal(await evalPage("document.querySelector('#scrolled-action').dataset.clicked"),'yes');
     await evalPage("document.querySelector('#scrolled-action').style.transform='translateX(20px)'");
-    evidence.layoutShiftClick = await run({ kind: "click_at", captureId: layoutCapture.provenance.captureId, x: 5, y: 5 });
+    // Only the captured surroundings of the point must still match: click where the action was.
+    evidence.layoutShiftClick = await run({ kind: "click_at", captureId: layoutCapture.provenance.captureId, ...scrolledBox });
     assert.equal(evidence.layoutShiftClick.errorCode, "stale_target");
     const fullContext=new CommandContext(5000);
     const spatialRead=executor.captureSpatialState.bind(executor),fullSpatial=[];

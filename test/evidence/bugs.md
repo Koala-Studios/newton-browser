@@ -3193,3 +3193,34 @@ WorldWideWeb returned no nodes. The main landmark has 1,789 links and the first 
 slots first. Regression: ax-snapshot "a text query reaches a matching main link past the
 128-link bound". Closed shadow roots in document.read remain unread and are not yet
 reported as incomplete.
+# A frame removed during attachment blocked targets and screenshots — fixed in 0.7.5
+
+Observed 2026-10-03 on a live hosted storefront and its local theme preview: selector
+hovers returned search_incomplete and screenshots evidence_unavailable, most often right
+after a navigate. A cross-site app frame attached as its own target and was removed about
+5 ms later; Chromium dropped the replies to its setup commands, so the attachment never
+settled and every target search and capture waited on it. A detach now settles it.
+Screenshots also wait for frame churn to stop and retry within the budget, and say which
+condition failed when they cannot. Regression: storefront-pages "frames that attach and
+vanish do not block targets or screenshots" (fails on 0.7.4).
+# Coordinates went stale on any animation; covered targets said target_moved — fixed in 0.7.5
+
+Same QA: move with a fresh header capture returned stale_target because the homepage
+slideshow changed pixels far from the point; the whole capture had to match. Now 32 px
+tile digests around the point must match. A selector hover that later returned
+target_moved was covered by the store's signup popup; it now returns target_covered with
+coveredBy naming the form. The header mega-menu <summary> (Chromium role
+DisclosureTriangle) was missing from observe and from role targets; it is now a button
+with expanded. A role target hung on a hidden 0x0 cart-sync frame, whose AX query
+never answers: unrendered child frames are skipped and an unanswered frame is reported as
+search_incomplete. Regressions: storefront-pages summary, covered and coordinate tests.
+# Closed shadow roots were omitted from document.read — fixed in 0.7.5
+
+Observation audit: closed-shadow text was missing while document.read reported complete. Native
+DOM.performSearch for `:host > *` reaches the top-level children of every shadow root;
+when that count exceeds the open-root children page script can count, the reader fetches
+those children (at most 256; more leaves the read incomplete) and follows each one's
+closed root. Pages without closed roots pay one search (measured 23-154 ms total read on
+Wikipedia, Amazon, GitHub, YouTube and the storefront). A closed root holding only text, with no
+element child, is not detected. Regression: storefront-pages "document reads include
+closed shadow roots" (fails on 0.7.4).

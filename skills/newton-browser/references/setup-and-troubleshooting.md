@@ -29,6 +29,7 @@ The operator signs in personally in the visible window and confirms in the termi
 | `protocol_version_required` / MCP `-32022` | Send stateless MCP `2026-07-28` metadata on every request. |
 | `invalid_arguments` | Fix the named `field`; resend with the same `nextCommandId`. |
 | `stale_target` / `target_moved` / `ambiguous` / `not_found` | Observe again and use a fresh narrower ref. |
+| `target_covered` | The step's `coveredBy` names what covers the target; dismiss it, then retry. |
 | `browser_launch_failed` | Retry once, then report its `phase`; run `doctor --live`. |
 | `configured_browser_unavailable` | Install Chrome or Edge, or set `NEWTON_BROWSER_BROWSER_EXECUTABLE`. |
 | `unsupported_capability` | The page or mode does not support that read or action. |

@@ -43,6 +43,8 @@ Only when the operator asks you to use their browser, and only once the Chrome a
 
 - A receipt whose input may have reached the page without a finished result is uncertain: do not repeat it. Observe the same session, check the site, and continue only when you know what happened.
 - `stale_target`, `target_moved`, `ambiguous`: observe again and use a fresh ref.
+- `target_covered`: something sits over the target; the step's `coveredBy` names it (often a popup or cookie banner). Close or dismiss it, then retry.
+- An unavailable screenshot or read carries `detail`: which condition failed and whether retrying helps.
 - A receipt with `pageRestarted`: the page stopped responding and was reopened at its last address. Observe before continuing; the hung action may or may not have taken effect.
 - `browser_launch_failed`: retry once, then report its `phase`.
 

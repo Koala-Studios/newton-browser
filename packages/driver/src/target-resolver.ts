@@ -53,6 +53,13 @@ interface TargetResolverContext {
   pendingAttachments(): number;
   pendingFrames(): number;
 }
+// Chromium can withhold an AX query reply for a frame; an unanswered frame leaves the search incomplete.
+const AX_QUERY_MS = 2500;
+const withheld = <T,>(reply: Promise<T>): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  void reply.catch(() => undefined);
+  return Promise.race([reply, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new EngineError("search_incomplete")), AX_QUERY_MS); })]).finally(() => clearTimeout(timer));
+};
 export type TargetResolverFacts = Readonly<{
   sensitive: boolean;
   editable: boolean;
@@ -94,14 +101,22 @@ export class TargetResolver {
     for (const frame of this.directory.frames(page.pageId)) {
       const base = this.directory.binding(frame, 1);
       if (target.kind === "semantic") {
+        // A child frame with no rendered box cannot hold an actionable target, and
+        // Chromium may never answer an AX query for it (a hidden 0x0 cart-sync frame).
+        if (!await this.rendered(context, frame)) continue;
         const nodeId = await this.documentRoot(context, frame, base);
         // Chromium filters inside the renderer; unrelated article text and its
         // inline layout fragments never become a giant protocol response.
-        const result = await context.read(() => this.sendBinding(base, "Accessibility.queryAXTree", { nodeId, role: target.role, ...(target.exact ? { accessibleName: target.name } : {}) }));
-        const nodes = array(result.nodes);
+        // Observe lists <summary> (Chromium's internal DisclosureTriangle) as a button.
+        const axRoles = target.role === "button" ? ["button", "DisclosureTriangle"] : [target.role];
+        const nodes: RecordValue[] = [];
+        for (const role of axRoles) {
+          const result = await context.read(() => withheld(this.sendBinding(base, "Accessibility.queryAXTree", { nodeId, role, ...(target.exact ? { accessibleName: target.name } : {}) })));
+          nodes.push(...array(result.nodes));
+        }
         visited += nodes.length;
         if (visited > 20_000) throw new EngineError("search_incomplete");
-        for (const node of nodes) if (!node.ignored && object(node.role).value === target.role &&
+        for (const node of nodes) if (!node.ignored && axRoles.includes(String(object(node.role).value)) &&
           (target.exact ? object(node.name).value === target.name : string(object(node.name).value).includes(target.name))) {
           matches.push(this.directory.binding(frame, Number(node.backendDOMNodeId)));
         }
@@ -120,6 +135,21 @@ export class TargetResolver {
     }
     if (!matches.length) throw new EngineError("not_found");
     return matches[0]!;
+  }
+  private async rendered(context: CommandContext, frame: EnginePageStamp): Promise<boolean> {
+    const parent = this.directory.parent(frame);
+    if (!parent) return true;
+    const base = this.directory.binding(parent, 1);
+    const owner = await context.read(() => this.sendBinding(base, "DOM.getFrameOwner", { frameId: frame.frameId }));
+    if (!Number.isSafeInteger(owner.backendNodeId)) return true;
+    try {
+      const model = object((await context.read(() => this.sendBinding(base, "DOM.getBoxModel", { backendNodeId: owner.backendNodeId }))).model);
+      return Number(model.width) > 0 && Number(model.height) > 0;
+    } catch (error) {
+      // Chromium answers "Could not compute box model" for an owner that is not rendered.
+      if (/box model/i.test(String((error as Error | undefined)?.message))) return false;
+      throw error;
+    }
   }
   async document(context: CommandContext, frame: EnginePageStamp): Promise<NodeBinding> {
     const base = this.directory.binding(frame, 1);

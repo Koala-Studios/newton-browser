@@ -5,6 +5,8 @@ const object = (value: unknown): Ax => value && typeof value === 'object' && !Ar
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const list = (value: unknown): Ax[] => Array.isArray(value) ? value.map(object) : [];
 const roles = new Set(['button','link','textbox','searchbox','combobox','checkbox','radio','switch','menuitem','tab','option','slider','spinbutton','listbox','textarea']);
+/** Chromium exposes <summary> under an internal role; it toggles like a button and reports expanded. */
+export const axRole = (node: Ax): string => { const role = text(object(node.role).value); return role === 'DisclosureTriangle' ? 'button' : role; };
 const contextRoles = new Set(['dialog','alertdialog','form','row','listitem','group','radiogroup','tabpanel','region']);
 
 const trackingParameter=/^(utm_[a-z]+|fbclid|gclid|gbraid|wbraid|msclkid|mc_[a-z]+|_ga|_gl|_hsenc|_hsmi|ref_src|igshid|si|pr_[a-z_]+)$/i;
@@ -53,7 +55,7 @@ export function readAXControls(raw: readonly Ax[], scopeBackendNodeId?: number):
     for(let i=0;i<queue.length;i++) {
       if(seen.size>=256){incomplete=true;break;}
       const item=queue[i]!;if(seen.has(item))continue;seen.add(item);
-      const role=text(object(item.role).value);
+      const role=axRole(item);
       if(roles.has(role))continue;
       if(role==='StaticText'){parts.push(text(object(item.name).value));continue;}
       if(Array.isArray(item.childIds))for(const id of item.childIds) {const child=byId.get(String(id));if(child)queue.push(child);else incomplete=true;}
@@ -62,7 +64,7 @@ export function readAXControls(raw: readonly Ax[], scopeBackendNodeId?: number):
   };
   for(const node of nodes) {
     if(selected&&!selected.has(node))continue;
-    const role=text(object(node.role).value);
+    const role=axRole(node);
     if(selected&&['Iframe','iframe'].includes(role))incomplete=true;
     if(node.ignored||!roles.has(role)||!Number.isSafeInteger(node.backendDOMNodeId)||Number(node.backendDOMNodeId)<=0)continue;
     const props=list(node.properties);

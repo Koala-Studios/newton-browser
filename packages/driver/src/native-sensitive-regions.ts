@@ -117,6 +117,6 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
   }
   for(const frame of frames)directory.route(directory.binding(frame,1));
   const current=[...directory.frames(page.pageId)].sort((a,b)=>a.frameId.localeCompare(b.frameId));
-  if(JSON.stringify(current)!==JSON.stringify(frames))throw new EngineError('stale_target');
+  if(JSON.stringify(current)!==JSON.stringify(frames))throw new EngineError('stale_target','frame_churn');
   return {regions,frames};
 }

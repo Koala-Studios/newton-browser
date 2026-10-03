@@ -64,6 +64,43 @@ export function maskCapturedPng(
   return { base64: encoded.toString("base64"), width: parsed.width, height: parsed.height, appliedRegions };
 }
 
+export type TileDigests = Readonly<{ width: number; height: number; tile: number; columns: number; digests: Uint32Array }>;
+
+/** FNV-1a digest of each tile×tile pixel block of a PNG, row-major. */
+export function pngTileDigests(base64: string, tile = 32): TileDigests {
+  const input = Buffer.from(base64, "base64");
+  if (input.length === 0 || input.length > MAX_COMPRESSED_BYTES || !input.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    throw new Error("invalid_raster_mask_png");
+  }
+  const parsed = parsePng(input);
+  const columns = Math.ceil(parsed.width / tile), rows = Math.ceil(parsed.height / tile);
+  const digests = new Uint32Array(columns * rows).fill(0x811c9dc5);
+  const stride = parsed.width * parsed.channels;
+  for (let y = 0; y < parsed.height; y += 1) {
+    const rowTiles = Math.floor(y / tile) * columns;
+    for (let x = 0; x < parsed.width; x += 1) {
+      const index = rowTiles + Math.floor(x / tile), offset = y * stride + x * parsed.channels;
+      let hash = digests[index]!;
+      for (let channel = 0; channel < parsed.channels; channel += 1) hash = Math.imul(hash ^ parsed.pixels[offset + channel]!, 0x01000193) >>> 0;
+      digests[index] = hash;
+    }
+  }
+  return { width: parsed.width, height: parsed.height, tile, columns, digests };
+}
+
+/** Whether every tile within radius image pixels of (x, y) is identical in both digests. */
+export function sameTilesNear(before: TileDigests, after: TileDigests, x: number, y: number, radius: number): boolean {
+  if (before.width !== after.width || before.height !== after.height || before.tile !== after.tile) return false;
+  const tile = before.tile;
+  const left = Math.max(0, Math.floor((x - radius) / tile)), right = Math.min(before.columns - 1, Math.floor((x + radius) / tile));
+  const top = Math.max(0, Math.floor((y - radius) / tile)), bottom = Math.min(Math.ceil(before.height / tile) - 1, Math.floor((y + radius) / tile));
+  for (let row = top; row <= bottom; row += 1) for (let column = left; column <= right; column += 1) {
+    const index = row * before.columns + column;
+    if (before.digests[index] !== after.digests[index]) return false;
+  }
+  return true;
+}
+
 function parsePng(input: Buffer): { width: number; height: number; channels: 3 | 4; pixels: Buffer } {
   let offset = PNG_SIGNATURE.length;
   let width = 0;

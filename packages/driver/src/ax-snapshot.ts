@@ -10,7 +10,7 @@ const bounded = (reply: Promise<Ax>): Promise<Ax> => {
   return Promise.race([reply, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('role_query_timeout')), ROLE_QUERY_MS); })])
     .finally(() => clearTimeout(timer));
 };
-const terminalRoles = new Set(['StaticText', 'InlineTextBox', 'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'option', 'tab', 'menuitem']);
+const terminalRoles = new Set(['StaticText', 'InlineTextBox', 'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'option', 'tab', 'menuitem', 'DisclosureTriangle']);
 
 /** Bound tree expansion before requesting the full rendered article from CDP.
  * Static text leaves cannot contain controls, so their inline layout fragments
@@ -50,7 +50,7 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
     // then fetch their ancestor paths for the same scope/context projection.
     // Deep action controls (add to cart, quantity, options) sit below any
     // breadth-first bound on real storefronts, so query them directly too.
-    const queried: [string, number][] = [['searchbox',16],['textbox',16],['combobox',16],['spinbutton',16],['button',64],['checkbox',16],['radio',24],['switch',8],['tab',16],['slider',8]];
+    const queried: [string, number][] = [['searchbox',16],['textbox',16],['combobox',16],['spinbutton',16],['button',64],['DisclosureTriangle',16],['checkbox',16],['radio',24],['switch',8],['tab',16],['slider',8]];
     // The main-content links run alongside the role queries so a withheld reply costs one bound, not several.
     const mainLinks = scopeBackendNodeId === undefined ? bounded(send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role:'main'})).then(async reply => {
       const landmarks=nodes(reply.nodes).filter(node=>!node.ignored);
