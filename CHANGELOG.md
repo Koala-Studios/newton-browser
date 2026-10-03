@@ -7,6 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-03
+
+### Fixed
+
+- A frame that attached and was removed at once (storefront apps do this while loading)
+  left its setup waiting forever: every selector or role target returned
+  `search_incomplete` and screenshots waited on it. Its detach now settles the setup.
+- Screenshots wait for frames to stop attaching and changing, then retry within the
+  budget instead of failing right after a navigate or scroll. An unavailable screenshot
+  carries `detail` saying which condition failed and whether retrying helps.
+- `click_at` and `move` stay valid while animation runs elsewhere on the page: only the
+  captured surroundings of the point must still match.
+- Role targets skip child frames with no rendered box, whose accessibility queries
+  Chromium may never answer, and report `search_incomplete` instead of waiting out the
+  command when a frame does not answer.
+- `<summary>` disclosures appear in observe as buttons with their `expanded` state and
+  resolve as `button` role targets.
+- Document reads and text waits include closed shadow roots. A native count of all
+  shadow-root children against the open ones page script reaches proves whether any
+  exist, so pages without them pay one search.
+
+### Added
+
+- `target_covered`: a target that another element covers names it in the step's
+  `coveredBy` (for example a signup popup), instead of returning `target_moved`.
+
+### Changed
+
+- The default screenshot budget is 4 MiB, which fits a 1440x900 photographic viewport.
+
 ## [0.7.4] - 2026-10-03
 
 ### Fixed
