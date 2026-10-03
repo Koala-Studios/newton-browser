@@ -3164,3 +3164,32 @@ add-json (conflict without --force, remove then add with it). Regression: instal
 "Claude Code install registers one user-scope server". Applied on macOS 2026-10-02;
 claude mcp get reported the 0.7.3 server connected, and current Claude Code connects to
 the stateless server without a shim.
+# macOS key input stalled the whole browser — fixed in 0.7.4
+
+Observed 2026-10-03 in installed 0.7.3 with Codex and Claude Code on macOS Chrome 154: a
+select on a native menu-list, and plain key presses into a text input, left every later
+read timing out until the session closed. A sample of the browser process showed its main
+thread inside routeKeyEquivalent, NSWindow performKeyEquivalent and NSMenu _enableItems.
+Raw CDP isolated it: a rawKeyDown with any nativeVirtualKeyCode (the Windows code we sent,
+or the real macOS code) took seconds and blocked browser-level commands; without the
+field each key took 0-3 ms. macOS key events now omit it (native input and live view).
+Separately, a second select on a focused control within the type-ahead window searched
+both labels at once; select now blurs a focused select first. Regressions:
+native-input "macOS key events carry no native key code" and final-push-batch-01
+consecutive selects followed by a read (timed_out on 0.7.3).
+# A page stuck parsing timed out start and navigate — fixed in 0.7.4
+
+Observed 2026-10-03 on the-internet.herokuapp.com/dynamic_controls: its head script
+foundation.js never answered, the body never parsed, and start, navigate and observe each
+waited for DOMContentLoaded for the whole budget, then failed; start closed the session.
+The parse wait is now bounded and the committed page returns with loading:true. A page
+that never commits still times out. Regression: final-push-batch-01 "a committed page
+stalled behind a head script returns as loading" (timed_out on 0.7.3).
+# A text query missed links past the 128-link sample — fixed in 0.7.4
+
+Observed 2026-10-03 on Wikipedia's World Wide Web article: observe with query text
+WorldWideWeb returned no nodes. The main landmark has 1,789 links and the first match is
+#176; the query filtered a sample capped at 128. Matching names now take the bounded
+slots first. Regression: ax-snapshot "a text query reaches a matching main link past the
+128-link bound". Closed shadow roots in document.read remain unread and are not yet
+reported as incomplete.

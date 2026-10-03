@@ -7,6 +7,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-03
+
+### Fixed
+
+- macOS key input no longer stalls the browser. Key events carried a native key code,
+  which sent each one through the system menu's shortcut search: seconds per key, with the
+  whole browser unresponsive meanwhile (select, typing and live-view keys alike).
+- A select on a control that is already focused starts a fresh type-ahead search, so a
+  second select within a second no longer misses.
+- Start, navigate and observe return a page that committed but is still parsing (for
+  example behind a script that never loads) with `loading: true`, instead of timing out
+  and closing the session.
+- An observe `query` with text reaches matching links and controls beyond the per-role
+  bounds; matching names take the bounded slots first.
+- Release certification fails when a required test was skipped, not only when one failed.
+
+### Changed
+
+- The select `value` and press `keys`/`text` fields are described in the tool schema, and
+  `docs/MCP_CLIENTS.md` shows the current start, observe, act and stop path.
+
 ## [0.7.3] - 2026-10-02
 
 ### Added
