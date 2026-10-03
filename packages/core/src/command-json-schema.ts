@@ -40,9 +40,9 @@ const waitFor = {
 const click = { type: "object", properties: { kind: { const: "click" }, target, waitFor, button: { enum: ["left", "right", "middle"] }, clickCount: { type: "integer", minimum: 1, maximum: 3 } }, required: ["kind", "target"], additionalProperties: false };
 const hover = { type: "object", properties: { kind: { const: "hover" }, target, waitFor }, required: ["kind", "target"], additionalProperties: false };
 const clickAt = { type: "object", properties: { kind: { enum: ["click_at", "move"] }, captureId: { type: "string", minLength: 1, maxLength: 120 }, x: { type: "number" }, y: { type: "number" }, waitFor }, required: ["kind", "captureId", "x", "y"], additionalProperties: false };
-const select = { type: "object", properties: { kind: { const: "select" }, target, value: { type: "string", maxLength: 65536 } }, required: ["kind", "target", "value"], additionalProperties: false };
+const select = { type: "object", properties: { kind: { const: "select" }, target, value: { type: "string", maxLength: 65536, description: "The option's value or its visible label." } }, required: ["kind", "target", "value"], additionalProperties: false };
 const press = {
-  type: "object", properties: { kind: { const: "press" }, target, keys: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 80 } }, text: { type: "string", maxLength: 65536 } },
+  type: "object", properties: { kind: { const: "press" }, target, keys: { type: "array", minItems: 1, maxItems: 8, description: "One chord, modifiers first: [\"Enter\"], [\"Control\", \"a\"].", items: { type: "string", minLength: 1, maxLength: 80 } }, text: { type: "string", maxLength: 65536, description: "Text inserted as typed input." } },
   required: ["kind"], anyOf: [{ required: ["keys"] }, { required: ["text"] }], additionalProperties: false,
 };
 const scroll = { type: "object", properties: { kind: { const: "scroll" }, x: { type: "number" }, y: { type: "number" }, target }, required: ["kind", "x", "y"], additionalProperties: false };

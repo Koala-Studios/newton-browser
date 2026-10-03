@@ -57,6 +57,7 @@ async function withFixture(t,callback){
   const temporary=temporaryRoot('final-push-batch-01');
   const navigation=deferred(),slowFrame=deferred();
   let server,executor,slowNavigationResponse,slowFrameResponse;
+  const stalledScripts=[];
   await new Promise((resolve,reject)=>{
     server=http.createServer(async(request,response)=>{
       response.setHeader('content-type','text/html; charset=utf-8');
@@ -66,6 +67,8 @@ async function withFixture(t,callback){
       if(url==='/grandchild')return void response.end(pageMarkup('deep nested frame needle'));
       if(url==='/hidden')return void response.end(pageMarkup('hidden iframe secret'));
       if(url==='/destination')return void response.end(pageMarkup('destination ready'));
+      if(url==='/stalled-head')return void response.end('<!doctype html><html><head><title>Stalled head</title><script src="/never.js"></script></head><body><main><button>Behind the stalled script</button></main></body></html>');
+      if(url==='/never.js'){stalledScripts.push(response);return;}
       if(url==='/huge')return void response.end(pageMarkup('y'.repeat(262_200)+'beyond-work-cap'));
       if(url==='/slow-nav'){slowNavigationResponse=response;response.write('<!doctype html><html><body><main>loading navigation</main>');await navigation.promise;return void response.end('</body></html>');}
       if(url==='/slow-frame'){slowFrameResponse=response;response.write('<!doctype html><html><body><main>loading frame');await slowFrame.promise;return void response.end('slow frame ready</main></body></html>');}
@@ -84,6 +87,7 @@ async function withFixture(t,callback){
   }finally{
     if(slowNavigationResponse)navigation.resolve();
     if(slowFrameResponse)slowFrame.resolve();
+    for(const response of stalledScripts)response.end();
     if(executor)await executor.close();
     await new Promise(resolve=>server.close(resolve));
     temporary.remove();
@@ -184,6 +188,9 @@ test('oversized select acquisition refuses before focus/input while normal trust
       assert.equal(normal.state,'met');
       const normalState=await evaluate(connection,executor,'({value:document.querySelector("#normal-select").value,changed:document.querySelector("#normal-select").dataset.changed})');
       assert.deepEqual(normalState,{value:'second',changed:'second'});
+      // A second select right away on the still-focused control, then an ordinary read.
+      assert.equal((await executor.act(context,page,{kind:'select',target:{kind:'selector',selector:'#normal-select'},value:'First'})).state,'met');
+      assert.equal(await evaluate(connection,executor,'document.querySelector("#normal-select").value'),'first');
     },15000); // macOS selects by type-ahead, one trusted key per character.
   });
 });
@@ -274,4 +281,21 @@ test('MDN public search through MCP returns actionable feedback and destination 
     if(host)await host.close();
     temporary.remove();
   }
+});
+
+test('a committed page stalled behind a head script returns as loading instead of timing out',async t=>{
+  await withFixture(t,async({executor,url})=>{
+    const page=executor.bindPage();
+    const started=performance.now();
+    await withContext(async context=>assert.deepEqual(await executor.act(context,page,{kind:'navigate',url:url('/stalled-head')}),{state:'met',kind:'navigation'}),3000);
+    assert.ok(performance.now()-started<3000);
+    const current=executor.bindPage();
+    assert.ok(current.documentGeneration>page.documentGeneration);
+    await withContext(async context=>{
+      const observation=await executor.observe(context,current,8192);
+      assert.equal(observation.loading,true);
+      assert.match(observation.url??'',/stalled-head/);
+      assert.equal(observation.nodes.length,0);
+    },3000);
+  });
 });

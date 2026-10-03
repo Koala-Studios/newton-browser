@@ -23,6 +23,15 @@ function macEditingCommand(keys: readonly string[], platform: NodeJS.Platform): 
   if (held.length !== normalized.length - 1) return undefined;
   return macEditingCommands[[...held, key].join('+')];
 }
+/** On macOS, a key event carrying a native key code is also routed through
+ * AppKit's main-menu key-equivalent search, which in headless Chrome costs
+ * seconds per key and stalls the whole browser. The renderer only needs the
+ * DOM key, code and Windows key code, so macOS events carry no native code. */
+export function platformKey<T extends object>(event: T, platform: NodeJS.Platform = process.platform): Omit<T, 'nativeVirtualKeyCode'> {
+  if (platform !== 'darwin') return event;
+  const { nativeVirtualKeyCode: _native, ...rest } = event as T & { nativeVirtualKeyCode?: number };
+  return rest;
+}
 function describeChord(keys: readonly string[]) {
   const normalized = keys.map(normalizeKey);
   if (!normalized.length || normalized.length > 8 || new Set(normalized).size !== normalized.length
@@ -53,14 +62,14 @@ export class NativeInput {
     const route = this.transport.route(binding);
     for (const descriptor of descriptions) {
       await beforeInput?.();
-      const { text: _text, unmodifiedText: _unmodified, ...key } = descriptor;
+      const { text: _text, unmodifiedText: _unmodified, ...key } = platformKey(descriptor, platform);
       this.context.checkpoint();
       this.held.set(`key:${descriptor.key}`, { route, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', ...key, modifiers: descriptor.modifiers & ~(modifiers[descriptor.key] ?? 0) } });
       const commands = command && descriptor === descriptions.at(-1) ? { commands: [command] } : {};
       await this.context.input(() => this.transport.send(binding, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key, ...commands }));
     }
     const last = descriptions.at(-1)!;
-    if (last.text && !(mask & 7)) { await beforeInput?.(); await this.context.input(() => this.transport.send(binding, 'Input.dispatchKeyEvent', { type: 'char', ...last })); }
+    if (last.text && !(mask & 7)) { await beforeInput?.(); await this.context.input(() => this.transport.send(binding, 'Input.dispatchKeyEvent', { type: 'char', ...platformKey(last, platform) })); }
     for (const descriptor of [...descriptions].reverse()) {
       const held = this.held.get(`key:${descriptor.key}`)!;
       // Key release remains on its original CDP route even if Enter committed a document.

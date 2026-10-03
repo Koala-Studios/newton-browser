@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { EngineError } from "@newton-browser/core";
 import type { EngineWire } from "./connection.ts";
 import type { PageDirectory } from "./page-directory.ts";
+import { platformKey } from "./native-input.ts";
 
 type RecordValue = Record<string, unknown>;
 const object = (value: unknown): RecordValue => value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -195,7 +196,7 @@ export class SessionLive {
       if (typeof input.key !== "string" || !input.key || input.key.length > 32 || (input.text !== undefined && (typeof input.text !== "string" || input.text.length > 8))) invalid();
       await this.wire.send("Input.dispatchKeyEvent", { type: input.action === "down" ? (input.text ? "keyDown" : "rawKeyDown") : "keyUp",
         key: input.key, ...(input.code ? { code: String(input.code).slice(0, 32) } : {}), ...(input.text && input.action === "down" ? { text: input.text } : {}),
-        ...(Number.isSafeInteger(input.keyCode) ? { windowsVirtualKeyCode: input.keyCode, nativeVirtualKeyCode: input.keyCode } : {}), modifiers: modifiers(input.modifiers) }, route);
+        ...(Number.isSafeInteger(input.keyCode) ? platformKey({ windowsVirtualKeyCode: input.keyCode, nativeVirtualKeyCode: input.keyCode }) : {}), modifiers: modifiers(input.modifiers) }, route);
     } else if (input.type === "text") {
       if (typeof input.text !== "string" || !input.text || input.text.length > 4096) invalid();
       await this.wire.send("Input.insertText", { text: input.text }, route);

@@ -238,7 +238,7 @@ export class PageExecutor implements EngineExecutor {
         const before = this.directory.stamp(this.connection.rootTargetId).documentGeneration;
         const navigation = await this.connection.wire.send("Page.navigate", { url }, route);
         if (navigation.errorText) throw new EngineError("navigation_failed");
-        if (navigation.loaderId) await this.waitForDocument(context, string(navigation.loaderId), this.connection.rootTargetId, before);
+        if (navigation.loaderId) await this.waitForDocument(context, string(navigation.loaderId), this.connection.rootTargetId, before, parseDeadline(context));
         const tree = await this.connection.wire.send("Page.getFrameTree", {}, route);
         this.frameTree(this.connection.rootTargetId, object(tree.frameTree), route);
       }
@@ -518,7 +518,10 @@ export class PageExecutor implements EngineExecutor {
           const folded = label.toLocaleLowerCase();
           if (!/^[\x20-\x7e]{1,256}$/.test(label) || label.startsWith(" ")) throw new EngineError("unsupported_capability");
           if (enabled.some(candidate => Number(candidate.index) !== Number(selected.index) && String(candidate.label ?? "").toLocaleLowerCase().startsWith(folded))) throw new EngineError("ambiguous");
-          context.ensureInputCapacity(1 + label.length * 3);
+          context.ensureInputCapacity(2 + label.length * 3);
+          // Type-ahead appends to recent keys until the select loses focus, so a
+          // second select within a second would search for both labels at once.
+          if (facts.focused) await context.input(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: "function(){this.blur();}", silent: true }));
           await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
           for (const character of label) await this.key(context, binding, character);
         } else {
@@ -547,7 +550,9 @@ export class PageExecutor implements EngineExecutor {
     if (result.errorText) throw new EngineError("navigation_failed");
     const loaderId = string(result.loaderId);
     if (loaderId) {
-      await this.waitForDocument(context, loaderId, page.pageId, before);
+      // A committed document that is still parsing (a stalled script in its head) is the navigation's
+      // result; its observation says it is loading instead of the whole budget being spent waiting.
+      await this.waitForDocument(context, loaderId, page.pageId, before, parseDeadline(context));
       await this.waitForGeneration(context, page.pageId, before);
     } else {
       // A fragment navigation does not create a new document generation.
@@ -1046,15 +1051,15 @@ export class PageExecutor implements EngineExecutor {
       const scopeNode=scoped?.frameId===frame.frameId?scoped.backendNodeId:undefined;
       try {
         const binding = this.directory.binding(frame, 1);
-        let result = await readAXSnapshot((method, params) => context.read(() => this.send(binding, method, params)), frame.frameId, scopeNode);
+        let result = await readAXSnapshot((method, params) => context.read(() => this.send(binding, method, params)), frame.frameId, scopeNode, undefined, query?.text);
         // A committed document can precede an observable AX root. Refresh only
         // after a proven loading transition, using the existing deadline. Pages
         // with usable controls never acquire a global load/settle wait.
         if(!scoped&&frame.frameId===page.frameId&&!readAXControls(result.nodes).controls.length){
           const ready=await context.read(()=>this.send(binding,'Runtime.evaluate',{expression:'document.readyState',returnByValue:true,silent:true}));
           if(object(ready.result).value==='loading'){
-            await this.waitForDocument(context,this.directory.loader(frame),page.pageId);
-            result=await readAXSnapshot((method,params)=>context.read(()=>this.send(binding,method,params)),frame.frameId);
+            await this.waitForDocument(context,this.directory.loader(frame),page.pageId,undefined,parseDeadline(context));
+            result=await readAXSnapshot((method,params)=>context.read(()=>this.send(binding,method,params)),frame.frameId,undefined,undefined,query?.text);
           }
         }
         incomplete ||= result.incomplete;
@@ -1590,9 +1595,10 @@ export class PageExecutor implements EngineExecutor {
   /**
    * Waits until the requested document is parsed. With `afterGeneration`, a document that replaced it (a script
    * redirect while it was still parsing, as sign-in pages do) also ends the wait once parsed: the requested one never
-   * reaches DOMContentLoaded.
+   * reaches DOMContentLoaded. With `until`, a document still parsing then ends the wait without an error; the result
+   * says whether it was parsed.
    */
-  private async waitForDocument(context: CommandContext, loaderId: string, pageId: string, afterGeneration?: number): Promise<void> {
+  private async waitForDocument(context: CommandContext, loaderId: string, pageId: string, afterGeneration?: number, until?: number): Promise<boolean> {
     context.checkpoint();
     if ([...this.dialogs.values()].some(dialog => dialog.pageId === pageId)) throw new EngineError("dialog_opened");
     const parsed = () => {
@@ -1603,16 +1609,18 @@ export class PageExecutor implements EngineExecutor {
       const loader = this.directory.loader(current);
       return current.documentGeneration > afterGeneration && loader !== loaderId && !!this.lifecycle.get(loader)?.has("DOMContentLoaded");
     };
-    if (parsed()) return;
-    await new Promise<void>((resolve, reject) => {
+    if (parsed()) return true;
+    const bounded = until !== undefined && until < context.deadline;
+    const done = await new Promise<boolean>((resolve, reject) => {
       const cleanup = () => { clearTimeout(timer); this.lifecycleWaiters.delete(wake); this.dialogWaiters.delete(dialog); context.signal.removeEventListener("abort", abort); };
       const abort = () => { cleanup(); reject(context.signal.reason); };
       const dialog = (openedPage: string) => { if (openedPage === pageId) { cleanup(); reject(new EngineError("dialog_opened")); } };
-      const wake = () => { if (parsed()) { cleanup(); resolve(); } };
-      const timer = setTimeout(() => { cleanup(); reject(new EngineError("timed_out")); }, Math.max(1, context.deadline - performance.now()));
+      const wake = () => { if (parsed()) { cleanup(); resolve(true); } };
+      const timer = setTimeout(() => { cleanup(); if (bounded) resolve(false); else reject(new EngineError("timed_out")); }, Math.max(1, (bounded ? until : context.deadline) - performance.now()));
       this.lifecycleWaiters.add(wake); this.dialogWaiters.add(dialog); context.signal.addEventListener("abort", abort, { once: true }); wake();
     });
     context.checkpoint();
+    return done;
   }
   private async captureSpatialState(context: CommandContext, root: NodeBinding): Promise<CaptureSpatialState> {
     const metrics = await context.read(() => this.send(root, "Page.getLayoutMetrics", {}));
@@ -1632,6 +1640,12 @@ export class PageExecutor implements EngineExecutor {
       deviceScaleFactor,
     };
   }
+}
+
+/** Leaves part of the budget, up to two seconds, for reading a page that has not finished parsing. */
+function parseDeadline(context: CommandContext): number {
+  const remaining = context.deadline - performance.now();
+  return performance.now() + Math.max(0, remaining - Math.min(2_000, remaining / 4));
 }
 
 function expectedTypedValue(before: { value?: string; selectionStart?: number; selectionEnd?: number }, inserted: string): string | undefined {

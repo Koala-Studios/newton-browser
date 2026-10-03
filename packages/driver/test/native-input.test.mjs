@@ -45,3 +45,15 @@ test('unsupported keys and invalid chords do not dispatch',async()=>{
   try{for(const keys of [['MadeUp'],['a','b'],['Control','Control','a']])await assert.rejects(input.chord({},keys),/invalid_arguments/);assert.equal(calls,0);}
   finally{context.dispose();}
 });
+
+test('macOS key events carry no native key code; other platforms keep it',async()=>{
+  for(const [platform,native] of [['darwin',false],['win32',true]]){
+    const calls=[];const context=new CommandContext(1000);
+    const input=new NativeInput(context,{route:()=> 'route',send:async(_b,_m,p)=>{calls.push(p);},release:async(_r,_m,p)=>{calls.push(p);}});
+    try{
+      await input.chord({},['w'],undefined,platform);await input.finish();
+      assert.deepEqual(calls.map(call=>call.type),['rawKeyDown','char','keyUp']);
+      assert.ok(calls.every(call=>('nativeVirtualKeyCode' in call)===native&&call.windowsVirtualKeyCode===87),platform);
+    }finally{context.dispose();}
+  }
+});

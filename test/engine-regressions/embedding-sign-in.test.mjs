@@ -37,6 +37,8 @@ test('embedding: operator sign-in publishes a login source that new sessions inh
     const deadline = Date.now() + 5000; let title = '';
     while (Date.now() < deadline && title !== 'signed in') { title = text(await engine.call('browser.observe', { sessionId: signIn.sessionId, maxBytes: 2048 })).observation.title; if (title !== 'signed in') await new Promise(r => setTimeout(r, 100)); }
     assert.equal(title, 'signed in');
+    // Live frames arrive on their own schedule; a busy machine can deliver the first after the click lands.
+    for (const framesBy = Date.now() + 5000; !frames.length && Date.now() < framesBy;) await new Promise(r => setTimeout(r, 50));
     assert.ok(frames.length > 0);
     await stopFrames();
     // The worker's own session, started before the sign-in, takes it over and reloads: no restart needed.

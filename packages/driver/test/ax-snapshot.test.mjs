@@ -54,3 +54,18 @@ test('primary-landmark links remain discoverable without site-specific selectors
   },'frame');
   assert.deepEqual([...result.primary],[3]);assert.ok(result.nodes.some(node=>node.nodeId==='result'));
 });
+
+test('a text query reaches a matching main link past the 128-link bound',async()=>{
+  const links=Array.from({length:300},(_,index)=>({nodeId:`l${index}`,backendDOMNodeId:100+index,role:{value:'link'},name:{value:index===176?'WorldWideWeb':`Link ${index}`}}));
+  const read=queryText=>readAXSnapshot(async(method,params)=>{
+    if(method==='Accessibility.getFullAXTree')return {nodes:[{nodeId:'root',backendDOMNodeId:1,role:{value:'RootWebArea'},childIds:['unexpanded-main']}]};
+    if(method==='Accessibility.queryAXTree'&&params.role==='main')return {nodes:[{nodeId:'main',backendDOMNodeId:2}]};
+    if(method==='Accessibility.queryAXTree'&&params.role==='link')return {nodes:links};
+    return {nodes:[]};
+  },'frame',undefined,undefined,queryText);
+  const plain=await read(),queried=await read('worldwideweb');
+  assert.ok(!plain.nodes.some(node=>node.nodeId==='l176'));
+  assert.ok(queried.nodes.some(node=>node.nodeId==='l176'));
+  assert.equal(queried.nodes.filter(node=>node.role?.value==='link').length,128);
+  assert.equal(queried.incomplete,true);
+});

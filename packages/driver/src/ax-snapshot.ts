@@ -16,7 +16,7 @@ const terminalRoles = new Set(['StaticText', 'InlineTextBox', 'button', 'link', 
  * Static text leaves cannot contain controls, so their inline layout fragments
  * need not cross either the private pipe or native-messaging transport.
  */
-export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNodeId?: number, limits: {maxNodes:number;maxExpansionCalls:number}={maxNodes:4096,maxExpansionCalls:64}): Promise<{nodes: Ax[]; incomplete: boolean; primary: ReadonlySet<number>}> {
+export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNodeId?: number, limits: {maxNodes:number;maxExpansionCalls:number}={maxNodes:4096,maxExpansionCalls:64}, queryText?: string): Promise<{nodes: Ax[]; incomplete: boolean; primary: ReadonlySet<number>}> {
   const maxNodes=Math.max(1,Math.min(4096,limits.maxNodes));
   const maxExpansionCalls=Math.max(0,Math.min(64,limits.maxExpansionCalls));
   const initial = scopeBackendNodeId === undefined
@@ -24,6 +24,11 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
     : await send('Accessibility.getPartialAXTree', {backendNodeId: scopeBackendNodeId, fetchRelatives: true});
   const found = new Map<string, Ax>();
   let incomplete = false;
+  // A text query must reach a matching control past the per-role bound, so
+  // matching names take the bounded slots first and the rest fill them in order.
+  const needle = queryText?.toLocaleLowerCase();
+  const named = (node: Ax) => !!needle && [object(node.name).value, object(node.description).value].some(value => typeof value === 'string' && value.toLocaleLowerCase().includes(needle));
+  const bound = (batch: Ax[], cap: number) => (needle ? [...batch.filter(named), ...batch.filter(node => !named(node))] : batch).slice(0, cap);
   const primary = new Set<number>();
   const add = (batch: Ax[]) => {
     for (const node of batch) {
@@ -59,7 +64,7 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
       if (result.status === 'rejected') { incomplete = true; return; }
       const cap = queried[index]![1];
       const batch = nodes(result.value.nodes).filter(node => !node.ignored); if (batch.length > cap) incomplete = true;
-      fields.push(...batch.slice(0, cap));
+      fields.push(...bound(batch, cap));
     });
     add(fields);
     for (let index=0;index<fields.length;index+=8) {
@@ -74,8 +79,9 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
         const links=await mainLinks!;
         if(links) {
           if(links.length>128)incomplete=true;
-          add(links.slice(0,128));
-          for(const node of links.slice(0,128))if(Number.isSafeInteger(node.backendDOMNodeId))primary.add(Number(node.backendDOMNodeId));
+          const kept=bound(links,128);
+          add(kept);
+          for(const node of kept)if(Number.isSafeInteger(node.backendDOMNodeId))primary.add(Number(node.backendDOMNodeId));
         }
       }catch{incomplete=true;}
     }

@@ -9,7 +9,9 @@ const stages = ["build", "lint", "typecheck", "test", "eval:agent-cost", "pack:c
 for (const command of stages) {
   const executable = process.env.npm_execpath ? process.execPath : "pnpm";
   const args = process.env.npm_execpath ? [process.env.npm_execpath, command] : [command];
-  const result = spawnSync(executable, args, { cwd: process.cwd(), stdio: "inherit", windowsHide: true, timeout: 600_000 });
+  // Certification fails when a required test was skipped, not only when one failed.
+  const env = { ...process.env, NEWTON_BROWSER_REQUIRE_ACCEPTANCE: "1" };
+  const result = spawnSync(executable, args, { cwd: process.cwd(), env, stdio: "inherit", windowsHide: true, timeout: 600_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`release stage ${command} failed (${result.status})`);
 }
