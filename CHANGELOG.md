@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-10-03
+
+### Fixed
+
+- Owned browsers present a fine pointer with hover. On a host with no pointing device
+  (a Linux container, such as an embedding's runner) Chrome reported `pointer: none` and
+  `hover: none`, and sites switched hover menus to click-only, so `hover` acknowledged
+  but opened nothing.
+
 ## [0.7.5] - 2026-10-03
 
 ### Fixed
