@@ -233,3 +233,16 @@ test("Claude Code install registers one user-scope server through its own CLI af
   assert.throws(() => runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, runClient: () => ({ status: 1, stdout: "", stderr: "" }),
     verifyCandidate: () => { throw new Error("codex_mcp_candidate_incompatible"); } }), /candidate_incompatible/u);
 });
+
+test("install output separates the server check from an agent's first use and names each client's remedy", async () => {
+  const { firstUseLines } = await import("../src/cli.ts");
+  const codex = firstUseLines("codex", "1.2.3").join("\n");
+  assert.match(codex, /Checked: the server starts and lists its browser tools \(version 1\.2\.3\)/u);
+  assert.match(codex, /Not checked: an agent using them\. Start a new Codex session/u);
+  assert.match(codex, /update Codex/u);
+  assert.doesNotMatch(codex, /auth login/u);
+  const claude = firstUseLines("claude-code", "1.2.3").join("\n");
+  assert.match(claude, /new Claude Code session/u);
+  assert.match(claude, /claude auth login/u);
+  assert.match(firstUseLines("generic").join("\n"), /Checked: the client configuration only\./u);
+});

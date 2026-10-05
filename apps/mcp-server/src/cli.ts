@@ -289,8 +289,19 @@ function runInstallCommand(args: string[]): string {
   }
   lines.push(result.message);
   if (result.backupPath) lines.push(`Backed up the previous file to ${result.backupPath}.`);
-  lines.push("Restart the client to pick up the new server.");
+  lines.push(...firstUseLines(client, result.candidateVersion));
   return lines.join("\n");
+}
+
+/** Registration and a server handshake are not an agent using the tools; say which was checked and what the client may still need. */
+export function firstUseLines(client: InstallClient, version?: string): string[] {
+  const name = client === "codex" ? "Codex" : client === "claude-code" ? "Claude Code" : "the client";
+  return [
+    version ? `Checked: the server starts and lists its browser tools (version ${version}).` : "Checked: the client configuration only.",
+    `Not checked: an agent using them. Start a new ${name} session (running sessions keep their old tools) and ask it to open a page with Newton Browser.`,
+    ...(client === "codex" ? ["If Codex stops before any browser call, update Codex: an older release can refuse the configured model or drop the server at startup."] : []),
+    ...(client === "claude-code" ? ["If Claude Code reports an expired sign-in, run `claude auth login`, then start the session again."] : []),
+  ];
 }
 
 export async function collectDoctorReport(input: { directory?: string; env?: NodeJS.ProcessEnv } = {}) {
