@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-10-05
+
+### Changed
+
+- A `maxBytes` below the 2048 minimum is raised to 2048 and listed under `normalized`, instead of
+  refusing the call: a smaller budget only asks for less room than every result needs.
+
 ## [0.7.13] - 2026-10-05
 
 ### Added

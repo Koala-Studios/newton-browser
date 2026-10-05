@@ -111,3 +111,11 @@ test("press key, drag source and drag-and-drop spellings become the exact comman
   const three = act({ commandId: 2, action: { kind: "drag", source: { kind: "ref", ref: "e2" }, target: { kind: "ref", ref: "e3" }, to: { kind: "ref", ref: "e4" } } });
   assert.throws(() => parsed(three), /invalid_arguments|unsupported/u);
 });
+
+test("an output budget below the minimum is raised to it", () => {
+  const small = act({ commandId: 1, maxBytes: 2000, action: { kind: "click", target: { kind: "ref", ref: "e1" } } });
+  assert.equal(parsed(small).maxBytes, 2048);
+  assert.deepEqual(small.normalized, ["command.maxBytes 2000 → 2048"]);
+  const read = normalizeToolArguments("browser.document.read", { sessionId: "s1", maxBytes: "1000" });
+  assert.equal((read.args as { maxBytes: number }).maxBytes, 2048);
+});

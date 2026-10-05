@@ -15,6 +15,7 @@ const REF = /^e\d{1,9}$/u;
 /** Actions whose own `waitFor` waits after them; any other action followed by a wait becomes a sequence. */
 const WAITING_KINDS = new Set(["click", "hover", "drag", "click_at", "move"]);
 const MAX_STEPS = 32;
+const MIN_OUTPUT_BYTES = 2048;
 const DRAG_KINDS = new Set(["drag_and_drop", "dragAndDrop", "drag_drop", "drag_to"]);
 const MAX_NOTES = 8;
 
@@ -186,4 +187,8 @@ function normalizeTarget(target: unknown, path: string, note: (text: string) => 
 
 function numeric(value: Value, key: string, path: string, note: (text: string) => void): void {
   if (typeof value[key] === "string" && /^\d{1,15}$/u.test(value[key] as string)) { value[key] = Number(value[key]); note(`${path} "${value[key]}" → number`); }
+  // An output budget below the smallest one only asks for less room than every result needs.
+  if (key === "maxBytes" && typeof value[key] === "number" && Number.isInteger(value[key]) && (value[key] as number) > 0 && (value[key] as number) < MIN_OUTPUT_BYTES) {
+    note(`${path} ${value[key]} → ${MIN_OUTPUT_BYTES}`); value[key] = MIN_OUTPUT_BYTES;
+  }
 }
