@@ -16,7 +16,7 @@ export interface EngineExecutor {
   observe(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, recordMode?: boolean, scope?: EngineTarget, query?: EngineControlQuery): Promise<EngineObservation>;
   observeAfterAction?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget): Promise<EngineObservation>;
   readyPage?(context: CommandContext, page: EnginePageStamp): Promise<{ page: EnginePageStamp } | { observation: EngineObservation }>;
-  readRecords?(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget):Promise<EngineObservation>;
+  readRecords?(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget,query?:EngineControlQuery):Promise<EngineObservation>;
   readDocument?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, cursor?: string, scope?: EngineTarget): Promise<EngineObservation>;
   screenshot?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, options: unknown): Promise<EngineObservation>;
   /** Replace a page whose renderer stopped answering with a new page at its last address, keeping the browser and identity. */
@@ -221,7 +221,7 @@ export class SessionEngine {
       ? this.executor.readDocument(item.context, page, budget, item.cursor, item.scope)
       : item.mode === "screenshot" && this.executor.screenshot
         ? this.executor.screenshot(item.context, page, budget, item.options)
-      : item.mode === 'records' && this.executor.readRecords ? this.executor.readRecords(item.context,page,budget,item.recordShape??'controls',item.scope)
+      : item.mode === 'records' && this.executor.readRecords ? this.executor.readRecords(item.context,page,budget,item.recordShape??'controls',item.scope,item.query)
       : this.executor.observe(item.context, page, budget, item.mode === "records", item.scope, item.query);
     }).then(value => { observation = item.mode === "records" ? this.records(value, item.page, item.maxBytes, item.previousSnapshotId, item.scope,item.recordShape) : value; }).catch(error => {
       observation = { state: "unavailable", errorCode: engineErrorCode(error), ...(error instanceof EngineError && error.detail && error.code !== "target_covered" ? { detail: error.detail } : {}) };

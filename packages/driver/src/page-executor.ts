@@ -1234,9 +1234,9 @@ export class PageExecutor implements EngineExecutor {
       await send("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => undefined);
     }
   }
-  async readRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget):Promise<EngineObservation>{
-    if(shape==='controls'||[...this.dialogs.values()].some(dialog=>dialog.pageId===page.pageId))return this.observe(context,page,budget,true,scope);
-    return readStructuredRecords(context,page,budget,shape,scope,{directory:this.directory,resolver:this.resolver,send:(binding,method,params)=>this.send(binding,method,params)});
+  async readRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget,query?:EngineControlQuery):Promise<EngineObservation>{
+    if(shape==='controls'||[...this.dialogs.values()].some(dialog=>dialog.pageId===page.pageId))return this.observe(context,page,budget,true,scope,query);
+    return readStructuredRecords(context,page,budget,shape,scope,{directory:this.directory,resolver:this.resolver,send:(binding,method,params)=>this.send(binding,method,params)},query);
   }
   async readDocument(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, cursor?: string, scope?: EngineTarget): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue);

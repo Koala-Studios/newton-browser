@@ -10,6 +10,7 @@ import { createNewtonIdentity, openProfileStore } from "../../apps/mcp-server/sr
 import { ownedEngineConnection } from "../../apps/mcp-server/src/browser-runtime/engine-host.ts";
 import { CommandContext } from "../../packages/driver/src/command-context.ts";
 import { PageExecutor } from "../../packages/driver/src/page-executor.ts";
+import { asObservationBudget } from "../../packages/core/src/receipt-encoding.ts";
 
 test("the session engine refuses unverifiable effects and preserves exact input semantics", async () => {
   const browser = discoverBrowserExecutable({ family: "chrome", env: process.env });
@@ -194,6 +195,15 @@ test("the session engine refuses unverifiable effects and preserves exact input 
       } finally { context.dispose(); }
     }
     assert.equal((await run({ kind: "click", target: { kind: "selector", selector: "button" } })).errorCode, "ambiguous");
+    // A text query narrows records-mode links before the output budget is spent on the others.
+    await evalPage("document.body.insertAdjacentHTML('beforeend','<nav><a href=\"/alpha\">Alpha guide</a><a href=\"/beta\">Beta</a><a href=\"/gamma\" title=\"x\">Gamma alpha notes</a></nav>')");
+    {
+      const context = new CommandContext(3000);
+      try {
+        const links = await executor.readRecords(context, page, asObservationBudget(16384), "links", undefined, { text: "alpha" });
+        assert.deepEqual(links.records.map(record => record.name).sort(), ["Alpha guide", "Gamma alpha notes"]);
+      } finally { context.dispose(); }
+    }
 
     evidence.initialBack = await run({ kind: "back" });
     assert.equal(evidence.initialBack.state, "not_met", JSON.stringify({ initialBack: evidence.initialBack, historyProbe: evidence.historyProbe }));

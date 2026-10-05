@@ -7,6 +7,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-10-05
+
+### Fixed
+
+- `observe` in records mode applies `query`: `recordShape: "links"` with `query.text` returns the links whose text, description, href or context mention it, before the output budget is spent on the others; the default controls shape filters as the controls mode does. Before, records ignored the query and long pages came back cut at `output_limit`.
+
 ## [0.7.11] - 2026-10-05
 
 ### Changed

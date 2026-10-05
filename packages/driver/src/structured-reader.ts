@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { EngineError,type EngineObservation,type EngineObservationBudget,type EngineObservationRecord,type EnginePageStamp,type EngineRecordShape,type EngineTarget,type EngineTableRecord,type EngineFieldView } from '@newton-browser/core';
+import { EngineError,type EngineControlQuery,type EngineObservation,type EngineObservationBudget,type EngineObservationRecord,type EnginePageStamp,type EngineRecordShape,type EngineTarget,type EngineTableRecord,type EngineFieldView } from '@newton-browser/core';
 import type {CommandContext} from './command-context.ts';
 import type {PageDirectory,NodeBinding} from './page-directory.ts';
 import type {TargetResolver} from './target-resolver.ts';
@@ -13,7 +13,7 @@ const identity=(binding:NodeBinding)=>'n'+createHash('sha256').update(JSON.strin
 const previewRef='e9007199254740991';
 
 export async function readStructuredRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:Exclude<EngineRecordShape,'controls'>,scope:EngineTarget|undefined,
-  dependencies:{directory:PageDirectory;resolver:TargetResolver;send:(binding:NodeBinding,method:string,params:Value)=>Promise<Value>}):Promise<EngineObservation>{
+  dependencies:{directory:PageDirectory;resolver:TargetResolver;send:(binding:NodeBinding,method:string,params:Value)=>Promise<Value>},query?:EngineControlQuery):Promise<EngineObservation>{
   const {directory,resolver,send}=dependencies;
   const read=(binding:NodeBinding,method:string,params:Value)=>context.read(()=>send(binding,method,params));
   const view=(records:readonly EngineObservationRecord[],complete:boolean,reason:'output_limit'|'work_limit'|'rendered_subset'='rendered_subset'):EngineObservation=>({
@@ -81,6 +81,13 @@ export async function readStructuredRecords(context:CommandContext,page:EnginePa
     for(const item of projected.controls){
       if(bindings.length>=512){limited=true;break;}
       if(item.view.role!=='link'||!item.view.href)continue;
+      // A text query keeps the links that mention it, before the output budget is spent on the rest.
+      if(query?.role!==undefined&&query.role!=='link')continue;
+      if(query?.text!==undefined){
+        const needle=query.text.toLocaleLowerCase();
+        const texts=[item.view.name,item.view.description,item.view.href,...(item.view.context??[]).map(entry=>entry.name)];
+        if(!texts.some(value=>typeof value==='string'&&value.toLocaleLowerCase().includes(needle)))continue;
+      }
       const binding=directory.binding(root,item.backendNodeId);
       const record={...item.view,kind:'link' as const,recordId:identity(binding),ref:previewRef};
       if(!budget.fits(view([...records,record],false,'output_limit'))){limited=true;continue;}

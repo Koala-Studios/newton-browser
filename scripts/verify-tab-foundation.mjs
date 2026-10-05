@@ -12,7 +12,7 @@ import { connectExistingTab,existingConnectionId,nativeAdvertisements,discoverEx
 import { temporaryRoot, pageConnection, navigate, deadline, readBoolean } from './prototypes/support.mjs';
 const temp = temporaryRoot('tab-foundation');
 const packed=path.join(temp.root,'packed');await fs.mkdir(packed);
-await promisify(execFile)('tar',['-xf',path.resolve('artifacts/newton-browser-0.7.11.tgz'),'-C',packed],{windowsHide:true});
+await promisify(execFile)('tar',['-xf',path.resolve('artifacts/newton-browser-0.7.12.tgz'),'-C',packed],{windowsHide:true});
 const {unregisterNativeLocal}=await import(pathToFileURL(path.join(packed,'package/dist/native-install.js')).href);
 const candidate=pathToFileURL(path.join(packed,'package/dist/embedding.js')).href;
 const {connectNative,developmentUpdateControl,updateInstalledAdapter}=await import(candidate);
