@@ -6,15 +6,16 @@ import { ENGINE_WAIT_STATES } from "@newton-browser/core";
 
 type Value = Record<string, unknown>;
 const isObject = (value: unknown): value is Value => !!value && typeof value === "object" && !Array.isArray(value);
-const ACTION_KINDS = new Set(["fill", "type", "clear", "edit", "click", "hover", "click_at", "move", "select", "press", "scroll", "navigate", "back", "forward",
+const ACTION_KINDS = new Set(["fill", "type", "clear", "edit", "click", "hover", "drag", "click_at", "move", "select", "press", "scroll", "navigate", "back", "forward",
   "reload", "wait_for", "dialog_accept", "dialog_dismiss", "resize", "set_files", "sequence"]);
 const WAIT_STATES = new Set<string>(ENGINE_WAIT_STATES);
 const WAIT_FIELDS = ["target", "state", "url", "title", "text", "value", "timeoutMs"] as string[];
 const COMMAND_FIELDS = ["commandId", "pageId", "action", "timeoutMs", "observe", "maxBytes"] as const;
 const REF = /^e\d{1,9}$/u;
 /** Actions whose own `waitFor` waits after them; any other action followed by a wait becomes a sequence. */
-const WAITING_KINDS = new Set(["click", "hover", "click_at", "move"]);
+const WAITING_KINDS = new Set(["click", "hover", "drag", "click_at", "move"]);
 const MAX_STEPS = 32;
+const DRAG_KINDS = new Set(["drag_and_drop", "dragAndDrop", "drag_drop", "drag_to"]);
 const MAX_NOTES = 8;
 
 export type NormalizedArguments = { args: unknown; normalized: string[] };
@@ -83,7 +84,29 @@ function normalizeAction(action: Value, path: string, note: (text: string) => vo
     action.kind = action.type; delete action.type;
     note(`${path}.type → ${path}.kind`);
   }
+  if (typeof action.kind === "string" && DRAG_KINDS.has(action.kind)) { note(`${path}.kind "${action.kind}" → "drag"`); action.kind = "drag"; }
+  if (action.kind === "drag") {
+    // The dragged element is `target` and the drop target `to`; the other common spellings mean the same.
+    const named = ["source", "from"].filter(key => action[key] !== undefined);
+    if (named.length === 1) {
+      const key = named[0]!;
+      if (action.to === undefined && action.target !== undefined) { action.to = action.target; delete action.target; note(`${path}.target → ${path}.to`); }
+      if (action.target === undefined) { action.target = action[key]; delete action[key]; note(`${path}.${key} → ${path}.target`); }
+    }
+    for (const key of ["destination", "dropTarget", "toTarget"]) {
+      if (action.to === undefined && action[key] !== undefined) { action.to = action[key]; delete action[key]; note(`${path}.${key} → ${path}.to`); }
+    }
+    if (action.to !== undefined) action.to = normalizeTarget(action.to, `${path}.to`, note);
+  }
   if (action.target !== undefined) action.target = normalizeTarget(action.target, `${path}.target`, note);
+  // press takes a chord as `keys`; `key`, or a string such as "Control+a", can only mean that chord.
+  if (action.kind === "press") {
+    if (action.keys === undefined && action.key !== undefined) { action.keys = action.key; delete action.key; note(`${path}.key → ${path}.keys`); }
+    if (typeof action.keys === "string") {
+      const parts = action.keys.length > 1 && action.keys.includes("+") ? action.keys.split("+") : [action.keys];
+      if (parts.every(part => part.length > 0)) { action.keys = parts; note(`${path}.keys "${parts.join("+")}" → [${parts.map(part => JSON.stringify(part)).join(", ")}]`); }
+    }
+  }
   // fill and type take `value`; `text` there can only mean the same thing (press keeps its own `text`).
   if ((action.kind === "fill" || action.kind === "type") && action.value === undefined && typeof action.text === "string") {
     action.value = action.text; delete action.text;

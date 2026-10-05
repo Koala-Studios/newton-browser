@@ -44,6 +44,8 @@ export type EngineClear = Readonly<{ kind: "clear"; target: EngineTarget }>;
 export type EngineEdit = Readonly<{kind:'edit';target:EngineTarget;match:string;replacement:string;prefix?:string;suffix?:string;occurrence?:number}>;
 export type EngineClick = Readonly<{ kind: "click"; target: EngineTarget; button?: "left" | "right" | "middle"; clickCount?: number; waitFor?: EngineWaitFor }>;
 export type EngineHover = Readonly<{ kind: "hover"; target: EngineTarget; waitFor?: EngineWaitFor }>;
+/** Press on `target`, move to `to` and release there: native HTML5 drag and drop or a mouse-driven drag. */
+export type EngineDrag = Readonly<{ kind: "drag"; target: EngineTarget; to: EngineTarget; waitFor?: EngineWaitFor }>;
 export type EngineClickAt = Readonly<{ kind: "click_at" | "move"; captureId: string; x: number; y: number; waitFor?: EngineWaitFor }>;
 export type EngineSelect = Readonly<{ kind: "select"; target: EngineTarget; value: string }>;
 export type EnginePress = Readonly<{ kind: "press"; target?: EngineTarget; keys?: readonly string[]; text?: string }>;
@@ -51,10 +53,11 @@ export type EngineScroll = Readonly<{ kind: "scroll"; x: number; y: number; targ
 export type EngineNavigate = Readonly<{ kind: "navigate"; url: string }>;
 export type EngineHistory = Readonly<{ kind: "back" | "forward" | "reload" }>;
 export type EngineWait = Readonly<{ kind: "wait_for"; waitFor: EngineWaitFor }>;
-export type EngineDialog = Readonly<{ kind: "dialog_accept" | "dialog_dismiss"; dialogId: string; promptText?: string }>;
+/** Without dialogId, the page's one open dialog. */
+export type EngineDialog = Readonly<{ kind: "dialog_accept" | "dialog_dismiss"; dialogId?: string; promptText?: string }>;
 export type EngineResize = Readonly<{kind:'resize';width:number;height:number}>;
 export type EngineSetFiles = Readonly<{kind:'set_files';target:EngineTarget;files:readonly string[]}>;
-export type EngineInputAction = EngineFill | EngineType | EngineClear | EngineEdit | EngineClick | EngineHover | EngineClickAt | EngineSelect | EnginePress | EngineScroll | EngineNavigate | EngineHistory | EngineWait | EngineDialog | EngineResize | EngineSetFiles;
+export type EngineInputAction = EngineFill | EngineType | EngineClear | EngineEdit | EngineClick | EngineHover | EngineDrag | EngineClickAt | EngineSelect | EnginePress | EngineScroll | EngineNavigate | EngineHistory | EngineWait | EngineDialog | EngineResize | EngineSetFiles;
 export type EngineAction = EngineInputAction | Readonly<{ kind: "sequence"; steps: readonly EngineInputAction[] }>;
 export type EngineCommand = Readonly<{
     commandId: number; pageId?: string; action: EngineAction; timeoutMs: number;
@@ -254,7 +257,7 @@ function parseWait(raw: unknown): EngineWait {
   return Object.freeze({ kind: "wait_for", waitFor: parseWaitFor(condition) });
 }
 function parseInputAction(raw: unknown): EngineInputAction {
-  const value = exactObject(raw, ["kind", "target", "value", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
+  const value = exactObject(raw, ["kind", "target", "value", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "to", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
   if(value.kind==='resize'){
     exactObject(raw,['kind','width','height']);
     return Object.freeze({kind:'resize',width:boundedInteger(value.width,320,7680),height:boundedInteger(value.height,240,4320)});
@@ -268,9 +271,13 @@ function parseInputAction(raw: unknown): EngineInputAction {
     exactObject(raw, ["kind", "target", "waitFor"]);
     return Object.freeze({ kind: "hover", target: parseEngineTarget(value.target), ...(value.waitFor === undefined ? {} : { waitFor: parseWaitFor(value.waitFor) }) });
   }
+  if (value.kind === "drag") {
+    exactObject(raw, ["kind", "target", "to", "waitFor"]);
+    return Object.freeze({ kind: "drag", target: parseEngineTarget(value.target), to: parseEngineTarget(value.to), ...(value.waitFor === undefined ? {} : { waitFor: parseWaitFor(value.waitFor) }) });
+  }
   if (value.kind === "dialog_accept" || value.kind === "dialog_dismiss") {
     exactObject(raw, ["kind", "dialogId", ...(value.kind === "dialog_accept" ? ["promptText"] : [])]);
-    return Object.freeze({ kind: value.kind, dialogId: boundedString(value.dialogId, 120), ...(value.promptText === undefined ? {} : { promptText: boundedString(value.promptText, 65536, true) }) });
+    return Object.freeze({ kind: value.kind, ...(value.dialogId === undefined ? {} : { dialogId: boundedString(value.dialogId, 120) }), ...(value.promptText === undefined ? {} : { promptText: boundedString(value.promptText, 65536, true) }) });
   }
   if (value.kind === "fill") return parseFill(raw);
   if (value.kind === "type") return parseType(raw);
@@ -288,7 +295,7 @@ function parseInputAction(raw: unknown): EngineInputAction {
 }
 export function parseEngineCommand(raw: unknown): EngineCommand {
   const input = exactObject(raw, ["commandId", "pageId", "action", "timeoutMs", "observe", "maxBytes"]);
-  const value = exactObject(input.action, ["kind", "target", "value", "steps", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
+  const value = exactObject(input.action, ["kind", "target", "value", "steps", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "to", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
   let action: EngineAction;
   if (value.kind === "sequence") {
     exactObject(value, ["kind", "steps"]);
@@ -302,8 +309,14 @@ export function parseEngineCommand(raw: unknown): EngineCommand {
   if (maxBytes < required) throw new EngineError("output_budget");
   return Object.freeze({ commandId: boundedInteger(input.commandId, 1, Number.MAX_SAFE_INTEGER),
     ...(input.pageId === undefined ? {} : { pageId: boundedString(input.pageId, 120) }), action,
-    timeoutMs: boundedInteger(input.timeoutMs ?? ENGINE_LIMITS.defaultTimeoutMs, 1, ENGINE_LIMITS.maxTimeoutMs),
+    timeoutMs: input.timeoutMs === undefined ? defaultCommandTimeout(action) : boundedInteger(input.timeoutMs, 1, ENGINE_LIMITS.maxTimeoutMs),
     observe: input.observe === "none" ? "none" : "local", maxBytes });
+}
+/** A command without its own timeout gets the default plus the time its waits ask for, so a long wait is not cut short. */
+function defaultCommandTimeout(action: EngineAction): number {
+  const steps = action.kind === "sequence" ? action.steps : [action];
+  const waits = steps.reduce((total, step) => total + ((step.kind === "wait_for" ? step.waitFor.timeoutMs : "waitFor" in step ? step.waitFor?.timeoutMs : undefined) ?? 0), 0);
+  return Math.min(ENGINE_LIMITS.defaultTimeoutMs + waits, ENGINE_LIMITS.maxTimeoutMs);
 }
 export function normalizeEngineUrl(raw: unknown): string {
   const text = boundedString(raw, 8192);

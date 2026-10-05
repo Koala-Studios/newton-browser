@@ -91,6 +91,24 @@ export class NativeInput {
       this.held.delete(id);
     }
   }
+  /** Press at `from`, move to `to` in steps and release there. When the browser intercepted a native
+   * HTML5 drag, `intercepted` returns its data and the drop is delivered at `to` before the release. */
+  async drag(binding: NodeBinding, from: { x: number; y: number }, to: { x: number; y: number }, intercepted: () => Promise<Params | undefined>): Promise<boolean> {
+    const steps = 8;
+    this.context.ensureInputCapacity(steps + 6);
+    const route = this.transport.route(binding);
+    const move = (x: number, y: number, buttons: number) => this.context.input(() => this.transport.send(binding, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: buttons ? 'left' : 'none', buttons }));
+    await move(from.x, from.y, 0);
+    this.held.set('mouse:left', { route, method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 } });
+    await this.context.input(() => this.transport.send(binding, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 }));
+    for (let step = 1; step <= steps; step++) await move(from.x + (to.x - from.x) * step / steps, from.y + (to.y - from.y) * step / steps, 1);
+    const data = await intercepted();
+    if (data) for (const type of ['dragEnter', 'dragOver', 'drop']) await this.context.input(() => this.transport.send(binding, 'Input.dispatchDragEvent', { type, x: to.x, y: to.y, data, modifiers: 0 }));
+    const held = this.held.get('mouse:left')!;
+    await this.context.input(() => this.transport.release(held.route, held.method, held.params));
+    this.held.delete('mouse:left');
+    return data !== undefined;
+  }
   async selectRange(binding:NodeBinding,commands:readonly string[]):Promise<void>{
     const allowed=new Set(['selectAll','moveToBeginningOfDocument','moveToEndOfDocument','moveForward','moveBackward','moveForwardAndModifySelection','moveBackwardAndModifySelection']);
     if(!commands.length||commands.length>4096||commands.some(command=>!allowed.has(command)))throw new EngineError('invalid_arguments');

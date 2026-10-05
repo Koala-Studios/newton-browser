@@ -7,6 +7,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-10-05
+
+### Added
+
+- `drag`: `{ kind: "drag", target, to }` presses on `target`, moves to `to` and drops there. It
+  completes native HTML5 drag and drop (Chrome intercepts the drag and the drop is delivered at
+  the destination) as well as mouse-driven drags, and takes `waitFor` like `click`. Both ends must
+  be in the same document. Agents had no way to drag before.
+
+### Changed
+
+- `dialog_accept` and `dialog_dismiss` without `dialogId` answer the page's one open dialog; with
+  none open they return `stale_target` as before.
+- A command without its own `timeoutMs` gets the default 10000 plus the `timeoutMs` of the waits it
+  contains, so `{ kind: "wait_for", text, timeoutMs: 60000 }` is no longer cut off after 10 s. An
+  explicit command `timeoutMs` still wins.
+- Near-miss shapes: `press` with `key` (or `keys` as a string such as `"Control+a"`) becomes the
+  `keys` chord; `drag` written with `source`/`from`, `destination`/`dropTarget`, or the kinds
+  `drag_and_drop`/`dragAndDrop`, becomes the exact `drag`. Each rewrite is listed under `normalized`.
+- The skill says what `search_incomplete` means: the page is still loading, so name the element with
+  a CSS selector or retry.
+
 ## [0.7.12] - 2026-10-05
 
 ### Fixed

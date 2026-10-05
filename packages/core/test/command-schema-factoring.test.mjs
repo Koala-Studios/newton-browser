@@ -12,8 +12,8 @@ test('factored command schema keeps enclosing target and waitFor constraints wit
   assert.ok(sequence);
   assert.deepEqual(Object.keys(action.properties).sort(), ['target', 'waitFor']);
   assert.deepEqual(Object.keys(sequence.properties.steps.items.properties).sort(), ['target', 'waitFor']);
-  assert.equal(action.oneOf.length, 18);
-  assert.equal(sequence.properties.steps.items.oneOf.length, 17);
+  assert.equal(action.oneOf.length, 19);
+  assert.equal(sequence.properties.steps.items.oneOf.length, 18);
 
   for (const branch of [...action.oneOf.filter(branch => branch !== sequence), ...sequence.properties.steps.items.oneOf]) {
     assert.equal(branch.additionalProperties, false);
@@ -33,14 +33,14 @@ test('factored command schema reconstructs the expanded target and waitFor branc
   assert.equal(action.properties, undefined);
   assert.equal(sequence.properties.steps.items.properties, undefined);
   assert.equal(countEmptyPlaceholders(expanded), 0);
-  // 20 action targets plus the target inside each of the 8 waitFor copies.
-  assert.equal(countPropertySchema(expanded, 'target'), 28);
-  // click, hover and click_at take waitFor, as actions and as sequence steps; wait_for carries its condition itself.
-  assert.equal(countPropertySchema(expanded, 'waitFor'), 6);
+  // 22 action targets plus the target inside each of the 10 waitFor copies.
+  assert.equal(countPropertySchema(expanded, 'target'), 32);
+  // click, hover, drag and click_at take waitFor, as actions and as sequence steps; wait_for carries its condition itself.
+  assert.equal(countPropertySchema(expanded, 'waitFor'), 8);
 
   const primitiveKinds = action.oneOf.filter(branch => branch !== sequence).map(branch => branch.properties.kind.const ?? branch.properties.kind.enum);
   assert.deepEqual(primitiveKinds, [
-    'fill', 'type', 'clear', 'edit', 'click', 'hover', ['click_at', 'move'], 'select', 'press', 'scroll',
+    'fill', 'type', 'clear', 'edit', 'click', 'hover', 'drag', ['click_at', 'move'], 'select', 'press', 'scroll',
     'navigate', ['back', 'forward', 'reload'], 'wait_for', 'dialog_accept', 'dialog_dismiss', 'resize', 'set_files',
   ]);
   assert.equal(sequence.properties.steps.items.oneOf.every(branch => branch.additionalProperties === false), true);
@@ -86,6 +86,7 @@ test('every primitive kind and enum alias parses standalone and inside a sequenc
     () => ({kind:'edit',target:refTarget,match:'original',replacement:'new',prefix:'before ',suffix:' after',occurrence:1}),
     () => ({kind: 'click', target: refTarget}),
     () => ({kind: 'hover', target: refTarget}),
+    () => ({kind: 'drag', target: refTarget, to: selectorTarget}),
     () => ({kind: 'click_at', captureId: 'c1', x: 1, y: 2}),
     () => ({kind: 'move', captureId: 'c1', x: 1, y: 2}),
     () => ({kind: 'select', target: refTarget, value: 'one'}),
@@ -98,10 +99,11 @@ test('every primitive kind and enum alias parses standalone and inside a sequenc
     () => ({kind: 'wait_for', url: 'https://example.org'}),
     () => ({kind: 'dialog_accept', dialogId: 'dialog1'}),
     () => ({kind: 'dialog_dismiss', dialogId: 'dialog1'}),
+    () => ({kind: 'dialog_dismiss'}),
     () => ({kind: 'resize', width: 640, height: 480}),
     () => ({kind: 'set_files', target: refTarget, files: ['C:\\fixture.png']}),
   ];
-  assert.equal(cases.length, 20);
+  assert.equal(cases.length, 22);
   for (const [index, makeAction] of cases.entries()) {
     assert.doesNotThrow(() => parseEngineCommand({commandId: 100 + index, action: makeAction()}));
     assert.doesNotThrow(() => parseEngineCommand({commandId: 200 + index, action: {kind: 'sequence', steps: [makeAction()]}}));

@@ -10,9 +10,10 @@ test('file selection and real-window resize have strict bounded command shapes',
   for(const action of [{kind:'resize',width:0,height:480},{kind:'resize',width:640.5,height:480},{kind:'resize',width:640,height:480,scale:2},{kind:'set_files',target:command.action.target,files:[]},{kind:'set_files',files:['C:\\media.png']},{kind:'set_files',target:command.action.target,files:Array(9).fill('C:\\media.png')}])assert.throws(()=>parseEngineCommand({commandId:1,action}),/invalid_arguments/);
 });
 
-test('dialog actions require an exact dialog identity and only acceptance accepts prompt text',()=>{
+test('dialog actions name a dialog or the one open dialog, and only acceptance accepts prompt text',()=>{
+  assert.equal('dialogId' in parseEngineCommand({commandId:1,action:{kind:'dialog_dismiss'}}).action,false);
   assert.equal(parseEngineCommand({commandId:1,action:{kind:'dialog_accept',dialogId:'dialog1',promptText:''}}).action.promptText,'');
-  for(const action of [{kind:'dialog_accept'}, {kind:'dialog_dismiss',dialogId:'dialog1',promptText:'no'}, {kind:'dialog_accept',dialogId:'dialog1',accept:true}]) assert.throws(()=>parseEngineCommand({commandId:1,action}),/invalid_arguments/);
+  for(const action of [{kind:'dialog_accept',dialogId:''}, {kind:'dialog_dismiss',dialogId:'dialog1',promptText:'no'}, {kind:'dialog_accept',dialogId:'dialog1',accept:true}]) assert.throws(()=>parseEngineCommand({commandId:1,action}),/invalid_arguments/);
 });
 
 test('pointer variants validate exact targets, button counts and capture provenance',()=>{
@@ -69,4 +70,12 @@ test('native assembly is bounded, ordered, expires partial data, and reconstruct
   let now=0;const expiring=new NativeAssembly(()=>now);const packets=[...nativePackets('partial',value)];expiring.accept(packets[0]);now=10001;
   assert.throws(()=>expiring.accept(packets[1]),/native_reassembly_limit/);
   assert.throws(()=>[...nativePackets('too_big',{text:'x'.repeat(5*1024*1024)})],/native_message_limit/);
+});
+
+test('a command without its own timeout covers the time its waits ask for',()=>{
+  assert.equal(parseEngineCommand({commandId:1,action:{kind:'wait_for',text:'Hovers',timeoutMs:60000}}).timeoutMs,70000);
+  assert.equal(parseEngineCommand({commandId:1,action:{kind:'sequence',steps:[{kind:'reload'},{kind:'wait_for',text:'x',timeoutMs:45000},{kind:'click',target:{kind:'ref',ref:'e1'},waitFor:{text:'y',timeoutMs:30000}}]}}).timeoutMs,85000);
+  assert.equal(parseEngineCommand({commandId:1,action:{kind:'wait_for',text:'x',timeoutMs:120000}}).timeoutMs,120000);
+  assert.equal(parseEngineCommand({commandId:1,timeoutMs:5000,action:{kind:'wait_for',text:'x',timeoutMs:60000}}).timeoutMs,5000);
+  assert.equal(parseEngineCommand({commandId:1,action:{kind:'click',target:{kind:'ref',ref:'e1'}}}).timeoutMs,10000);
 });

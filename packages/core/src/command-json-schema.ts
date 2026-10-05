@@ -35,6 +35,7 @@ const waitFor = {
 };
 const click = { type: "object", properties: { kind: { const: "click" }, target, waitFor, button: { enum: ["left", "right", "middle"] }, clickCount: { type: "integer", minimum: 1, maximum: 3 } }, required: ["kind", "target"], additionalProperties: false };
 const hover = { type: "object", properties: { kind: { const: "hover" }, target, waitFor }, required: ["kind", "target"], additionalProperties: false };
+const drag = { type: "object", description: "Drag target and drop it on to: native HTML5 drag and drop or a mouse-driven drag.", properties: { kind: { const: "drag" }, target, to: target, waitFor }, required: ["kind", "target", "to"], additionalProperties: false };
 const clickAt = { type: "object", properties: { kind: { enum: ["click_at", "move"] }, captureId: { type: "string", minLength: 1, maxLength: 120 }, x: { type: "number" }, y: { type: "number" }, waitFor }, required: ["kind", "captureId", "x", "y"], additionalProperties: false };
 const select = { type: "object", properties: { kind: { const: "select" }, target, value: { type: "string", maxLength: 65536, description: "The option's value or its visible label." } }, required: ["kind", "target", "value"], additionalProperties: false };
 const press = {
@@ -47,11 +48,11 @@ const history = { type: "object", properties: { kind: { enum: ["back", "forward"
 // A wait action carries the condition fields itself, so it reads like every other action.
 const wait = { type: "object", description: "Wait for url, title or text, or for target in a state.", properties: { kind: { const: "wait_for" }, ...waitFor.properties }, required: ["kind"],
   allOf: waitFor.allOf, additionalProperties: false };
-const dialogAccept = { type: "object", properties: { kind: { const: "dialog_accept" }, dialogId: { type: "string", minLength: 1, maxLength: 120 }, promptText: { type: "string", maxLength: 65536 } }, required: ["kind", "dialogId"], additionalProperties: false };
-const dialogDismiss = { type: "object", properties: { kind: { const: "dialog_dismiss" }, dialogId: { type: "string", minLength: 1, maxLength: 120 } }, required: ["kind", "dialogId"], additionalProperties: false };
+const dialogAccept = { type: "object", properties: { kind: { const: "dialog_accept" }, dialogId: { type: "string", minLength: 1, maxLength: 120, description: "Optional when the page has one open dialog." }, promptText: { type: "string", maxLength: 65536 } }, required: ["kind"], additionalProperties: false };
+const dialogDismiss = { type: "object", properties: { kind: { const: "dialog_dismiss" }, dialogId: { type: "string", minLength: 1, maxLength: 120, description: "Optional when the page has one open dialog." } }, required: ["kind"], additionalProperties: false };
 const resize = {type:'object',description:'Resize the page in CSS pixels. An owned browser resizes its window; a tab in the operator\'s own Chrome renders at that size without resizing their window.',properties:{kind:{const:'resize'},width:{type:'integer',minimum:320,maximum:7680},height:{type:'integer',minimum:240,maximum:4320}},required:['kind','width','height'],additionalProperties:false};
 const setFiles = {type:'object',properties:{kind:{const:'set_files'},target,files:{type:'array',description:'Exact absolute local PNG/JPEG/WebP/GIF/MP4/WebM paths; 50 MiB per file, 200 MiB total. Hidden native file inputs can be targeted explicitly.',minItems:1,maxItems:8,items:{type:'string',minLength:1,maxLength:32768}}},required:['kind','target','files'],additionalProperties:false};
-const primitives = [fill, type, clear, edit, click, hover, clickAt, select, press, scroll, navigate, history, wait, dialogAccept, dialogDismiss, resize, setFiles];
+const primitives = [fill, type, clear, edit, click, hover, drag, clickAt, select, press, scroll, navigate, history, wait, dialogAccept, dialogDismiss, resize, setFiles];
 // JSON Schema applies sibling properties and oneOf together. Keep the empty
 // property declarations in each variant so its strict field allowlist survives;
 // validate the repeated subtrees once at the enclosing object instead.
@@ -70,7 +71,7 @@ export const ENGINE_COMMAND_SCHEMA = {
         { type: "object", properties: { kind: { const: "sequence" }, steps: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", properties: { target, waitFor }, oneOf: compactPrimitives } } },
           required: ["kind", "steps"], additionalProperties: false }],
     },
-    timeoutMs: { type: "integer", minimum: 1, maximum: 120000, default: 10000 },
+    timeoutMs: { type: "integer", minimum: 1, maximum: 120000, description: "Default 10000 plus the timeoutMs of the waits in the command." },
     observe: { enum: ["local", "none"], default: "local" }, maxBytes: { type: "integer", minimum: 2048, maximum: 65536, default: 8192 },
   }, required: ["commandId", "action"], additionalProperties: false,
 };

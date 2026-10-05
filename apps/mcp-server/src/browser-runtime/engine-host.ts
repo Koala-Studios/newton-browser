@@ -92,7 +92,7 @@ export class EngineHost {
         this.sessions.set(sessionId, engine);
         this.executors.set(sessionId, executor);
         if (finish) this.maintenanceFinish.set(sessionId, finish);
-        return { sessionId, mode, capabilities: ["fill", "type", "clear", "edit", "click", "hover", "move", "click_at", "select", "press", "scroll", "navigate", "back", "forward", "reload", "wait_for", "dialog_accept", "dialog_dismiss", "set_files", "resize", "sequence", "records", "document", "screenshot"], ...(connection.loginSites ? { loginSites: connection.loginSites } : {}), nextCommandId: 1, page: executor.bindPage(), observation };
+        return { sessionId, mode, capabilities: ["fill", "type", "clear", "edit", "click", "hover", "drag", "move", "click_at", "select", "press", "scroll", "navigate", "back", "forward", "reload", "wait_for", "dialog_accept", "dialog_dismiss", "set_files", "resize", "sequence", "records", "document", "screenshot"], ...(connection.loginSites ? { loginSites: connection.loginSites } : {}), nextCommandId: 1, page: executor.bindPage(), observation };
       } catch (error) { unsubscribe?.(); await executor.close(); await finish?.(false).catch(() => undefined); throw error; }
     })();
     this.starts.add(start);

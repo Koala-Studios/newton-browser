@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ENGINE_ERRORS, EngineError, asObservationBudget, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
+import { ENGINE_ERRORS, EngineError, asObservationBudget, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
 import { CommandContext } from "./command-context.ts";
 import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
@@ -335,7 +335,9 @@ export class PageExecutor implements EngineExecutor {
     }
     if (this.suspendedInputs.size >= 32) throw new EngineError("work_limit");
     if (action.kind === "dialog_accept" || action.kind === "dialog_dismiss") {
-      const dialog = [...this.dialogs.values()].find(item => item.pageId === page.pageId && item.id === action.dialogId);
+      // Without an id, the page's one open dialog: with none open there is nothing to answer.
+      const open = [...this.dialogs.values()].filter(item => item.pageId === page.pageId);
+      const dialog = action.dialogId === undefined ? (open.length === 1 ? open[0] : undefined) : open.find(item => item.id === action.dialogId);
       if (!dialog) throw new EngineError("stale_target");
       if (action.promptText !== undefined && dialog.type !== "prompt") throw new EngineError("invalid_arguments");
       await context.input(() => this.connection.wire.send("Page.handleJavaScriptDialog", { accept: action.kind === "dialog_accept", ...(action.promptText === undefined ? {} : { promptText: action.promptText }) }, dialog.route));
@@ -355,6 +357,7 @@ export class PageExecutor implements EngineExecutor {
     if (action.kind === 'resize') return this.resize(context,page,action.width,action.height);
     if (action.kind === "press" && !action.target) return this.pressGlobal(context, page, action.keys, action.text);
     if (!("target" in action)) throw new EngineError("unsupported_capability");
+    if (action.kind === "drag") return this.drag(context, page, action);
     const binding = await this.resolver.resolve(context, page, action.target);
     if (action.kind === 'set_files') return this.setFiles(context,binding,action.files);
     if (action.kind === "click" || action.kind === "hover") await this.preparePointerDocument(context, binding);
@@ -1650,6 +1653,46 @@ export class PageExecutor implements EngineExecutor {
       }
     }
     return { x, y };
+  }
+  /** One pointer gesture from target to `to`. Chrome intercepts a native HTML5 drag so its drop
+   * can be delivered at the destination; a mouse-driven drag simply follows the moves and release. */
+  private async drag(context: CommandContext, page: EnginePageStamp, action: EngineDrag): Promise<EnginePostcondition> {
+    const source = await this.resolver.resolve(context, page, action.target);
+    const destination = await this.resolver.resolve(context, page, action.to);
+    // The gesture runs on one input route, so both ends must be in the same document.
+    const route = this.directory.route(source);
+    if (this.directory.route(destination) !== route) throw new EngineError("unsupported_structure");
+    await this.preparePointerDocument(context, source);
+    context.ensureInputCapacity(2);
+    for (const binding of [destination, source]) {
+      const facts = await this.resolver.inspect(context, binding, { editable: false, pointer: true });
+      if (facts.pointerInView === false) await context.input(() => this.send(binding, "DOM.scrollIntoViewIfNeeded", { backendNodeId: binding.backendNodeId }));
+    }
+    const points: { x: number; y: number }[] = [];
+    for (const binding of [source, destination]) {
+      const facts = await this.resolver.inspect(context, binding, { editable: false, pointer: true });
+      const box = facts.bbox;
+      if (!facts.pointerInView || !box || box.width <= 0 || box.height <= 0) throw new EngineError("target_not_editable");
+      await this.verifyHit(context, binding, box.x + box.width / 2, box.y + box.height / 2);
+      points.push(await this.pointerPoint(context, binding));
+    }
+    let data: Record<string, unknown> | undefined;
+    let wake: (() => void) | undefined;
+    const unsubscribe = this.connection.wire.onEvent(event => {
+      if (event.method === "Input.dragIntercepted" && (event.sessionId ?? "") === route) { data = object(event.params.data); wake?.(); }
+    });
+    try {
+      await context.read(() => this.send(source, "Input.setInterceptDrags", { enabled: true }));
+      await this.input!.drag(source, points[0]!, points[1]!, async () => {
+        if (!data) await new Promise<void>(resolve => { wake = resolve; setTimeout(resolve, 250); });
+        return data;
+      });
+    } finally {
+      unsubscribe();
+      void this.send(source, "Input.setInterceptDrags", { enabled: false }).catch(() => undefined);
+    }
+    if (action.waitFor) return this.waitFor(context, page, action.waitFor);
+    return { state: "not_requested" };
   }
   private async clickAt(context: CommandContext, page: EnginePageStamp, action: EngineClickAt): Promise<EnginePostcondition> {
     const capture = this.captures.get(action.captureId);

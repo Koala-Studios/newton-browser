@@ -89,3 +89,25 @@ test("the rewrites reach the agent inside the tool result", () => {
   assert.deepEqual(JSON.parse((withNormalized(result, ["action.label → action.value"]) as typeof result).content[0]!.text), { reason: "completed", normalized: ["action.label → action.value"] });
   assert.equal(withNormalized(result, []), result);
 });
+
+// Written in the 2026-10-05 twelve-task runs.
+test("press key, drag source and drag-and-drop spellings become the exact command", () => {
+  const key = act({ commandId: 1, action: { kind: "press", target: { kind: "ref", ref: "e1" }, key: "Tab" } });
+  assert.deepEqual(parsed(key).action, { kind: "press", target: { kind: "ref", ref: "e1" }, keys: ["Tab"] });
+  assert.deepEqual(key.normalized, ["action.key → action.keys", "action.keys \"Tab\" → [\"Tab\"]"]);
+  const chord = act({ commandId: 1, action: { kind: "press", keys: "Control+a" } });
+  assert.deepEqual(parsed(chord).action, { kind: "press", keys: ["Control", "a"] });
+  const plus = act({ commandId: 1, action: { kind: "press", keys: "+" } });
+  assert.deepEqual(parsed(plus).action, { kind: "press", keys: ["+"] });
+
+  const codex = act({ commandId: 2, action: { kind: "drag", source: { kind: "selector", selector: "#column-a" }, target: { kind: "selector", selector: "#column-b" } } });
+  assert.deepEqual(parsed(codex).action, { kind: "drag", target: { kind: "selector", selector: "#column-a" }, to: { kind: "selector", selector: "#column-b" } });
+  assert.deepEqual(codex.normalized, ["action.target → action.to", "action.source → action.target"]);
+  const fromTo = act({ commandId: 2, action: { kind: "drag_and_drop", from: "e3", to: "e4" } });
+  assert.deepEqual(parsed(fromTo).action, { kind: "drag", target: { kind: "ref", ref: "e3" }, to: { kind: "ref", ref: "e4" } });
+  const exact = act({ commandId: 2, action: { kind: "drag", target: { kind: "ref", ref: "e3" }, to: { kind: "ref", ref: "e4" } } });
+  assert.deepEqual(exact.normalized, []);
+  // Three ends are not one drag: the strict check refuses it.
+  const three = act({ commandId: 2, action: { kind: "drag", source: { kind: "ref", ref: "e2" }, target: { kind: "ref", ref: "e3" }, to: { kind: "ref", ref: "e4" } } });
+  assert.throws(() => parsed(three), /invalid_arguments|unsupported/u);
+});
