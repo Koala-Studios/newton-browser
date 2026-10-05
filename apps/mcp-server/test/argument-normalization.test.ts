@@ -35,6 +35,17 @@ test("near-miss shapes agents wrote become the exact command, and each rewrite i
   assert.deepEqual(parsed(textForValue).action, { kind: "type", target: { kind: "ref", ref: "e1" }, value: "hello" });
   assert.deepEqual(parsed(act({ commandId: 7, action: { kind: "press", text: "hi" } })).action, { kind: "press", text: "hi" }, "press keeps its own text");
 
+  // Claude, 0.7.10 run: a wait after navigating, on the action and then on the command.
+  const navigateWait = act({ commandId: 7, action: { kind: "navigate", url: "https://example.org/", waitFor: { text: "Remove/add", timeoutMs: 4000 } } });
+  assert.deepEqual(parsed(navigateWait).action, { kind: "sequence", steps: [{ kind: "navigate", url: "https://example.org/" }, { kind: "wait_for", waitFor: { text: "Remove/add", timeoutMs: 4000 } }] });
+  const commandWait = act({ commandId: 7, action: { kind: "navigate", url: "https://example.org/" }, waitFor: { text: "Remove/add" } });
+  assert.equal(parsed(commandWait).action.kind, "sequence");
+  assert.deepEqual(commandWait.normalized, ["command.waitFor → action.waitFor", "action.waitFor → a following wait_for step"]);
+  const clickWait = act({ commandId: 8, action: { kind: "click", target: { kind: "ref", ref: "e2" } }, waitFor: { url: "**/done" } });
+  assert.deepEqual(parsed(clickWait).action, { kind: "click", target: { kind: "ref", ref: "e2" }, waitFor: { url: "**/done" } }, "a click keeps its own after-wait");
+  const stepWait = act({ commandId: 9, action: { kind: "sequence", steps: [{ kind: "fill", target: "e1", value: "x", waitFor: { text: "Saved" } }] } });
+  assert.deepEqual(parsed(stepWait).action, { kind: "sequence", steps: [{ kind: "fill", target: { kind: "ref", ref: "e1" }, value: "x" }, { kind: "wait_for", waitFor: { text: "Saved" } }] });
+
   const typeForKind = act({ commandId: 1, action: { type: "fill", target: "e1", value: "qa test" } });
   assert.deepEqual(parsed(typeForKind).action, { kind: "fill", target: { kind: "ref", ref: "e1" }, value: "qa test" });
 

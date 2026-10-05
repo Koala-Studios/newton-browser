@@ -12,6 +12,9 @@ const WAIT_STATES = new Set<string>(ENGINE_WAIT_STATES);
 const WAIT_FIELDS = ["target", "state", "url", "title", "text", "value", "timeoutMs"] as string[];
 const COMMAND_FIELDS = ["commandId", "pageId", "action", "timeoutMs", "observe", "maxBytes"] as const;
 const REF = /^e\d{1,9}$/u;
+/** Actions whose own `waitFor` waits after them; any other action followed by a wait becomes a sequence. */
+const WAITING_KINDS = new Set(["click", "hover", "click_at", "move"]);
+const MAX_STEPS = 32;
 const MAX_NOTES = 8;
 
 export type NormalizedArguments = { args: unknown; normalized: string[] };
@@ -49,10 +52,30 @@ function normalizeAct(args: Value, note: (text: string) => void): void {
   }
   for (const key of ["commandId", "timeoutMs", "maxBytes"]) numeric(command, key, `command.${key}`, note);
   if (!isObject(command.action)) return;
+  // A wait written on the command means the same as one on its action.
+  if (isObject(command.waitFor) && command.action.waitFor === undefined) {
+    command.action.waitFor = command.waitFor; delete command.waitFor;
+    note("command.waitFor → action.waitFor");
+  }
   normalizeAction(command.action, "action", note);
   if (command.action.kind === "sequence" && Array.isArray(command.action.steps)) {
     command.action.steps.forEach((step, index) => { if (isObject(step)) normalizeAction(step, `action.steps[${index}]`, note); });
+    const steps: unknown[] = [];
+    for (const [index, step] of command.action.steps.entries()) steps.push(...splitWait(step, `action.steps[${index}]`, note));
+    if (steps.length <= MAX_STEPS) command.action.steps = steps;
+  } else {
+    const steps = splitWait(command.action, "action", note);
+    if (steps.length > 1) command.action = { kind: "sequence", steps };
   }
+}
+
+/** `waitFor` on an action that has none of its own (navigate, fill, …) means: do it, then wait. */
+function splitWait(step: unknown, path: string, note: (text: string) => void): unknown[] {
+  if (!isObject(step) || !isObject(step.waitFor) || typeof step.kind !== "string" || WAITING_KINDS.has(step.kind) || step.kind === "wait_for" || step.kind === "sequence") return [step];
+  const { waitFor, ...action } = step;
+  if (waitFor.kind !== undefined) return [step];
+  note(`${path}.waitFor → a following wait_for step`);
+  return [action, { kind: "wait_for", ...waitFor }];
 }
 
 function normalizeAction(action: Value, path: string, note: (text: string) => void): void {

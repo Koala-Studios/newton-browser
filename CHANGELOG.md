@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.11] - 2026-10-05
+
+### Changed
+
+- A `waitFor` on an action that has no after-wait of its own (`navigate`, `fill`, …), or
+  written on the command instead of the action, becomes a following `wait_for` step in a
+  sequence, reported under `normalized`. `click`, `hover` and `click_at` keep their own.
+
 ## [0.7.10] - 2026-10-05
 
 ### Fixed
