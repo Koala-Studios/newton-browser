@@ -43,7 +43,7 @@ try {
         let commandId=2;
         const act=async(action,pageId)=>{const receipt=await call('browser.act',{sessionId:initial.sessionId,command:{commandId:commandId++,timeoutMs:2500,action,...(pageId?{pageId}:{})}});if(receipt.reason!=='completed')throw new Error(JSON.stringify({action:action.kind,receipt}));return receipt;};
         const hover=await act({kind:'hover',target:{kind:'selector',selector:'#hover'},waitFor:{text:'hovered',timeoutMs:500}});
-        const checkbox=await act({kind:'click',target:{kind:'selector',selector:'#toggle'},waitFor:{selector:'#toggle',state:'checked',timeoutMs:500}});
+        const checkbox=await act({kind:'click',target:{kind:'selector',selector:'#toggle'},waitFor:{target:{kind:'selector',selector:'#toggle'},state:'checked',timeoutMs:500}});
         const screenshot=await call('browser.screenshot',{sessionId:initial.sessionId,maxBytes:65536,timeoutMs:5000});
         const fullPageScreenshot=await call('browser.screenshot',{sessionId:initial.sessionId,fullPage:true,timeoutMs:5000});
         const opened=await act({kind:'click',target:{kind:'selector',selector:'#prompt'}});

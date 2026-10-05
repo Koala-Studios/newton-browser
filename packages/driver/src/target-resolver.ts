@@ -29,9 +29,12 @@ const fieldInspection = `function(pointer=false) {
   // Sensitivity gates the access itself, including geometry-only masking inspection.
   const currentValue = sensitive || !editable ? undefined :
     tag === 'input' || tag === 'textarea' || tag === 'select' ? this.value : this.isContentEditable ? (this.textContent || '') : undefined;
+  // closest() is not side-effect free for V8's check; walk ancestors with getAttribute.
+  let ariaDisabled=false;
+  for(let node=this,depth=0;node&&depth<64&&!ariaDisabled;node=node.parentElement,depth++)ariaDisabled=node.getAttribute('aria-disabled')==='true';
   let focusRoot=this,focusDepth=0;
   while(focusRoot.parentNode&&focusDepth++<256)focusRoot=focusRoot.parentNode;
-  return { sensitive, editable, connected: this.isConnected, disabled: !!this.disabled,
+  return { sensitive, editable, connected: this.isConnected, disabled: !!this.disabled, ariaDisabled,
     readonly: !!this.readOnly, visible, focused: !focusRoot.parentNode && focusRoot.activeElement === this,
     tag, type, checked: !!this.checked, selected: !!this.selected, pointerInView,
     multiple: tag === 'select' || (tag === 'input' && type === 'file') ? !!this.multiple : undefined,
@@ -65,6 +68,8 @@ export type TargetResolverFacts = Readonly<{
   editable: boolean;
   connected: boolean;
   disabled: boolean;
+  /** The element or an ancestor says aria-disabled="true": a custom control that is not usable yet. */
+  ariaDisabled?: boolean;
   readonly: boolean;
   visible: boolean;
   focused: boolean;
@@ -202,6 +207,7 @@ export class TargetResolver {
         ...(typeof facts.tag === "string" ? { tag: facts.tag } : {}),
         ...(typeof facts.type === "string" ? { type: facts.type } : {}),
         ...(typeof facts.checked === "boolean" ? { checked: facts.checked } : {}),
+        ...(typeof facts.ariaDisabled === "boolean" ? { ariaDisabled: facts.ariaDisabled } : {}),
         ...(typeof facts.selected === "boolean" ? { selected: facts.selected } : {}),
         ...(typeof facts.multiple === "boolean" ? { multiple: facts.multiple } : {}),
         ...(typeof facts.pointerInView === "boolean" ? { pointerInView: facts.pointerInView } : {}),

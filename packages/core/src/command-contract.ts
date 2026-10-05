@@ -30,11 +30,13 @@ export type EngineTarget =
   | Readonly<{ kind: "ref"; ref: string }>
   | Readonly<{ kind: "selector"; selector: string }>
   | Readonly<{ kind: "semantic"; role: string; name: string; exact: boolean }>;
+/** An element is named with the same `target` as every action; `state` says what to wait for on it. */
 export type EngineWaitFor = Readonly<{
-  url?: string; title?: string; text?: string; selector?: string; role?: string; name?: string; ref?: string; value?: string;
-  state?: "attached" | "detached" | "visible" | "hidden" | "checked" | "unchecked" | "value";
+  url?: string; title?: string; text?: string; target?: EngineTarget; value?: string;
+  state?: "attached" | "detached" | "visible" | "hidden" | "enabled" | "disabled" | "checked" | "unchecked" | "value";
   timeoutMs?: number;
 }>;
+export const ENGINE_WAIT_STATES = ["attached", "detached", "visible", "hidden", "enabled", "disabled", "checked", "unchecked", "value"] as const;
 export type EngineFill = Readonly<{ kind: "fill"; target: EngineTarget; value: string }>;
 export type EngineType = Readonly<{ kind: "type"; target: EngineTarget; value: string }>;
 export type EngineClear = Readonly<{ kind: "clear"; target: EngineTarget }>;
@@ -186,20 +188,18 @@ function parseEdit(raw:unknown):EngineEdit {
     ...(value.occurrence===undefined?{}:{occurrence:boundedInteger(value.occurrence,1,65536)})});
 }
 function parseWaitFor(raw: unknown): EngineWaitFor {
-  const value = exactObject(raw, ["url", "title", "text", "selector", "role", "name", "ref", "value", "state", "timeoutMs"]);
+  const value = exactObject(raw, ["url", "title", "text", "target", "value", "state", "timeoutMs"]);
   const output: Record<string, unknown> = {};
-  for (const key of ["url", "title", "text", "selector", "role", "name", "ref", "value"] as const) {
-    if (value[key] !== undefined) output[key] = boundedString(value[key], key === "role" ? 80 : key === "ref" ? 120 : 1024, key === "value");
+  for (const key of ["url", "title", "text", "value"] as const) {
+    if (value[key] !== undefined) output[key] = boundedString(value[key], 1024, key === "value");
   }
-  if (value.state !== undefined && (typeof value.state !== "string" || !["attached", "detached", "visible", "hidden", "checked", "unchecked", "value"].includes(value.state))) throw new EngineError("invalid_arguments");
+  if (value.target !== undefined) output.target = parseEngineTarget(value.target);
+  if (value.state !== undefined && (typeof value.state !== "string" || !(ENGINE_WAIT_STATES as readonly string[]).includes(value.state))) throw new EngineError("invalid_arguments");
   if (value.state !== undefined) output.state = value.state;
   if (value.timeoutMs !== undefined) output.timeoutMs = boundedInteger(value.timeoutMs, 1, 120_000);
-  const semantic = value.role !== undefined || value.name !== undefined;
-  const targets = Number(value.ref !== undefined) + Number(value.selector !== undefined) + Number(semantic);
-  if (targets > 1 || (semantic && (value.role === undefined || value.name === undefined))) throw new EngineError("invalid_arguments");
-  if (value.state !== undefined && targets !== 1) throw new EngineError("invalid_arguments");
+  if (value.state !== undefined && value.target === undefined) throw new EngineError("invalid_arguments");
   if ((value.state === "value") !== (value.value !== undefined)) throw new EngineError("invalid_arguments");
-  if (!targets && value.url === undefined && value.title === undefined && value.text === undefined) throw new EngineError("invalid_arguments");
+  if (value.target === undefined && value.url === undefined && value.title === undefined && value.text === undefined) throw new EngineError("invalid_arguments");
   return Object.freeze(output as EngineWaitFor);
 }
 function parseClick(raw: unknown): EngineClick {

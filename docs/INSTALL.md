@@ -7,7 +7,7 @@ TCP port.
 
 ## Install
 
-This checkout contains version 0.7.7. Clients should run an installed release package
+This checkout contains version 0.7.8. Clients should run an installed release package
 (see **Install a release** below), not a source checkout: a checkout changes under the
 client whenever it is edited or rebuilt. For source testing, build and run the exact
 compiled entrypoint:
@@ -95,12 +95,12 @@ Rebuild after source changes.
 
 ## Install a release
 
-Download the release asset `newton-browser-0.7.7.tgz` and check it against the
+Download the release asset `newton-browser-0.7.8.tgz` and check it against the
 SHA-256 in the release notes. On macOS:
 
 ```bash
 root="$HOME/Library/Application Support/NewtonBrowser/package"
-npm install --prefix "$root" --ignore-scripts --no-audit --no-fund --offline /absolute/path/newton-browser-0.7.7.tgz
+npm install --prefix "$root" --ignore-scripts --no-audit --no-fund --offline /absolute/path/newton-browser-0.7.8.tgz
 entry="$root/node_modules/newton-browser/dist/index.js"
 node "$entry" install claude-code
 node "$entry" install codex
@@ -109,11 +109,11 @@ node "$entry" install codex
 To upgrade, install the newer tarball the same way and rerun both client commands with
 `--force`.
 
-On Windows (`artifacts/newton-browser-0.7.7.tgz` from `pnpm pack:check`, or a release asset):
+On Windows (`artifacts/newton-browser-0.7.8.tgz` from `pnpm pack:check`, or a release asset):
 
 ```powershell
 $installRoot = Join-Path $env:LOCALAPPDATA "NewtonBrowser\package"
-npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.7.7.tgz"
+npm install --prefix $installRoot --ignore-scripts --no-audit --no-fund --offline "C:\absolute\path\newton-browser-0.7.8.tgz"
 node "$installRoot\node_modules\newton-browser\dist\index.js" install codex --dry-run
 ```
 

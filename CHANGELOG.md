@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-10-05
+
+### Changed
+
+- **Breaking:** `waitFor` names an element with the same `target` as every action
+  (`{ target: { kind: "ref", ref: "e3" }, state: "visible" }`), instead of its own flat
+  `ref`, `selector` or `role` with `name`. Agents reused the action form and were refused.
+  The flat fields are gone, not aliased.
+
+### Added
+
+- `waitFor` states `enabled` and `disabled`: wait until a control becomes usable. A custom
+  control counts as disabled while it or an ancestor has `aria-disabled="true"`.
+
 ## [0.7.7] - 2026-10-05
 
 ### Fixed

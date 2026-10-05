@@ -38,7 +38,7 @@ function compactSchema(schema: unknown): unknown {
   const properties = compact.properties as Record<string, Record<string, unknown>> | undefined;
   if (Array.isArray(compact.allOf) && properties?.state && properties.url) {
     delete compact.allOf;
-    compact.description = "Give one of url, title, text, ref, selector, or role with name. state needs ref, selector or role; value needs state \"value\".";
+    compact.description = "Give url, title or text, or an element as target, named exactly like an action target, with an optional state. Example: {\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"enabled\"}. value needs state \"value\".";
   }
   if (properties?.kind?.const === "sequence" && properties.steps) {
     compact.properties = { ...properties, steps: { ...properties.steps, items: { type: "object", description: "One action of any kind except sequence, shaped as above." } } };

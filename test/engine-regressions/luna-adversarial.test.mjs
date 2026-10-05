@@ -154,17 +154,32 @@ test("the session engine refuses unverifiable effects and preserves exact input 
     }catch(error){console.error('full-page spatial evidence:',JSON.stringify({fullSpatial,fullCaptureRequests}));throw error;}
     finally{executor.send=originalSend;executor.captureSpatialState=spatialRead;fullContext.dispose();}
 
-    evidence.hiddenWait = await run({ kind: "wait_for", waitFor: { selector: "#hidden", state: "hidden", timeoutMs: 500 } });
+    evidence.hiddenWait = await run({ kind: "wait_for", waitFor: { target: { kind: "selector", selector: "#hidden" }, state: "hidden", timeoutMs: 500 } });
     assert.equal(evidence.hiddenWait.state, "met");
     let detachedSettled = false;
-    const detachedPromise = run({ kind: "wait_for", waitFor: { selector: "#remove", state: "detached", timeoutMs: 500 } }).finally(() => { detachedSettled = true; });
+    const detachedPromise = run({ kind: "wait_for", waitFor: { target: { kind: "selector", selector: "#remove" }, state: "detached", timeoutMs: 500 } }).finally(() => { detachedSettled = true; });
     await new Promise(resolve => setTimeout(resolve, 60));
     assert.equal(detachedSettled, false);
     await evalPage("document.getElementById('remove')?.remove()");
     evidence.detachedWait = await detachedPromise;
     assert.equal(evidence.detachedWait.state, "met");
-    evidence.attachedDetachedTimeout = await run({ kind: "wait_for", waitFor: { selector: "#normal", state: "detached", timeoutMs: 120 } }, 500);
+    evidence.attachedDetachedTimeout = await run({ kind: "wait_for", waitFor: { target: { kind: "selector", selector: "#normal" }, state: "detached", timeoutMs: 120 } }, 500);
     assert.equal(evidence.attachedDetachedTimeout.errorCode, "timed_out");
+
+    // A control that becomes usable later: a native disabled button, and a custom one marked aria-disabled.
+    await evalPage("document.body.insertAdjacentHTML('beforeend','<button id=\"later\" disabled>Later</button><div id=\"custom\" role=\"button\" aria-disabled=\"true\">Custom</div>')");
+    const later = { kind: "selector", selector: "#later" }, custom = { kind: "semantic", role: "button", name: "Custom" };
+    assert.equal((await run({ kind: "wait_for", waitFor: { target: later, state: "disabled", timeoutMs: 500 } })).state, "met");
+    let enabledSettled = false;
+    const enabledPromise = run({ kind: "wait_for", waitFor: { target: later, state: "enabled", timeoutMs: 1000 } }).finally(() => { enabledSettled = true; });
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(enabledSettled, false, "a disabled control does not satisfy enabled");
+    await evalPage("document.getElementById('later').disabled = false");
+    assert.equal((await enabledPromise).state, "met");
+    assert.equal((await run({ kind: "wait_for", waitFor: { target: custom, state: "disabled", timeoutMs: 500 } })).state, "met");
+    assert.equal((await run({ kind: "wait_for", waitFor: { target: custom, state: "enabled", timeoutMs: 120 } }, 500)).errorCode, "timed_out");
+    await evalPage("document.getElementById('custom').removeAttribute('aria-disabled')");
+    assert.equal((await run({ kind: "wait_for", waitFor: { target: custom, state: "enabled", timeoutMs: 500 } })).state, "met");
 
     evidence.initialBack = await run({ kind: "back" });
     assert.equal(evidence.initialBack.state, "not_met", JSON.stringify({ initialBack: evidence.initialBack, historyProbe: evidence.historyProbe }));

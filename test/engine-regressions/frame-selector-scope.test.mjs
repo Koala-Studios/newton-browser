@@ -32,7 +32,7 @@ for (const crossSite of [false, true]) test(`selectors and pointers preserve fra
     }
     assert.deepEqual(outcomes,[{state:'met',kind:'value'},{state:'met',kind:'value'}]);
     const clickContext=new CommandContext(2000);
-    try { assert.deepEqual(await executor.act(clickContext,page,{kind:'click',target:{kind:'selector',selector:'#check'},waitFor:{selector:'#check',state:'checked',timeoutMs:500}}),{state:'met',kind:'visible'}); }
+    try { assert.deepEqual(await executor.act(clickContext,page,{kind:'click',target:{kind:'selector',selector:'#check'},waitFor:{target:{kind:'selector',selector:'#check'},state:'checked',timeoutMs:500}}),{state:'met',kind:'visible'}); }
     finally {clickContext.dispose();}
     const navContext=new CommandContext(1000);
     try {

@@ -21,7 +21,8 @@ test('factored command schema keeps enclosing target and waitFor constraints wit
     if (Object.hasOwn(branch.properties, 'waitFor')) assert.deepEqual(branch.properties.waitFor, {});
   }
   assert.equal(action.properties.target.oneOf.length, 3);
-  assert.equal(action.properties.waitFor.allOf.length, 7);
+  assert.equal(action.properties.waitFor.allOf.length, 4);
+  assert.equal(action.properties.waitFor.properties.target, action.properties.target, 'a wait names its element with the action target schema');
 });
 
 test('factored command schema reconstructs the expanded target and waitFor branches', () => {
@@ -32,7 +33,8 @@ test('factored command schema reconstructs the expanded target and waitFor branc
   assert.equal(action.properties, undefined);
   assert.equal(sequence.properties.steps.items.properties, undefined);
   assert.equal(countEmptyPlaceholders(expanded), 0);
-  assert.equal(countPropertySchema(expanded, 'target'), 20);
+  // 20 action targets plus the target inside each of the 8 waitFor copies.
+  assert.equal(countPropertySchema(expanded, 'target'), 28);
   assert.equal(countPropertySchema(expanded, 'waitFor'), 8);
 
   const primitiveKinds = action.oneOf.filter(branch => branch !== sequence).map(branch => branch.properties.kind.const ?? branch.properties.kind.enum);
@@ -49,9 +51,10 @@ test('valid and adversarial command corpus agrees with the strict runtime contra
     {commandId: 2, action: {kind: 'click', target: selectorTarget, waitFor: {url: 'https://example.org'}}},
     {commandId: 3, action: {kind: 'sequence', steps: [
       {kind: 'click', target: refTarget},
-      {kind: 'wait_for', waitFor: {role: 'button', name: 'Save', state: 'visible'}},
+      {kind: 'wait_for', waitFor: {target: {kind: 'semantic', role: 'button', name: 'Save'}, state: 'visible'}},
     ]}},
-    {commandId: 4, action: {kind: 'wait_for', waitFor: {value: 'ready', state: 'value', selector: '#status'}}},
+    {commandId: 4, action: {kind: 'wait_for', waitFor: {value: 'ready', state: 'value', target: {kind: 'selector', selector: '#status'}}}},
+    {commandId: 14, action: {kind: 'wait_for', waitFor: {target: refTarget, state: 'enabled'}}},
   ];
   const invalid = [
     {commandId: 5, action: {kind: 'fill', target: {kind: 'ref', ref: 'e1', selector: '#mixed'}, value: 'x'}},
@@ -60,7 +63,9 @@ test('valid and adversarial command corpus agrees with the strict runtime contra
     {commandId: 8, action: {kind: 'navigate', url: 'https://example.org', target: refTarget}},
     {commandId: 9, action: {kind: 'click', target: refTarget, value: 'forbidden'}},
     {commandId: 10, action: {kind: 'sequence', steps: [{kind: 'click', target: refTarget, selector: '#forbidden'}]}},
-    {commandId: 11, action: {kind: 'click', target: refTarget, waitFor: {ref: 'e1', selector: '#mixed'}}},
+    {commandId: 11, action: {kind: 'click', target: refTarget, waitFor: {ref: 'e1'}}},
+    {commandId: 15, action: {kind: 'wait_for', waitFor: {target: refTarget, state: 'usable'}}},
+    {commandId: 16, action: {kind: 'wait_for', waitFor: {target: {kind: 'ref', ref: 'e1', selector: '#mixed'}}}},
     {commandId: 12, action: {kind: 'click'}},
     {commandId: 13},
     {action: {kind: 'click', target: refTarget}},

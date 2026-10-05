@@ -19,21 +19,17 @@ const edit = {type:'object',description:'Replace an exact text match within one 
   properties:{kind:{const:'edit'},target,match:{type:'string',minLength:1,maxLength:4096},replacement:{type:'string',maxLength:65536},prefix:{type:'string',maxLength:4096},suffix:{type:'string',maxLength:4096},occurrence:{type:'integer',minimum:1,maximum:65536}},required:['kind','target','match','replacement'],additionalProperties:false};
 const waitFor = {
   type: "object", minProperties: 1, additionalProperties: false,
+  description: "Give url, title, text, or an element as target (the same target as actions) with an optional state; value needs state \"value\".",
   allOf: [
-    { anyOf: ["url", "title", "text", "ref", "selector", "role"].map(key => ({ required: [key] })) },
-    { not: { anyOf: [{ required: ["ref", "selector"] }, { required: ["ref", "role"] }, { required: ["selector", "role"] }] } },
-    { if: { required: ["role"] }, then: { required: ["name"] } },
-    { if: { required: ["name"] }, then: { required: ["role"] } },
-    { if: { required: ["state"] }, then: { anyOf: ["ref", "selector", "role"].map(key => ({ required: [key] })) } },
+    { anyOf: ["url", "title", "text", "target"].map(key => ({ required: [key] })) },
+    { if: { required: ["state"] }, then: { required: ["target"] } },
     { if: { required: ["value"] }, then: { required: ["state"], properties: { state: { const: "value" } } } },
     { if: { required: ["state"], properties: { state: { const: "value" } } }, then: { required: ["value"] } },
   ],
   properties: {
     url: { type: "string", minLength: 1, maxLength: 1024 }, title: { type: "string", minLength: 1, maxLength: 1024 },
-    text: { type: "string", minLength: 1, maxLength: 1024 }, selector: { type: "string", minLength: 1, maxLength: 1024 },
-    role: { type: "string", minLength: 1, maxLength: 80 }, name: { type: "string", minLength: 1, maxLength: 1024 },
-    ref: { type: "string", minLength: 1, maxLength: 120 }, value: { type: "string", maxLength: 1024 },
-    state: { enum: ["attached", "detached", "visible", "hidden", "checked", "unchecked", "value"] },
+    text: { type: "string", minLength: 1, maxLength: 1024 }, target, value: { type: "string", maxLength: 1024 },
+    state: { enum: ["attached", "detached", "visible", "hidden", "enabled", "disabled", "checked", "unchecked", "value"] },
     timeoutMs: { type: "integer", minimum: 1, maximum: 120000 },
   },
 };

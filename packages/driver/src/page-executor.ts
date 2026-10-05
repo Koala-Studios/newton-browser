@@ -756,7 +756,7 @@ export class PageExecutor implements EngineExecutor {
       if(!matched&&incomplete)throw new EngineError('search_incomplete');
       if (!matched) return false;
     }
-    const target = waitTarget(waitFor);
+    const target = waitFor.target;
     if (!target) return true;
     try {
       const binding = await this.resolver.resolve(context, page, target);
@@ -764,6 +764,9 @@ export class PageExecutor implements EngineExecutor {
       const facts = await this.resolver.inspect(context, binding, { editable: false, actionable: false, allowSensitive: true });
       if (waitFor.state === "hidden") return !facts.visible;
       if (waitFor.state === "visible") return facts.visible;
+      // A native disabled control, or a custom one marked aria-disabled, is not usable yet.
+      if (waitFor.state === "enabled") return !facts.disabled && facts.ariaDisabled !== true;
+      if (waitFor.state === "disabled") return facts.disabled || facts.ariaDisabled === true;
       if (waitFor.state === "checked") return facts.checked === true;
       if (waitFor.state === "unchecked") return facts.checked === false;
       if (waitFor.state === "value") return facts.value === waitFor.value;
@@ -1785,13 +1788,6 @@ function documentUrl(value: string): string {
   } catch {
     return value.split("#", 1)[0] ?? value;
   }
-}
-
-function waitTarget(waitFor: EngineWaitFor): EngineTarget | undefined {
-  if (waitFor.ref) return { kind: "ref", ref: waitFor.ref };
-  if (waitFor.selector) return { kind: "selector", selector: waitFor.selector };
-  if (waitFor.role && waitFor.name) return { kind: "semantic", role: waitFor.role, name: waitFor.name, exact: true };
-  return undefined;
 }
 
 /** Read-only and bounded: scans at most 4000 elements and returns element/label pairs, never page data beyond labels. */

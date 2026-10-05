@@ -30,13 +30,18 @@ test('pointer variants validate exact targets, button counts and capture provena
   ]) assert.throws(()=>parseEngineCommand({commandId:1,action}),/invalid_arguments/);
 });
 
-test('waits require meaningful predicates and one complete targeting strategy',()=>{
-  for(const waitFor of [{timeoutMs:100},{state:'detached'},{value:'x'}, {selector:''}, {role:'button'},
-    {ref:'e1',selector:'input'}, {selector:'input',state:['visible']}, {selector:'input',state:'value'}, {selector:'input',value:'x'}]) {
+test('waits require meaningful predicates and name an element with the same target as actions',()=>{
+  const input={kind:'selector',selector:'input'};
+  for(const waitFor of [{timeoutMs:100},{state:'detached'},{value:'x'}, {target:{kind:'selector',selector:''}}, {target:{kind:'semantic',role:'button'}},
+    {target:{kind:'ref',ref:'e1',selector:'input'}}, {target:input,state:['visible']}, {target:input,state:'value'}, {target:input,value:'x'}, {target:input,state:'usable'},
+    // The flat element fields of earlier releases are gone, not aliased.
+    {selector:'input'}, {ref:'e1',state:'visible'}, {role:'button',name:'Save'}]) {
     assert.throws(()=>parseEngineCommand({commandId:1,action:{kind:'wait_for',waitFor}}),/invalid_arguments/,JSON.stringify(waitFor));
   }
-  for(const waitFor of [{url:'https://example.org'}, {selector:'input',state:'value',value:''}, {role:'button',name:'Save',state:'visible'}])
+  for(const waitFor of [{url:'https://example.org'}, {target:input,state:'value',value:''}, {target:{kind:'semantic',role:'button',name:'Save'},state:'visible'},
+    {target:{kind:'ref',ref:'e3'},state:'enabled'}, {target:input,state:'disabled'}])
     assert.equal(parseEngineCommand({commandId:1,action:{kind:'wait_for',waitFor}}).action.kind,'wait_for');
+  assert.deepEqual(parseEngineCommand({commandId:1,action:{kind:'wait_for',waitFor:{target:{kind:'semantic',role:'button',name:'Save'}}}}).action.waitFor.target,{kind:'semantic',role:'button',name:'Save',exact:true});
 });
 test('strict canonical parsing rejects mixed targets and unsupported action bags before admission',()=>{
   const parsed=parseEngineCommand(command);assert.ok(Object.isFrozen(parsed.action.target));assert.equal(parsed.maxBytes,8192);
