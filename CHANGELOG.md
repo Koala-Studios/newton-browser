@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-10-05
+
 ### Fixed
 
 - A page that commits but stays parsing (a script that never loads) returns as loading
