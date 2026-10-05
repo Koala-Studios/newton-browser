@@ -283,6 +283,17 @@ test('MDN public search through MCP returns actionable feedback and destination 
   }
 });
 
+// A stalled document returns well before an ordinary 30 second budget ends, so a client's own deadline is not reached first.
+test('a stalled document with a full budget returns as loading after the parse wait, not at the deadline',async t=>{
+  await withFixture(t,async({executor,url})=>{
+    const page=executor.bindPage();
+    const started=performance.now();
+    await withContext(async context=>assert.deepEqual(await executor.act(context,page,{kind:'navigate',url:url('/stalled-head')}),{state:'met',kind:'navigation'}),30_000);
+    const elapsed=performance.now()-started;
+    assert.ok(elapsed>=9_000&&elapsed<13_000,`returned after ${Math.round(elapsed)} ms`);
+  });
+});
+
 test('a committed page stalled behind a head script returns as loading instead of timing out',async t=>{
   await withFixture(t,async({executor,url})=>{
     const page=executor.bindPage();

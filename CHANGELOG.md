@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- A page that commits but stays parsing (a script that never loads) returns as loading
+  after ten seconds, instead of after nearly the whole budget. A start with the default
+  30 second budget used to end so close to its deadline that a client's own limit could
+  time it out. Observe no longer waits a second time for a document that already spent
+  its parse wait.
+
+### Changed
+
+- `newton-browser install` says what it checked (the server starts and lists its tools)
+  and what it did not (an agent using them), and names the client's own remedy when
+  first use fails: update Codex, or `claude auth login` for an expired Claude Code sign-in.
+
 ## [0.7.6] - 2026-10-03
 
 ### Fixed

@@ -94,6 +94,8 @@ export class PageExecutor implements EngineExecutor {
   private readonly live:SessionLive;
   private readonly diagnostics=new SessionDiagnostics();
   private readonly lifecycle = new Map<string, Set<string>>();
+  /** Documents that already spent a bounded parse wait unparsed; a later read does not wait for them again. */
+  private readonly stalledLoaders = new Set<string>();
   private readonly lifecycleWaiters = new Set<() => void>();
   private readonly conditionWaiters = new Set<() => void>();
   private readonly domRevisions = new Map<string,number>();
@@ -1714,12 +1716,18 @@ export class PageExecutor implements EngineExecutor {
     };
     if (parsed()) return true;
     const bounded = until !== undefined && until < context.deadline;
+    if (until !== undefined && this.stalledLoaders.has(loaderId)) return false;
     const done = await new Promise<boolean>((resolve, reject) => {
       const cleanup = () => { clearTimeout(timer); this.lifecycleWaiters.delete(wake); this.dialogWaiters.delete(dialog); context.signal.removeEventListener("abort", abort); };
       const abort = () => { cleanup(); reject(context.signal.reason); };
       const dialog = (openedPage: string) => { if (openedPage === pageId) { cleanup(); reject(new EngineError("dialog_opened")); } };
       const wake = () => { if (parsed()) { cleanup(); resolve(true); } };
-      const timer = setTimeout(() => { cleanup(); if (bounded) resolve(false); else reject(new EngineError("timed_out")); }, Math.max(1, (bounded ? until : context.deadline) - performance.now()));
+      const timer = setTimeout(() => {
+        cleanup();
+        if (!bounded) { reject(new EngineError("timed_out")); return; }
+        if (this.stalledLoaders.size >= 128) this.stalledLoaders.delete(this.stalledLoaders.values().next().value!);
+        this.stalledLoaders.add(loaderId); resolve(false);
+      }, Math.max(1, (bounded ? until : context.deadline) - performance.now()));
       this.lifecycleWaiters.add(wake); this.dialogWaiters.add(dialog); context.signal.addEventListener("abort", abort, { once: true }); wake();
     });
     context.checkpoint();
@@ -1745,10 +1753,12 @@ export class PageExecutor implements EngineExecutor {
   }
 }
 
-/** Leaves part of the budget, up to two seconds, for reading a page that has not finished parsing. */
+/** A document still parsing after this long is stalled (a script that never loads): it returns as loading. */
+const PARSE_WAIT_MS = 10_000;
+/** Ends the wait for parsing at PARSE_WAIT_MS, leaving up to five seconds of the budget, and at least a quarter, to read the page. */
 function parseDeadline(context: CommandContext): number {
-  const remaining = context.deadline - performance.now();
-  return performance.now() + Math.max(0, remaining - Math.min(2_000, remaining / 4));
+  const now = performance.now(), remaining = context.deadline - now;
+  return now + Math.min(PARSE_WAIT_MS, Math.max(0, remaining - Math.max(remaining / 4, Math.min(5_000, remaining / 2))));
 }
 
 function expectedTypedValue(before: { value?: string; selectionStart?: number; selectionEnd?: number }, inserted: string): string | undefined {
