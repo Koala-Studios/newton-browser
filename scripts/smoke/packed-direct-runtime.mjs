@@ -114,7 +114,7 @@ try {
   requireSuccess(navigated, "packed_direct_cross_origin_action_failed");
   requireSuccess(await client.tool("browser.act", {
     sessionId,
-    command: { commandId: 3, action: { kind: "wait_for", waitFor: { text: "destination-ready", timeoutMs: 10_000 } } },
+    command: { commandId: 3, action: { kind: "wait_for", text: "destination-ready", timeoutMs: 10_000 } },
   }), "packed_direct_cross_origin_navigation_failed");
   requireState(destinationApplicationRequests === 1, "packed_direct_cross_origin_request_missing");
 

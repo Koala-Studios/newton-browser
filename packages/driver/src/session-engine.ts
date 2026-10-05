@@ -7,7 +7,8 @@ import {encodeEngineResult,type EngineRecordShape,type EngineObservationDelta} f
 const postconditionKind=(action:EngineInputAction):Exclude<EnginePostcondition,{state:'not_requested'}>['kind']=>
   action.kind==='set_files'?'files':action.kind==='resize'?'viewport':
   ['navigate','back','forward','reload'].includes(action.kind)?'navigation':
-  ['fill','type','clear','edit','select','press'].includes(action.kind)?'value':'visible';
+  ['fill','type','clear','edit','select','press'].includes(action.kind)?'value':
+  action.kind==='wait_for'||(('waitFor' in action)&&action.waitFor)?'condition':'visible';
 
 export interface EngineExecutor {
   bindPage(pageId?: string): EnginePageStamp;

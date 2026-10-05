@@ -10,7 +10,7 @@ import {getEncoding} from 'js-tiktoken';
 const outputTokenizer=getEncoding('o200k_base');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const DEFAULT_ARTIFACT = path.join(ROOT, "artifacts", "newton-browser-0.7.8.tgz");
+const DEFAULT_ARTIFACT = path.join(ROOT, "artifacts", "newton-browser-0.7.9.tgz");
 const PROTOCOL_VERSION = "2026-07-28";
 const CLIENT_INFO = { name: "packed-acceptance-probes", version: "1.0.0" };
 const MAX_TEXT = 1200;
@@ -495,8 +495,7 @@ async function runWikipedia(client) {
       return workflow;
     }
     const wait = await act(client, workflow, "wait for Wikipedia search suggestion", {
-      kind: "wait_for",
-      waitFor: { text: "Ada Lovelace", timeoutMs: 45000 },
+      kind: "wait_for", text: "Ada Lovelace", timeoutMs: 45000,
     });
     if (!wait.ok) {
       fail(workflow, "wait for Wikipedia search suggestion", actionFailureReason(wait), { response: wait.error ?? wait.data });
@@ -598,8 +597,7 @@ async function runGitHub(client) {
       return workflow;
     }
     const waitForFilteredUrl = await act(client, workflow, "wait for GitHub filtered URL", {
-      kind: "wait_for",
-      waitFor: { url: "label%3Abug", timeoutMs: 45000 },
+      kind: "wait_for", url: "label%3Abug", timeoutMs: 45000,
     });
     if (!waitForFilteredUrl.ok) {
       fail(workflow, "wait for GitHub filtered URL", actionFailureReason(waitForFilteredUrl), { response: waitForFilteredUrl.error ?? waitForFilteredUrl.data });
@@ -786,7 +784,7 @@ async function main() {
     finishedAt: null,
     artifact: {
       path: artifact,
-      version: "0.7.8",
+      version: "0.7.9",
       bytes: artifactStat.size,
       expectedSha256: expectedSha256 || null,
       sha256Before: before,

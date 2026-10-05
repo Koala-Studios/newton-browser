@@ -28,13 +28,13 @@ test('native input returns an actionable prompt and exact dialog acceptance unbl
     assert.equal(stale.errorCode,'stale_target');assert.equal(stale.dispatch,'not_started');
     const accepted=await engine.submit({commandId:3,action:{kind:'dialog_accept',dialogId:id,promptText:'chosen'}});
     assert.equal(accepted.postcondition.state,'met',JSON.stringify(accepted));
-    const effect=await engine.submit({commandId:4,action:{kind:'wait_for',waitFor:{text:'chosen',timeoutMs:500}}});
+    const effect=await engine.submit({commandId:4,action:{kind:'wait_for',text:'chosen',timeoutMs:500}});
     assert.equal(effect.postcondition.state,'met');
     const reopened=await engine.submit({commandId:5,action:{kind:'click',target:{kind:'selector',selector:'button'}}});
     assert.notEqual(reopened.observation.dialog.dialogId,id);
     const dismissed=await engine.submit({commandId:6,action:{kind:'dialog_dismiss',dialogId:reopened.observation.dialog.dialogId}});
     assert.equal(dismissed.postcondition.state,'met');
-    const last=await engine.submit({commandId:7,action:{kind:'wait_for',waitFor:{text:'dismissed',timeoutMs:500}}});
+    const last=await engine.submit({commandId:7,action:{kind:'wait_for',text:'dismissed',timeoutMs:500}});
     assert.equal(last.postcondition.state,'met');
     const keyed=await engine.submit({commandId:8,action:{kind:'press',target:{kind:'selector',selector:'button'},keys:['Enter']}});
     assert.equal(keyed.observation.scope,'dialog');

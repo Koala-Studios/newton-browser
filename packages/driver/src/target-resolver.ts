@@ -97,7 +97,8 @@ export class TargetResolver {
     this.pendingAttachmentsCount = context.pendingAttachments;
     this.pendingFrameCount = context.pendingFrames;
   }
-  async resolve(context: CommandContext, page: EnginePageStamp, target: EngineTarget): Promise<NodeBinding> {
+  /** `firstOfMany` (reads only): several matches resolve to the first in page order and the count is reported; actions stay exact. */
+  async resolve(context: CommandContext, page: EnginePageStamp, target: EngineTarget, firstOfMany?: { count: number }): Promise<NodeBinding> {
     if (target.kind === "ref") return this.directory.resolve(target.ref, page.pageId);
     this.directory.binding(page, 1);
     if (this.pendingAttachmentsCount() || this.pendingFrameCount()) throw new EngineError("search_incomplete");
@@ -129,16 +130,18 @@ export class TargetResolver {
         const nodeId = await this.documentRoot(context, frame, base);
         const result = await context.read(() => this.sendBinding(base, "DOM.querySelectorAll", { nodeId, selector: target.selector }));
         const ids = Array.isArray(result.nodeIds) ? result.nodeIds : [];
-        if (ids.length > 1) throw new EngineError("ambiguous");
+        if (ids.length > 1 && !firstOfMany) throw new EngineError("ambiguous");
+        if (firstOfMany) firstOfMany.count += Math.max(0, ids.length - 1);
         if (ids.length) {
           const described = await context.read(() => this.sendBinding(base, "DOM.describeNode", { nodeId: ids[0] }));
           const backendNodeId = Number(object(described.node).backendNodeId);
           if (Number.isSafeInteger(backendNodeId) && backendNodeId > 0) matches.push(this.directory.binding(frame, backendNodeId));
         }
       }
-      if (matches.length > 1) throw new EngineError("ambiguous");
+      if (matches.length > 1 && !firstOfMany) throw new EngineError("ambiguous");
     }
     if (!matches.length) throw new EngineError("not_found");
+    if (firstOfMany) firstOfMany.count += matches.length;
     return matches[0]!;
   }
   private async rendered(context: CommandContext, frame: EnginePageStamp): Promise<boolean> {

@@ -35,14 +35,14 @@ try {
     const filled=await act({kind:'fill',target:{kind:'ref',ref:field.ref},value:query});
     const fresh=filled.observation.nodes.find(node=>node.value===query);assert.ok(fresh);
     await act({kind:'press',target:{kind:'ref',ref:fresh.ref},keys:['Enter']});
-    await act({kind:'wait_for',waitFor:{url:'label%3Abug',timeoutMs:5000}});
+    await act({kind:'wait_for',url:'label%3Abug',timeoutMs:5000});
     const view=await engine.observe({mode:'controls',maxBytes:32768});
     assert.equal(new URL(view.url).searchParams.get('q'),query);
     evidence.filtered={url:view.url,issues:view.nodes.filter(node=>/github\.com\/microsoft\/vscode\/issues\/\d+/.test(node.href??'')).map(node=>({name:node.name,href:node.href}))};
     assert.ok(evidence.filtered.issues.length);assert.deepEqual(evidence.protocolErrors,[]);evidence.passed=true;
   }else{
   await act({kind:'fill',target:{kind:'semantic',role:'searchbox',name:'Search Wikipedia',exact:true},value:'Ada Lovelace'});
-  await act({kind:'wait_for',waitFor:{text:'Ada Lovelace',timeoutMs:5000}});
+  await act({kind:'wait_for',text:'Ada Lovelace',timeoutMs:5000});
   const controls=await engine.observe({mode:'controls',maxBytes:32768});
   const link=controls.nodes?.find(node=>node.href?.endsWith('/wiki/Ada_Lovelace'));
   if(!link)throw Error('missing result link');

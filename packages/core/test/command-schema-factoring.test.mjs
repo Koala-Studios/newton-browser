@@ -35,7 +35,8 @@ test('factored command schema reconstructs the expanded target and waitFor branc
   assert.equal(countEmptyPlaceholders(expanded), 0);
   // 20 action targets plus the target inside each of the 8 waitFor copies.
   assert.equal(countPropertySchema(expanded, 'target'), 28);
-  assert.equal(countPropertySchema(expanded, 'waitFor'), 8);
+  // click, hover and click_at take waitFor, as actions and as sequence steps; wait_for carries its condition itself.
+  assert.equal(countPropertySchema(expanded, 'waitFor'), 6);
 
   const primitiveKinds = action.oneOf.filter(branch => branch !== sequence).map(branch => branch.properties.kind.const ?? branch.properties.kind.enum);
   assert.deepEqual(primitiveKinds, [
@@ -51,21 +52,24 @@ test('valid and adversarial command corpus agrees with the strict runtime contra
     {commandId: 2, action: {kind: 'click', target: selectorTarget, waitFor: {url: 'https://example.org'}}},
     {commandId: 3, action: {kind: 'sequence', steps: [
       {kind: 'click', target: refTarget},
-      {kind: 'wait_for', waitFor: {target: {kind: 'semantic', role: 'button', name: 'Save'}, state: 'visible'}},
+      {kind: 'wait_for', target: {kind: 'semantic', role: 'button', name: 'Save'}, state: 'visible'},
     ]}},
-    {commandId: 4, action: {kind: 'wait_for', waitFor: {value: 'ready', state: 'value', target: {kind: 'selector', selector: '#status'}}}},
-    {commandId: 14, action: {kind: 'wait_for', waitFor: {target: refTarget, state: 'enabled'}}},
+    {commandId: 4, action: {kind: 'wait_for', value: 'ready', state: 'value', target: {kind: 'selector', selector: '#status'}}},
+    {commandId: 14, action: {kind: 'wait_for', target: refTarget, state: 'enabled'}},
+    {commandId: 17, action: {kind: 'click', target: refTarget, waitFor: {target: refTarget, state: 'hidden'}}},
   ];
   const invalid = [
     {commandId: 5, action: {kind: 'fill', target: {kind: 'ref', ref: 'e1', selector: '#mixed'}, value: 'x'}},
-    {commandId: 6, action: {kind: 'wait_for', waitFor: {timeoutMs: 100}}},
-    {commandId: 7, action: {kind: 'wait_for', waitFor: {value: 'ready'}}},
+    {commandId: 6, action: {kind: 'wait_for', timeoutMs: 100}},
+    {commandId: 7, action: {kind: 'wait_for', value: 'ready'}},
+    // The nested form is the after-action wait; on wait_for itself the condition is written flat (normalized at the MCP boundary).
+    {commandId: 18, action: {kind: 'wait_for', waitFor: {target: refTarget, state: 'visible'}}},
     {commandId: 8, action: {kind: 'navigate', url: 'https://example.org', target: refTarget}},
     {commandId: 9, action: {kind: 'click', target: refTarget, value: 'forbidden'}},
     {commandId: 10, action: {kind: 'sequence', steps: [{kind: 'click', target: refTarget, selector: '#forbidden'}]}},
     {commandId: 11, action: {kind: 'click', target: refTarget, waitFor: {ref: 'e1'}}},
-    {commandId: 15, action: {kind: 'wait_for', waitFor: {target: refTarget, state: 'usable'}}},
-    {commandId: 16, action: {kind: 'wait_for', waitFor: {target: {kind: 'ref', ref: 'e1', selector: '#mixed'}}}},
+    {commandId: 15, action: {kind: 'wait_for', target: refTarget, state: 'usable'}},
+    {commandId: 16, action: {kind: 'wait_for', target: {kind: 'ref', ref: 'e1', selector: '#mixed'}}},
     {commandId: 12, action: {kind: 'click'}},
     {commandId: 13},
     {action: {kind: 'click', target: refTarget}},
@@ -91,7 +95,7 @@ test('every primitive kind and enum alias parses standalone and inside a sequenc
     () => ({kind: 'back'}),
     () => ({kind: 'forward'}),
     () => ({kind: 'reload'}),
-    () => ({kind: 'wait_for', waitFor: {url: 'https://example.org'}}),
+    () => ({kind: 'wait_for', url: 'https://example.org'}),
     () => ({kind: 'dialog_accept', dialogId: 'dialog1'}),
     () => ({kind: 'dialog_dismiss', dialogId: 'dialog1'}),
     () => ({kind: 'resize', width: 640, height: 480}),
@@ -110,7 +114,7 @@ test('hoisted-field boundaries reject malformed types and forbidden sequence pla
     assert.throws(() => parseEngineCommand({commandId: 300, action: {kind: 'fill', target, value: 'x'}}), /invalid_arguments|unsupported field/u);
   }
   for (const waitFor of [null, 'done', ['done'], {timeoutMs: 100}, {role: 'button'}, {value: 'ready'}]) {
-    assert.throws(() => parseEngineCommand({commandId: 301, action: {kind: 'wait_for', waitFor}}), /invalid_arguments|unsupported field/u);
+    assert.throws(() => parseEngineCommand({commandId: 301, action: {kind: 'click', target: refTarget, waitFor}}), /invalid_arguments|unsupported field/u);
   }
   assert.doesNotThrow(() => parseEngineCommand({commandId: 302, action: {kind: 'click', target: {kind: 'semantic', role: 'button', name: 'Save', exact: false}}}));
   for (const target of [

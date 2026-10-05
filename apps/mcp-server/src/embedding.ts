@@ -84,6 +84,10 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
   });
 }
 
+/** A host that applies its own policy to tool arguments (file authorization, intent records) normalizes
+ * them first with the same rules `call` applies, so a near-miss shape cannot pass a check it would fail. */
+export { normalizeToolArguments } from "./argument-normalization.ts";
+export { withNormalized } from "./engine-mcp.ts";
 // Foundation and packaging checks exercise these from packed artifacts.
 export { EngineHost, ownedEngineConnection } from "./browser-runtime/engine-host.ts";
 export { LoginSource } from "./browser-runtime/login-source.ts";

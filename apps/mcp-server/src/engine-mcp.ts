@@ -1,5 +1,6 @@
 import { ENGINE_LIMITS, ENGINE_COMMAND_SCHEMA, ENGINE_TARGET_SCHEMA, EngineError, boundedInteger, boundedString, encodeEngineReceipt, encodeEngineResult, engineErrorCode, exactObject, explainArguments, parseEngineCommand, parseEngineTarget } from "@newton-browser/core";
 import { NEWTON_BROWSER_VERSION } from "./package-metadata.ts";
+import { normalizeToolArguments } from "./argument-normalization.ts";
 import type { EngineHost } from "./browser-runtime/engine-host.ts";
 import { MODERN_MCP_PROTOCOL_VERSION, type ModernMcpRequest, type ModernMcpRequestContext, type ModernMcpResponse } from "./modern-mcp-stdio.ts";
 
@@ -38,7 +39,9 @@ function compactSchema(schema: unknown): unknown {
   const properties = compact.properties as Record<string, Record<string, unknown>> | undefined;
   if (Array.isArray(compact.allOf) && properties?.state && properties.url) {
     delete compact.allOf;
-    compact.description = "Give url, title or text, or an element as target, named exactly like an action target, with an optional state. Example: {\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"enabled\"}. value needs state \"value\".";
+    compact.description = properties.kind?.const === "wait_for"
+      ? "Wait for url, title or text, or for target (named like any action target) in a state. Example: {\"kind\":\"wait_for\",\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"enabled\"}. value needs state \"value\"."
+      : "After the action, wait for url, title or text, or for target (named like any action target) in a state. Example: {\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"visible\"}. value needs state \"value\".";
   }
   if (properties?.kind?.const === "sequence" && properties.steps) {
     compact.properties = { ...properties, steps: { ...properties.steps, items: { type: "object", description: "One action of any kind except sequence, shaped as above." } } };
@@ -74,7 +77,8 @@ function parseScreenshotOptions(args: Record<string, unknown>) {
 }
 
 export async function handleEngineMcp(host: EngineHost, message: ModernMcpRequest, context: ModernMcpRequestContext): Promise<ModernMcpResponse | null> {
-  const response = (result: unknown): ModernMcpResponse => ({ jsonrpc: "2.0", id: message.id, result });
+  let normalized: string[] = [];
+  const response = (result: unknown): ModernMcpResponse => ({ jsonrpc: "2.0", id: message.id, result: withNormalized(result, normalized) });
   const wrap = encodeEngineResult;
   let toolName: unknown, toolArguments: unknown;
   try {
@@ -85,17 +89,21 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
     if (message.method === "tools/list") { exactObject(message.params, ["_meta"]); return response({ resultType: "complete", tools: ENGINE_TOOL_CATALOG, ttlMs: 0, cacheScope: "private" }); }
     if (message.method !== "tools/call") return { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Unsupported MCP method." } };
     const params = exactObject(message.params, ["_meta", "name", "arguments"]);
-    toolName = params.name; toolArguments = params.arguments;
+    // Near-miss argument shapes are rewritten to the exact contract; the result lists each rewrite.
+    const prepared = normalizeToolArguments(params.name, params.arguments);
+    normalized = prepared.normalized;
+    toolName = params.name; toolArguments = prepared.args;
     context.signal.throwIfAborted();
-    if (params.name === "browser.session.start") return response(wrap(await host.start(params.arguments)));
-    if (params.name === "browser.existing.discover") { exactObject(params.arguments, []); return response(wrap(await host.existingStatus())); }
-    if (params.name === "browser.existing.setup") { exactObject(params.arguments, []); return response(wrap(await host.existingSetup())); }
-    if (params.name === "browser.sessions.list") { exactObject(params.arguments, []); return response(wrap({ sessions: host.list() })); }
-    const args = exactObject(params.arguments, params.name === "browser.act" ? ["sessionId", "command"] : params.name === "browser.command" ? ["sessionId", "commandId", "cancel"] : params.name === "browser.observe" ? ["sessionId", "pageId", "mode", "recordShape", "scope", "previousSnapshotId", "query", "maxBytes", "timeoutMs"] : params.name === "browser.document.read" ? ["sessionId", "pageId", "scope", "maxBytes", "timeoutMs"] : params.name === "browser.document.continue" ? ["sessionId", "pageId", "cursor", "maxBytes", "timeoutMs"] : params.name === "browser.screenshot" ? ["sessionId", "pageId", "maxBytes", "timeoutMs", "fullPage", "clip", "sensitiveZones"] : params.name === "browser.page.select" ? ["sessionId", "pageId"] : params.name === "browser.console" ? ["sessionId", "pageId", "level", "pattern", "limit", "clear"] : params.name === "browser.network" ? ["sessionId", "pageId", "urlPattern", "failedOnly", "requestId", "limit", "maxBytes"] : ["sessionId"]);
+    if (params.name === "browser.session.start") return response(wrap(await host.start(toolArguments)));
+    if (params.name === "browser.existing.discover") { exactObject(toolArguments, []); return response(wrap(await host.existingStatus())); }
+    if (params.name === "browser.existing.setup") { exactObject(toolArguments, []); return response(wrap(await host.existingSetup())); }
+    if (params.name === "browser.sessions.list") { exactObject(toolArguments, []); return response(wrap({ sessions: host.list() })); }
+    const args = exactObject(toolArguments, params.name === "browser.act" ? ["sessionId", "command"] : params.name === "browser.command" ? ["sessionId", "commandId", "cancel"] : params.name === "browser.observe" ? ["sessionId", "pageId", "mode", "recordShape", "scope", "previousSnapshotId", "query", "maxBytes", "timeoutMs"] : params.name === "browser.document.read" ? ["sessionId", "pageId", "scope", "maxBytes", "timeoutMs"] : params.name === "browser.document.continue" ? ["sessionId", "pageId", "cursor", "maxBytes", "timeoutMs"] : params.name === "browser.screenshot" ? ["sessionId", "pageId", "maxBytes", "timeoutMs", "fullPage", "clip", "sensitiveZones"] : params.name === "browser.page.select" ? ["sessionId", "pageId"] : params.name === "browser.console" ? ["sessionId", "pageId", "level", "pattern", "limit", "clear"] : params.name === "browser.network" ? ["sessionId", "pageId", "urlPattern", "failedOnly", "requestId", "limit", "maxBytes"] : ["sessionId"]);
     const session = host.session(args.sessionId);
     if (params.name === "browser.act") {
       const command = parseEngineCommand(args.command);
-      const result = session.submit(command);
+      // submit parses the wire command itself; the parsed form above only supplies its ID and budget here.
+      const result = session.submit(args.command);
       const cancel = () => session.command(command.commandId, true);
       context.signal.addEventListener("abort", cancel, { once: true });
       try { return response(encodeEngineReceipt(await result, command.maxBytes)); }
@@ -156,4 +164,16 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
     const phase = error instanceof EngineError ? error.phase : undefined;
     return response({ ...wrap({ errorCode, ...(phase ? { phase } : {}), ...(issue ? { field: issue.field, expected: issue.expected } : {}), ...(nextCommandId === undefined ? {} : { nextCommandId }) }), isError: true });
   }
+}
+
+/** Adds the list of rewritten arguments to a tool result's JSON text, so the agent sees the exact form next time. */
+export function withNormalized(result: unknown, normalized: readonly string[]): unknown {
+  if (!normalized.length || !result || typeof result !== "object") return result;
+  const content = (result as { content?: unknown }).content;
+  const first = Array.isArray(content) ? content[0] as { type?: unknown; text?: unknown } | undefined : undefined;
+  if (!first || first.type !== "text" || typeof first.text !== "string") return result;
+  let parsed: unknown;
+  try { parsed = JSON.parse(first.text); } catch { return result; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return result;
+  return { ...(result as object), content: [{ ...first, text: JSON.stringify({ ...parsed, normalized }) }, ...(content as unknown[]).slice(1)] };
 }

@@ -44,7 +44,9 @@ const press = {
 const scroll = { type: "object", properties: { kind: { const: "scroll" }, x: { type: "number" }, y: { type: "number" }, target }, required: ["kind", "x", "y"], additionalProperties: false };
 const navigate = { type: "object", properties: { kind: { const: "navigate" }, url: { type: "string", minLength: 1, maxLength: 8192 } }, required: ["kind", "url"], additionalProperties: false };
 const history = { type: "object", properties: { kind: { enum: ["back", "forward", "reload"] } }, required: ["kind"], additionalProperties: false };
-const wait = { type: "object", properties: { kind: { const: "wait_for" }, waitFor }, required: ["kind", "waitFor"], additionalProperties: false };
+// A wait action carries the condition fields itself, so it reads like every other action.
+const wait = { type: "object", description: "Wait for url, title or text, or for target in a state.", properties: { kind: { const: "wait_for" }, ...waitFor.properties }, required: ["kind"],
+  allOf: waitFor.allOf, additionalProperties: false };
 const dialogAccept = { type: "object", properties: { kind: { const: "dialog_accept" }, dialogId: { type: "string", minLength: 1, maxLength: 120 }, promptText: { type: "string", maxLength: 65536 } }, required: ["kind", "dialogId"], additionalProperties: false };
 const dialogDismiss = { type: "object", properties: { kind: { const: "dialog_dismiss" }, dialogId: { type: "string", minLength: 1, maxLength: 120 } }, required: ["kind", "dialogId"], additionalProperties: false };
 const resize = {type:'object',description:'Resize the page in CSS pixels. An owned browser resizes its window; a tab in the operator\'s own Chrome renders at that size without resizing their window.',properties:{kind:{const:'resize'},width:{type:'integer',minimum:320,maximum:7680},height:{type:'integer',minimum:240,maximum:4320}},required:['kind','width','height'],additionalProperties:false};

@@ -32,7 +32,7 @@ for (const crossSite of [false, true]) test(`selectors and pointers preserve fra
     }
     assert.deepEqual(outcomes,[{state:'met',kind:'value'},{state:'met',kind:'value'}]);
     const clickContext=new CommandContext(2000);
-    try { assert.deepEqual(await executor.act(clickContext,page,{kind:'click',target:{kind:'selector',selector:'#check'},waitFor:{target:{kind:'selector',selector:'#check'},state:'checked',timeoutMs:500}}),{state:'met',kind:'visible'}); }
+    try { assert.deepEqual(await executor.act(clickContext,page,{kind:'click',target:{kind:'selector',selector:'#check'},waitFor:{target:{kind:'selector',selector:'#check'},state:'checked',timeoutMs:500}}),{state:'met',kind:'condition',condition:'checked'}); }
     finally {clickContext.dispose();}
     const navContext=new CommandContext(1000);
     try {
@@ -50,7 +50,7 @@ for (const crossSite of [false, true]) test(`selectors and pointers preserve fra
     assert.equal(edited.observation.nodes[0].name,'Child');
     assert.ok((await engine.observe()).nodes.length>=3);
     const scrolled=await engine.submit({commandId:2,action:{kind:'scroll',target:{kind:'selector',selector:'#scrollbox'},x:0,y:100}});
-    const effect=await engine.submit({commandId:3,action:{kind:'wait_for',waitFor:{text:'container-scrolled',timeoutMs:500}}});
+    const effect=await engine.submit({commandId:3,action:{kind:'wait_for',text:'container-scrolled',timeoutMs:500}});
     assert.equal(effect.postcondition.state,'met',JSON.stringify(effect));
     assert.equal(scrolled.postcondition.state,'met',JSON.stringify(scrolled));
   } finally {if(executor)await executor.close();await new Promise(resolve=>server.close(resolve));temp.remove();}

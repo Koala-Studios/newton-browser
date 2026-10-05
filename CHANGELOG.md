@@ -7,6 +7,39 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-10-05
+
+### Changed
+
+- **Near-miss arguments work.** `browser.act` and the read tools rewrite shapes agents
+  commonly write into the exact command before checking it, and list each rewrite in the
+  result under `normalized`:
+  - a wait's condition nested in `waitFor`;
+  - `waitFor.kind` used as the state;
+  - flat `ref`/`selector`/`role`+`name`;
+  - `select` with `label` (or `value: { label }`);
+  - `type` naming the action kind;
+  - a ref written as `"e3"`;
+  - a target or scope without its `kind`;
+  - command fields beside `command` (or the command unwrapped);
+  - numbers as strings.
+
+  Conflicting or ambiguous input is still refused. Embedding hosts that check arguments
+  themselves use the exported `normalizeToolArguments` first.
+- **`wait_for` carries its condition itself**, like every other action:
+  `{ kind: "wait_for", target, state }`, or `url`, `title` or `text`. `waitFor` remains
+  the wait after `click`, `hover` and `click_at`.
+- A wait reports `postcondition: { kind: "condition", condition }` naming what held
+  (`hidden`, `enabled`, `url`, …), instead of `visible` for every wait.
+
+### Fixed
+
+- A URL wait with `*` (`**/done**`) matches as a wildcard pattern.
+- A read scope (`observe`, `document.read`) that matches several elements reads the first
+  and reports `scopeMatches`. An action target stays exact.
+- A wait keeps waiting while a page still loading cannot finish a search, instead of
+  failing at once with `search_incomplete`.
+
 ## [0.7.8] - 2026-10-05
 
 ### Changed

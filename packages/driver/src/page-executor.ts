@@ -99,7 +99,7 @@ export class PageExecutor implements EngineExecutor {
   private readonly lifecycleWaiters = new Set<() => void>();
   private readonly conditionWaiters = new Set<() => void>();
   private readonly domRevisions = new Map<string,number>();
-  private readonly documents = new Map<string, { page: EnginePageStamp; participants?:EnginePageStamp[]; ownerGeneration: number; text: string; bytes: number; complete: boolean; expiresAt: number }>();
+  private readonly documents = new Map<string, { page: EnginePageStamp; participants?:EnginePageStamp[]; ownerGeneration: number; text: string; bytes: number; complete: boolean; expiresAt: number; scopeMatches?: number }>();
   private readonly captures = new Map<string, CaptureRecord>();
   private readonly pointerDocuments = new Map<string, number>();
   private readonly viewportFrames = new Map<string, Promise<void>>();
@@ -488,8 +488,8 @@ export class PageExecutor implements EngineExecutor {
       await verify();
       await this.input!.click(binding, x, y, press.button, press.count, verify);
     }
-    if (waitFor) await this.waitFor(context, { pageId: binding.pageId, frameId: binding.frameId, documentGeneration: binding.documentGeneration }, waitFor);
-    return waitFor ? { state: "met", kind: "visible" } : { state: "not_requested" };
+    if (waitFor) return this.waitFor(context, { pageId: binding.pageId, frameId: binding.frameId, documentGeneration: binding.documentGeneration }, waitFor);
+    return { state: "not_requested" };
   }
 
   private async press(context: CommandContext, binding: NodeBinding, keys: readonly string[] | undefined, text: string | undefined): Promise<EnginePostcondition> {
@@ -709,7 +709,7 @@ export class PageExecutor implements EngineExecutor {
       const current = this.directory.stamp(page.pageId);
       const revision=this.domRevisions.get(page.pageId);
       try {
-        if (await this.waitFact(context, current, waitFor)) return { state: "met", kind: "visible" };
+        if (await this.waitFact(context, current, waitFor)) return { state: "met", kind: "condition", condition: waitFor.state ?? (waitFor.target ? "attached" : waitFor.url ? "url" : waitFor.title ? "title" : "text") };
       } catch (error) {
         // Navigation can replace the document between two read-only probes. It
         // invalidates the probe, not the already-dispatched click. Re-evaluate
@@ -717,6 +717,13 @@ export class PageExecutor implements EngineExecutor {
         // Chromium can invalidate frontend DOM IDs again after frameNavigated,
         // without another document generation. That event also invalidates the
         // read probe, and only that probe is retried.
+        // A page still loading (frames attaching, a search that cannot finish yet) is not an answer: keep
+        // waiting for it to change until the wait's deadline, then report why it never settled.
+        if (error instanceof EngineError && error.code === "search_incomplete") {
+          if (performance.now() >= deadline) throw error;
+          await this.waitForCondition(context, deadline).catch(() => { throw error; });
+          continue;
+        }
         if (this.directory.stamp(page.pageId).documentGeneration === current.documentGeneration&&this.domRevisions.get(page.pageId)===revision) throw error;
         continue;
       }
@@ -730,7 +737,7 @@ export class PageExecutor implements EngineExecutor {
     if (waitFor.url || waitFor.title) {
       const result = await context.read(() => this.send(root, "Runtime.evaluate", { expression: "({url:location.href,title:document.title})", returnByValue: true, silent: true }));
       const current = object(object(result.result).value);
-      if (waitFor.url && !string(current.url).includes(waitFor.url)) return false;
+      if (waitFor.url && !urlMatches(string(current.url), waitFor.url)) return false;
       if (waitFor.title && !string(current.title).includes(waitFor.title)) return false;
     }
     if (waitFor.text) {
@@ -1049,7 +1056,9 @@ export class PageExecutor implements EngineExecutor {
     }
     // Wait for known attachment work, not arbitrary page/network quietness.
     if (this.pendingAttachments.size) await context.read(() => Promise.all([...this.pendingAttachments]));
-    const scoped = scope ? await this.resolver.resolve(context, page, scope) : undefined;
+    // A scope that matches several containers observes the first; the result says how many matched.
+    const scopeMatches = { count: 0 };
+    const scoped = scope ? await this.resolver.resolve(context, page, scope, scopeMatches) : undefined;
     const candidates: { view: ReturnType<typeof readAXControls>["controls"][number]["view"]; binding: NodeBinding; primary: boolean }[] = [];
     this.prunePendingFrames();
     let incomplete = this.pendingAttachments.size > 0 || this.pendingFrames.size > 0 || this.degraded;
@@ -1183,6 +1192,7 @@ export class PageExecutor implements EngineExecutor {
     }
     return { state: incomplete || nodes.length < candidates.length ? "incomplete" : "available", trust: "untrusted_page_content", scope: scoped ? "target" : "page",
       page, ...(title === undefined ? {} : { title }), ...(url === undefined ? {} : { url }), ...(cover ? { cover } : {}), ...(loading ? { loading: true as const } : {}),
+      ...(scopeMatches.count > 1 ? { scopeMatches: scopeMatches.count } : {}),
       ...(outputLimited?{incompleteReason:"output_limit" as const}:readFailed?{incompleteReason:"evidence_unavailable" as const}:incomplete?{incompleteReason:"rendered_subset" as const}:nodes.length<candidates.length?{incompleteReason:"work_limit" as const}:{}),
       snapshotId: published.snapshotId, expiredSnapshots: published.expiredSnapshots,
       nodes: nodes.map((node, i) => ({ ...node, ref: published.refs[i]! })) };
@@ -1244,9 +1254,12 @@ export class PageExecutor implements EngineExecutor {
     } else {
       let root: NodeBinding;
       let extracted: Awaited<ReturnType<PageExecutor['readBoundText']>>;
+      // A read scope that matches several containers reads the first; the result says how many matched.
+      const scopeMatches={count:0};
       for (;;) {
         context.checkpoint();
-        root = scope ? await this.resolver.resolve(context,page,scope) : await this.resolver.document(context,page);
+        scopeMatches.count=0;
+        root = scope ? await this.resolver.resolve(context,page,scope,scopeMatches) : await this.resolver.document(context,page);
         extracted = await this.readBoundText(context,root,DOCUMENT_WORK_CHARS,DOCUMENT_WORK_NODES,scope!==undefined);
         if (!extracted.loading) break;
         // A committed but still-parsing document is not a complete empty page.
@@ -1287,7 +1300,7 @@ export class PageExecutor implements EngineExecutor {
       const complete = !extracted.truncated && text.length === redacted.length;
       snapshotId = `d${this.nextDocumentSnapshot++}`;
       const bytes = Buffer.byteLength(text, "utf8");
-      this.documents.set(snapshotId, { page: {pageId:root.pageId,frameId:root.frameId,documentGeneration:root.documentGeneration},participants, ownerGeneration: page.documentGeneration, text, bytes, complete, expiresAt:performance.now()+DOCUMENT_TTL_MS });
+      this.documents.set(snapshotId, { page: {pageId:root.pageId,frameId:root.frameId,documentGeneration:root.documentGeneration},participants, ownerGeneration: page.documentGeneration, text, bytes, complete, expiresAt:performance.now()+DOCUMENT_TTL_MS, ...(scopeMatches.count>1?{scopeMatches:scopeMatches.count}:{}) });
       this.documentBytes += bytes;
       while (this.documents.size > 8 || this.documentBytes > DOCUMENT_CACHE_BYTES) {
         const oldest = this.documents.keys().next().value!;
@@ -1295,7 +1308,7 @@ export class PageExecutor implements EngineExecutor {
       }
     }
     const snapshot = this.documents.get(snapshotId)!;
-    return documentChunk(snapshot.text, snapshot.page, snapshotId, offset, budget, snapshot.complete);
+    return documentChunk(snapshot.text, snapshot.page, snapshotId, offset, budget, snapshot.complete, snapshot.scopeMatches);
   }
   private async frameWithinScope(context:CommandContext,container:NodeBinding,frame:EnginePageStamp,useThis=true,preferMain=true):Promise<boolean>{
     const owner=await context.read(()=>this.send(container,'DOM.getFrameOwner',{frameId:frame.frameId}));
@@ -1661,8 +1674,8 @@ export class PageExecutor implements EngineExecutor {
     if(x<0||y<0||x>=currentSpatial.width||y>=currentSpatial.height)throw new EngineError('target_moved');
     await context.input(() => this.send(root, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", clickCount: 0 }));
     if (action.kind === "click_at") await this.input!.click(root, x, y);
-    if (action.waitFor) await this.waitFor(context, page, action.waitFor);
-    return action.waitFor ? { state: "met", kind: "visible" } : { state: "not_requested" };
+    if (action.waitFor) return this.waitFor(context, page, action.waitFor);
+    return { state: "not_requested" };
   }
   private async selectAll(context: CommandContext, binding: NodeBinding): Promise<void> {
     context.checkpoint();
@@ -1754,6 +1767,20 @@ export class PageExecutor implements EngineExecutor {
       deviceScaleFactor,
     };
   }
+}
+
+/** A URL wait matches part of the URL; `*` (or `**`, as agents write globs) matches any run of characters. */
+function urlMatches(url: string, pattern: string): boolean {
+  if (!pattern.includes("*")) return url.includes(pattern);
+  // Each fixed piece in order, searched left to right: linear, with no pattern compiled from agent input.
+  let from = 0;
+  for (const part of pattern.split(/\*+/u)) {
+    if (!part) continue;
+    const at = url.indexOf(part, from);
+    if (at === -1) return false;
+    from = at + part.length;
+  }
+  return true;
 }
 
 /** A document still parsing after this long is stalled (a script that never loads): it returns as loading. */

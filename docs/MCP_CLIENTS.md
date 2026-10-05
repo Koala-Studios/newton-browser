@@ -22,7 +22,7 @@ mcp_2026_07_28 = true
 [mcp_servers.newton-browser]
 command = "node"
 args = ["/absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js"]
-env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.7.8" }
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.7.9" }
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -43,7 +43,7 @@ claude mcp list
 The equivalent manual entry:
 
 ```bash
-claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.8 -- node /absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js
+claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.9 -- node /absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js
 ```
 
 Point both clients at an installed release package (see `INSTALL.md`), not a source

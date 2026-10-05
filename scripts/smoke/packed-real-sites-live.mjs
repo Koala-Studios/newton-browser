@@ -53,7 +53,7 @@ async function runSite(site) {
   const sessionId = started.value?.sessionId;
   if (typeof sessionId !== "string") throw new Error(`${site.id}_session_missing`);
   try {
-    const ready = await client.tool("browser.act", { sessionId, command: { commandId: 1, action: { kind: "wait_for", waitFor: { url: site.url, timeoutMs: 30_000 } } } });
+    const ready = await client.tool("browser.act", { sessionId, command: { commandId: 1, action: { kind: "wait_for", url: site.url, timeoutMs: 30_000 } } });
     requireReceipt(ready, `${site.id}_ready_failed`, "met");
     const observed = await client.tool("browser.observe", { sessionId, maxBytes: 16_384 });
     requireSuccess(observed, `${site.id}_observe_failed`);

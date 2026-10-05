@@ -233,7 +233,7 @@ test('navigation waits for loading readiness, preserves metadata on AX failure, 
     const originalInputSend=connection.wire.send.bind(connection.wire);let pointerDispatches=0;
     connection.wire.send=async(method,params,route)=>{if(method==='Input.dispatchMouseEvent')pointerDispatches++;return originalInputSend(method,params,route);};
     const before=pointerDispatches;
-    await withContext(async context=>assert.deepEqual(await executor.act(context,page,{kind:'click',target:{kind:'selector',selector:'#navigate'},waitFor:{url:'/destination',timeoutMs:2000}}),{state:'met',kind:'visible'}));
+    await withContext(async context=>assert.deepEqual(await executor.act(context,page,{kind:'click',target:{kind:'selector',selector:'#navigate'},waitFor:{url:'/destination',timeoutMs:2000}}),{state:'met',kind:'condition',condition:'url'}));
     const after=pointerDispatches;
     connection.wire.send=originalInputSend;
     assert.equal(after-before,3);

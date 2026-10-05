@@ -181,6 +181,20 @@ test("the session engine refuses unverifiable effects and preserves exact input 
     await evalPage("document.getElementById('custom').removeAttribute('aria-disabled')");
     assert.equal((await run({ kind: "wait_for", waitFor: { target: custom, state: "enabled", timeoutMs: 500 } })).state, "met");
 
+    // Agents write URL waits as globs; `*` matches any run of characters, and a literal still matches as part of the URL.
+    assert.equal((await run({ kind: "wait_for", waitFor: { url: "**127.0.0.1:*/**", timeoutMs: 500 } })).state, "met");
+    assert.equal((await run({ kind: "wait_for", waitFor: { url: "**/never-here**", timeoutMs: 120 } }, 500)).errorCode, "timed_out");
+    // A read scope matching several elements reads the first and says how many matched; an action target stays exact.
+    {
+      const context = new CommandContext(3000);
+      try {
+        const read = await executor.readDocument(context, page, 16384, undefined, { kind: "selector", selector: "button" });
+        assert.ok(read.scopeMatches > 1, JSON.stringify(read).slice(0, 300));
+        assert.match(read.text, /Covered/u);
+      } finally { context.dispose(); }
+    }
+    assert.equal((await run({ kind: "click", target: { kind: "selector", selector: "button" } })).errorCode, "ambiguous");
+
     evidence.initialBack = await run({ kind: "back" });
     assert.equal(evidence.initialBack.state, "not_met", JSON.stringify({ initialBack: evidence.initialBack, historyProbe: evidence.historyProbe }));
 

@@ -25,7 +25,8 @@ export type EngineDispatch = "not_started" | "attempted" | "acknowledged";
 export type EngineFinish = "completed" | "rejected" | "failed" | "cancelled" | "timed_out";
 export type EnginePostcondition =
   | Readonly<{ state: "not_requested" }>
-  | Readonly<{ state: "met" | "not_met" | "unknown"; kind: "value" | "navigation" | "visible" | "files" | "viewport" }>;
+  /** `condition` is a wait; when met, `condition` names what held (a state such as hidden or enabled, or url, title or text). */
+  | Readonly<{ state: "met" | "not_met" | "unknown"; kind: "value" | "navigation" | "visible" | "files" | "viewport" | "condition"; condition?: string }>;
 export type EngineTarget =
   | Readonly<{ kind: "ref"; ref: string }>
   | Readonly<{ kind: "selector"; selector: string }>
@@ -107,6 +108,8 @@ export type EngineObservation =
       navigation?: Readonly<{ state: "pending"; url?: string }>;
       /** The page or one of its frames is still loading; observe again for its content. */
       loading?: true;
+      /** A read scope matched this many elements; the first in page order was read. */
+      scopeMatches?: number;
       /** A fixed layer covers the page (a promotion, consent or sign-up prompt without dialog semantics); its controls come first. */
       cover?: Readonly<{ text: string }>;
       dialog?: Readonly<{ dialogId: string; type: "alert" | "confirm" | "prompt" | "beforeunload"; message: string }>;
@@ -244,13 +247,14 @@ function parseHistory(raw: unknown): EngineHistory {
   if (value.kind !== "back" && value.kind !== "forward" && value.kind !== "reload") throw new EngineError("unsupported_capability");
   return Object.freeze({ kind: value.kind });
 }
+/** A wait is written like every other action: `{ kind: "wait_for", target, state }`, or with url, title or text. */
 function parseWait(raw: unknown): EngineWait {
-  const value = exactObject(raw, ["kind", "waitFor"]);
-  if (value.kind !== "wait_for") throw new EngineError("unsupported_capability");
-  return Object.freeze({ kind: "wait_for", waitFor: parseWaitFor(value.waitFor) });
+  const { kind, ...condition } = exactObject(raw, ["kind", "url", "title", "text", "target", "value", "state", "timeoutMs"]);
+  if (kind !== "wait_for") throw new EngineError("unsupported_capability");
+  return Object.freeze({ kind: "wait_for", waitFor: parseWaitFor(condition) });
 }
 function parseInputAction(raw: unknown): EngineInputAction {
-  const value = exactObject(raw, ["kind", "target", "value", "waitFor", "keys", "text", "x", "y", "url", "captureId", "wait_for", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
+  const value = exactObject(raw, ["kind", "target", "value", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
   if(value.kind==='resize'){
     exactObject(raw,['kind','width','height']);
     return Object.freeze({kind:'resize',width:boundedInteger(value.width,320,7680),height:boundedInteger(value.height,240,4320)});
@@ -284,7 +288,7 @@ function parseInputAction(raw: unknown): EngineInputAction {
 }
 export function parseEngineCommand(raw: unknown): EngineCommand {
   const input = exactObject(raw, ["commandId", "pageId", "action", "timeoutMs", "observe", "maxBytes"]);
-  const value = exactObject(input.action, ["kind", "target", "value", "steps", "waitFor", "keys", "text", "x", "y", "url", "captureId", "wait_for", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
+  const value = exactObject(input.action, ["kind", "target", "value", "steps", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
   let action: EngineAction;
   if (value.kind === "sequence") {
     exactObject(value, ["kind", "steps"]);

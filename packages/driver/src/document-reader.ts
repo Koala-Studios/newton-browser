@@ -129,13 +129,13 @@ export function unicodeBoundary(text: string, offset: number): number {
   return offset > 0 && offset < text.length && /[\uD800-\uDBFF]/u.test(text[offset - 1]!) && /[\uDC00-\uDFFF]/u.test(text[offset]!) ? offset - 1 : offset;
 }
 
-export function documentChunk(text: string, page: EnginePageStamp, snapshotId: string, offset: number, budgetValue: number|EngineObservationBudget, sourceComplete: boolean): EngineObservation {
+export function documentChunk(text: string, page: EnginePageStamp, snapshotId: string, offset: number, budgetValue: number|EngineObservationBudget, sourceComplete: boolean, scopeMatches?: number): EngineObservation {
   const budget=asObservationBudget(budgetValue);
   if (unicodeBoundary(text, offset) !== offset) throw new EngineError('cursor_expired');
   const observation = (end: number): EngineObservation => {
     const complete = sourceComplete && end === text.length;
     return { state: complete ? 'available' : 'incomplete', trust: 'untrusted_page_content', scope: 'document', page,
-      snapshotId, nodes: [], text: text.slice(offset, end), complete,
+      snapshotId, nodes: [], text: text.slice(offset, end), complete, ...(scopeMatches && scopeMatches > 1 ? { scopeMatches } : {}),
       ...(end < text.length ? { cursor: `doc:${snapshotId}:${end}` } : {}),
       ...(!complete ? { incompleteReason: end < text.length ? 'output_limit' : 'work_limit' } as const : {}) };
   };
