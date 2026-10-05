@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { EngineHost } from "../src/browser-runtime/engine-host.ts";
 import { ENGINE_TOOL_CATALOG } from "../src/engine-mcp.ts";
-import { handleMcpMessage } from "../src/mcp-server.ts";
+import { CLASSIC_MCP_PROTOCOL_VERSIONS, createMcpConnectionHandler, handleMcpMessage } from "../src/mcp-server.ts";
 import { MODERN_MCP_PROTOCOL_VERSION } from "../src/modern-mcp-stdio.ts";
 
 const META = {
@@ -67,6 +67,35 @@ test("the catalog is the engine's, and unknown fields and tools are refused befo
       const reply = await handleMcpMessage(host, { jsonrpc: "2.0", id: 3, method: "tools/call", params });
       assert.ok(reply && ("error" in reply || (reply.result as { isError?: boolean }).isError), JSON.stringify(params));
     }
+    assert.equal(launches(), 0);
+  } finally { await host.close(); }
+});
+
+// Claude Code 2.1.228 opened with the classic handshake on 2026-10-05 and could not connect.
+test("a connection opened with the classic initialize handshake gets the same tools without per-request metadata", async () => {
+  const { host, launches } = unlaunchedHost();
+  const signal = new AbortController().signal;
+  try {
+    const handle = createMcpConnectionHandler(host);
+    const init = await handle({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "claude-code", version: "2.1.228" } } }, { signal });
+    assert.ok(init && "result" in init);
+    const result = init.result as { protocolVersion: string; serverInfo: { name: string }; instructions: string };
+    assert.equal(result.protocolVersion, "2025-11-25");
+    assert.equal(result.serverInfo.name, "newton-browser");
+    assert.match(result.instructions, /untrusted/u);
+    const older = await createMcpConnectionHandler(host)({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2024-01-01" } }, { signal });
+    assert.equal((older as { result: { protocolVersion: string } }).result.protocolVersion, CLASSIC_MCP_PROTOCOL_VERSIONS[0], "an unknown version gets the newest classic one");
+
+    const listed = await handle({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { cursor: "x" } }, { signal });
+    assert.ok(listed && "result" in listed);
+    assert.deepEqual((listed.result as { tools: { name: string }[] }).tools.map(tool => tool.name), ENGINE_TOOL_CATALOG.map(tool => tool.name));
+    const ping = await handle({ jsonrpc: "2.0", id: 2, method: "ping" }, { signal });
+    assert.deepEqual(ping, { jsonrpc: "2.0", id: 2, result: {} });
+    const call = await handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser.sessions.list", arguments: {} } }, { signal });
+    assert.ok(call && "result" in call);
+    assert.deepEqual(JSON.parse((call.result as { content: { text: string }[] }).content[0]!.text), { sessions: [] });
+    const unknown = await handle({ jsonrpc: "2.0", id: 4, method: "resources/list" }, { signal });
+    assert.ok(unknown && "error" in unknown && unknown.error.code === -32601);
     assert.equal(launches(), 0);
   } finally { await host.close(); }
 });

@@ -1,10 +1,12 @@
 # MCP clients
 
-Newton Browser implements only stateless MCP `2026-07-28` over newline-delimited JSON on
-stdio. It does not implement `initialize`, connection-scoped sessions, HTTP transport,
-`Content-Length` framing, sockets, or a daemon.
+Newton Browser speaks stateless MCP `2026-07-28` over newline-delimited JSON on stdio. A
+client that opens with the classic `initialize` handshake (`2025-11-25`, `2025-06-18` or
+`2025-03-26`; Claude Code does, depending on its release and settings) gets the same tools on
+that connection without per-request metadata. There is no HTTP transport, `Content-Length`
+framing, socket or daemon.
 
-Every request carries:
+On `2026-07-28`, every request carries:
 
 ```json
 {"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}
@@ -22,7 +24,7 @@ mcp_2026_07_28 = true
 [mcp_servers.newton-browser]
 command = "node"
 args = ["/absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js"]
-env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.7.9" }
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28", NEWTON_BROWSER_EXPECTED_VERSION = "0.7.10" }
 startup_timeout_sec = 45
 tool_timeout_sec = 150
 ```
@@ -43,7 +45,7 @@ claude mcp list
 The equivalent manual entry:
 
 ```bash
-claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.9 -- node /absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js
+claude mcp add --scope user newton-browser -e NEWTON_BROWSER_EXPECTED_VERSION=0.7.10 -- node /absolute/path/NewtonBrowser/package/node_modules/newton-browser/dist/index.js
 ```
 
 Point both clients at an installed release package (see `INSTALL.md`), not a source

@@ -9,7 +9,8 @@ import {
   type ModernMcpResponse,
 } from "./modern-mcp-stdio.ts";
 import type { EngineHost } from "./browser-runtime/engine-host.ts";
-import { handleEngineMcp } from "./engine-mcp.ts";
+import { ENGINE_INSTRUCTIONS, handleEngineMcp } from "./engine-mcp.ts";
+import { NEWTON_BROWSER_VERSION } from "./package-metadata.ts";
 import { createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
 
 export async function startNewtonBrowserMcpServer(input: { host?: EngineHost } = {}): Promise<void> {
@@ -26,8 +27,35 @@ async function serveNewtonBrowserMcpConnection(input: { host: EngineHost; readab
   await serveModernMcpStdio({
     readable: input.readable,
     writable: input.writable,
-    handleRequest: (request, context) => handleMcpMessage(input.host, request, context),
+    handleRequest: createMcpConnectionHandler(input.host),
   });
+}
+
+/** Classic MCP protocol versions answered after an `initialize` handshake, newest first. */
+export const CLASSIC_MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
+
+/**
+ * One connection's request handler. A client that opens with the classic `initialize` handshake
+ * (Claude Code does, depending on its release and settings) gets the same tools as a 2026-07-28
+ * client, without the per-request protocol metadata; the tool calls themselves are identical.
+ */
+export function createMcpConnectionHandler(host: EngineHost) {
+  let classic = false;
+  return async (request: ModernMcpRequest, context: ModernMcpRequestContext): Promise<ModernMcpResponse | null> => {
+    if (request.method === "initialize" && !classic) {
+      const requested = isObject(request.params) ? request.params.protocolVersion : undefined;
+      const protocolVersion = CLASSIC_MCP_PROTOCOL_VERSIONS.find(version => version === requested) ?? CLASSIC_MCP_PROTOCOL_VERSIONS[0];
+      classic = true;
+      return { jsonrpc: "2.0", id: request.id, result: { protocolVersion, capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "newton-browser", version: NEWTON_BROWSER_VERSION }, instructions: ENGINE_INSTRUCTIONS } };
+    }
+    if (!classic) return handleMcpMessage(host, request, context);
+    if (request.method === "ping") return { jsonrpc: "2.0", id: request.id, result: {} };
+    if (request.method !== "tools/list" && request.method !== "tools/call") return errorResponse(request.id, -32601, "Unsupported MCP method.");
+    // The classic list may carry a pagination cursor; the catalog is one page.
+    const { cursor: _cursor, _meta: _classicMeta, ...params } = isObject(request.params) ? request.params : {};
+    return handleEngineMcp(host, { ...request, params: { _meta: {}, ...params } }, context);
+  };
 }
 
 export async function handleMcpMessage(

@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-10-05
+
+### Fixed
+
+- Clients that open with the classic MCP `initialize` handshake connect. Claude Code
+  2.1.228 does so (depending on its release and settings) and could not reach the server at
+  all. That connection gets the same tools without per-request protocol metadata.
+  `2026-07-28` clients are unchanged.
+- `fill` and `type` accept `text` for `value`, reported under `normalized`.
+- A `wait_for` without its own `timeoutMs` may use the whole command budget, so a longer
+  command `timeoutMs` lets a wait outlast a slow page instead of stopping at ten seconds.
+
 ## [0.7.9] - 2026-10-05
 
 ### Changed

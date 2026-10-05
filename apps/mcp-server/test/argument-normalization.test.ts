@@ -31,6 +31,10 @@ test("near-miss shapes agents wrote become the exact command, and each rewrite i
   const nested = act({ commandId: 2, action: { kind: "select", target: { kind: "ref", ref: "e6" }, value: { label: "Two" } } });
   assert.equal((parsed(nested).action as { value: string }).value, "Two");
 
+  const textForValue = act({ commandId: 6, action: { kind: "type", target: { kind: "ref", ref: "e1" }, text: "hello" } });
+  assert.deepEqual(parsed(textForValue).action, { kind: "type", target: { kind: "ref", ref: "e1" }, value: "hello" });
+  assert.deepEqual(parsed(act({ commandId: 7, action: { kind: "press", text: "hi" } })).action, { kind: "press", text: "hi" }, "press keeps its own text");
+
   const typeForKind = act({ commandId: 1, action: { type: "fill", target: "e1", value: "qa test" } });
   assert.deepEqual(parsed(typeForKind).action, { kind: "fill", target: { kind: "ref", ref: "e1" }, value: "qa test" });
 

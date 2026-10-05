@@ -8,7 +8,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const DEFAULT_ARTIFACT = path.join(ROOT, "artifacts", "newton-browser-0.7.9.tgz");
+const DEFAULT_ARTIFACT = path.join(ROOT, "artifacts", "newton-browser-0.7.10.tgz");
 const DEFAULT_EVIDENCE_PATH = path.join(ROOT, "test", "evidence", "luna-packed-concurrency.json");
 const DEFAULT_EXPECTED_SHA256 = "8C8C78BB76BB34B3795077910D89F70AF93176A01D5C13C025300A1741751BE8";
 const PROTOCOL_VERSION = "2026-07-28";
@@ -482,7 +482,7 @@ async function main() {
   const sessionRootA = path.join(qaRoot, "session-a");
   const sessionRootB = path.join(qaRoot, "session-b");
   await Promise.all([mkdir(artifactRoot), mkdir(fixtureRoot), mkdir(sessionRootA), mkdir(sessionRootB)]);
-  const copiedArtifact = path.join(artifactRoot, "newton-browser-0.7.9.tgz");
+  const copiedArtifact = path.join(artifactRoot, "newton-browser-0.7.10.tgz");
   await copyFile(artifact, copiedArtifact);
   const copiedBefore = await sha256(copiedArtifact);
   if (copiedBefore !== expectedSha256) throw new Error(`Copied artifact hash mismatch: expected ${expectedSha256}, got ${copiedBefore}`);
@@ -498,7 +498,7 @@ async function main() {
     artifact: {
       sourcePath: artifact,
       copiedPath: copiedArtifact,
-      version: "0.7.9",
+      version: "0.7.10",
       bytes: sourceStat.size,
       expectedSha256,
       sourceSha256Before: sourceBefore,

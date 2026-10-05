@@ -61,6 +61,11 @@ function normalizeAction(action: Value, path: string, note: (text: string) => vo
     note(`${path}.type → ${path}.kind`);
   }
   if (action.target !== undefined) action.target = normalizeTarget(action.target, `${path}.target`, note);
+  // fill and type take `value`; `text` there can only mean the same thing (press keeps its own `text`).
+  if ((action.kind === "fill" || action.kind === "type") && action.value === undefined && typeof action.text === "string") {
+    action.value = action.text; delete action.text;
+    note(`${path}.text → ${path}.value`);
+  }
   if (action.kind === "select") {
     if (action.value === undefined && typeof action.label === "string") { action.value = action.label; delete action.label; note(`${path}.label → ${path}.value`); }
     if (isObject(action.value)) {

@@ -350,7 +350,8 @@ export class PageExecutor implements EngineExecutor {
     if (action.kind === "click_at" || action.kind === "move") return this.clickAt(context, page, action);
     if (action.kind === "back" || action.kind === "forward" || action.kind === "reload") return this.history(context, page, action.kind);
     if (action.kind === "scroll") return this.scroll(context, page, action.x, action.y, action.target);
-    if (action.kind === "wait_for") return this.waitFor(context, page, action.waitFor);
+    // A wait_for is the whole command: without its own timeoutMs it may use the command's budget.
+    if (action.kind === "wait_for") return this.waitFor(context, page, action.waitFor, true);
     if (action.kind === 'resize') return this.resize(context,page,action.width,action.height);
     if (action.kind === "press" && !action.target) return this.pressGlobal(context, page, action.keys, action.text);
     if (!("target" in action)) throw new EngineError("unsupported_capability");
@@ -701,8 +702,8 @@ export class PageExecutor implements EngineExecutor {
     while (this.pointerDocuments.size > 256) this.pointerDocuments.delete(this.pointerDocuments.keys().next().value!);
   }
 
-  private async waitFor(context: CommandContext, page: EnginePageStamp, waitFor: EngineWaitFor): Promise<EnginePostcondition> {
-    const deadline = Math.min(context.deadline, performance.now() + (waitFor.timeoutMs ?? 10_000));
+  private async waitFor(context: CommandContext, page: EnginePageStamp, waitFor: EngineWaitFor, wholeCommand = false): Promise<EnginePostcondition> {
+    const deadline = Math.min(context.deadline, waitFor.timeoutMs !== undefined ? performance.now() + waitFor.timeoutMs : wholeCommand ? context.deadline : performance.now() + 10_000);
     for (;;) {
       context.checkpoint();
       if (performance.now() > deadline) throw new EngineError("timed_out");
