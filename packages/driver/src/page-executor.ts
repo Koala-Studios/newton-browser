@@ -3,7 +3,7 @@ import { ENGINE_ERRORS, EngineError, asObservationBudget, type EngineControlQuer
 import { CommandContext } from "./command-context.ts";
 import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
-import { TargetResolver } from "./target-resolver.ts";
+import { DRAWN_BOX, TargetResolver } from "./target-resolver.ts";
 import { NativeInput } from "./native-input.ts";
 import { OPEN_SHADOW_CHILDREN_FUNCTION, DOCUMENT_READ_FUNCTION, FRAME_SCOPE_FUNCTION, documentChunk, boundDocumentUtf8 } from "./document-reader.ts";
 import { readAXControls } from "./control-reader.ts";
@@ -484,7 +484,8 @@ export class PageExecutor implements EngineExecutor {
     }
     const box = facts.bbox;
     if (!box || box.width <= 0 || box.height <= 0) throw new EngineError("target_not_editable");
-    await this.verifyHit(context, binding, box.x + box.width / 2, box.y + box.height / 2);
+    // A drawn box's middle may be off screen; pointerPoint checks the part that shows is what gets hit.
+    if (!facts.drawn) await this.verifyHit(context, binding, box.x + box.width / 2, box.y + box.height / 2);
     const { x, y } = await this.pointerPoint(context, binding);
     await context.input(() => this.send(binding, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", clickCount: 0 }));
     if (press) {
@@ -1625,8 +1626,20 @@ export class PageExecutor implements EngineExecutor {
     const quads = geometry.quads;
     if (!Array.isArray(quads) || quads.length !== 1 || !Array.isArray(quads[0]) || quads[0].length !== 8 || !quads[0].every(finiteNumber)) throw new EngineError("evidence_unavailable");
     const quad = quads[0] as number[];
-    const x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
-    const y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+    let x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
+    let y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+    // A zero-size control is drawn and hit by its children; aim at the middle of the part of them that shows.
+    if (Math.abs((quad[2]! - quad[0]!) * (quad[5]! - quad[1]!) - (quad[4]! - quad[0]!) * (quad[3]! - quad[1]!)) < 1) {
+      const drawn = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: binding.backendNodeId }));
+      const drawnId = string(object(drawn.object).objectId);
+      if (!drawnId) throw new EngineError("stale_target");
+      try {
+        const box = object(object((await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId: drawnId,
+          functionDeclaration: `function(){const b=(${DRAWN_BOX})(this),l=Math.max(b.left,0),t=Math.max(b.top,0),r=Math.min(b.left+b.width,innerWidth),u=Math.min(b.top+b.height,innerHeight);return r>l&&u>t?{left:l,top:t,width:r-l,height:u-t}:b;}`, returnByValue: true, silent: true }))).result).value);
+        if (!finiteNumber(box.left) || !finiteNumber(box.top) || !finiteNumber(box.width) || !finiteNumber(box.height) || !box.width || !box.height) throw new EngineError("target_not_editable");
+        x = box.left + box.width / 2; y = box.top + box.height / 2;
+      } finally { void this.send(binding, "Runtime.releaseObject", { objectId: drawnId }).catch(() => undefined); }
+    }
     const scroll = await context.read(() => this.send(binding,"Runtime.evaluate",{expression:"({x:scrollX,y:scrollY})",returnByValue:true,silent:true}));
     const offset = object(object(scroll.result).value);
     if(!finiteNumber(offset.x)||!finiteNumber(offset.y))throw new EngineError("evidence_unavailable");

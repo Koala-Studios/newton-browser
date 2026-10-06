@@ -6,25 +6,53 @@ type RecordValue = Record<string, unknown>;
 function object(value: unknown): RecordValue { return value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {}; }
 function string(value: unknown): string { return typeof value === "string" ? value : ""; }
 function array(value: unknown): RecordValue[] { return Array.isArray(value) ? value.map(object) : []; }
+/**
+ * The box a control draws. A zero-size control (an icon button whose SVG overflows it) is drawn and hit by its
+ * children, so their union stands in for it. Walks siblings by property: querySelectorAll fails V8's side-effect check.
+ */
+export const DRAWN_BOX = `function(element){
+  const own=element.getBoundingClientRect();
+  if(own.width&&own.height)return {left:own.left,top:own.top,width:own.width,height:own.height};
+  let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity,node=element.firstElementChild,count=0;
+  while(node&&count++<64){
+    const box=node.getBoundingClientRect();
+    if(box.width&&box.height){left=Math.min(left,box.left);top=Math.min(top,box.top);right=Math.max(right,box.right);bottom=Math.max(bottom,box.bottom);}
+    if(node.firstElementChild){node=node.firstElementChild;continue;}
+    while(node&&node!==element&&!node.nextElementSibling)node=node.parentElement;
+    node=node&&node!==element?node.nextElementSibling:null;
+  }
+  return right>left&&bottom>top?{left,top,width:right-left,height:bottom-top,drawn:true}:{left:own.left,top:own.top,width:own.width,height:own.height};
+}`;
+
 const fieldInspection = `function(pointer=false) {
   const tag = this.tagName?.toLowerCase();
   const type = (this.getAttribute('type') || 'text').toLowerCase();
   const autocomplete = (this.getAttribute('autocomplete') || '').toLowerCase();
   const sensitive = type === 'password' || /password|one-time-code|cc-|webauthn/.test(autocomplete);
   const editable = tag === 'textarea' || tag === 'select' || this.isContentEditable || (tag === 'input' && ['text','search','email','url','tel','number'].includes(type));
-  const rect = this.getBoundingClientRect();
+  const rect = (${DRAWN_BOX})(this);
   const visible = !!(rect.width && rect.height) && getComputedStyle(this).visibility !== 'hidden';
   let pointerInView;
   if(pointer){
     const view=this.ownerDocument.defaultView;
     let left=0,top=0,right=view.innerWidth,bottom=view.innerHeight,ancestor=this.parentElement,count=0;
+    // Only an ancestor that contains the box clips it: a fixed box escapes every ancestor up to a transformed one,
+    // an absolute box escapes static ones. The containing ancestor's own position then decides what clips it.
+    let position=getComputedStyle(this).position;
     while(ancestor&&count++<128){
       const style=getComputedStyle(ancestor),box=ancestor.getBoundingClientRect();
-      if(/auto|scroll|hidden|clip/.test(style.overflowX)){left=Math.max(left,box.left);right=Math.min(right,box.right);}
-      if(/auto|scroll|hidden|clip/.test(style.overflowY)){top=Math.max(top,box.top);bottom=Math.min(bottom,box.bottom);}
+      const containsFixed=style.transform!=='none'||style.perspective!=='none'||style.filter!=='none'||/paint|layout|strict|content/.test(style.contain)||/transform|perspective|filter/.test(style.willChange);
+      const contains=position==='fixed'?containsFixed:position==='absolute'?style.position!=='static'||containsFixed:true;
+      if(contains){
+        if(/auto|scroll|hidden|clip/.test(style.overflowX)){left=Math.max(left,box.left);right=Math.min(right,box.right);}
+        if(/auto|scroll|hidden|clip/.test(style.overflowY)){top=Math.max(top,box.top);bottom=Math.min(bottom,box.bottom);}
+        position=style.position;
+      }
       ancestor=ancestor.parentElement;
     }
-    if(!ancestor)pointerInView=rect.left+rect.width/2>=left&&rect.left+rect.width/2<right&&rect.top+rect.height/2>=top&&rect.top+rect.height/2<bottom;
+    // A drawn box counts while any of it shows, as a person would tap the part they see.
+    if(!ancestor)pointerInView=rect.drawn?Math.min(right,rect.left+rect.width)-Math.max(left,rect.left)>=1&&Math.min(bottom,rect.top+rect.height)-Math.max(top,rect.top)>=1
+      :rect.left+rect.width/2>=left&&rect.left+rect.width/2<right&&rect.top+rect.height/2>=top&&rect.top+rect.height/2<bottom;
   }
   // Sensitivity gates the access itself, including geometry-only masking inspection.
   const currentValue = sensitive || !editable ? undefined :
@@ -36,7 +64,7 @@ const fieldInspection = `function(pointer=false) {
   while(focusRoot.parentNode&&focusDepth++<256)focusRoot=focusRoot.parentNode;
   return { sensitive, editable, connected: this.isConnected, disabled: !!this.disabled, ariaDisabled,
     readonly: !!this.readOnly, visible, focused: !focusRoot.parentNode && focusRoot.activeElement === this,
-    tag, type, checked: !!this.checked, selected: !!this.selected, pointerInView,
+    tag, type, checked: !!this.checked, selected: !!this.selected, pointerInView, drawn: !!rect.drawn,
     multiple: tag === 'select' || (tag === 'input' && type === 'file') ? !!this.multiple : undefined,
     bbox: visible ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : undefined,
     selectionStart: !sensitive && typeof this.selectionStart === 'number' ? this.selectionStart : undefined,
@@ -74,6 +102,8 @@ export type TargetResolverFacts = Readonly<{
   visible: boolean;
   focused: boolean;
   pointerInView?: boolean;
+  /** The box is the area the control's children draw, as the control itself has no size. */
+  drawn?: boolean;
   tag?: string;
   type?: string;
   checked?: boolean;
@@ -214,6 +244,7 @@ export class TargetResolver {
         ...(typeof facts.selected === "boolean" ? { selected: facts.selected } : {}),
         ...(typeof facts.multiple === "boolean" ? { multiple: facts.multiple } : {}),
         ...(typeof facts.pointerInView === "boolean" ? { pointerInView: facts.pointerInView } : {}),
+        ...(facts.drawn === true ? { drawn: true } : {}),
         ...(typeof facts.selectionStart === "number" ? { selectionStart: facts.selectionStart } : {}),
         ...(typeof facts.selectionEnd === "number" ? { selectionEnd: facts.selectionEnd } : {}),
         ...(typeof bbox.x === "number" && typeof bbox.y === "number" && typeof bbox.width === "number" && typeof bbox.height === "number"

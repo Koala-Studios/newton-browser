@@ -44,3 +44,36 @@ for (const allowSensitive of [false, true]) test(`sensitive inspection never acc
     assert.equal(valueReads, 0, 'suppressing a returned value must not read it first');
   } finally { context.dispose(); }
 });
+
+test('a fixed box is in view even inside a clipped ancestor that does not contain it', async () => {
+  const styles = new Map();
+  const node = (name, rect, style, parent = null) => {
+    const element = { tagName: name, isConnected: true, isContentEditable: false, disabled: false, readOnly: false, parentElement: parent,
+      getAttribute: () => '', getBoundingClientRect: () => rect };
+    styles.set(element, { visibility: 'visible', position: 'static', overflowX: 'visible', overflowY: 'visible', transform: 'none',
+      perspective: 'none', filter: 'none', contain: 'none', willChange: 'auto', ...style });
+    return element;
+  };
+  const view = { innerWidth: 390, innerHeight: 844 };
+  const inspectWith = async element => {
+    element.ownerDocument = { defaultView: view, activeElement: null };
+    const resolver = new TargetResolver({ directory: {}, pendingAttachments: () => 0, pendingFrames: () => 0,
+      async send(_binding, method, params) {
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'o' } };
+        if (method === 'Runtime.releaseObject') return {};
+        const inspect = vm.runInNewContext(`(${params.functionDeclaration})`, { getComputedStyle: item => styles.get(item) });
+        return { result: { value: inspect.call(element, true) } };
+      } });
+    const context = new CommandContext(1000);
+    try { return (await resolver.inspect(context, {}, { editable: false, pointer: true })).pointerInView; } finally { context.dispose(); }
+  };
+  const body = node('BODY', { left: 0, top: 0, width: 390, height: 844 }, {});
+  const wrapper = node('DIV', { left: 0, top: 0, width: 390, height: 0 }, { overflowX: 'hidden', overflowY: 'hidden' }, body);
+  const close = node('BUTTON', { left: 340, top: 20, width: 30, height: 30 }, { position: 'fixed' }, wrapper);
+  assert.equal(await inspectWith(close), true, 'the zero-height wrapper does not contain a fixed popup');
+  const inline = node('BUTTON', { left: 340, top: 20, width: 30, height: 30 }, {}, wrapper);
+  assert.equal(await inspectWith(inline), false, 'an ordinary child is clipped by the same wrapper');
+  const transformed = node('DIV', { left: 0, top: 0, width: 390, height: 0 }, { overflowX: 'hidden', overflowY: 'hidden', transform: 'matrix(1, 0, 0, 1, 0, 0)' }, body);
+  const contained = node('BUTTON', { left: 340, top: 20, width: 30, height: 30 }, { position: 'fixed' }, transformed);
+  assert.equal(await inspectWith(contained), false, 'a transformed ancestor contains and clips a fixed box');
+});

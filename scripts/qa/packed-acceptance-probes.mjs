@@ -10,7 +10,7 @@ import {getEncoding} from 'js-tiktoken';
 const outputTokenizer=getEncoding('o200k_base');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const DEFAULT_ARTIFACT = path.join(ROOT, "artifacts", "newton-browser-0.7.14.tgz");
+const DEFAULT_ARTIFACT = path.join(ROOT, "artifacts", "newton-browser-0.7.15.tgz");
 const PROTOCOL_VERSION = "2026-07-28";
 const CLIENT_INFO = { name: "packed-acceptance-probes", version: "1.0.0" };
 const MAX_TEXT = 1200;
@@ -784,7 +784,7 @@ async function main() {
     finishedAt: null,
     artifact: {
       path: artifact,
-      version: "0.7.14",
+      version: "0.7.15",
       bytes: artifactStat.size,
       expectedSha256: expectedSha256 || null,
       sha256Before: before,

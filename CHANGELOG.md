@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.15] - 2026-10-06
+
+### Fixed
+
+- `click`, `hover` and the other pointer actions reach a control whose box has no size but whose
+  children draw it, such as an icon button with an overflowing SVG: the children's drawn area
+  stands in for the box, and the pointer aims at the part of it that shows. These were refused with
+  `target_not_editable`.
+- A fixed or absolutely positioned control inside a clipped ancestor that does not contain it (a
+  fixed popup in a zero-height wrapper) counts as in view; only containing ancestors clip.
+- The hit check before a click tests the point the pointer actually presses.
+
 ## [0.7.14] - 2026-10-05
 
 ### Changed
