@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.19] - 2026-10-07
+
+### Fixed
+
+- `browser.session.start` in owned mode refuses a `sourceId` that is an existing-browser `connectionId`
+  or `instanceId` (`invalid_arguments`, phase `source_is_existing_browser`). It used to be taken as a
+  new login source name and opened an empty, signed-out profile instead of the operator's browser.
+  The published `sourceId` says it is a saved login source name and that those IDs go with mode
+  `existing`.
+
 ## [0.7.18] - 2026-10-07
 
 ### Fixed

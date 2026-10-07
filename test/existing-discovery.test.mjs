@@ -83,3 +83,13 @@ test('an advertisement left by a native host that is gone is removed, not report
     assert.equal(fs.existsSync(abandoned),false);assert.equal(fs.existsSync(broker.advertisement),true);
   }finally{await broker?.close();peer.close();temp.remove();}
 });
+
+test('an existing-browser connectionId or instanceId given as an owned sourceId is refused instead of opening a new signed-out profile',async()=>{
+  let connects=0;
+  const host=new EngineHost(async()=>{connects++;throw Error('unused');});
+  for(const sourceId of ['existing_891ab24c68fbc9660d71ead2','345b0e5e-807c-4295-bdf9-0dfa62299262']){
+    await assert.rejects(host.start({mode:'owned',url:'https://example.test/',sourceId}),error=>error.code==='invalid_arguments'&&error.phase==='source_is_existing_browser');
+  }
+  assert.equal(connects,0);
+  await host.close();
+});

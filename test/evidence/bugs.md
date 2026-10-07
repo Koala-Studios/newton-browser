@@ -3281,3 +3281,11 @@ incomplete; `session.start` in existing mode without a `connectionId` saw two ca
 with `browser_connection_required`. Listing the advertisements now removes those whose recorded pid
 no longer exists (ESRCH); a live or unverifiable one is kept. Regression: existing-discovery "an
 advertisement left by a native host that is gone is removed, not reported as an incomplete probe".
+# An existing-browser ID given as sourceId opened a signed-out profile — fixed in 0.7.19
+
+Observed 2026-10-07: an agent that could not find mode `existing` passed the `connectionId` from
+`browser.existing.discover` as an owned `sourceId`. The ID is a valid source name, so the call created
+a new, empty login source and opened a signed-out headless browser (Shopify and Klaviyo login pages,
+a CAPTCHA) rather than failing. Owned mode now refuses a `sourceId` shaped like a `connectionId`
+(`existing_` + 24 hex) or an `instanceId` (UUID) before any browser starts. Regression:
+existing-discovery "an existing-browser connectionId or instanceId given as an owned sourceId is refused".

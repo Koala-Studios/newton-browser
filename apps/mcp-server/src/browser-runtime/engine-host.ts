@@ -53,6 +53,9 @@ export class EngineHost {
       exactObject(args, ["mode", "url", "sourceId", "viewport", "locale", "timezone", "collect", "timeoutMs"]);
       url = normalizeEngineUrl(args.url);
       const sourceId = args.sourceId === undefined ? undefined : boundedString(args.sourceId, 120);
+      // A connectionId or instanceId from browser.existing.discover is not a login source; as one it would open a new,
+      // empty, signed-out profile instead of the operator's browser.
+      if (sourceId !== undefined && /^(?:existing_[a-f0-9]{24}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(sourceId)) throw new EngineError("invalid_arguments", "source_is_existing_browser");
       const viewport = args.viewport === undefined ? DEFAULT_BROWSER_DISPLAY : exactObject(args.viewport, ["width", "height"]);
       const locale = args.locale === undefined ? undefined : boundedString(args.locale, 35);
       if (locale !== undefined && !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/u.test(locale)) throw new EngineError("invalid_arguments");
