@@ -68,6 +68,8 @@ export type EngineStepReceipt = Readonly<{
   index: number; dispatch: EngineDispatch; postcondition: EnginePostcondition; errorCode?: EngineErrorCode;
   /** With target_covered: the page element over the target (untrusted page content). */
   coveredBy?: string;
+  /** Why the step failed and what to do next, when known (may quote untrusted page content). */
+  detail?: string;
 }>;
 export type EngineFieldView = Readonly<{
   ref: string; recordId?: string; role: string; name: string; value?: string; readonly?: boolean; disabled?: boolean;
@@ -203,7 +205,8 @@ function parseWaitFor(raw: unknown): EngineWaitFor {
   if (value.state !== undefined && (typeof value.state !== "string" || !(ENGINE_WAIT_STATES as readonly string[]).includes(value.state))) throw new EngineError("invalid_arguments");
   if (value.state !== undefined) output.state = value.state;
   if (value.timeoutMs !== undefined) output.timeoutMs = boundedInteger(value.timeoutMs, 1, 120_000);
-  if (value.state !== undefined && value.target === undefined) throw new EngineError("invalid_arguments");
+  // Without a target a state applies to text: hidden or detached waits for the text to go away.
+  if (value.state !== undefined && value.target === undefined && !(value.text !== undefined && (value.state === "hidden" || value.state === "detached"))) throw new EngineError("invalid_arguments");
   if ((value.state === "value") !== (value.value !== undefined)) throw new EngineError("invalid_arguments");
   if (value.target === undefined && value.url === undefined && value.title === undefined && value.text === undefined) throw new EngineError("invalid_arguments");
   return Object.freeze(output as EngineWaitFor);

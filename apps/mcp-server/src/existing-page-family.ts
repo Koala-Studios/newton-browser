@@ -49,7 +49,7 @@ export function existingPageConnection(client:NativeClient,root:Token,initial:Va
     const tabId=match?Number(match[1]):routes.get(sessionId!);
     const owned=tabId===undefined?undefined:claims.get(tabId);if(!owned)throw new Error('foreign_target');return owned;
   };
-  return {rootTargetId:`tab_${root.tabId}`,epoch:root.epoch,claimGeneration:root.generation,signal:client.signal,
+  return {rootTargetId:`tab_${root.tabId}`,epoch:root.epoch,claimGeneration:root.generation,signal:client.signal,borrowedTab:true,
     tracksOwnedPages:client.hello.capabilities.includes('owned_popups'),
     wire:{
       async send(method,params={},sessionId){

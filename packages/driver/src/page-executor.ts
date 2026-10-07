@@ -42,6 +42,8 @@ type CaptureSpatialState = Readonly<{
 }>;
 type CaptureRecord = Readonly<{
   captureBeyondViewport?:boolean;
+  // Taken under a screencast because the borrowed tab was hidden; its check must be too.
+  observedSurface?:boolean;
   pageId: string;
   documentGeneration: number;
   clip: { x: number; y: number; width: number; height: number };
@@ -62,6 +64,8 @@ const DESCRIBE_COVER = `function(node){
 const CAPTURE_POINT_RADIUS = 24;
 // Frames must be still this long before a screenshot proves its masks.
 const FRAME_QUIET_MS = 300;
+// How long a read waits for a hidden borrowed tab to render a frame before reading what is there.
+const HIDDEN_FRAME_MS = 1500;
 // Shadow-root children fetched natively per read to find closed roots.
 const CLOSED_CHILD_LIMIT = 256;
 /** Shared reader/resolver/input vertical. Connections only route and own lifecycle. */
@@ -686,12 +690,27 @@ export class PageExecutor implements EngineExecutor {
     const root = this.directory.binding(this.directory.stamp(pageId), 1);
     // Pixels are neither retained nor exposed. A full viewport is necessary:
     // a 1px clip does not reliably commit off-clip scroll-layer updates.
-    const operation = context.read(() => this.send(root, "Page.captureScreenshot", { format: "png", captureBeyondViewport: false })).then(() => { this.directory.route(root); });
+    const operation = context.read(() => this.send(root, "Page.captureScreenshot", { format: "jpeg", quality: 1, captureBeyondViewport: false })).then(() => { this.directory.route(root); });
     this.viewportFrames.set(pageId, operation);
     try { await operation; }
     finally { if (this.viewportFrames.get(pageId) === operation) this.viewportFrames.delete(pageId); }
   }
 
+  /** A hidden tab of the operator's browser runs no frames, so pages that render on a frame
+   * (virtualized grids, deferred commits) keep a DOM behind what a screenshot shows. One observed
+   * frame brings it up to date before a read or a wait check; a frame that never comes is skipped. */
+  private async renderHidden(context: CommandContext, page: EnginePageStamp): Promise<void> {
+    if (this.connection.borrowedTab !== true) return;
+    const root = this.directory.binding(page, 1);
+    const result = await context.read(() => this.send(root, "Runtime.evaluate", { expression: "document.visibilityState", returnByValue: true, silent: true }));
+    if (object(result.result).value !== "hidden") return;
+    const frame = this.observeViewportFrame(context, page.pageId);
+    void frame.catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([frame, new Promise<void>(resolve => { timer = setTimeout(resolve, HIDDEN_FRAME_MS); })]); }
+    finally { clearTimeout(timer); }
+    context.checkpoint();
+  }
   private async preparePointerDocument(context: CommandContext, binding: NodeBinding): Promise<void> {
     if (this.pointerDocuments.get(binding.frameId) === binding.documentGeneration) return;
     const root = this.directory.binding(this.directory.stamp(binding.pageId), 1);
@@ -738,6 +757,7 @@ export class PageExecutor implements EngineExecutor {
   }
 
   private async waitFact(context: CommandContext, page: EnginePageStamp, waitFor: EngineWaitFor): Promise<boolean> {
+    if (waitFor.text || waitFor.target) await this.renderHidden(context, page);
     const root = this.directory.binding(page, 1);
     if (waitFor.url || waitFor.title) {
       const result = await context.read(() => this.send(root, "Runtime.evaluate", { expression: "({url:location.href,title:document.title})", returnByValue: true, silent: true }));
@@ -766,6 +786,8 @@ export class PageExecutor implements EngineExecutor {
       }
       incomplete||=pending.some(frame=>{const parent=this.directory.parent(frame);return !parent||included.has(parent.frameId);});
       if(!matched&&incomplete)throw new EngineError('search_incomplete');
+      // Without a target, hidden or detached is about the text: met once it is gone.
+      if (!waitFor.target && (waitFor.state === "hidden" || waitFor.state === "detached")) return !matched;
       if (!matched) return false;
     }
     const target = waitFor.target;
@@ -1050,6 +1072,7 @@ export class PageExecutor implements EngineExecutor {
   async observe(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, recordMode = false, scope?: EngineTarget, query?: EngineControlQuery): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue);
     context.checkpoint();
+    await this.renderHidden(context, page);
     const dialog = [...this.dialogs.values()].find(item => item.pageId === page.pageId);
     if (dialog) {
       const view=(end:number):EngineObservation=>({state:end===dialog.message.length?"available":"incomplete",trust:"untrusted_page_content",scope:"dialog",page,nodes:[],...(end===dialog.message.length?{}:{incompleteReason:"output_limit" as const}),dialog:{dialogId:dialog.id,type:dialog.type,message:dialog.message.slice(0,end)}});
@@ -1240,11 +1263,13 @@ export class PageExecutor implements EngineExecutor {
   }
   async readRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget,query?:EngineControlQuery):Promise<EngineObservation>{
     if(shape==='controls'||[...this.dialogs.values()].some(dialog=>dialog.pageId===page.pageId))return this.observe(context,page,budget,true,scope,query);
+    await this.renderHidden(context,page);
     return readStructuredRecords(context,page,budget,shape,scope,{directory:this.directory,resolver:this.resolver,send:(binding,method,params)=>this.send(binding,method,params)},query);
   }
   async readDocument(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, cursor?: string, scope?: EngineTarget): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue);
     if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId)) return this.observe(context, page, budget);
+    if (!cursor) await this.renderHidden(context, page);
     for (const [id,snapshot] of this.documents) if(snapshot.expiresAt<=performance.now()) {this.documentBytes-=snapshot.bytes;this.documents.delete(id);}
     let snapshotId: string;
     let offset = 0;
@@ -1384,10 +1409,10 @@ export class PageExecutor implements EngineExecutor {
     await this.front(page);
     // Storefronts attach and drop third-party frames for seconds after a load. Masks are
     // only proven against a still frame set, so wait for one and retry within the budget.
-    const capture=async()=>{
+    const capture=async(observed:boolean)=>{
       for(let attempt=0;;attempt++){
         await this.frameQuiet(context);
-        try{return await this.captureScreenshot(context,page,budgetValue,rawOptions,false);}
+        try{return await this.captureScreenshot(context,page,budgetValue,rawOptions,false,observed);}
         catch(error){
           const phase=error instanceof EngineError?error.phase:undefined;
           if(phase!=='frame_churn'&&phase!=='geometry'||context.cancellation)throw error;
@@ -1401,17 +1426,21 @@ export class PageExecutor implements EngineExecutor {
         }
       }
     };
-    if(this.connection.ownsBrowser||object(rawOptions).fullPage!==true)return capture();
+    if(this.connection.ownsBrowser||object(rawOptions).fullPage!==true)return capture(false);
+    return this.withPaintedSurface(context,page,capture);
+  }
+  /** A hidden borrowed tab paints only while observed: run read under a tiny screencast so its captures show the live page. */
+  private async withPaintedSurface<T>(context: CommandContext, page: EnginePageStamp, read: (observed: boolean) => Promise<T>): Promise<T> {
     const root=this.directory.binding(page,1);
     const visibility=await context.read(()=>this.send(root,'Runtime.evaluate',{expression:'document.visibilityState',returnByValue:true,silent:true}));
-    if(object(visibility.result).value!=='hidden')return capture();
+    if(object(visibility.result).value!=='hidden')return read(false);
     if(this.captureObservations.has(page.pageId))throw new EngineError('evidence_unavailable');
     const route=this.directory.route(root);
     this.captureObservations.add(page.pageId);
     // Tiny native observations keep hidden surfaces capturable. Do not acknowledge
     // frames: Chromium's in-flight bound prevents an ongoing image stream.
     const started=Promise.resolve().then(()=>this.connection.wire.send('Page.startScreencast',{format:'png',maxWidth:1,maxHeight:1},route));
-    try{await context.read(()=>started);return await capture();}
+    try{await context.read(()=>started);return await read(true);}
     finally{
       // Await late start completion even after cancellation, then stop on the exact
       // original route. Keep ownership until cleanup settles to prevent late-stop races.
@@ -1423,7 +1452,7 @@ export class PageExecutor implements EngineExecutor {
       await context.read(()=>cleanup);
     }
   }
-  private async captureScreenshot(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, rawOptions: unknown, recaptured: boolean): Promise<EngineObservation> {
+  private async captureScreenshot(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, rawOptions: unknown, recaptured: boolean, observed = false): Promise<EngineObservation> {
     const budget=asObservationBudget(budgetValue),maxBytes=budget.maxBytes;
     if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId)) return this.observe(context, page, budget);
     const options = rawOptions && typeof rawOptions === "object" && !Array.isArray(rawOptions) ? rawOptions as Record<string, unknown> : {};
@@ -1436,11 +1465,16 @@ export class PageExecutor implements EngineExecutor {
     const viewport = { width: spatial.width, height: spatial.height };
     const rawClip = object(options.clip);
     let defaultClip={ x: spatial.pageX, y: spatial.pageY, width: viewport.width, height: viewport.height };
+    let beyondViewport=options.fullPage===true;
     if(options.fullPage===true&&options.clip===undefined){
       const metrics=await context.read(()=>this.send(root,'Page.getLayoutMetrics',{}));
       const content=object(metrics.cssContentSize??metrics.contentSize);
       if(!finiteNumber(content.x)||!finiteNumber(content.y)||!finiteNumber(content.width)||!finiteNumber(content.height)||content.width<=0||content.height<=0)throw new EngineError('evidence_unavailable');
       defaultClip={x:content.x,y:content.y,width:content.width,height:content.height};
+      // Capturing beyond the viewport resizes the page, and app shells relayout for it
+      // (toolbars drop buttons), so click_at points from it miss. A page that already
+      // fits needs no resize.
+      if(content.x>=spatial.pageX&&content.y>=spatial.pageY&&content.x+content.width<=spatial.pageX+viewport.width&&content.y+content.height<=spatial.pageY+viewport.height)beyondViewport=false;
     }
     const clip = finiteNumber(rawClip.x) && finiteNumber(rawClip.y) && finiteNumber(rawClip.width) && finiteNumber(rawClip.height)
       ? { x: Number(rawClip.x), y: Number(rawClip.y), width: Number(rawClip.width), height: Number(rawClip.height) }
@@ -1465,7 +1499,7 @@ export class PageExecutor implements EngineExecutor {
     };
     const collected=await collectRegions(),regions=collected.regions;
     const result = await context.read(() => this.send(root, "Page.captureScreenshot", {
-      format: "png", fromSurface: true, captureBeyondViewport: options.fullPage === true,
+      format: "png", fromSurface: true, captureBeyondViewport: beyondViewport,
       // One image pixel per CSS pixel, so positions in the image are the ones click_at takes.
       clip: { ...clip, scale: 1 / spatial.deviceScaleFactor },
     }));
@@ -1475,9 +1509,9 @@ export class PageExecutor implements EngineExecutor {
     if(!sameCaptureSpatial(spatial,await this.captureSpatialState(context,root))){
       // Native full-page capture can change scrollbar geometry. Discard its pixels
       // and rebuild all evidence once, sharing the original cancellation/deadline.
-      if(options.fullPage===true&&!recaptured&&!this.pendingAttachments.size&&!this.pendingFrames.size){
+      if(beyondViewport&&!recaptured&&!this.pendingAttachments.size&&!this.pendingFrames.size){
         const after=await collectRegions();
-        if(!this.pendingAttachments.size&&!this.pendingFrames.size&&JSON.stringify(collected.frames)===JSON.stringify(after.frames))return this.captureScreenshot(context,page,budget,rawOptions,true);
+        if(!this.pendingAttachments.size&&!this.pendingFrames.size&&JSON.stringify(collected.frames)===JSON.stringify(after.frames))return this.captureScreenshot(context,page,budget,rawOptions,true,observed);
       }
       throw new EngineError('stale_target','geometry');
     }
@@ -1490,7 +1524,8 @@ export class PageExecutor implements EngineExecutor {
       provenance: { pageId: page.pageId, documentGeneration: page.documentGeneration, captureId, viewport, clip, maskDisposition: masked.appliedRegions>0?"mask_applied":"mask_not_applicable" } };
     if(!budget.fits(observation))throw new EngineError("output_budget");
     this.captures.set(captureId, {
-      captureBeyondViewport:options.fullPage===true,
+      captureBeyondViewport:beyondViewport,
+      ...(observed?{observedSurface:true}:{}),
       pageId: page.pageId,
       documentGeneration: page.documentGeneration,
       clip,
@@ -1709,15 +1744,18 @@ export class PageExecutor implements EngineExecutor {
   }
   private async clickAt(context: CommandContext, page: EnginePageStamp, action: EngineClickAt): Promise<EnginePostcondition> {
     const capture = this.captures.get(action.captureId);
-    if (!capture || capture.pageId !== page.pageId || capture.documentGeneration !== page.documentGeneration
-      || action.x < 0 || action.y < 0 || action.x > capture.clip.width || action.y > capture.clip.height) throw new EngineError("stale_target");
+    if (!capture || capture.pageId !== page.pageId) throw new EngineError("stale_target", undefined, "unknown captureId for this page; take a screenshot first");
+    if (capture.documentGeneration !== page.documentGeneration) throw new EngineError("stale_target", undefined, "the page loaded a new document since this screenshot; take a new one");
+    if (action.x < 0 || action.y < 0 || action.x > capture.clip.width || action.y > capture.clip.height) throw new EngineError("stale_target", undefined, `the point is outside the ${capture.clip.width}x${capture.clip.height} screenshot`);
     const root = this.directory.binding(page, 1);
     const currentSpatial = await this.captureSpatialState(context, root);
-    if (!sameCaptureSpatial(capture.spatial, currentSpatial)) throw new EngineError("stale_target");
-    const currentShot = await context.read(() => this.send(root, "Page.captureScreenshot", {
+    if (!sameCaptureSpatial(capture.spatial, currentSpatial)) throw new EngineError("stale_target", undefined, "the page scrolled, zoomed or resized since this screenshot; take a new one");
+    const recapture = () => context.read(() => this.send(root, "Page.captureScreenshot", {
       format: "png", fromSurface: true, captureBeyondViewport: capture.captureBeyondViewport===true,
       clip: { ...capture.clip, scale: 1 / capture.spatial.deviceScaleFactor },
     }));
+    // A hidden tab's unobserved surface is stale, so it never matches a capture taken while observed.
+    const currentShot = capture.observedSurface ? await this.withPaintedSurface(context, page, recapture) : await recapture();
     const currentData = string(currentShot.data);
     if (!currentData) throw new EngineError("evidence_unavailable");
     let currentMasked: ReturnType<typeof maskCapturedPng>;
@@ -1725,7 +1763,7 @@ export class PageExecutor implements EngineExecutor {
     // Animation elsewhere on the page does not invalidate a point: what was captured
     // around it must still be there, pixel for pixel.
     const scale = capture.tiles.width / capture.clip.width;
-    if (!sameTilesNear(capture.tiles, pngTileDigests(currentMasked.base64), action.x * scale, action.y * scale, CAPTURE_POINT_RADIUS * scale)) throw new EngineError("stale_target");
+    if (!sameTilesNear(capture.tiles, pngTileDigests(currentMasked.base64), action.x * scale, action.y * scale, CAPTURE_POINT_RADIUS * scale)) throw new EngineError("stale_target", undefined, "the page around this point changed since the screenshot; take a new one");
     const x = capture.clip.x + action.x-currentSpatial.pageX+currentSpatial.offsetX;
     const y = capture.clip.y + action.y-currentSpatial.pageY+currentSpatial.offsetY;
     if(x<0||y<0||x>=currentSpatial.width||y>=currentSpatial.height)throw new EngineError('target_moved');

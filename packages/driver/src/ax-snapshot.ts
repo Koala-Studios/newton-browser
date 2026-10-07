@@ -10,6 +10,12 @@ const bounded = (reply: Promise<Ax>): Promise<Ax> => {
   return Promise.race([reply, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('role_query_timeout')), ROLE_QUERY_MS); })])
     .finally(() => clearTimeout(timer));
 };
+/** Chromium finishes a role query in a background tab of the operator's browser only when another
+ * accessibility read arrives after it: no frames run there to complete it. A tiny read sent right
+ * after the queries releases them and answers itself. */
+export function releaseRoleQueries(send: Send, root: { nodeId: number } | { backendNodeId: number }): void {
+  void send('Accessibility.getPartialAXTree', {...root, fetchRelatives: false}).catch(() => undefined);
+}
 const terminalRoles = new Set(['StaticText', 'InlineTextBox', 'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch', 'slider', 'spinbutton', 'option', 'tab', 'menuitem', 'DisclosureTriangle']);
 
 /** Bound tree expansion before requesting the full rendered article from CDP.
@@ -49,16 +55,22 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
     // nested search/form field. Query these scarce high-value roles in Chromium,
     // then fetch their ancestor paths for the same scope/context projection.
     // Deep action controls (add to cart, quantity, options) sit below any
-    // breadth-first bound on real storefronts, so query them directly too.
-    const queried: [string, number][] = [['searchbox',16],['textbox',16],['combobox',16],['spinbutton',16],['button',64],['DisclosureTriangle',16],['checkbox',16],['radio',24],['switch',8],['tab',16],['slider',8]];
+    // breadth-first bound on real storefronts, and open menus and listboxes
+    // render at the end of the page, so query them directly too.
+    const queried: [string, number][] = [['searchbox',16],['textbox',16],['combobox',16],['spinbutton',16],['button',64],['DisclosureTriangle',16],['checkbox',16],['radio',24],['switch',8],['tab',16],['slider',8],['menuitem',32],['option',32]];
     // The main-content links run alongside the role queries so a withheld reply costs one bound, not several.
-    const mainLinks = scopeBackendNodeId === undefined ? bounded(send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role:'main'})).then(async reply => {
+    const root = {backendNodeId: Number(rootBackend)};
+    const mainLinks = scopeBackendNodeId === undefined ? bounded(send('Accessibility.queryAXTree',{...root,role:'main'})).then(async reply => {
       const landmarks=nodes(reply.nodes).filter(node=>!node.ignored);
       if(landmarks.length!==1||!Number.isSafeInteger(landmarks[0]!.backendDOMNodeId))return undefined;
-      return nodes((await bounded(send('Accessibility.queryAXTree',{backendNodeId:landmarks[0]!.backendDOMNodeId,role:'link'}))).nodes);
+      const links=bounded(send('Accessibility.queryAXTree',{backendNodeId:landmarks[0]!.backendDOMNodeId,role:'link'}));
+      releaseRoleQueries(send,root);
+      return nodes((await links).nodes);
     }) : undefined;
     void mainLinks?.catch(() => undefined);
-    const matches = await Promise.allSettled(queried.map(([role]) => bounded(send('Accessibility.queryAXTree',{backendNodeId:rootBackend,role}))));
+    const replies = queried.map(([role]) => bounded(send('Accessibility.queryAXTree',{...root,role})));
+    releaseRoleQueries(send, root);
+    const matches = await Promise.allSettled(replies);
     const fields: Ax[] = [];
     matches.forEach((result, index) => {
       if (result.status === 'rejected') { incomplete = true; return; }

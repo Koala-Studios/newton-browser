@@ -1,6 +1,7 @@
 import { EngineError, type EnginePageStamp, type EngineTarget } from "@newton-browser/core";
 import type { CommandContext } from "./command-context.ts";
 import { type NodeBinding } from "./page-directory.ts";
+import { releaseRoleQueries } from "./ax-snapshot.ts";
 
 type RecordValue = Record<string, unknown>;
 function object(value: unknown): RecordValue { return value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {}; }
@@ -146,10 +147,10 @@ export class TargetResolver {
         // Observe lists <summary> (Chromium's internal DisclosureTriangle) as a button.
         const axRoles = target.role === "button" ? ["button", "DisclosureTriangle"] : [target.role];
         const nodes: RecordValue[] = [];
-        for (const role of axRoles) {
-          const result = await context.read(() => withheld(this.sendBinding(base, "Accessibility.queryAXTree", { nodeId, role, ...(target.exact ? { accessibleName: target.name } : {}) })));
-          nodes.push(...array(result.nodes));
-        }
+        const send = (method: string, params: RecordValue) => context.read(() => this.sendBinding(base, method, params));
+        const replies = axRoles.map(role => withheld(send("Accessibility.queryAXTree", { nodeId, role, ...(target.exact ? { accessibleName: target.name } : {}) })));
+        releaseRoleQueries(send, { nodeId });
+        for (const result of await Promise.all(replies)) nodes.push(...array(result.nodes));
         visited += nodes.length;
         if (visited > 20_000) throw new EngineError("search_incomplete");
         for (const node of nodes) if (!node.ignored && axRoles.includes(String(object(node.role).value)) &&

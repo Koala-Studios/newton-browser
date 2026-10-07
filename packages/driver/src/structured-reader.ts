@@ -4,7 +4,7 @@ import type {CommandContext} from './command-context.ts';
 import type {PageDirectory,NodeBinding} from './page-directory.ts';
 import type {TargetResolver} from './target-resolver.ts';
 import {readNativeTable} from './table-reader.ts';
-import {readAXSnapshot} from './ax-snapshot.ts';
+import {readAXSnapshot,releaseRoleQueries} from './ax-snapshot.ts';
 import {readAXControls} from './control-reader.ts';
 type Value=Record<string,unknown>;
 const object=(value:unknown):Value=>value&&typeof value==='object'&&!Array.isArray(value)?value as Value:{};
@@ -75,7 +75,9 @@ export async function readStructuredRecords(context:CommandContext,page:EnginePa
   const records:EngineObservationRecord[]=[],bindings:NodeBinding[]=[];
   let complete=!resolver.isSearchIncomplete(),limited=false,visited=0;
   for(const root of roots){
-    const result=await read(root,'Accessibility.queryAXTree',{backendNodeId:root.backendNodeId,role:'link'});
+    const reply=read(root,'Accessibility.queryAXTree',{backendNodeId:root.backendNodeId,role:'link'});
+    releaseRoleQueries((method,params)=>read(root,method,params),{backendNodeId:root.backendNodeId});
+    const result=await reply;
     const raw=list(result.nodes);visited+=raw.length;
     const projected=readAXControls(raw);complete&&=!projected.incomplete;
     for(const item of projected.controls){

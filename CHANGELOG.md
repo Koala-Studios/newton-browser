@@ -7,6 +7,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.16] - 2026-10-07
+
+### Fixed
+
+- In a background tab of the operator's browser, Chromium answers a role query only when another
+  accessibility read follows it. Every semantic target (`{kind:"semantic",role,name}`) therefore
+  failed there with `search_incomplete` after 2.5 s, and `observe` waited out its last role query on
+  every call. Each batch of role queries is now followed by a one-node read that releases them:
+  semantic targets resolve in milliseconds and `observe` no longer waits.
+- `observe` queries open menu items and listbox options directly, so a menu that renders at the
+  end of a large page is listed (it was cut off as `rendered_subset`, also with a text query).
+- A background tab runs no frames, so content a page renders on a frame (virtualized grids,
+  deferred commits) stayed out of the DOM: `wait_for` text timed out on rows a screenshot showed,
+  and `observe` and document reads missed them. Reads and wait checks in a hidden borrowed tab now
+  render one frame first.
+- A full-page screenshot of a page that already fits its viewport no longer captures beyond the
+  viewport. That resized the page, app shells relaid out their toolbars for it, and `click_at`
+  points from the capture were refused with `stale_target` (or would have missed). A `click_at` on
+  a capture taken in a hidden tab also checks the page under the same painted surface.
+
+### Added
+
+- `wait_for` with `text` and `state: "hidden"` (or `"detached"`) and no target waits for that text
+  to go away, such as a "Publishing" progress message.
+- A failed step's receipt carries `detail` when the engine knows why and what to do, for example
+  `click_at`: "the page around this point changed since the screenshot; take a new one".
+
 ## [0.7.15] - 2026-10-06
 
 ### Fixed

@@ -3233,3 +3233,27 @@ headless Chrome has no pointing device and reported `pointer: none` and `hover: 
 the site made the menu click-only. Owned launches now pass Blink pointer and hover types
 for a mouse. Regression: chromium-process launch args, and storefront-pages asserts the
 page sees a fine pointer with hover (meaningful on hosts without a mouse).
+# Background borrowed tabs: role targets, menu items, rendered rows and click_at — fixed in 0.7.16
+
+Observed 2026-10-07 driving an ad platform's management app in an operator's own browser
+(existing mode, background tab), about 590 calls: stale_target 22x, search_incomplete 16x.
+Four causes, each reproduced on that app and on example.com in a hidden tab:
+1. Chromium answers a pending `Accessibility.queryAXTree` only when another accessibility
+   read arrives after it (no frames run in a hidden tab). A single role-target query never
+   answered (search_incomplete after 2.5 s, even on example.com); observe's eleven parallel
+   role queries all answered except the last, which it waited out on every call. A
+   `getPartialAXTree` of one node sent right after each batch releases them and answers
+   itself: semantic targets 2.5 s -> 8-19 ms, observe 2.6 s -> 0.13 s.
+2. Open menu items render at the end of the body, past observe's expansion bound; menuitem
+   and option are now queried directly like buttons.
+3. The app built its table rows only on a rendered frame. In a hidden tab the DOM lacked rows
+   a screenshot showed (any capture renders a frame), so wait_for text timed out and document
+   reads omitted the table. Reads and wait checks render one viewport frame first (bounded
+   1.5 s, JPEG, pixels discarded).
+4. A full-page capture with captureBeyondViewport resized the page even when it already fit;
+   the app relaid out its toolbar for the resize (a button dropped, its neighbour shifted
+   left), so the capture showed a layout the page did not keep and click_at near it was
+   refused. Pages that fit are captured without it: 6/6 points accepted vs 3/6.
+Also added wait_for text with state hidden (wait for a progress message to go away) and a
+step `detail` naming why click_at refused. Regression: engine-regressions/hidden-borrowed-tab
+(owned browser, second tab hides the page, connection marked borrowed).

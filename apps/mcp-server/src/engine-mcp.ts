@@ -40,8 +40,8 @@ function compactSchema(schema: unknown): unknown {
   if (Array.isArray(compact.allOf) && properties?.state && properties.url) {
     delete compact.allOf;
     compact.description = properties.kind?.const === "wait_for"
-      ? "Wait for url, title or text, or for target (named like any action target) in a state. Example: {\"kind\":\"wait_for\",\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"enabled\"}. value needs state \"value\"."
-      : "After the action, wait for url, title or text, or for target (named like any action target) in a state. Example: {\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"visible\"}. value needs state \"value\".";
+      ? "Wait for url, title or text, or for target (named like any action target) in a state. Example: {\"kind\":\"wait_for\",\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"enabled\"}. value needs state \"value\". text with state \"hidden\" waits for the text to go away."
+      : "After the action, wait for url, title or text, or for target (named like any action target) in a state. Example: {\"target\":{\"kind\":\"ref\",\"ref\":\"e3\"},\"state\":\"visible\"}. value needs state \"value\". text with state \"hidden\" waits for the text to go away.";
   }
   if (properties?.kind?.const === "sequence" && properties.steps) {
     compact.properties = { ...properties, steps: { ...properties.steps, items: { type: "object", description: "One action of any kind except sequence, shaped as above." } } };

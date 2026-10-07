@@ -6,6 +6,8 @@ export interface EngineWire {
 export interface EngineConnection {
   /** Private owned process only; borrowed tab adapters never grant browser discovery. */
   readonly ownsBrowser?: boolean;
+  /** A tab of the operator's own browser: usually in the background, where Chromium runs no frames. */
+  readonly borrowedTab?: boolean;
   /** The adapter emits only pages already claimed by this connection's owner. */
   readonly tracksOwnedPages?: boolean;
   /** Sites the cloned login source holds cookies for (domains only), when the session starts from one. */

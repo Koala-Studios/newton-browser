@@ -69,3 +69,16 @@ test('a text query reaches a matching main link past the 128-link bound',async()
   assert.equal(queried.nodes.filter(node=>node.role?.value==='link').length,128);
   assert.equal(queried.incomplete,true);
 });
+
+test('role queries a background tab holds back are released by a following accessibility read',async()=>{
+  // Chromium answers a pending queryAXTree only when another accessibility read arrives after it.
+  const held=[];
+  const result=await readAXSnapshot(async(method,params)=>{
+    if(method==='Accessibility.getFullAXTree')return {nodes:[{nodeId:'root',backendDOMNodeId:1,role:{value:'RootWebArea'},childIds:['deep']}]};
+    if(method==='Accessibility.queryAXTree')return new Promise(resolve=>held.push(()=>resolve({nodes:params.role==='menuitem'?[{nodeId:'item',backendDOMNodeId:5,role:{value:'menuitem'},name:{value:'Import'}}]:[]})));
+    if(method==='Accessibility.getPartialAXTree'){assert.deepEqual(params,{backendNodeId:1,fetchRelatives:false});held.splice(0).forEach(release=>release());return {nodes:[]};}
+    return {nodes:[]};
+  },'frame');
+  assert.ok(result.nodes.some(node=>node.nodeId==='item'),'open menu items are queried directly');
+  assert.equal(held.length,0);
+});

@@ -169,8 +169,8 @@ export class SessionEngine {
           if (postcondition.state !== "met" && postcondition.state !== "not_requested") { stoppedAt = index; break; }
         } catch (error) {
           failure = context.cancellation ?? engineErrorCode(error);
-          const coveredBy = failure === "target_covered" && error instanceof EngineError && error.detail ? { coveredBy: error.detail } : {};
-          steps.push({ index, dispatch: context.since(mark), postcondition: { state: "unknown", kind: postconditionKind(actions[index]!) }, errorCode: failure, ...coveredBy });
+          const detail = error instanceof EngineError && error.detail && failure === error.code ? (failure === "target_covered" ? { coveredBy: error.detail } : { detail: error.detail }) : {};
+          steps.push({ index, dispatch: context.since(mark), postcondition: { state: "unknown", kind: postconditionKind(actions[index]!) }, errorCode: failure, ...detail });
           break;
         }
       }

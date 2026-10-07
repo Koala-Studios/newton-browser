@@ -19,10 +19,10 @@ const edit = {type:'object',description:'Replace an exact text match within one 
   properties:{kind:{const:'edit'},target,match:{type:'string',minLength:1,maxLength:4096},replacement:{type:'string',maxLength:65536},prefix:{type:'string',maxLength:4096},suffix:{type:'string',maxLength:4096},occurrence:{type:'integer',minimum:1,maximum:65536}},required:['kind','target','match','replacement'],additionalProperties:false};
 const waitFor = {
   type: "object", minProperties: 1, additionalProperties: false,
-  description: "Give url, title, text, or an element as target (the same target as actions) with an optional state; value needs state \"value\".",
+  description: "Give url, title, text, or an element as target (the same target as actions) with an optional state; value needs state \"value\"; text with state \"hidden\" waits for that text to go away.",
   allOf: [
     { anyOf: ["url", "title", "text", "target"].map(key => ({ required: [key] })) },
-    { if: { required: ["state"] }, then: { required: ["target"] } },
+    { if: { required: ["state"], not: { required: ["text"], properties: { state: { enum: ["hidden", "detached"] } } } }, then: { required: ["target"] } },
     { if: { required: ["value"] }, then: { required: ["state"], properties: { state: { const: "value" } } } },
     { if: { required: ["state"], properties: { state: { const: "value" } } }, then: { required: ["value"] } },
   ],
