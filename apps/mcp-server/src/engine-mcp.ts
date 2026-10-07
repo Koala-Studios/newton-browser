@@ -6,7 +6,7 @@ import { MODERN_MCP_PROTOCOL_VERSION, type ModernMcpRequest, type ModernMcpReque
 
 // The full schemas validate and explain arguments; models get the compact form below.
 const FULL_TOOL_CATALOG = [
-  { name: "browser.session.start", description: "Default: isolated headless browser at a complete URL. Only when the operator requests their browser, claim a specific existing tab or create an owned background tab using target kind new_tab and a complete URL.", inputSchema: { type: "object", oneOf: [
+  { name: "browser.session.start", description: "Default: an isolated headless browser at a complete url (mode owned, or no mode). Only when the operator asks for their own browser, use mode existing with connectionId and a target: {kind: \"new_tab\", url, instanceId} opens your own background tab there, {kind: \"tab\", tabId, instanceId} claims one of their tabs. connectionId, instanceId and tabId come from browser.existing.discover.", inputSchema: { type: "object", oneOf: [
     { type: "object", properties: { url: { type: "string" }, mode: { const: "owned" }, sourceId: { type: "string" }, viewport: { type: "object", description: "Page area; default 1280x900.", properties: { width: { type: "integer", minimum: 320, maximum: 3840 }, height: { type: "integer", minimum: 240, maximum: 2160 } }, required: ["width", "height"], additionalProperties: false }, locale: { type: "string", description: "BCP 47, e.g. en-CA." }, timezone: { type: "string", description: "IANA, e.g. America/Toronto." }, collect: { type: "array", description: "Record console and/or network from the first page load. Off by default.", items: { enum: ["console", "network"] }, maxItems: 2, uniqueItems: true }, timeoutMs: { type: "integer", minimum: 1000, maximum: 120000, description: "Start budget; default 30000." } }, required: ["url"], additionalProperties: false },
     { type: "object", properties: { mode: { const: "existing" }, connectionId: { type: "string" }, target: { type: "object", properties: { kind: { const: "tab" }, tabId: { type: "integer", minimum: 1 }, instanceId: { type: "string" } }, required: ["kind", "tabId", "instanceId"], additionalProperties: false } }, required: ["mode", "target"], additionalProperties: false },
     { type: "object", properties: { mode: { const: "existing" }, connectionId: { type: "string" }, target: { type: "object", properties: { kind: { const: "new_tab" }, url: { type: "string" }, instanceId: { type: "string" } }, required: ["kind", "url", "instanceId"], additionalProperties: false } }, required: ["mode", "target"], additionalProperties: false },
@@ -29,7 +29,27 @@ const FULL_TOOL_CATALOG = [
 
 /** Published catalog: string length bounds (enforced server-side) are dropped and a sequence
  * step points back at the action shapes instead of repeating them. */
-export const ENGINE_TOOL_CATALOG = FULL_TOOL_CATALOG.map(tool => ({ ...tool, inputSchema: compactSchema(tool.inputSchema) as typeof tool.inputSchema }));
+export const ENGINE_TOOL_CATALOG = FULL_TOOL_CATALOG.map(tool => ({ ...tool, inputSchema: compactSchema(flattenRootVariants(tool.inputSchema)) as typeof tool.inputSchema }));
+
+/** Some clients cannot show a root oneOf: they merge its branches and keep the first value of each shared key,
+ * which hid mode existing and the new_tab target. Publish one object instead: each key once, constants as an
+ * enum, differing shapes as a oneOf. The full schema still explains a wrong combination. */
+function flattenRootVariants(schema: unknown): unknown {
+  const root = schema as Record<string, unknown>;
+  if (!Array.isArray(root.oneOf)) return schema;
+  const shapes = new Map<string, Record<string, unknown>[]>();
+  for (const option of root.oneOf as Record<string, unknown>[]) {
+    for (const [key, value] of Object.entries((option.properties ?? {}) as Record<string, Record<string, unknown>>)) {
+      const seen = shapes.get(key) ?? [];
+      if (!seen.some(item => JSON.stringify(item) === JSON.stringify(value))) seen.push(value);
+      shapes.set(key, seen);
+    }
+  }
+  const properties = Object.fromEntries([...shapes].map(([key, values]) => [key, values.length === 1 ? values[0]
+    : values.every(value => "const" in value) ? { enum: values.map(value => value.const) } : { oneOf: values }]));
+  const { oneOf: _variants, ...rest } = root;
+  return { ...rest, properties, required: [], additionalProperties: false };
+}
 
 function compactSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(compactSchema);

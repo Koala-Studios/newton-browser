@@ -3257,3 +3257,17 @@ Four causes, each reproduced on that app and on example.com in a hidden tab:
 Also added wait_for text with state hidden (wait for a progress message to go away) and a
 step `detail` naming why click_at refused. Regression: engine-regressions/hidden-borrowed-tab
 (owned browser, second tab hides the page, connection marked borrowed).
+# session.start hid existing mode and the new_tab target from models — fixed in 0.7.17
+
+Observed 2026-10-07 in a desktop agent client: the published `browser.session.start` schema was a
+root `oneOf` of three shapes (owned; existing + tab; existing + new_tab). The client cannot show a
+root `oneOf`, so it merged the branches and kept the first value of each shared key: `mode` became
+the constant "owned" and `target` only the tab shape, and the tool description's "target kind
+new_tab" matched nothing a model could send. Agents fell back to the signed-out owned browser or to
+claiming an operator's tab. Separately, the argument explanation picked a branch by `mode` alone; two
+branches share "existing", so a new_tab call missing `instanceId` was explained against the tab shape
+("target.url not allowed; allowed: kind, tabId, instanceId"), sending the model away from the right
+shape. The published schema is now one object (`mode` enum owned/existing, `target` a oneOf of the
+tab and new_tab shapes, every other key once); the full schema still validates and explains, and
+branches that share a discriminator are narrowed by the nested `kind` before explaining. Regression:
+mcp-contract "session.start publishes one object that shows existing mode and the new_tab target".

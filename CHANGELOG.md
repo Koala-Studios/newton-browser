@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.17] - 2026-10-07
+
+### Fixed
+
+- `browser.session.start` is published as one object instead of a root `oneOf`. Clients that cannot
+  show a root `oneOf` merged its shapes and kept only `mode: "owned"` and the tab target, so models
+  could not find `mode: "existing"` with a `new_tab` target and fell back to the signed-out owned
+  browser. `mode` is now an enum and `target` lists both the `tab` and `new_tab` shapes; the
+  description says which keys each needs and that they come from `browser.existing.discover`.
+- An invalid `session.start` call with `mode: "existing"` is explained against the target kind it
+  names: a `new_tab` target missing `instanceId` now reports `arguments.target.instanceId` required,
+  not `target.url` "not allowed" from the tab shape.
+
 ## [0.7.16] - 2026-10-07
 
 ### Fixed

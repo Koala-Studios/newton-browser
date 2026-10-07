@@ -47,6 +47,31 @@ test("modern metadata is mandatory and old protocol handshakes are rejected", as
   } finally { await host.close(); }
 });
 
+test("session.start publishes one object that shows existing mode and the new_tab target", async () => {
+  // A client that cannot show a root oneOf merged the branches and kept only mode "owned" and the tab target.
+  const start = ENGINE_TOOL_CATALOG.find(tool => tool.name === "browser.session.start")!.inputSchema as Record<string, any>;
+  assert.equal(start.oneOf, undefined);
+  assert.deepEqual(start.properties.mode, { enum: ["owned", "existing"] });
+  assert.deepEqual(start.properties.target.oneOf.map((shape: any) => shape.properties.kind.const), ["tab", "new_tab"]);
+  assert.ok(start.properties.connectionId && start.properties.url && start.properties.viewport);
+  let claims = 0;
+  const host = new EngineHost(async () => { throw new Error("not_started"); }, async () => { claims++; throw new Error("not_started"); });
+  try {
+    const call = async (args: unknown) => {
+      const reply = await handleMcpMessage(host, { jsonrpc: "2.0", id: 9, method: "tools/call", params: { _meta: META, name: "browser.session.start", arguments: args } });
+      return JSON.parse(((reply as { result: { content: { text: string }[] } }).result.content[0]).text);
+    };
+    // A new_tab target is explained against the new_tab shape, not the tab shape.
+    assert.deepEqual((({ field, expected }) => ({ field, expected }))(await call({ mode: "existing", connectionId: "c", target: { kind: "new_tab", url: "https://example.com/" } })),
+      { field: "arguments.target.instanceId", expected: "required" });
+    assert.equal((await call({ mode: "existing", target: { kind: "tab", tabId: 3, instanceId: "i", url: "https://example.com/" } })).field, "arguments.target.url");
+    assert.equal((await call({ mode: "owned", url: "https://example.com/", target: { kind: "new_tab", url: "https://example.com/", instanceId: "i" } })).field, "arguments.target");
+    assert.equal(claims, 0);
+  } finally {
+    await host.close();
+  }
+});
+
 test("the catalog is the engine's, and unknown fields and tools are refused before any browser starts", async () => {
   const { host, launches } = unlaunchedHost();
   try {

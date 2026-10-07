@@ -52,13 +52,35 @@ function variants(options: Schema[], value: unknown, path: string): ArgumentIssu
   if (isRecord(value)) for (const key of ["kind", "mode"]) {
     const labelled = options.filter(option => "const" in object(object(option.properties)[key]) || Array.isArray(object(object(option.properties)[key]).enum));
     if (!labelled.length || !(key in value)) continue;
-    const match = labelled.find(option => { const discriminator = object(object(option.properties)[key]); return discriminator.const === value[key] || (Array.isArray(discriminator.enum) && discriminator.enum.includes(value[key])); });
+    const matches = labelled.filter(option => { const discriminator = object(object(option.properties)[key]); return discriminator.const === value[key] || (Array.isArray(discriminator.enum) && discriminator.enum.includes(value[key])); });
+    if (matches.length > 1) {
+      // Several branches share this value (mode existing with a tab or a new_tab target): narrow by the nested
+      // discriminators the value names, so a new_tab target is not explained against the tab shape.
+      const narrowed = matches.filter(option => nestedKindsMatch(option, value));
+      return variants(narrowed.length ? narrowed.map(option => withoutDiscriminator(option, key)) : matches.map(option => withoutDiscriminator(option, key)), value, path);
+    }
+    const match = matches[0];
     if (!match) return { field: `${path}.${key}`, expected: `one of ${labelled.flatMap(option => { const discriminator = object(object(option.properties)[key]); return "const" in discriminator ? [discriminator.const] : discriminator.enum as unknown[]; }).map(item => JSON.stringify(item)).join(", ")}` };
     return check(match, value, path);
   }
   const issues = options.map(option => check(option, value, path));
   if (issues.some(issue => !issue)) return undefined;
   return issues.reduce((deepest, issue) => (issue!.field.length > deepest!.field.length ? issue : deepest));
+}
+
+function nestedKindsMatch(option: Schema, value: Record<string, unknown>): boolean {
+  return Object.entries(object(option.properties)).every(([key, schema]) => {
+    const kind = object(object(object(schema).properties).kind);
+    const nested = value[key];
+    return !("const" in kind) || !isRecord(nested) || !("kind" in nested) || nested.kind === kind.const;
+  });
+}
+/** The branch with an already-matched discriminator made optional, so choosing among the remaining branches
+ * cannot pick the same key again. The check of the other keys is unchanged. */
+function withoutDiscriminator(option: Schema, key: string): Schema {
+  const properties = { ...object(option.properties) };
+  properties[key] = {};
+  return { ...option, properties };
 }
 
 function hasType(value: unknown, type: string): boolean {
