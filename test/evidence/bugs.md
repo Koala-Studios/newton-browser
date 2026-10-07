@@ -3271,3 +3271,13 @@ shape. The published schema is now one object (`mode` enum owned/existing, `targ
 tab and new_tab shapes, every other key once); the full schema still validates and explains, and
 branches that share a discriminator are narrowed by the nested `kind` before explaining. Regression:
 mcp-contract "session.start publishes one object that shows existing mode and the new_tab target".
+# Discovery read incomplete because of a dead native host's connection file — fixed in 0.7.18
+
+Observed 2026-10-07 on macOS Chrome: `browser.existing.discover` returned one tab with
+`incomplete: true`. The connections directory held two advertisements: the live native host's and
+one from Sep 28 whose process (and socket) no longer existed, left behind when that host exited
+without closing. Every discovery probed it, the probe was rejected and the result was marked
+incomplete; `session.start` in existing mode without a `connectionId` saw two candidates and refused
+with `browser_connection_required`. Listing the advertisements now removes those whose recorded pid
+no longer exists (ESRCH); a live or unverifiable one is kept. Regression: existing-discovery "an
+advertisement left by a native host that is gone is removed, not reported as an incomplete probe".

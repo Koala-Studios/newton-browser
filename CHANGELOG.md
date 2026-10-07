@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-10-07
+
+### Fixed
+
+- `browser.existing.discover` no longer reports `incomplete: true` because a native host that
+  crashed left its connection file behind. Connection files whose process is gone are removed when
+  the connections are listed, so discovery returns the live browser's tabs without a failed probe,
+  and `session.start` in existing mode no longer needs a `connectionId` to choose between the live
+  browser and a dead one. A directory full of such files also stops counting toward the 32-file limit.
+
 ## [0.7.17] - 2026-10-07
 
 ### Fixed

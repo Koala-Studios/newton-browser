@@ -11,9 +11,18 @@ export const existingConnectionId=(advertisement:string)=>'existing_'+createHash
 export async function nativeAdvertisements(directory:string):Promise<string[]>{
   let stat;try{stat=await fs.lstat(directory);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error;}
   if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('native_directory_invalid');
-  const files=(await fs.readdir(directory)).filter(name=>/^connection-[a-f0-9-]{36}\.json$/.test(name));
-  if(files.length>32)throw new Error('native_connection_capacity');
-  return files.map(name=>path.join(directory,name));
+  const files=(await fs.readdir(directory)).filter(name=>/^connection-[a-f0-9-]{36}\.json$/.test(name)).map(name=>path.join(directory,name));
+  // A native host that crashed leaves its advertisement behind; it would read as a failed probe forever.
+  const live=[];
+  for(const file of files){if(await abandonedAdvertisement(file))await fs.unlink(file).catch(()=>{});else live.push(file);}
+  if(live.length>32)throw new Error('native_connection_capacity');
+  return live;
+}
+async function abandonedAdvertisement(file:string):Promise<boolean>{
+  let pid:unknown;
+  try{const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>4096)return false;pid=JSON.parse(await fs.readFile(file,'utf8'))?.pid;}catch{return false;}
+  if(!Number.isSafeInteger(pid)||Number(pid)<=0)return false;
+  try{process.kill(Number(pid),0);return false;}catch(error){return (error as NodeJS.ErrnoException).code==='ESRCH';}
 }
 export async function discoverExistingDirectory(directory:string):Promise<ExistingDiscovery>{
   const files=await nativeAdvertisements(directory);

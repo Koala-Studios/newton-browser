@@ -64,3 +64,22 @@ test('installed directory discovery keeps distinct profile identities within one
     assert.ok(Buffer.byteLength(JSON.stringify(encodeEngineResult(result)))<=8192);assert.deepEqual(methods,['inventory','inventory']);
   }finally{for(const broker of brokers)await broker.close();for(const peer of peers)peer.close();temp.remove();}
 });
+
+test('an advertisement left by a native host that is gone is removed, not reported as an incomplete probe',{timeout:5000},async()=>{
+  const temp=temporaryRoot('existing-abandoned'),input=new PassThrough(),output=new PassThrough();let broker,peer;
+  peer=new NativeChannel(output,input,message=>{
+    if(message.type==='request')void peer.send({connectionId:message.connectionId,payload:{type:'response',id:message.request.id,result:{tabs:[{tabId:1,title:'Live tab',url:'https://example.test/',claimed:false}]}}});
+  },()=>{});
+  const {spawnSync}=await import('node:child_process');const fs=await import('node:fs');const path=await import('node:path');
+  const gone=spawnSync(process.execPath,['-e','process.stdout.write(String(process.pid))']).stdout.toString();
+  const abandoned=path.join(temp.root,'connection-ec3ac703-0775-4af4-9898-abde24fffab0.json');
+  fs.writeFileSync(abandoned,JSON.stringify({version:1,endpoint:'/nonexistent.sock',token:'b'.repeat(64),epoch:'ec3ac703-0775-4af4-9898-abde24fffab0',pid:Number(gone)}),{mode:0o600});
+  try{
+    const starting=startNativeBroker(temp.root,input,output);
+    await peer.send({type:'hello',epoch:'current-browser',digest:'a'.repeat(64),protocolMajor:1,capabilities:['tab_claim','scoped_cdp','tab_inventory']});
+    broker=await starting;
+    const result=await discoverExistingDirectory(temp.root);
+    assert.equal(result.available,true);assert.equal(result.incomplete,false);assert.equal(result.tabs.length,1);assert.equal(result.connections,undefined);
+    assert.equal(fs.existsSync(abandoned),false);assert.equal(fs.existsSync(broker.advertisement),true);
+  }finally{await broker?.close();peer.close();temp.remove();}
+});
