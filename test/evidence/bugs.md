@@ -3289,3 +3289,13 @@ a new, empty login source and opened a signed-out headless browser (Shopify and 
 a CAPTCHA) rather than failing. Owned mode now refuses a `sourceId` shaped like a `connectionId`
 (`existing_` + 24 hex) or an `instanceId` (UUID) before any browser starts. Regression:
 existing-discovery "an existing-browser connectionId or instanceId given as an owned sourceId is refused".
+
+# A click on a download link saved nothing — fixed in 0.7.20
+
+Observed 2026-10-07: a hosted worker clicked a public file host's download link. The click was
+acknowledged, but headless Chromium refuses downloads unless a client allows them, and no tool reported
+whether a download happened or where it went, so no original file could be retrieved. Owned sessions now
+allow downloads into the session's own folder, `browser.downloads` lists each with its state and bytes,
+and an embedding host copies a completed file out with `downloadFile`. Regression:
+engine-regressions/downloads "a download link saves the file into the session, listed for the model and
+readable by the host".

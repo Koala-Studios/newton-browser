@@ -12,6 +12,8 @@ export interface EngineConnection {
   readonly tracksOwnedPages?: boolean;
   /** Sites the cloned login source holds cookies for (domains only), when the session starts from one. */
   readonly loginSites?: readonly string[];
+  /** Private owned process only: the session's own folder where downloads are saved, removed with the session. */
+  readonly downloadDirectory?: string;
   readonly wire: EngineWire;
   readonly rootTargetId: string;
   readonly epoch: string;

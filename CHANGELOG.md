@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.20] - 2026-10-08
+
+### Added
+
+- Downloads in owned sessions. Headless Chromium refused every download unless a client allowed it,
+  so a click on a download link was acknowledged and nothing was saved. Owned sessions now save
+  downloads into the session's own folder (removed with the session), and `browser.downloads` lists
+  them oldest first with `downloadId`, the site's file name, source URL, state (`in_progress`,
+  `completed`, `canceled`) and bytes. A host reads a completed file with `downloadFile(sessionId,
+  downloadId)` from the embedding API; the model never sees a host path. Sign-in sessions, whose
+  profile becomes the shared login, do not save downloads.
+
 ## [0.7.19] - 2026-10-07
 
 ### Fixed

@@ -1,4 +1,5 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
+import path from "node:path";
 
 import { type BrowserDisplay,
   ChromiumLaunchError,
@@ -120,6 +121,9 @@ export class OwnedBrowserRuntime {
     this.unavailable = input.process.exited;
     void input.process.exited.then(() => this.handleUnexpectedProcessExit());
   }
+
+  /** Downloads go in the session's own profile folder, so they are removed with it. */
+  get downloadDirectory(): string { return path.join(this.lease.path, "Newton Downloads"); }
 
   cleanupState(): "ready" | "closing" | "cleanup_uncertain" | "closed" {
     return this.state;

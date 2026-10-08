@@ -39,6 +39,8 @@ export type BrowserEngine = Readonly<{
   /** Before publishing a sign-in: give a running session the same signed-in state and reload its page, so it need not restart. */
   adoptSignIn(signInSessionId: string, sessionId: string): Promise<void>;
   sessions(): readonly { sessionId: string; state: string }[];
+  /** Where a completed download of this session was saved, for the host to copy out before the session stops. */
+  downloadFile(sessionId: string, downloadId: string): { path: string; filename: string; bytes: number };
   /** Remove session copies left by crashed hosts; pass the PID namespaces of every host still running on this store. */
   collectOrphans(liveNamespaces: readonly string[]): number;
   stop(sessionId: string): Promise<void>;
@@ -78,6 +80,7 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
     finishSignIn: (sessionId, publish) => host.finishMaintenance(sessionId, publish),
     adoptSignIn: (signInSessionId, sessionId) => host.adoptSignIn(signInSessionId, sessionId),
     sessions: () => host.list(),
+    downloadFile: (sessionId, downloadId) => host.downloadFile(sessionId, downloadId),
     collectOrphans: liveNamespaces => collectOrphanedSessionCopies(env, liveNamespaces),
     stop: sessionId => host.stop(sessionId),
     close: () => host.close(),

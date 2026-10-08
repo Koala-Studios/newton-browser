@@ -12,14 +12,16 @@ export type ExistingPageRequest={connectionId?:string;tabId?:number;instanceId:s
 export type LoginMaintenance = { begin(sourceId: string, display: BrowserDisplay): Promise<{ connection: EngineConnection; finish(publish: boolean): Promise<{ generation: string } | undefined> }> };
 
 export async function ownedEngineConnection(options: LaunchOwnedBrowserRuntimeOptions): Promise<EngineConnection> {
-  return engineConnectionFromRuntime(await launchOwnedBrowserRuntime({ ...options, headless: true }));
+  return engineConnectionFromRuntime(await launchOwnedBrowserRuntime({ ...options, headless: true }), { downloads: true });
 }
 
-export function engineConnectionFromRuntime(runtime: OwnedBrowserRuntime): EngineConnection {
+/** A sign-in session's profile becomes the shared login, so only working sessions save downloads. */
+export function engineConnectionFromRuntime(runtime: OwnedBrowserRuntime, options: { downloads?: boolean } = {}): EngineConnection {
   const bootstrap = runtime.claimDriverBootstrap();
   const controller = new AbortController();
   void runtime.unavailable.then(() => controller.abort());
-  return { ownsBrowser: true, wire: bootstrap.transport, rootTargetId: bootstrap.rootTargetId, epoch: randomUUID(), claimGeneration: 1, signal: controller.signal, close: () => runtime.close() };
+  return { ownsBrowser: true, wire: bootstrap.transport, rootTargetId: bootstrap.rootTargetId, epoch: randomUUID(), claimGeneration: 1, signal: controller.signal,
+    ...(options.downloads ? { downloadDirectory: runtime.downloadDirectory } : {}), close: () => runtime.close() };
 }
 
 /** Injectable replacement host until the full catalog cutover. No legacy result translation. */
@@ -108,6 +110,9 @@ export class EngineHost {
   }
   consoleRecords(id: unknown, options: Parameters<PageExecutor["consoleRecords"]>[0]) { return this.executor(id).consoleRecords(options); }
   networkRecords(id: unknown, options: Parameters<PageExecutor["networkRecords"]>[0]) { return this.executor(id).networkRecords(options); }
+  downloadRecords(id: unknown, options: Parameters<PageExecutor["downloadRecords"]>[0]) { return this.executor(id).downloadRecords(options); }
+  /** Host-only: the saved file of a completed download. */
+  downloadFile(id: unknown, downloadId: unknown) { return this.executor(id).downloadFile(boundedString(downloadId, 64)); }
   pages(id: unknown) {
     const sessionId = boundedString(id, 120);
     const executor = this.executors.get(sessionId);

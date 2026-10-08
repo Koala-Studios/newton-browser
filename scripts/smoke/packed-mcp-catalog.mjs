@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 const EXPECTED_TOOLS = ["browser.session.start", "browser.existing.discover", "browser.existing.setup", "browser.act", "browser.observe",
-  "browser.document.read", "browser.document.continue", "browser.screenshot", "browser.console", "browser.network", "browser.pages.list",
+  "browser.document.read", "browser.document.continue", "browser.screenshot", "browser.console", "browser.network", "browser.downloads", "browser.pages.list",
   "browser.page.select", "browser.sessions.list", "browser.command", "browser.session.stop"];
 const entryIndex = process.argv.indexOf("--entry");
 const entry = entryIndex >= 0 ? process.argv[entryIndex + 1] : null;

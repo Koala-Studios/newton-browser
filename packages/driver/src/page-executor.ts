@@ -20,6 +20,7 @@ import { maskCapturedPng, MAX_RASTER_PIXELS, pngTileDigests, sameTilesNear, type
 import {nativeSensitiveRegions} from './native-sensitive-regions.ts';
 import type { EngineExecutor } from "./session-engine.ts";
 import { SessionDiagnostics, type ConsoleEntry, type DiagnosticKind } from "./session-diagnostics.ts";
+import { SessionDownloads } from "./session-downloads.ts";
 import { SessionLive, type EngineFrame, type EngineFrameOptions, type EngineOperatorInput, type EngineSessionEvent, type EngineWebAuthnCredential } from "./session-live.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -97,6 +98,7 @@ export class PageExecutor implements EngineExecutor {
   private readonly readonlyWorlds:ReadonlyWorlds;
   private readonly live:SessionLive;
   private readonly diagnostics=new SessionDiagnostics();
+  private readonly downloads: SessionDownloads;
   private readonly lifecycle = new Map<string, Set<string>>();
   /** Documents that already spent a bounded parse wait unparsed; a later read does not wait for them again. */
   private readonly stalledLoaders = new Set<string>();
@@ -123,6 +125,7 @@ export class PageExecutor implements EngineExecutor {
     this.directory = new PageDirectory(connection.epoch, connection.claimGeneration);
     this.readonlyWorlds=new ReadonlyWorlds(this.directory,connection.wire);
     this.live=new SessionLive(connection.wire,this.directory,connection.ownsBrowser===true);
+    this.downloads=new SessionDownloads(connection.ownsBrowser===true?connection.downloadDirectory:undefined);
     this.resolver = new TargetResolver({
       directory: this.directory,
       send: (binding, method, params) => this.send(binding, method, params),
@@ -141,6 +144,7 @@ export class PageExecutor implements EngineExecutor {
       try {
         this.live.handle(event, route => this.routes.get(route));
         this.diagnostics.handle(event, route => this.routes.get(route));
+        if (event.sessionId === null && event.method.startsWith("Browser.download")) this.downloads.handle(event);
         if (event.method === "Target.targetCreated" && (this.connection.ownsBrowser||this.connection.tracksOwnedPages)) {
           const info = object(event.params.targetInfo),pageId=string(info.targetId);
           if(info.type==='page'&&pageId&&pageId!==this.connection.rootTargetId&&!this.attachingPages.has(pageId)) {
@@ -255,6 +259,7 @@ export class PageExecutor implements EngineExecutor {
       } catch (error) { this.fault = error; }
     });
     if(this.connection.ownsBrowser)await this.connection.wire.send('Target.setDiscoverTargets',{discover:true});
+    await this.downloads.enable((method, params) => this.connection.wire.send(method, params));
     const result = await this.connection.wire.send("Target.attachToTarget", { targetId: this.connection.rootTargetId, flatten: true });
     const route = string(result.sessionId);
     if (!route) throw new EngineError("connection_lost");
@@ -901,6 +906,16 @@ export class PageExecutor implements EngineExecutor {
   async consoleRecords(options: { pageId?: string; level?: ConsoleEntry["level"]; pattern?: string; limit: number; clear?: boolean }) {
     const started = await this.collect("console");
     return { ...(started ? { collecting: "started" as const } : {}), ...this.diagnostics.readConsole({ ...options, ...(options.pageId ? { pageId: this.bindPage(options.pageId).pageId } : {}) }) };
+  }
+  /** Downloads this session started, oldest first. Owned browsers only. */
+  downloadRecords(options: { limit: number }) {
+    if (this.closed) throw new EngineError("session_closed");
+    return this.downloads.list(options.limit);
+  }
+  /** Host-only: where a completed download was saved. */
+  downloadFile(downloadId: string) {
+    if (this.closed) throw new EngineError("session_closed");
+    return this.downloads.file(downloadId);
   }
   /** Request metadata since collection began, or one current-origin text body. */
   async networkRecords(options: { pageId?: string; urlPattern?: string; failedOnly?: boolean; requestId?: string; limit: number; maxBytes: number }) {

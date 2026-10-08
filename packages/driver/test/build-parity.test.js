@@ -33,7 +33,7 @@ const EXPECTED_FILES = [
   "raster-mask.d.ts",
   "raster-mask.js",
   "readonly-world.d.ts", "readonly-world.js",
-  "session-diagnostics.d.ts", "session-diagnostics.js",
+  "session-diagnostics.d.ts", "session-diagnostics.js", "session-downloads.d.ts", "session-downloads.js",
   "session-engine.d.ts", "session-engine.js",
   "session-live.d.ts", "session-live.js",
   "structured-reader.d.ts", "structured-reader.js",
