@@ -5,7 +5,10 @@ const MAX_FILES = 8;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 const HEADER_BYTES = 16;
-const ALLOWED_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm"]);
+// Media plus the documents and archives import dialogs take (an email template with its images zipped beside it,
+// a contact list, a PDF). Each is checked by its first bytes, not only its name.
+const ALLOWED_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm",
+  ".html", ".htm", ".zip", ".csv", ".pdf", ".json"]);
 
 type FileIdentity = {
   dev: number;
@@ -99,7 +102,15 @@ function hasAllowedSignature(descriptor: number, extension: string): boolean {
   if (extension === ".webp") return view.subarray(0, 4).toString("ascii") === "RIFF" && view.subarray(8, 12).toString("ascii") === "WEBP";
   if (extension === ".mp4") return view.subarray(4, 8).toString("ascii") === "ftyp";
   if (extension === ".webm") return view.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
-  return false;
+  if (extension === ".pdf") return view.subarray(0, 5).toString("ascii") === "%PDF-";
+  // A zip starts with a local file header, or is an empty archive.
+  if (extension === ".zip") return view.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) || view.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  // Text documents: no NUL in the first bytes, and HTML or JSON open as they should.
+  if (view.includes(0)) return false;
+  const text = view.toString("utf8").replace(/^\uFEFF/u, "").trimStart();
+  if (extension === ".html" || extension === ".htm") return text.startsWith("<");
+  if (extension === ".json") return text.startsWith("{") || text.startsWith("[");
+  return extension === ".csv";
 }
 
 function closeDescriptors(files: readonly OpenFile[]): void {

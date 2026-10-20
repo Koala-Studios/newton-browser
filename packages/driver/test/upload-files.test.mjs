@@ -126,6 +126,25 @@ test("enforces count, extension, signature, per-file, and total byte limits", (t
   expectCode(() => prepareUploadFiles(total), "file_total_too_large");
 });
 
+test("accepts the documents and archives import dialogs take, checked by their first bytes", (t) => {
+  const root = tempRoot(t);
+  const write = (name, bytes) => { const file = path.join(root, name); fs.writeFileSync(file, bytes); return file; };
+  const accepted = [
+    write("template.html", "\uFEFF\n<!doctype html><html></html>"),
+    write("images.zip", Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0, 0, 0])),
+    write("contacts.csv", "email,first_name\nsam@example.com,Sam\n"),
+    write("brief.pdf", "%PDF-1.7\n"),
+    write("data.json", " [1, 2]"),
+  ];
+  const prepared = prepareUploadFiles(accepted);
+  assert.deepEqual(prepared.names, ["template.html", "images.zip", "contacts.csv", "brief.pdf", "data.json"]);
+  prepared.close();
+  for (const [name, bytes] of [["fake.zip", "not a zip"], ["fake.pdf", "PDF"], ["binary.csv", Buffer.from([0x61, 0, 0x62])],
+    ["script.html", "alert(1)"], ["text.json", "hello"], ["notes.txt", "plain"]]) {
+    expectCode(() => prepareUploadFiles([write(name, bytes)]), "file_type_not_allowed");
+  }
+});
+
 test("rejects symlinks in the file and every parent component", (t) => {
   const root = tempRoot(t);
   const target = writeAsset(root, "target.png");

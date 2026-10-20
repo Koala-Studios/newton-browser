@@ -7,6 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.21] - 2026-10-20
+
+### Fixed
+
+- `resize` in an owned browser reports `met` when the page is the requested size less a classic
+  scrollbar. On Linux and Windows a 390 px window reads as 380 px wide, so the receipt waited until
+  `timed_out` although the viewport had changed.
+- Screenshots of pages with many cross-site frames no longer fail with `work_limit`: masking searches
+  up to 64 separate renderer roots (a product page with widget and tracking frames had 31-33).
+
+### Added
+
+- `set_files` uploads HTML, ZIP, CSV, PDF and JSON files as well as images and video, for import
+  dialogs such as an email template with its images zipped beside it. Each type is still checked by
+  its first bytes, and the per-file and total size limits are unchanged.
+
 ## [0.7.20] - 2026-10-08
 
 ### Added

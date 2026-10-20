@@ -36,7 +36,8 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
       roots.set(route,binding);
     }
   }
-  if(roots.size>16)throw new EngineError('work_limit');
+  // Storefronts load many cross-site widget and tracking frames in their own renderers (33 on one product page).
+  if(roots.size>64)throw new EngineError('work_limit');
   const rootRoute=directory.route(directory.binding(page,1));
   const send=(binding:NodeBinding,method:string,params:RecordValue={})=>context.read(async()=>{
     const result=await wire.send(method,params,directory.route(binding));directory.route(binding);return result;

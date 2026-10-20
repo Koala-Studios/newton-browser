@@ -468,7 +468,8 @@ export class PageExecutor implements EngineExecutor {
       const current=this.directory.binding(this.directory.stamp(page.pageId),1);
       const metrics=await context.read(()=>this.send(current,'Page.getLayoutMetrics',{}));
       const viewport=object(metrics.cssLayoutViewport);
-      if(viewport.clientWidth===width&&viewport.clientHeight===height)return {state:'met',kind:'viewport'};
+      // A classic scrollbar (Linux, Windows) takes its width out of the layout viewport: 390 wide reads as 380.
+      if(fitsViewport(viewport.clientWidth,width)&&fitsViewport(viewport.clientHeight,height))return {state:'met',kind:'viewport'};
       await this.waitForCondition(context,context.deadline);
     }
   }
@@ -480,7 +481,7 @@ export class PageExecutor implements EngineExecutor {
       const current=this.directory.binding(this.directory.stamp(page.pageId),1);
       const viewport=object((await context.read(()=>this.send(current,'Page.getLayoutMetrics',{}))).cssLayoutViewport);
       // A classic scrollbar takes its width out of the layout viewport.
-      if(typeof viewport.clientWidth==='number'&&viewport.clientWidth<=width&&viewport.clientWidth>=width-24)return {state:'met',kind:'viewport'};
+      if(fitsViewport(viewport.clientWidth,width))return {state:'met',kind:'viewport'};
       await this.waitForCondition(context,context.deadline);
     }
   }
@@ -1960,3 +1961,8 @@ const PAGE_EXTRAS_SCRIPT = `(() => {
   }
   return { clickables, cover, coverText: coverLayer && cover.length ? label(coverLayer).slice(0, 160) : undefined, incomplete };
 })()`;
+
+/** The rendered size equals the request, less at most a classic scrollbar. */
+function fitsViewport(actual:unknown,requested:number):boolean{
+  return typeof actual==='number'&&actual<=requested&&actual>=requested-24;
+}
