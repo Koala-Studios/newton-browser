@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- `set_files` on an upload button or label uses the file input it stands for: the label's control, or
+  the only file input in the nearest enclosing element that has any. Pages with one hidden input per
+  picker made every page-wide selector `ambiguous`, and the visible button returned
+  `target_not_editable`. Two inputs at the same level still return `ambiguous`.
+
 ## [0.7.21] - 2026-10-20
 
 ### Fixed

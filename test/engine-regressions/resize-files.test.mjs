@@ -17,7 +17,9 @@ test('owned resize and file selection verify actual renderer effects through MCP
     <main><h1 id="wide">Wide layout</h1><h1 id="narrow">Narrow layout</h1>
     <label>Media<input type="file" id="media" multiple></label><p id="effect"></p>
     <input type="file" id="hidden-media" hidden><input type="file" id="reject-media" onchange="this.value=''">
-    <input type="file" id="dialog-media" onchange="alert('File selected')"></main>
+    <input type="file" id="dialog-media" onchange="alert('File selected')">
+    <div role="dialog" aria-label="Add image"><section><button type="button" id="picker">Upload from computer</button><input type="file" accept="image/*" hidden id="picker-input" onchange="document.querySelector('#picked').textContent=this.files[0].name"></section><p id="picked"></p></div>
+    <div id="twin"><button type="button" id="twin-button">Upload twin</button><input type="file" hidden><input type="file" hidden></div></main>
     <script>document.querySelector('#media').addEventListener('change',e=>document.querySelector('#effect').textContent=[...e.target.files].map(f=>f.name).join(','));</script>`);});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const store=openProfileStore(`${temp.root}/identities`),identity=createNewtonIdentity(store,{browserFamily:'chrome'});
@@ -53,6 +55,11 @@ test('owned resize and file selection verify actual renderer effects through MCP
     assert.equal(modal.observation.scope,'dialog',JSON.stringify(modal));assert.equal(modal.postcondition.kind,'files');assert.equal(modal.postcondition.state,'unknown');
     const dismissed=await call('browser.act',{sessionId,command:{commandId:9,action:{kind:'dialog_dismiss',dialogId:modal.observation.dialog.dialogId}}});
     assert.equal(dismissed.postcondition.state,'met');
+    const viaButton=await call('browser.act',{sessionId,command:{commandId:10,action:{kind:'set_files',target:{kind:'semantic',role:'button',name:'Upload from computer'},files:[file]}}});
+    assert.deepEqual(viaButton.postcondition,{state:'met',kind:'files'},JSON.stringify(viaButton));
+    const picked=await call('browser.document.read',{sessionId});assert.match(picked.observation.text,/fixture image\.png/);
+    const twin=await call('browser.act',{sessionId,command:{commandId:11,action:{kind:'set_files',target:{kind:'selector',selector:'#twin-button'},files:[file]},observe:'none'}});
+    assert.equal(twin.errorCode,'ambiguous',JSON.stringify(twin));assert.equal(twin.dispatch,'not_started');
   }finally{await host.close();await new Promise(resolve=>server.close(resolve));temp.remove();}
 });
 

@@ -11,6 +11,9 @@ import { readAXSnapshot } from "./ax-snapshot.ts";
 import { readStructuredRecords } from './structured-reader.ts';
 import {ReadonlyWorlds} from './readonly-world.ts';
 import {prepareUploadFiles} from './upload-files.ts';
+// The file input a button or label stands for: a label's control, else for a button-like trigger the only
+// enabled file input in the nearest enclosing element (crossing open shadow roots) that has any. Returns a reason string otherwise.
+const OWN_FILE_INPUT_FUNCTION="function(){const isFile=n=>n&&n.localName==='input'&&n.type==='file';const label=this.localName==='label'?this:this.closest&&this.closest('label');if(label&&isFile(label.control))return label.control.disabled?'not_found':label.control;const trigger=this.closest&&this.closest('button,label,a,[role=button],input[type=button],input[type=image],input[type=submit]');if(!trigger)return 'not_found';for(let n=trigger,depth=0;n&&depth<16;depth++){const all=n.querySelectorAll?[...n.querySelectorAll('input[type=file]')].filter(i=>!i.disabled):[];if(all.length===1)return all[0];if(all.length>1)return 'ambiguous';n=n.parentElement||(n.parentNode&&n.parentNode.host)||null;}return 'not_found';}";
 import {resolveTextEditRange} from './text-edit-range.ts';
 import {nativeSelectionCommands,EDIT_SELECTION_READ} from './native-edit-selection.ts';
 import type {EngineEdit} from '@newton-browser/core';
@@ -434,7 +437,11 @@ export class PageExecutor implements EngineExecutor {
     const checkFile=<T>(operation:()=>T):T=>{try{return operation();}catch(error){const code=error instanceof Error?error.message:'';throw new EngineError((ENGINE_ERRORS as readonly string[]).includes(code)?code as EngineErrorCode:'invalid_arguments');}};
     const prepared=checkFile(()=>prepareUploadFiles(paths));
     try{
-      const facts=await this.resolver.inspect(context,binding,{editable:false,actionable:false});
+      let facts=await this.resolver.inspect(context,binding,{editable:false,actionable:false});
+      // A styled upload button or label stands for its own file input: its label control, or the
+      // only file input in the nearest enclosing element that has any. Sites with one hidden input
+      // per picker make a page-wide selector ambiguous, while the visible button is unique.
+      if(facts.tag!=='input'||facts.type!=='file'){binding=await this.ownFileInput(context,binding);facts=await this.resolver.inspect(context,binding,{editable:false,actionable:false});}
       // Styled upload buttons commonly use a hidden native file input. The
       // explicit unique target and input type are sufficient; no focus/click is
       // fabricated and the site's file-change handling runs normally.
@@ -455,6 +462,21 @@ export class PageExecutor implements EngineExecutor {
       this.localField=binding;this.localFileNames=[...names];
       return {state:JSON.stringify(names)===JSON.stringify(prepared.names)?'met':'not_met',kind:'files'};
     }finally{prepared.close();}
+  }
+  private async ownFileInput(context:CommandContext,binding:NodeBinding):Promise<NodeBinding>{
+    const resolved=await context.read(()=>this.send(binding,'DOM.resolveNode',{backendNodeId:binding.backendNodeId}));
+    const objectId=string(object(resolved.object).objectId);if(!objectId)throw new EngineError('stale_target');
+    let inputId='';
+    try{
+      const result=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration:OWN_FILE_INPUT_FUNCTION,returnByValue:false,silent:true}));
+      if(result.exceptionDetails)throw new EngineError('evidence_unavailable');
+      const found=object(result.result);
+      if(found.type==='string')throw new EngineError(found.value==='ambiguous'?'ambiguous':'target_not_editable');
+      inputId=string(found.objectId);if(!inputId)throw new EngineError('target_not_editable');
+      const node=object(object(await context.read(()=>this.send(binding,'DOM.describeNode',{objectId:inputId}))).node);
+      if(!Number.isSafeInteger(node.backendNodeId)||Number(node.backendNodeId)<=0)throw new EngineError('evidence_unavailable');
+      return Object.freeze({...binding,backendNodeId:Number(node.backendNodeId)});
+    }finally{for(const id of [objectId,inputId])if(id)void Promise.resolve().then(()=>this.send(binding,'Runtime.releaseObject',{objectId:id})).catch(()=>{});}
   }
   private async resize(context:CommandContext,page:EnginePageStamp,width:number,height:number):Promise<EnginePostcondition>{
     const root=this.directory.binding(page,1);

@@ -3299,3 +3299,13 @@ allow downloads into the session's own folder, `browser.downloads` lists each wi
 and an embedding host copies a completed file out with `downloadFile`. Regression:
 engine-regressions/downloads "a download link saves the file into the session, listed for the model and
 readable by the host".
+
+# Upload buttons with several hidden file inputs could not take files — fixed after 0.7.21
+
+Observed 2026-10-21 in an ad platform's image dialog: the page kept one hidden file input per picker
+instance, so `input[type=file]` and every narrower selector returned `ambiguous` or `not_found`, and a
+ref to the visible "Upload from computer" button returned `target_not_editable`. `set_files` now accepts
+a button-like trigger or label and resolves the file input it stands for (the label's control, else the
+only enabled file input in the nearest enclosing element that has any), refusing two at the same level
+as `ambiguous`. Regression: engine-regressions/resize-files "owned resize and file selection verify
+actual renderer effects through MCP" (button in a dialog with a sibling hidden input; twin inputs).
