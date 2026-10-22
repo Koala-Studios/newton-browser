@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.22] - 2026-10-22
+
 ### Fixed
 
 - `set_files` on an upload button or label uses the file input it stands for: the label's control, or
