@@ -254,7 +254,7 @@ export class TargetResolver {
       };
     } finally { void this.sendBinding(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
   }
-  async focused(context: CommandContext, page: EnginePageStamp): Promise<NodeBinding> {
+  async focused(context: CommandContext, page: EnginePageStamp, inspection: { editable?: boolean; actionable?: boolean; allowSensitive?: boolean } = { editable: false }): Promise<NodeBinding> {
     this.directory.binding(page, 1);
     if (this.isSearchIncomplete()) throw new EngineError("search_incomplete");
     const matches: NodeBinding[] = [];
@@ -288,7 +288,7 @@ export class TargetResolver {
       }
       if (node.localName === "iframe" || node.localName === "frame") continue;
       const binding = this.directory.binding(frame, Number(node.backendNodeId));
-      const facts = await this.inspect(context, binding, { editable: false });
+      const facts = await this.inspect(context, binding, inspection);
       if (facts.focused) matches.push(binding);
     }
     if (!matches.length) throw new EngineError("not_found");

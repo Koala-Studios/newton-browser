@@ -1346,6 +1346,37 @@ export class PageExecutor implements EngineExecutor {
       await send("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => undefined);
     }
   }
+  /** The focused element across frames and shadow roots: its control view and ref, whether :focus-visible matches,
+   * and the computed outline and box shadow that draw a focus ring. No page script beyond these read-only queries. */
+  async readFocus(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget): Promise<EngineObservation> {
+    const budget = asObservationBudget(budgetValue);
+    await this.renderHidden(context, page);
+    if (this.pendingAttachments.size) await context.read(() => Promise.all([...this.pendingAttachments]));
+    let binding: NodeBinding;
+    try { binding = await this.resolver.focused(context, page, { editable: false, actionable: false, allowSensitive: true }); }
+    catch (error) { if (error instanceof EngineError && error.code === "not_found") return { state: "available", trust: "untrusted_page_content", scope: "target", page, nodes: [], focus: { found: false } }; throw error; }
+    const tree = await context.read(() => this.send(binding, "Accessibility.getPartialAXTree", { backendNodeId: binding.backendNodeId, fetchRelatives: false }));
+    const raw = array(tree.nodes).find(node => node.backendDOMNodeId === binding.backendNodeId);
+    const view = readAXControls(array(tree.nodes)).controls.find(item => item.backendNodeId === binding.backendNodeId)?.view
+      ?? { role: string(object(raw?.role).value).slice(0, 80) || "generic", name: string(object(raw?.name).value).slice(0, 256) };
+    const resolved = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: binding.backendNodeId }));
+    const objectId = string(object(resolved.object).objectId);
+    if (!objectId) throw new EngineError("stale_target");
+    let style: RecordValue;
+    try {
+      const result = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, returnByValue: true, silent: true,
+        functionDeclaration: "function(){const s=getComputedStyle(this);let visible=false;try{visible=this.matches(':focus-visible');}catch{}return {visible,style:s.outlineStyle,width:s.outlineWidth,color:s.outlineColor,offset:s.outlineOffset,shadow:s.boxShadow};}" }));
+      style = object(object(result.result).value);
+      if (result.exceptionDetails || typeof style.visible !== "boolean") throw new EngineError("evidence_unavailable");
+    } finally { void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
+    const focus = { found: true, ...(binding.frameId !== page.frameId ? { inFrame: true } : {}), focusVisible: style.visible as boolean,
+      outline: { style: string(style.style).slice(0, 40), width: string(style.width).slice(0, 40), color: string(style.color).slice(0, 80), offset: string(style.offset).slice(0, 40) },
+      ...(string(style.shadow) && style.shadow !== "none" ? { boxShadow: string(style.shadow).slice(0, 200) } : {}) };
+    const published = this.directory.publish([binding]);
+    const observation: EngineObservation = { state: "available", trust: "untrusted_page_content", scope: "target", page, snapshotId: published.snapshotId, expiredSnapshots: published.expiredSnapshots, nodes: [{ ...view, ref: published.refs[0]! }], focus };
+    if (!budget.fits(observation)) throw new EngineError("output_budget");
+    return observation;
+  }
   async readRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget,query?:EngineControlQuery):Promise<EngineObservation>{
     if(shape==='controls'||[...this.dialogs.values()].some(dialog=>dialog.pageId===page.pageId))return this.observe(context,page,budget,true,scope,query);
     await this.renderHidden(context,page);

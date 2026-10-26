@@ -27,6 +27,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   screenshot point in whatever frame is under it. Both wheel in the frame's own renderer, and the receipt
   is `met` when the window or any scroller around the element under the point moved (an editor preview
   scrolls an inner wrapper, not its document).
+- `browser.observe` mode `focus` reads the focused element for keyboard checks: its control view and ref
+  (across same- and cross-site frames and open or closed shadow roots), whether `:focus-visible` matches,
+  and its computed outline (style, width, colour, offset) and box shadow. `focus.found` is false when
+  nothing in the page has focus. It is a fixed read-only query, not page script evaluation.
 
 ## [0.7.22] - 2026-10-22
 

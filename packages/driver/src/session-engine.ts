@@ -19,13 +19,15 @@ export interface EngineExecutor {
   readRecords?(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget,query?:EngineControlQuery):Promise<EngineObservation>;
   readDocument?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, cursor?: string, scope?: EngineTarget): Promise<EngineObservation>;
   screenshot?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, options: unknown): Promise<EngineObservation>;
+  /** The focused element, across frames and shadow roots, with its focus-visible state and focus indicator styles. */
+  readFocus?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget): Promise<EngineObservation>;
   /** Replace a page whose renderer stopped answering with a new page at its last address, keeping the browser and identity. */
   recover?(page: EnginePageStamp): Promise<{ pageId: string; url?: string } | undefined>;
   /** Must close the exact owned runtime, or revoke/detach a borrowed claim. Never await this queue. */
   close(): Promise<void>;
 }
 interface QueueItem { kind: "command"; command: EngineCommand; page: EnginePageStamp; record: CommandRecord; bytes: number; context: CommandContext; }
-interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; options?: unknown; beforeRead?: () => void; complete(value: EngineObservation): void; }
+interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records" | "focus"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; options?: unknown; beforeRead?: () => void; complete(value: EngineObservation): void; }
 
 export class SessionEngine {
   readonly sessionId: string;
@@ -89,7 +91,7 @@ export class SessionEngine {
     this.pump();
     return record.result;
   }
-  observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; beforeRead?: () => void } = {}): Promise<EngineObservation> {
+  observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records" | "focus"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; beforeRead?: () => void } = {}): Promise<EngineObservation> {
     if(options.recordShape!==undefined&&(options.mode!=='records'||!['controls','links','table','form'].includes(options.recordShape)))throw new EngineError('invalid_arguments');
     if (this.admission !== "open") throw new EngineError("session_closed");
     if (this.queue.length + (this.active ? 1 : 0) >= ENGINE_LIMITS.queueItems) throw new EngineError("queue_full");
@@ -98,7 +100,7 @@ export class SessionEngine {
     const context = new CommandContext(boundedInteger(options.timeoutMs ?? 10000, 1, 120000), this.clock);
     let complete!: (value: EngineObservation) => void;
     const result = new Promise<EngineObservation>(resolve => { complete = resolve; });
-    const item: ReadItem = { kind: "read", page, maxBytes, bytes: 0, context, complete, ...(options.mode === "document" ? { mode: "document" as const } : options.mode === "records" ? { mode: "records" as const } : {}), ...(options.cursor === undefined ? {} : { cursor: options.cursor }), ...(options.previousSnapshotId === undefined ? {} : { previousSnapshotId: options.previousSnapshotId }) };
+    const item: ReadItem = { kind: "read", page, maxBytes, bytes: 0, context, complete, ...(options.mode === "document" ? { mode: "document" as const } : options.mode === "records" ? { mode: "records" as const } : options.mode === "focus" ? { mode: "focus" as const } : {}), ...(options.cursor === undefined ? {} : { cursor: options.cursor }), ...(options.previousSnapshotId === undefined ? {} : { previousSnapshotId: options.previousSnapshotId }) };
     this.queue.push(item);
     if (options.scope) item.scope = options.scope;
     if (options.query) item.query = options.query;
@@ -221,6 +223,7 @@ export class SessionEngine {
       ? this.executor.readDocument(item.context, page, budget, item.cursor, item.scope)
       : item.mode === "screenshot" && this.executor.screenshot
         ? this.executor.screenshot(item.context, page, budget, item.options)
+      : item.mode === "focus" ? (this.executor.readFocus ? this.executor.readFocus(item.context, page, budget) : Promise.reject(new EngineError("unsupported_capability")))
       : item.mode === 'records' && this.executor.readRecords ? this.executor.readRecords(item.context,page,budget,item.recordShape??'controls',item.scope,item.query)
       : this.executor.observe(item.context, page, budget, item.mode === "records", item.scope, item.query);
     }).then(value => { observation = item.mode === "records" ? this.records(value, item.page, item.maxBytes, item.previousSnapshotId, item.scope,item.recordShape) : value; }).catch(error => {

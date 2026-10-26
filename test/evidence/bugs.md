@@ -3366,3 +3366,15 @@ target `iframe[title="Online store preview"]` scrolled the preview wrapper 0 →
 local two-site fixture in the operator's Chrome both the frame target and `at` reported met (0 → 300 →
 600). Regression: engine-regressions/frame-scroll and background-tab-rendering ("a sidebar click scrolls a
 cross-site preview").
+
+# Keyboard QA could not tell which element had focus — added after 0.7.22
+
+Requested 2026-10-26 during keyboard/accessibility QA in existing mode: after pressing Tab there was no
+way to learn which element had focus or whether a focus ring showed (page script evaluation was asked
+for and stays outside the model API). `browser.observe` mode `focus` now returns the focused leaf (the
+resolver's existing frame and shadow-root descent, without the actionable/sensitive refusals), its ref,
+`:focus-visible`, and the computed outline and box shadow. Live (source build, the operator's Chrome,
+public storefront, background tab with the old adapter): four Tabs read link → link → nothing (focus left
+the document) → link, each with focusVisible true and a 2px solid outline. Regression:
+engine-regressions/focus-read (input, link with a focus-visible outline, closed shadow root, box-shadow
+ring, cross-site frame; the returned ref is clickable).
