@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.23] - 2026-10-26
+
 ### Fixed
 
 - The tab adapter forwards the other commands the engine sends on a borrowed tab: `Runtime.getProperties`
