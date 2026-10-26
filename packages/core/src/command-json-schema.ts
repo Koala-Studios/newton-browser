@@ -42,7 +42,10 @@ const press = {
   type: "object", properties: { kind: { const: "press" }, target, keys: { type: "array", minItems: 1, maxItems: 8, description: "One chord, modifiers first: [\"Enter\"], [\"Control\", \"a\"].", items: { type: "string", minLength: 1, maxLength: 80 } }, text: { type: "string", maxLength: 65536, description: "Text inserted as typed input." } },
   required: ["kind"], anyOf: [{ required: ["keys"] }, { required: ["text"] }], additionalProperties: false,
 };
-const scroll = { type: "object", properties: { kind: { const: "scroll" }, x: { type: "number" }, y: { type: "number" }, target }, required: ["kind", "x", "y"], additionalProperties: false };
+const scroll = { type: "object", description: "Wheel by x/y pixels. Without target or at: the page. With target: at that element; a frame element (e.g. selector iframe[src*=\"host\"]) scrolls the document inside it. With at (a screenshot point, not with target): in whatever frame and scroller is under it.",
+  properties: { kind: { const: "scroll" }, x: { type: "number" }, y: { type: "number" }, target,
+    at: { type: "object", properties: { captureId: { type: "string", minLength: 1, maxLength: 120 }, x: { type: "number" }, y: { type: "number" } }, required: ["captureId", "x", "y"], additionalProperties: false } },
+  required: ["kind", "x", "y"], additionalProperties: false };
 const navigate = { type: "object", properties: { kind: { const: "navigate" }, url: { type: "string", minLength: 1, maxLength: 8192 } }, required: ["kind", "url"], additionalProperties: false };
 const history = { type: "object", properties: { kind: { enum: ["back", "forward", "reload"] } }, required: ["kind"], additionalProperties: false };
 // A wait action carries the condition fields itself, so it reads like every other action.

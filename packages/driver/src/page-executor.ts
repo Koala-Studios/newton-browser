@@ -365,6 +365,7 @@ export class PageExecutor implements EngineExecutor {
     if (action.kind === "navigate") return this.navigate(context, page, action.url);
     if (action.kind === "click_at" || action.kind === "move") return this.clickAt(context, page, action);
     if (action.kind === "back" || action.kind === "forward" || action.kind === "reload") return this.history(context, page, action.kind);
+    if (action.kind === "scroll" && action.at) { const at = await this.capturePoint(context, page, action.at); return this.wheelAt(context, page, await this.framePoint(context, this.directory.binding(page, 1), at.x, at.y), action.x, action.y); }
     if (action.kind === "scroll") return this.scroll(context, page, action.x, action.y, action.target);
     // A wait_for is the whole command: without its own timeoutMs it may use the command's budget.
     if (action.kind === "wait_for") return this.waitFor(context, page, action.waitFor, true);
@@ -670,6 +671,15 @@ export class PageExecutor implements EngineExecutor {
         const current=await this.resolver.inspect(context,binding,{editable:false,pointer:true});
         if(!current.pointerInView)throw new EngineError('target_not_editable');
       }
+      // A frame element scrolls the document shown in it (an editor's preview), in that frame's own renderer.
+      for (const frame of this.directory.frames(page.pageId)) {
+        if (this.directory.parent(frame)?.frameId !== binding.frameId) continue;
+        if ((await context.read(() => this.send(binding, "DOM.getFrameOwner", { frameId: frame.frameId }))).backendNodeId !== binding.backendNodeId) continue;
+        const content = object((await context.read(() => this.send(binding, "DOM.getBoxModel", { backendNodeId: binding.backendNodeId }))).model).content;
+        if (!Array.isArray(content) || content.length !== 8 || !content.every(finiteNumber)) throw new EngineError("evidence_unavailable");
+        const quad = content as number[];
+        return this.wheelAt(context, page, await this.framePoint(context, binding, (quad[0]! + quad[4]!) / 2, (quad[1]! + quad[5]!) / 2), x, y);
+      }
     }
     const point = target ? await this.pointerPoint(context, binding) : { x: 1, y: 1 };
     let objectId: string | undefined;
@@ -714,6 +724,41 @@ export class PageExecutor implements EngineExecutor {
     } finally { if (objectId) void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
   }
 
+  /** One wheel at a point of a frame's viewport. Met when the window or any scroller around the element under the
+   * point moved: editors and app shells scroll an inner container, not the document. */
+  private async wheelAt(context: CommandContext, page: EnginePageStamp, point: { binding: NodeBinding; x: number; y: number }, x: number, y: number): Promise<EnginePostcondition> {
+    const { binding } = point;
+    const scroll = object(object((await context.read(() => this.send(binding, "Runtime.evaluate", { expression: "({x:scrollX,y:scrollY})", returnByValue: true, silent: true }))).result).value);
+    if (!finiteNumber(scroll.x) || !finiteNumber(scroll.y)) throw new EngineError("evidence_unavailable");
+    const documentPoint = { x: Math.round(point.x + scroll.x), y: Math.round(point.y + scroll.y) };
+    const hit = await context.read(() => this.send(binding, "DOM.getNodeForLocation", { ...documentPoint, includeUserAgentShadowDOM: false }));
+    const frame = this.directory.frames(page.pageId).find(item => item.frameId === hit.frameId) ?? binding;
+    const node = this.directory.binding(frame, Number(hit.backendNodeId));
+    const resolved = await context.read(() => this.send(node, "DOM.resolveNode", { backendNodeId: node.backendNodeId }));
+    const objectId = string(object(resolved.object).objectId);
+    if (!objectId) throw new EngineError("stale_target");
+    try {
+      const offsets = async () => {
+        const result = await context.read(() => this.send(node, "Runtime.callFunctionOn", { objectId, returnByValue: true, silent: true,
+          functionDeclaration: "function(){const d=this.ownerDocument,s=[d.visibilityState,d.defaultView.scrollX,d.defaultView.scrollY];for(let n=this,i=0;n&&i<256;i++,n=n.parentElement||(n.getRootNode&&n.getRootNode().host)||null)s.push(n.scrollLeft,n.scrollTop);return s.join(',');}" }));
+        const value = object(result.result).value;
+        if (result.exceptionDetails || typeof value !== "string") throw new EngineError("evidence_unavailable");
+        return value;
+      };
+      const before = await offsets();
+      const wheel = context.input(() => this.send(binding, "Input.dispatchMouseEvent", { type: "mouseWheel", x: point.x, y: point.y, deltaX: x, deltaY: y, button: "none" }));
+      const frameShown = before.startsWith("hidden") ? this.observeViewportFrame(context, page.pageId) : Promise.resolve();
+      void frameShown.catch(() => undefined);
+      await wheel;
+      const deadline = Math.min(context.deadline, performance.now() + 250);
+      for (;;) {
+        if (await offsets() !== before) return { state: "met", kind: "visible" };
+        if (performance.now() >= deadline) return { state: "unknown", kind: "visible" };
+        try { await this.waitForCondition(context, deadline, 16); }
+        catch (error) { if (!context.cancellation && error instanceof EngineError && error.code === "timed_out") return { state: "unknown", kind: "visible" }; throw error; }
+      }
+    } finally { void this.send(node, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
+  }
   private async observeViewportFrame(context: CommandContext, pageId: string): Promise<void> {
     const pending = this.viewportFrames.get(pageId);
     if (pending) return context.read(() => pending);
@@ -1788,6 +1833,15 @@ export class PageExecutor implements EngineExecutor {
     return { state: "not_requested" };
   }
   private async clickAt(context: CommandContext, page: EnginePageStamp, action: EngineClickAt): Promise<EnginePostcondition> {
+    const at = await this.capturePoint(context, page, action);
+    const point = await this.framePoint(context, this.directory.binding(page, 1), at.x, at.y);
+    await context.input(() => this.send(point.binding, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, button: "none", clickCount: 0 }));
+    if (action.kind === "click_at") await this.input!.click(point.binding, point.x, point.y);
+    if (action.waitFor) return this.waitFor(context, page, action.waitFor);
+    return { state: "not_requested" };
+  }
+  /** A screenshot point as a viewport point, once what was captured around it is still there. */
+  private async capturePoint(context: CommandContext, page: EnginePageStamp, action: { captureId: string; x: number; y: number }): Promise<{ x: number; y: number }> {
     const capture = this.captures.get(action.captureId);
     if (!capture || capture.pageId !== page.pageId) throw new EngineError("stale_target", undefined, "unknown captureId for this page; take a screenshot first");
     if (capture.documentGeneration !== page.documentGeneration) throw new EngineError("stale_target", undefined, "the page loaded a new document since this screenshot; take a new one");
@@ -1812,20 +1866,17 @@ export class PageExecutor implements EngineExecutor {
     const x = capture.clip.x + action.x-currentSpatial.pageX+currentSpatial.offsetX;
     const y = capture.clip.y + action.y-currentSpatial.pageY+currentSpatial.offsetY;
     if(x<0||y<0||x>=currentSpatial.width||y>=currentSpatial.height)throw new EngineError('target_moved');
-    const point = await this.framePoint(context, page, x, y);
-    await context.input(() => this.send(point.binding, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, button: "none", clickCount: 0 }));
-    if (action.kind === "click_at") await this.input!.click(point.binding, point.x, point.y);
-    if (action.waitFor) return this.waitFor(context, page, action.waitFor);
-    return { state: "not_requested" };
+    return { x, y };
   }
   /** The frame under a viewport point, with the point in its own viewport. Chrome routes root-level input into an
    * out-of-process frame by the hit-test data its painted frames carry; a background tab's frame may have painted
    * nothing, so input there landed nowhere. That frame's own session takes input at its own coordinates. */
-  private async framePoint(context: CommandContext, page: EnginePageStamp, x: number, y: number): Promise<{ binding: NodeBinding; x: number; y: number }> {
-    let binding = this.directory.binding(page, 1);
+  private async framePoint(context: CommandContext, start: NodeBinding, x: number, y: number): Promise<{ binding: NodeBinding; x: number; y: number }> {
+    // `start` is any frame of a renderer route; x and y are in that route's viewport.
+    let binding = start;
     for (let depth = 0; depth < 8; depth++) {
       const route = this.directory.route(binding);
-      const children = this.directory.frames(page.pageId).filter(frame => { const parent = this.directory.parent(frame); return parent && parent.frameId === binding.frameId && this.directory.route(this.directory.binding(frame, 1)) !== route; });
+      const children = this.directory.frames(binding.pageId).filter(frame => { const parent = this.directory.parent(frame); return parent && this.directory.route(this.directory.binding(parent, 1)) === route && this.directory.route(this.directory.binding(frame, 1)) !== route; });
       if (!children.length) break;
       const scroll = object(object((await context.read(() => this.send(binding, "Runtime.evaluate", { expression: "({x:scrollX,y:scrollY})", returnByValue: true, silent: true }))).result).value);
       if (!finiteNumber(scroll.x) || !finiteNumber(scroll.y)) throw new EngineError("evidence_unavailable");

@@ -20,6 +20,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `target_covered` names an open modal dialog when its backdrop (beside the dialog, not around the target)
   covers the target; it reported only `div`.
 
+### Added
+
+- `scroll` reaches embedded frames: a frame element as `target` (for example
+  `iframe[title="Preview"]`) scrolls the document inside it, and `at: {captureId, x, y}` scrolls at a
+  screenshot point in whatever frame is under it. Both wheel in the frame's own renderer, and the receipt
+  is `met` when the window or any scroller around the element under the point moved (an editor preview
+  scrolls an inner wrapper, not its document).
+
 ## [0.7.22] - 2026-10-22
 
 ### Fixed

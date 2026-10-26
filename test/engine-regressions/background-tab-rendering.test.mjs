@@ -7,6 +7,7 @@ import { discoverBrowserExecutable } from "../../apps/mcp-server/src/browser-run
 import { createNewtonIdentity, openProfileStore } from "../../apps/mcp-server/src/browser-runtime/profile-store.ts";
 import { ownedEngineConnection } from "../../apps/mcp-server/src/browser-runtime/engine-host.ts";
 import { PageExecutor } from "../../packages/driver/src/page-executor.ts";
+import { SessionEngine } from "../../packages/driver/src/session-engine.ts";
 
 // A background tab of the operator's browser runs no animation frames, in its own document and in a cross-site
 // embedded app frame alike: the app (which reveals itself on frames) stays blank and pointer input aimed at it has
@@ -56,5 +57,37 @@ for (const keepRendering of [true, false]) test(`a borrowed background tab ${kee
     if (keepRendering) assert.deepEqual(state, { visibility: "visible", text: "App ready" });
     else assert.deepEqual(state, { visibility: "hidden", text: "loading" }, "a hidden tab runs no frames: the fixture reproduces the stall");
     assert.equal(await evaluate(main, "document.visibilityState"), keepRendering ? "visible" : "hidden");
+  } finally { await close(); }
+});
+
+// An editor's sidebar asks its cross-site preview to bring a section into view; the preview scrolls smoothly, which
+// runs on frames. In a background tab the click landed and the preview never moved (the same fixture without focus
+// emulation does not even commit the preview frame within five seconds in headless Chrome).
+const PREVIEW = `<!doctype html><style>html,body{margin:0;height:100%;overflow:hidden}.wrapper{height:100%;overflow:auto}</style>
+<div class="wrapper"><section style="height:2000px">Top</section><section id="featured">Featured</section><section style="height:2000px"></section></div>
+<script>addEventListener('message',event=>{if(event.data==='show')document.getElementById('featured').scrollIntoView({behavior:'smooth'});});</script>`;
+test("a sidebar click scrolls a cross-site preview in a borrowed background tab", async t => {
+  const editor = port => `<!doctype html><button onclick="document.querySelector('iframe').contentWindow.postMessage('show','*')">Featured</button>
+    <iframe title="Preview" src="http://localhost:${port}/preview" style="width:600px;height:300px"></iframe>`;
+  let port;
+  const fixture = await borrowedFixture(t, { "/": (_request, response) => { response.setHeader("content-type", "text/html"); response.end(editor(port)); }, "/preview": PREVIEW });
+  if (!fixture) return;
+  port = fixture.port;
+  const { executor, close, evaluate, routes } = fixture;
+  try {
+    await executor.start(`http://127.0.0.1:${port}/`, { timeoutMs: 15_000 });
+    const [main, preview] = routes();
+    assert.ok(preview && preview !== main);
+    const engine = new SessionEngine("sidebar", executor);
+    let clicked;
+    for (let commandId = 1, deadline = Date.now() + 5000; Date.now() < deadline; commandId++) {
+      clicked = await engine.submit({ commandId, action: { kind: "click", target: { kind: "semantic", role: "button", name: "Featured", exact: true } }, timeoutMs: 8000, maxBytes: 16384, observe: "none" });
+      if (clicked.errorCode !== "search_incomplete") break; // The preview frame is still committing.
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(clicked.reason, "completed", JSON.stringify(clicked.steps));
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const offset = await evaluate(preview, "document.querySelector('.wrapper').scrollTop");
+    assert.ok(offset > 1500, `the preview scrolled to the section (${offset})`);
   } finally { await close(); }
 });

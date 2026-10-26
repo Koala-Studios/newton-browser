@@ -49,7 +49,8 @@ export type EngineDrag = Readonly<{ kind: "drag"; target: EngineTarget; to: Engi
 export type EngineClickAt = Readonly<{ kind: "click_at" | "move"; captureId: string; x: number; y: number; waitFor?: EngineWaitFor }>;
 export type EngineSelect = Readonly<{ kind: "select"; target: EngineTarget; value: string }>;
 export type EnginePress = Readonly<{ kind: "press"; target?: EngineTarget; keys?: readonly string[]; text?: string }>;
-export type EngineScroll = Readonly<{ kind: "scroll"; x: number; y: number; target?: EngineTarget }>;
+/** Wheel by x/y pixels at the page's top-left, at target (a frame element scrolls the document in it), or at a screenshot point (`at`) in whatever frame is under it. */
+export type EngineScroll = Readonly<{ kind: "scroll"; x: number; y: number; target?: EngineTarget; at?: Readonly<{ captureId: string; x: number; y: number }> }>;
 export type EngineNavigate = Readonly<{ kind: "navigate"; url: string }>;
 export type EngineHistory = Readonly<{ kind: "back" | "forward" | "reload" }>;
 export type EngineWait = Readonly<{ kind: "wait_for"; waitFor: EngineWaitFor }>;
@@ -239,9 +240,13 @@ function parsePress(raw: unknown): EnginePress {
   return Object.freeze({ kind: "press", ...(value.target === undefined ? {} : { target: parseEngineTarget(value.target) }), ...(keys ? { keys } : {}), ...(text === undefined ? {} : { text }) });
 }
 function parseScroll(raw: unknown): EngineScroll {
-  const value = exactObject(raw, ["kind", "x", "y", "target"]);
+  const value = exactObject(raw, ["kind", "x", "y", "target", "at"]);
   if (value.kind !== "scroll" || typeof value.x !== "number" || !Number.isFinite(value.x) || typeof value.y !== "number" || !Number.isFinite(value.y)) throw new EngineError("invalid_arguments");
-  return Object.freeze({ kind: "scroll", x: value.x, y: value.y, ...(value.target === undefined ? {} : { target: parseEngineTarget(value.target) }) });
+  if (value.at !== undefined && value.target !== undefined) throw new EngineError("invalid_arguments");
+  const at = value.at === undefined ? undefined : exactObject(value.at, ["captureId", "x", "y"]);
+  if (at && (typeof at.x !== "number" || !Number.isFinite(at.x) || typeof at.y !== "number" || !Number.isFinite(at.y))) throw new EngineError("invalid_arguments");
+  return Object.freeze({ kind: "scroll", x: value.x, y: value.y, ...(value.target === undefined ? {} : { target: parseEngineTarget(value.target) }),
+    ...(at ? { at: Object.freeze({ captureId: boundedString(at.captureId, 120), x: at.x as number, y: at.y as number }) } : {}) });
 }
 function parseNavigate(raw: unknown): EngineNavigate {
   const value = exactObject(raw, ["kind", "url"]);
@@ -260,7 +265,7 @@ function parseWait(raw: unknown): EngineWait {
   return Object.freeze({ kind: "wait_for", waitFor: parseWaitFor(condition) });
 }
 function parseInputAction(raw: unknown): EngineInputAction {
-  const value = exactObject(raw, ["kind", "target", "value", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "to", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
+  const value = exactObject(raw, ["kind", "target", "value", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "to", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence", "at"]);
   if(value.kind==='resize'){
     exactObject(raw,['kind','width','height']);
     return Object.freeze({kind:'resize',width:boundedInteger(value.width,320,7680),height:boundedInteger(value.height,240,4320)});
@@ -298,7 +303,7 @@ function parseInputAction(raw: unknown): EngineInputAction {
 }
 export function parseEngineCommand(raw: unknown): EngineCommand {
   const input = exactObject(raw, ["commandId", "pageId", "action", "timeoutMs", "observe", "maxBytes"]);
-  const value = exactObject(input.action, ["kind", "target", "value", "steps", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "to", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence"]);
+  const value = exactObject(input.action, ["kind", "target", "value", "steps", "waitFor", "state", "title", "timeoutMs", "keys", "text", "x", "y", "url", "captureId", "wait_for", "to", "dialogId", "promptText", "button", "clickCount", "files", "width", "height", "match", "replacement", "prefix", "suffix", "occurrence", "at"]);
   let action: EngineAction;
   if (value.kind === "sequence") {
     exactObject(value, ["kind", "steps"]);

@@ -3347,3 +3347,22 @@ acknowledged but changed nothing. Live probes in the operator's Chrome:
 Regression: engine-regressions/frame-point-input (headless background tab without focus emulation; the
 press is asserted on the frame's route at frame coordinates; a modal's backdrop names the dialog). Before
 the fix the click_at test failed: the button was never pressed.
+
+# A theme editor's preview frame could not be scrolled — fixed after 0.7.22
+
+Observed 2026-10-19 in existing mode (own background tab) in a theme editor: `scroll` with target
+`iframe` returned `ambiguous`, and clicking a section in the editor sidebar (click and click_at) did not
+move the preview. Live probes (source build, the operator's Chrome, read-only): the admin page holds the
+editor in a cross-site frame, which holds the store preview in another cross-site frame plus two hidden
+0x0 preview frames (so `iframe[src*=store-host]` was still ambiguous; the visible one has a title and
+`src=about:blank`). The preview document does not scroll: its inner `div.page-wrapper` does (814/6840 px).
+A scroll on a frame element wheeled at the element in the parent renderer and measured the element's own
+scrollTop, so it could never report the preview moving. A sidebar click was acknowledged and the preview
+stayed at 0 after 4 s: the preview scrolls smoothly on animation frames, which a background tab does not
+run (fixed by keeping the borrowed tab rendering, entry above). Fix: a frame element target scrolls inside
+that frame, `at` scrolls at a screenshot point in the frame under it (the same frame descent as click_at),
+and both measure the window plus every scroller around the element under the point. Live after the fix:
+target `iframe[title="Online store preview"]` scrolled the preview wrapper 0 → 600 px (met, 79 ms); on a
+local two-site fixture in the operator's Chrome both the frame target and `at` reported met (0 → 300 →
+600). Regression: engine-regressions/frame-scroll and background-tab-rendering ("a sidebar click scrolls a
+cross-site preview").
