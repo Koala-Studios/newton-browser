@@ -3309,3 +3309,21 @@ a button-like trigger or label and resolves the file input it stands for (the la
 only enabled file input in the nearest enclosing element that has any), refusing two at the same level
 as `ambiguous`. Regression: engine-regressions/resize-files "owned resize and file selection verify
 actual renderer effects through MCP" (button in a dialog with a sibling hidden input; twin inputs).
+
+# An embedded app frame stayed blank in a background tab — fixed after 0.7.22
+
+Observed 2026-10-19/26 in existing mode on an admin page that embeds a cross-site app frame, in a session's
+own background tab: the host chrome and its navigation rendered, the app frame stayed white in every
+screenshot for 10+ s. Live probe (source build, the operator's Chrome): the frame had its own renderer
+route and a complete DOM (document.read returned the app's text), but `requestAnimationFrame` never fired
+in it, all 17 of its CSS animations stayed at currentTime 0 (a modal backdrop's fade-in held at opacity 0),
+and screenshots 5, 11 and 24 s after load showed the frame white. A captured screenshot of the root page
+renders only the root renderer; a tiny screencast on the root, and capture or screencast on the frame's own
+session (refused), did not run the frame either. Cause: Chrome runs no frames for a hidden tab, and an
+out-of-process frame is only drawn and animated by its own frames. Fix: while a session holds a borrowed
+tab, the engine enables CDP focus emulation on it, which counts as a capturer and renders the tab as shown
+(visibilityState visible, frames running) without activating it; detaching drops it. The adapter forwards
+`Emulation.setFocusEmulationEnabled`; an older adapter refuses it and the hidden-tab fallbacks
+(renderHidden, observed captures) still apply. Regression: engine-regressions/background-tab-rendering
+(cross-site app frame revealed after ten frames, with and without the method; headless Chrome runs no
+frames in a background tab either, so the control reproduces the stall).

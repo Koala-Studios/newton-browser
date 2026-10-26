@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- A borrowed tab of the operator's browser renders as shown while a session holds it (CDP focus
+  emulation; nothing is activated or brought to the front). A background tab ran no animation frames:
+  a cross-site embedded app frame stayed white in screenshots for as long as it was observed, its CSS
+  animations and frame-driven reveals never advanced, and pointer input aimed at it had no painted frame
+  to land on. Requires the updated tab adapter; with an older one the previous hidden-tab fallbacks apply.
+
 ## [0.7.22] - 2026-10-22
 
 ### Fixed

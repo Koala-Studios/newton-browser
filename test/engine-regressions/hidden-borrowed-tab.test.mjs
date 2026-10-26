@@ -13,7 +13,7 @@ import { SessionEngine } from "../../packages/driver/src/session-engine.ts";
 // Role queries then answer only when another accessibility read follows them, content a page renders
 // on a frame stays out of the DOM until something paints, and a full-page capture resizes the page.
 // An owned browser stands in for the operator's: a second tab hides the page, and the connection is
-// marked borrowed so the engine treats it as it would a tab of theirs.
+// marked borrowed so the engine treats it as it would a tab of theirs, with an adapter that cannot keep it rendering.
 const PAGE = `<!doctype html><meta charset="utf-8"><title>Hidden app</title>
 <style>body{margin:0;font:16px sans-serif}#bar{display:flex;gap:8px;padding:8px}
 #menu{position:fixed;top:48px;left:120px;background:#fff;border:1px solid #888}</style>
@@ -47,7 +47,9 @@ test("a hidden borrowed tab resolves role targets, reads what it renders, lists 
   const fixture = http.createServer((_request, response) => { response.setHeader("content-type", "text/html; charset=utf-8"); response.end(PAGE); });
   await new Promise(resolve => fixture.listen(0, "127.0.0.1", resolve));
   const owned = await ownedEngineConnection({ executablePath: browser.path, browserFamily: "chrome", profileStore: store, identityId: identity.id, ephemeralIdentity: true });
-  const executor = new PageExecutor({ ...owned, ownsBrowser: false, borrowedTab: true });
+  // An adapter from before focus emulation leaves the tab hidden: this covers the hidden fallbacks.
+  const wire = { send: (method, params, route) => method === "Emulation.setFocusEmulationEnabled" ? Promise.reject(new Error("unsupported_method")) : owned.wire.send(method, params, route), onEvent: listener => owned.wire.onEvent(listener) };
+  const executor = new PageExecutor({ ...owned, wire, ownsBrowser: false, borrowedTab: true });
   try {
     await executor.start(`http://127.0.0.1:${fixture.address().port}/`, { timeoutMs: 15_000 });
     const engine = new SessionEngine("hidden-borrowed-tab", executor);

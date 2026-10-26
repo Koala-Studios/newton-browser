@@ -1608,6 +1608,11 @@ export class PageExecutor implements EngineExecutor {
     await send("Overlay.enable");
     await send("Page.setLifecycleEventsEnabled", { enabled: true });
     if (isPage && this.timezone) await send("Emulation.setTimezoneOverride", { timezoneId: this.timezone });
+    // A background tab of the operator's browser runs no frames: animation frames, CSS animations and an embedded
+    // frame's first paint wait for it to be shown (an app frame stays blank, an upload queue stalls). While the session
+    // holds the tab it renders as shown, without being activated; Chrome drops this when the debugger detaches.
+    // An adapter without the method leaves the tab hidden, and reads fall back to renderHidden.
+    if (isPage && this.connection.borrowedTab) await send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => undefined);
     if (isPage) await this.live.attachPage(route, send);
     await this.diagnostics.attachRoute(send);
     await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
