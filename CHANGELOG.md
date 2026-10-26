@@ -9,6 +9,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The tab adapter forwards the other commands the engine sends on a borrowed tab: `Runtime.getProperties`
+  and `Runtime.releaseObjectGroup` (covering-layer and script-clickable discovery returned nothing),
+  `Runtime.enable` and `Log.enable` (console reads were always empty) and `Input.setInterceptDrags` and
+  `Input.dispatchDragEvent` (every `drag` failed).
 - `browser.network` works for a tab of the operator's browser: the tab adapter refused `Network.enable`
   on every route, so existing-mode network reads were always empty (`collecting: started`, no entries).
 - Network records include requests made by embedded cross-site frames, each with `frame` (the frame's

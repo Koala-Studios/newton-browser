@@ -33,6 +33,24 @@ test('shared engine commands remain tab scoped and disconnect releases each orig
   assert.deepEqual(calls.slice(-2).map(call=>[call.target.sessionId,call.params.type]),[['child','mouseReleased'],['child','keyUp']]);
 });
 
+// Each command a session sends on a borrowed page or frame route. A refused one silently emptied existing-mode
+// console reads, dropped covering-layer and script-clickable discovery, and failed every drag.
+const BORROWED_COMMANDS = ['Page.enable','DOM.enable','Accessibility.enable','Overlay.enable','Page.setLifecycleEventsEnabled','Target.setAutoAttach','Page.getFrameTree',
+  'Emulation.setFocusEmulationEnabled','Emulation.setDeviceMetricsOverride','Runtime.runIfWaitingForDebugger','Runtime.evaluate','Runtime.callFunctionOn','Runtime.releaseObject',
+  'Runtime.getProperties','Runtime.releaseObjectGroup','Runtime.enable','Log.enable','Network.enable','Network.getResponseBody','Page.createIsolatedWorld',
+  'DOM.getDocument','DOM.querySelector','DOM.querySelectorAll','DOM.describeNode','DOM.resolveNode','DOM.focus','DOM.getFrameOwner','DOM.pushNodesByBackendIdsToFrontend',
+  'DOM.setFileInputFiles','DOM.getContentQuads','DOM.getNodeForLocation','DOM.scrollIntoViewIfNeeded','DOM.performSearch','DOM.getSearchResults','DOM.discardSearchResults','DOM.getBoxModel',
+  'Accessibility.getPartialAXTree','Accessibility.queryAXTree','Accessibility.getChildAXNodes','Page.captureScreenshot','Page.startScreencast','Page.stopScreencast','Page.getLayoutMetrics',
+  'Page.navigate','Page.reload','Page.getNavigationHistory','Page.navigateToHistoryEntry','Page.handleJavaScriptDialog',
+  'Input.dispatchKeyEvent','Input.dispatchMouseEvent','Input.insertText','Input.setInterceptDrags','Input.dispatchDragEvent'];
+test('the adapter forwards every command a borrowed session sends', async () => {
+  const sent=[];
+  const authority=new TabClaims({attach:async()=>{},detach:async()=>{},sendCommand:async(_target,method)=>{sent.push(method);return {};}},'epoch');
+  const owner=authority.bindPort(),token=await authority.claim(owner,1);
+  for(const method of BORROWED_COMMANDS)await authority.command(owner,token,method,{});
+  assert.deepEqual(sent,BORROWED_COMMANDS);
+});
+
 test('claims reserve before await; owner capability and epoch cannot be forged', async () => {
   const wait = held(); let inputs = 0;
   const authority = new TabClaims({ attach: () => wait.promise, detach: async () => {}, sendCommand: async () => { inputs++; } }, 'epoch');

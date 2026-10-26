@@ -3396,3 +3396,14 @@ by its URL's origin). Regression: engine-regressions/network-frames (host fetch 
 document, boot fetch and click fetch with its origin; a frame added after recording started keeps its boot
 fetch). Before the fix the boot fetch was missing. Not verified live in existing mode: the operator's
 installed adapter predates these methods and updating it would release every claimed tab.
+
+# The tab adapter refused commands the engine sends in existing mode — fixed after 0.7.22
+
+Found 2026-10-26 while probing the embedded-app page: every observe in existing mode logged
+`unsupported_method` for `Runtime.getProperties` and `Runtime.releaseObjectGroup`, so covering layers
+(`observation.cover`) and script-driven clickables were never discovered there (the error is caught and
+the observation looks complete). Comparing the driver's commands with the adapter's allowlist also showed
+`Runtime.enable`/`Log.enable` (console collection silently empty) and `Input.setInterceptDrags`/
+`Input.dispatchDragEvent` (`drag` fails) refused. The adapter now forwards them. Regression:
+tab-foundation "the adapter forwards every command a borrowed session sends" (failed before: first
+refusal `Runtime.getProperties`).
