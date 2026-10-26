@@ -3407,3 +3407,21 @@ the observation looks complete). Comparing the driver's commands with the adapte
 `Input.dispatchDragEvent` (`drag` fails) refused. The adapter now forwards them. Regression:
 tab-foundation "the adapter forwards every command a borrowed session sends" (failed before: first
 refusal `Runtime.getProperties`).
+
+# Uploads from a background tab turned every row red — cause reproduced, fixed by the rendering fix
+
+Observed 2026-10-19 in existing mode on a media-library "Upload images" dialog: `set_files` reported the
+8 files attached and the dialog's compression step listed them, but after "Upload all" every row turned
+red with no error text. Not reproduced on the live account (it would upload to a client). Local fixture in
+the operator's Chrome, own background tab, files set through the adapter (DOM.setFileInputFiles): with the
+engine reading between steps, every API an upload widget uses worked hidden — File.arrayBuffer,
+FileReader, createImageBitmap, img.decode, canvas.toBlob, OffscreenCanvas.convertToBlob, fetch with the
+File (server received all bytes) — so file access from the extension's context and decoding are not the
+cause. A queue that advances on requestAnimationFrame with a 3 s stall timeout (as upload widgets
+schedule work and flag stalled rows) failed both rows when nothing read the page for 6 s: a hidden tab
+runs no animation frames, and the engine's one-frame renders only happen during its own reads. The same
+fixture in headless Chrome fails identically without focus emulation and uploads both files with it.
+Fix: the borrowed tab renders as shown while the session holds it (entry "An embedded app frame stayed
+blank"). Residual: the real widget's internals are unknown; if it fails for another reason (a cross-origin
+upload target, a size rule), that is outside the browser and shows in network reads. Regression:
+engine-regressions/background-tab-rendering ("files set in a borrowed background tab ...").

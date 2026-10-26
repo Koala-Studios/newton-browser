@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import zlib from "node:zlib";
 import http from "node:http";
 import test from "node:test";
 
@@ -37,7 +39,7 @@ async function borrowedFixture(t, pages, { keepRendering = true } = {}) {
   const close = async () => { await executor.close(); server.close(); root.remove(); };
   const evaluate = async (route, expression) => (await owned.wire.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, route)).result.value;
   const routes = () => { const page = executor.bindPage(); return executor.directory.frames(page.pageId).map(frame => executor.directory.route(executor.directory.binding(frame, 1))); };
-  return { executor, owned, port, close, evaluate, routes };
+  return { executor, owned, port, close, evaluate, routes, directory: root.root };
 }
 
 for (const keepRendering of [true, false]) test(`a borrowed background tab ${keepRendering ? "renders its cross-site app frame while held" : "without focus emulation leaves the app frame waiting"}`, async t => {
@@ -89,5 +91,46 @@ test("a sidebar click scrolls a cross-site preview in a borrowed background tab"
     await new Promise(resolve => setTimeout(resolve, 1500));
     const offset = await evaluate(preview, "document.querySelector('.wrapper').scrollTop");
     assert.ok(offset > 1500, `the preview scrolled to the section (${offset})`);
+  } finally { await close(); }
+});
+
+// A media-library upload dialog: files from the input are compressed (bitmap decode, canvas re-encode) by a queue
+// that advances on animation frames, then posted; a row stalled for 3 s turns failed with no message. Set from a
+// background tab, every row failed. While the session holds the tab, the queue runs between the model's calls.
+const UPLOAD = `<!doctype html><input id="files" type="file" multiple accept="image/*"><button onclick="run()">Upload all</button><ul id="rows"></ul>
+<script>function run(){const rows=[...document.getElementById('files').files].map(file=>{const row=document.createElement('li');row.textContent=file.name+' queued';document.getElementById('rows').append(row);return {file,row,state:'queued',since:performance.now()};});
+setInterval(()=>{for(const item of rows)if(item.state!=='done'&&performance.now()-item.since>3000){item.state='failed';item.row.textContent=item.file.name+' failed';}},250);
+const tick=async()=>{const item=rows.find(entry=>entry.state==='queued');if(!item)return;item.state='sending';
+  const bitmap=await createImageBitmap(item.file),canvas=document.createElement('canvas');canvas.width=16;canvas.height=12;canvas.getContext('2d').drawImage(bitmap,0,0,16,12);
+  const small=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.8));
+  const response=await fetch('/upload',{method:'POST',body:new Blob([await item.file.arrayBuffer(),small])});
+  if(item.state==='sending'&&response.ok){item.state='done';item.row.textContent=item.file.name+' uploaded '+await response.text();}
+  item.since=performance.now();requestAnimationFrame(tick);};
+requestAnimationFrame(tick);}</script>`;
+function png(width, height) {
+  const raw = Buffer.alloc((width * 3 + 1) * height, 0x80);
+  for (let y = 0; y < height; y++) raw[y * (width * 3 + 1)] = 0;
+  const chunk = (type, data) => { const length = Buffer.alloc(4), crc = Buffer.alloc(4); length.writeUInt32BE(data.length); crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type), data]))); return Buffer.concat([length, Buffer.from(type), data, crc]); };
+  const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+for (const keepRendering of [true, false]) test(`files set in a borrowed background tab ${keepRendering ? "upload through a frame-driven queue" : "without focus emulation stall in a frame-driven queue"}`, async t => {
+  let received = 0;
+  const fixture = await borrowedFixture(t, { "/": UPLOAD, "/upload": (request, response) => { let bytes = 0; request.on("data", data => { bytes += data.length; }); request.on("end", () => { received++; response.end(String(bytes)); }); } }, { keepRendering });
+  if (!fixture) return;
+  const { executor, port, close, evaluate, routes } = fixture;
+  const files = [`${fixture.directory}/one.png`, `${fixture.directory}/two.png`];
+  for (const file of files) fs.writeFileSync(file, png(64, 48));
+  try {
+    await executor.start(`http://127.0.0.1:${port}/`, { timeoutMs: 15_000 });
+    const engine = new SessionEngine("upload", executor);
+    let commandId = 0;
+    const act = action => engine.submit({ commandId: ++commandId, action, timeoutMs: 8000, maxBytes: 16384, observe: "none" });
+    assert.deepEqual((await act({ kind: "set_files", target: { kind: "selector", selector: "#files" }, files })).postcondition, { state: "met", kind: "files" });
+    assert.equal((await act({ kind: "click", target: { kind: "semantic", role: "button", name: "Upload all", exact: true } })).reason, "completed");
+    await new Promise(resolve => setTimeout(resolve, 4000)); // The model reads nothing while the queue runs.
+    const rows = await evaluate(routes()[0], "[...document.querySelectorAll('li')].map(row=>row.textContent.replace(/ uploaded \\d+/,' uploaded'))");
+    if (keepRendering) { assert.deepEqual(rows, ["one.png uploaded", "two.png uploaded"]); assert.equal(received, 2); }
+    else assert.deepEqual(rows, ["one.png failed", "two.png failed"], "a hidden tab runs no frames: the fixture reproduces the red rows");
   } finally { await close(); }
 });

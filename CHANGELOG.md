@@ -23,7 +23,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   emulation; nothing is activated or brought to the front). A background tab ran no animation frames:
   a cross-site embedded app frame stayed white in screenshots for as long as it was observed, its CSS
   animations and frame-driven reveals never advanced, and pointer input aimed at it had no painted frame
-  to land on. Requires the updated tab adapter; with an older one the previous hidden-tab fallbacks apply.
+  to land on, and upload dialogs whose queues advance on frames failed every file. Requires the updated
+  tab adapter; with an older one the previous hidden-tab fallbacks apply.
 - `click_at` and `move` over a cross-site embedded frame are dispatched in that frame's own session at its
   own coordinates. Chrome routed the root-level press by the frame's painted hit-test data, which a
   background tab's frame did not have, so the press was acknowledged and landed nowhere.
