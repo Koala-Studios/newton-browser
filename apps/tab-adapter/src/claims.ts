@@ -19,7 +19,7 @@ const methods = new Set([
   "DOM.getFrameOwner", "DOM.pushNodesByBackendIdsToFrontend", "DOM.setFileInputFiles",
   "DOM.getContentQuads", "DOM.getNodeForLocation", "DOM.scrollIntoViewIfNeeded",
   "DOM.performSearch", "DOM.getSearchResults", "DOM.discardSearchResults", "DOM.getBoxModel",
-  "Emulation.setDeviceMetricsOverride", "Emulation.setFocusEmulationEnabled", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Target.setAutoAttach",
+  "Emulation.setDeviceMetricsOverride", "Emulation.setFocusEmulationEnabled", "Network.enable", "Network.getResponseBody", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Runtime.runIfWaitingForDebugger", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Target.setAutoAttach",
 ]);
 
 /** Browser-local authority. Owner capabilities are created by bound native connections. */

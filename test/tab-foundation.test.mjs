@@ -22,7 +22,7 @@ test('shared engine commands remain tab scoped and disconnect releases each orig
   const authority=new TabClaims({attach:async()=>{},detach:async()=>{},sendCommand:async(target,method,params)=>{calls.push({target,method,params});}},'epoch');
   const owner=authority.bindPort(); const token=await authority.claim(owner,1);
   authority.event(1,'Target.attachedToTarget',{sessionId:'child'});
-  for(const method of ['DOM.enable','DOM.getFrameOwner','DOM.pushNodesByBackendIdsToFrontend','DOM.querySelector','Runtime.evaluate','Page.reload','Page.getNavigationHistory','Page.navigateToHistoryEntry','Page.getLayoutMetrics','Emulation.setFocusEmulationEnabled']) await authority.command(owner,token,method,{},'child');
+  for(const method of ['DOM.enable','DOM.getFrameOwner','DOM.pushNodesByBackendIdsToFrontend','DOM.querySelector','Runtime.evaluate','Page.reload','Page.getNavigationHistory','Page.navigateToHistoryEntry','Page.getLayoutMetrics','Emulation.setFocusEmulationEnabled','Network.enable','Network.getResponseBody','Runtime.runIfWaitingForDebugger']) await authority.command(owner,token,method,{},'child');
   for(const method of ['Target.attachToTarget','Target.closeTarget','Browser.close']) await assert.rejects(authority.command(owner,token,method,{}),/unsupported_method/);
   await assert.rejects(authority.command(owner,token,'Runtime.evaluate',{},'foreign'),/foreign_route/);
   await authority.command(owner,token,'Input.dispatchKeyEvent',{type:'rawKeyDown',key:'Control'},'child');

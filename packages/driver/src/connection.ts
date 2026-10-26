@@ -8,6 +8,9 @@ export interface EngineConnection {
   readonly ownsBrowser?: boolean;
   /** A tab of the operator's own browser: usually in the background, where Chromium runs no frames. */
   readonly borrowedTab?: boolean;
+  /** Auto-attached frames may start paused until resumed (the adapter forwards Runtime.runIfWaitingForDebugger), so a
+   * frame's first requests are recorded. Owned browsers always may. */
+  readonly resumesTargets?: boolean;
   /** The adapter emits only pages already claimed by this connection's owner. */
   readonly tracksOwnedPages?: boolean;
   /** Sites the cloned login source holds cookies for (domains only), when the session starts from one. */

@@ -9,6 +9,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `browser.network` works for a tab of the operator's browser: the tab adapter refused `Network.enable`
+  on every route, so existing-mode network reads were always empty (`collecting: started`, no entries).
+- Network records include requests made by embedded cross-site frames, each with `frame` (the frame's
+  origin). While network is recorded, a new frame starts paused until its own recording is on, so its
+  first requests (an embedded app's boot calls) are kept; frames were attached without waiting and those
+  were lost. Existing mode pauses frames only with an adapter that can resume them (`resume_targets`).
 - A borrowed tab of the operator's browser renders as shown while a session holds it (CDP focus
   emulation; nothing is activated or brought to the front). A background tab ran no animation frames:
   a cross-site embedded app frame stayed white in screenshots for as long as it was observed, its CSS

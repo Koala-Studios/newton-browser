@@ -34,7 +34,7 @@ const post = (value: unknown) => { for (const packet of nativePackets(crypto.ran
 let digest = "";
 const ready = (async () => {
   digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await (await fetch(chrome.runtime.getURL("worker.js"))).arrayBuffer())), byte => byte.toString(16).padStart(2, "0")).join("");
-  post({ type: "hello", protocolMajor: 1, epoch, digest, capabilities: ["tab_claim", "scoped_cdp", "tab_inventory", "native_chunks", "dev_reload", "update_binding", "owned_popups", "create_tab"] });
+  post({ type: "hello", protocolMajor: 1, epoch, digest, capabilities: ["tab_claim", "scoped_cdp", "tab_inventory", "native_chunks", "dev_reload", "update_binding", "owned_popups", "create_tab", "resume_targets"] });
 })();
 void ready.catch(() => undefined);
 

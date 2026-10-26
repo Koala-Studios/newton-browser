@@ -3378,3 +3378,21 @@ public storefront, background tab with the old adapter): four Tabs read link →
 the document) → link, each with focusVisible true and a 2px solid outline. Regression:
 engine-regressions/focus-read (input, link with a focus-visible outline, closed shadow root, box-shadow
 ring, cross-site frame; the returned ref is clickable).
+
+# Network reads missed embedded-frame requests (and all requests in existing mode) — fixed after 0.7.22
+
+Observed 2026-10-26: network reads did not show an embedded app frame's requests. Live probe (source
+build, the operator's Chrome, local host page with a cross-site frame): `networkRecords` returned
+`collecting: started` and no entries at all; the adapter answered `unsupported_method` to `Network.enable`
+on the page route and on the frame's route (`Network.getResponseBody` was refused too). In owned mode the
+frame's later requests were recorded but its first ones were not: a frame's renderer session is attached
+without waiting (waitForDebuggerOnStart false), so its boot `fetch` ran before `Network.enable` reached
+it; entries also did not say which frame made them. Fix: the adapter forwards `Network.enable`,
+`Network.getResponseBody` and `Runtime.runIfWaitingForDebugger` and advertises `resume_targets`; while
+network is recorded, auto-attached frames start paused and are resumed once their domains are enabled
+(also when that fails; paused workers are resumed at once); entries from a frame other than the page's
+main frame carry its origin as `frame` (a frame's own document request, made before the frame is known,
+by its URL's origin). Regression: engine-regressions/network-frames (host fetch without frame; the frame's
+document, boot fetch and click fetch with its origin; a frame added after recording started keeps its boot
+fetch). Before the fix the boot fetch was missing. Not verified live in existing mode: the operator's
+installed adapter predates these methods and updating it would release every claimed tab.

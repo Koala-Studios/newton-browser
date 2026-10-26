@@ -50,7 +50,7 @@ export function existingPageConnection(client:NativeClient,root:Token,initial:Va
     const owned=tabId===undefined?undefined:claims.get(tabId);if(!owned)throw new Error('foreign_target');return owned;
   };
   return {rootTargetId:`tab_${root.tabId}`,epoch:root.epoch,claimGeneration:root.generation,signal:client.signal,borrowedTab:true,
-    tracksOwnedPages:client.hello.capabilities.includes('owned_popups'),
+    tracksOwnedPages:client.hello.capabilities.includes('owned_popups'),resumesTargets:client.hello.capabilities.includes('resume_targets'),
     wire:{
       async send(method,params={},sessionId){
         if(closed)throw new Error('connection_lost');

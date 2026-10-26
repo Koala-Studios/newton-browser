@@ -7,7 +7,8 @@ const string = (value: unknown): string => typeof value === "string" ? value : "
 
 export type DiagnosticKind = "console" | "network";
 export type ConsoleEntry = { pageId: string; level: "log" | "info" | "warn" | "error" | "debug"; text: string; source?: string; at: string };
-export type NetworkEntry = { requestId: string; pageId: string; method: string; url: string; resourceType?: string; status?: number;
+/** `frame` is the origin of the embedded frame that made the request; requests of the page's own document have none. */
+export type NetworkEntry = { requestId: string; pageId: string; frame?: string; method: string; url: string; resourceType?: string; status?: number;
   mimeType?: string; failed?: string; bytes?: number; at: string };
 
 const CONSOLE_MAX = 500, NETWORK_MAX = 500, TEXT_MAX = 2000, URL_MAX = 2048;
@@ -45,7 +46,8 @@ export class SessionDiagnostics {
     else await send("Network.enable", { maxTotalBufferSize: 4 * 1024 * 1024, maxResourceBufferSize: 1024 * 1024 });
   }
 
-  handle(event: { method: string; params: RecordValue; sessionId?: string | null }, pageOf: (route: string) => string | undefined): void {
+  /** `frameOf` gives null for a page's main frame, an embedded frame's origin, or undefined for a frame not yet known. */
+  handle(event: { method: string; params: RecordValue; sessionId?: string | null }, pageOf: (route: string) => string | undefined, frameOf: (pageId: string, frameId: string) => string | null | undefined = () => null): void {
     if (!this.enabled.size || !event.method.startsWith("Runtime.") && !event.method.startsWith("Log.") && !event.method.startsWith("Network.")) return;
     const route = event.sessionId ?? "", pageId = pageOf(route);
     if (!pageId) return;
@@ -73,7 +75,10 @@ export class SessionDiagnostics {
         this.network.delete(oldest); this.requestRoutes.delete(oldest); this.networkDropped++;
       }
       // A redirect reuses the request ID: the entry follows the latest URL.
-      this.network.set(requestId, { requestId, pageId, method: string(request.method).slice(0, 16) || "GET", url: string(request.url).slice(0, URL_MAX),
+      // An embedded frame's own document is requested before the frame is known: it is that frame's origin.
+      const known = string(params.frameId) ? frameOf(pageId, string(params.frameId)) : null;
+      const frame = known === undefined && params.type === "Document" ? origin(string(request.url)) : known;
+      this.network.set(requestId, { requestId, pageId, ...(frame ? { frame } : {}), method: string(request.method).slice(0, 16) || "GET", url: string(request.url).slice(0, URL_MAX),
         ...(string(params.type) ? { resourceType: string(params.type) } : {}), at });
       this.requestRoutes.set(requestId, route);
       return;
@@ -146,6 +151,10 @@ function newest<T>(entries: readonly T[], limit: number, maxBytes = 56 * 1024): 
     kept.push(entries[index]!);
   }
   return kept.reverse();
+}
+
+function origin(url: string): string | undefined {
+  try { const parsed = new URL(url); return /^https?:$/u.test(parsed.protocol) ? parsed.origin : undefined; } catch { return undefined; }
 }
 
 function textual(mimeType: string | undefined): boolean {

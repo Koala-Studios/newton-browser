@@ -110,6 +110,8 @@ export class PageExecutor implements EngineExecutor {
   private readonly lifecycleWaiters = new Set<() => void>();
   private readonly conditionWaiters = new Set<() => void>();
   private readonly domRevisions = new Map<string,number>();
+  // Each committed frame's origin, for naming the frame a request came from.
+  private readonly frameOrigins = new Map<string, string>();
   private readonly documents = new Map<string, { page: EnginePageStamp; participants?:EnginePageStamp[]; ownerGeneration: number; text: string; bytes: number; complete: boolean; expiresAt: number; scopeMatches?: number }>();
   private readonly captures = new Map<string, CaptureRecord>();
   private readonly pointerDocuments = new Map<string, number>();
@@ -148,7 +150,10 @@ export class PageExecutor implements EngineExecutor {
       // Do not return an async handler to a transport that serializes event delivery.
       try {
         this.live.handle(event, route => this.routes.get(route));
-        this.diagnostics.handle(event, route => this.routes.get(route));
+        this.diagnostics.handle(event, route => this.routes.get(route), (pageId, frameId) => {
+          try { if (this.directory.stamp(pageId).frameId === frameId) return null; } catch { return undefined; }
+          return this.frameOrigins.get(frameId);
+        });
         if (event.sessionId === null && event.method.startsWith("Browser.download")) this.downloads.handle(event);
         if (event.method === "Target.targetCreated" && (this.connection.ownsBrowser||this.connection.tracksOwnedPages)) {
           const info = object(event.params.targetInfo),pageId=string(info.targetId);
@@ -191,13 +196,16 @@ export class PageExecutor implements EngineExecutor {
         } else if (event.method === "Target.attachedToTarget") {
           const info = object(event.params.targetInfo); const route = string(event.params.sessionId);
           if (!event.sessionId && info.type === "page") return; // Explicit root attachment is initialized by start().
+          const waiting = event.params.waitingForDebugger === true;
+          const pageId = info.type === "page" ? string(info.targetId) : info.type === "iframe" ? this.routes.get(event.sessionId ?? "") : undefined;
+          // A paused target the session does not drive (a worker) runs at once.
+          if (waiting && route && !pageId) void this.connection.wire.send("Runtime.runIfWaitingForDebugger", {}, route).catch(() => undefined);
           if ((info.type === "page" || info.type === "iframe") && route) {
-            const pageId = info.type === "page" ? string(info.targetId) : this.routes.get(event.sessionId ?? "");
             if (pageId) {
               const controller=new AbortController();this.routeAttachments.set(route,controller);
               // Only the root page's own attachment is essential; a child frame or popup failing degrades the view.
               // A target that detached during attachment is simply gone, not a degraded view.
-              const job = this.attach(pageId, route, info.type === "page", string(info.parentFrameId), controller.signal)
+              const job = this.attach(pageId, route, info.type === "page", string(info.parentFrameId), controller.signal, waiting)
                 .catch(error => { if (controller.signal.aborted) return; if (pageId === this.connection.rootTargetId && info.type === "page") this.fault = error; else this.degraded = true; });
               this.pendingAttachments.add(job);
               void job.finally(() => { this.pendingAttachments.delete(job); if (this.routeAttachments.get(route) === controller) this.routeAttachments.delete(route); });
@@ -999,7 +1007,14 @@ export class PageExecutor implements EngineExecutor {
   private async collect(kind: DiagnosticKind): Promise<boolean> {
     if (this.closed) throw new EngineError("session_closed");
     if (this.diagnostics.isEnabled(kind)) return false;
-    return this.diagnostics.enable(kind, [...this.routes.keys()].map(route => [route, (method: string, params: RecordValue = {}) => this.connection.wire.send(method, params, route)] as [string, (method: string, params?: RecordValue) => Promise<RecordValue>]));
+    const started = await this.diagnostics.enable(kind, [...this.routes.keys()].map(route => [route, (method: string, params: RecordValue = {}) => this.connection.wire.send(method, params, route)] as [string, (method: string, params?: RecordValue) => Promise<RecordValue>]));
+    if (kind === "network") await Promise.all([...this.routes.keys()].map(route => this.connection.wire.send("Target.setAutoAttach", this.autoAttach(), route).catch(() => undefined)));
+    return started;
+  }
+  /** While network is recorded, new frames start paused until their domains are on, so a frame's first requests are
+   * recorded too. Only when the connection can resume them: an adapter without the method would leave them paused. */
+  private autoAttach(): RecordValue {
+    return { autoAttach: true, flatten: true, waitForDebuggerOnStart: this.diagnostics.isEnabled("network") && (this.connection.ownsBrowser === true || this.connection.resumesTargets === true) };
   }
   /** Host-only: events for the embedding process (never the model). */
   subscribeEvents(listener: (event: EngineSessionEvent) => void): () => void { return this.live.subscribe(listener); }
@@ -1663,7 +1678,7 @@ export class PageExecutor implements EngineExecutor {
     await this.connection.close();
     this.suspendedInputs.clear(); this.dialogs.clear(); this.dialogWaiters.clear();
   }
-  private async attach(pageId: string, route: string, isPage: boolean, parentFrameId?: string, signal?:AbortSignal): Promise<void> {
+  private async attach(pageId: string, route: string, isPage: boolean, parentFrameId?: string, signal?:AbortSignal, waiting = false): Promise<void> {
     const send=async(method:string,params:RecordValue={})=>{
       if(signal?.aborted)throw new EngineError('unknown_page');
       const sent=this.connection.wire.send(method,params,route);
@@ -1677,6 +1692,16 @@ export class PageExecutor implements EngineExecutor {
     this.directory.registerRoute(route);
     if (parentFrameId) this.routeParents.set(route, parentFrameId);
     this.directory.addPage(pageId); this.routes.set(route, pageId);
+    // A paused frame starts once its domains (network recording among them) are on, or when attaching fails.
+    try { await this.enable(route, isPage, send); }
+    finally { if (waiting) void this.connection.wire.send("Runtime.runIfWaitingForDebugger", {}, route).catch(() => undefined); }
+    const tree = await send("Page.getFrameTree");
+    if(this.routes.get(route)!==pageId)return;
+    const frameTree = object(tree.frameTree);
+    if (!isPage && parentFrameId && !object(frameTree.frame).parentId) frameTree.frame = { ...object(frameTree.frame), parentId: parentFrameId };
+    if (isPage || object(frameTree.frame).parentId) this.frameTree(pageId, frameTree, route);
+  }
+  private async enable(route: string, isPage: boolean, send: (method: string, params?: RecordValue) => Promise<RecordValue>): Promise<void> {
     await send("Page.enable");
     await send("DOM.enable");
     await send("Accessibility.enable");
@@ -1693,16 +1718,13 @@ export class PageExecutor implements EngineExecutor {
     if (isPage && this.connection.borrowedTab) await send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => undefined);
     if (isPage) await this.live.attachPage(route, send);
     await this.diagnostics.attachRoute(send);
-    await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
-    const tree = await send("Page.getFrameTree");
-    if(this.routes.get(route)!==pageId)return;
-    const frameTree = object(tree.frameTree);
-    if (!isPage && parentFrameId && !object(frameTree.frame).parentId) frameTree.frame = { ...object(frameTree.frame), parentId: parentFrameId };
-    if (isPage || object(frameTree.frame).parentId) this.frameTree(pageId, frameTree, route);
+    await send("Target.setAutoAttach", this.autoAttach());
   }
   private frame(pageId: string, frame: RecordValue, route: string): void {
     const frameId = string(frame.id); const loaderId = string(frame.loaderId);
     if (!frameId || !loaderId) return;
+    try { const url = new URL(string(frame.url)); if (/^https?:$/u.test(url.protocol)) { this.frameOrigins.delete(frameId); this.frameOrigins.set(frameId, url.origin); } } catch { /* about:blank and other local documents have no origin */ }
+    while (this.frameOrigins.size > 256) this.frameOrigins.delete(this.frameOrigins.keys().next().value!);
     const parentId = string(frame.parentId) || this.routeParents.get(route) || "";
     this.directory.navigate(pageId, { frameId, loaderId, route, url:string(frame.url), ...(parentId ? { parentId } : {}) });
     this.pendingFrames.delete(frameId);
