@@ -3327,3 +3327,23 @@ tab, the engine enables CDP focus emulation on it, which counts as a capturer an
 (renderHidden, observed captures) still apply. Regression: engine-regressions/background-tab-rendering
 (cross-site app frame revealed after ten frames, with and without the method; headless Chrome runs no
 frames in a background tab either, so the control reproduces the stall).
+
+# Pointer input inside a cross-site app frame missed or was refused — fixed after 0.7.22
+
+Observed 2026-10-26 in existing mode (own background tab) on the same embedded-app page: a click by ref
+on a control inside the app frame returned `target_covered` (coveredBy `div`), and `click_at` on it was
+acknowledged but changed nothing. Live probes in the operator's Chrome:
+1. Local fixture (host on one site, app frame on another, background tab): click by ref on a button in
+   the frame landed (input on the frame's own session); `click_at` at the same button's screenshot point
+   was acknowledged and nothing happened. The root-session press is routed into an out-of-process frame
+   by viz hit-test data, which a frame that never painted (hidden tab) does not have. Fix: click_at/move
+   find the frame under the point (DOM.getNodeForLocation on each renderer root, frame owner, owner's
+   content box) and dispatch in that frame's session at frame coordinates. Live after the fix: the
+   click_at lands (counter 1 → 2).
+2. The app page: observe listed the app's modal ("Meet ...", role dialog) first; the refusal was correct,
+   the modal's backdrop covers the page. In the hidden tab its fade-in was held at opacity 0, so the
+   screenshot was white and the cover looked spurious (see the blank-frame entry above). coveredBy now
+   names an open modal dialog of the hit element's document when the hit is its backdrop.
+Regression: engine-regressions/frame-point-input (headless background tab without focus emulation; the
+press is asserted on the frame's route at frame coordinates; a modal's backdrop names the dialog). Before
+the fix the click_at test failed: the button was never pressed.

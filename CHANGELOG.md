@@ -14,6 +14,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a cross-site embedded app frame stayed white in screenshots for as long as it was observed, its CSS
   animations and frame-driven reveals never advanced, and pointer input aimed at it had no painted frame
   to land on. Requires the updated tab adapter; with an older one the previous hidden-tab fallbacks apply.
+- `click_at` and `move` over a cross-site embedded frame are dispatched in that frame's own session at its
+  own coordinates. Chrome routed the root-level press by the frame's painted hit-test data, which a
+  background tab's frame did not have, so the press was acknowledged and landed nowhere.
+- `target_covered` names an open modal dialog when its backdrop (beside the dialog, not around the target)
+  covers the target; it reported only `div`.
 
 ## [0.7.22] - 2026-10-22
 

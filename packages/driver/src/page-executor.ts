@@ -56,10 +56,12 @@ type CaptureRecord = Readonly<{
   tiles: TileDigests;
 }>;
 
-// Names what sits over a target: the nearest dialog or form around the hit element, else the
-// element itself, as tag, id, role and a short label. Bounded, untrusted page content.
+// Names what sits over a target: the nearest dialog or form around the hit element, else an open modal
+// dialog of its document (a backdrop beside the dialog covers the page), else the element itself, as tag,
+// id, role and a short label. Bounded, untrusted page content.
 const DESCRIBE_COVER = `function(node){
-  const box=node.closest&&node.closest('dialog,[role=dialog],[role=alertdialog],[aria-modal=true],form')||node;
+  const modal='dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]';
+  const box=node.closest&&node.closest(modal+',form')||node.ownerDocument&&[...node.ownerDocument.querySelectorAll(modal)].find(item=>item.getClientRects().length)||node;
   const tag=String(box.localName||'element'),id=box.id?'#'+String(box.id).slice(0,40):'',role=box.getAttribute&&box.getAttribute('role');
   const label=(box.getAttribute&&(box.getAttribute('aria-label')||box.getAttribute('title'))||String(box.innerText||box.textContent||'')).replace(/\\s+/g,' ').trim().slice(0,80);
   return (tag+id+(role?'[role='+role+']':'')+(label?' "'+label+'"':'')).slice(0,160);
@@ -1810,10 +1812,36 @@ export class PageExecutor implements EngineExecutor {
     const x = capture.clip.x + action.x-currentSpatial.pageX+currentSpatial.offsetX;
     const y = capture.clip.y + action.y-currentSpatial.pageY+currentSpatial.offsetY;
     if(x<0||y<0||x>=currentSpatial.width||y>=currentSpatial.height)throw new EngineError('target_moved');
-    await context.input(() => this.send(root, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", clickCount: 0 }));
-    if (action.kind === "click_at") await this.input!.click(root, x, y);
+    const point = await this.framePoint(context, page, x, y);
+    await context.input(() => this.send(point.binding, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, button: "none", clickCount: 0 }));
+    if (action.kind === "click_at") await this.input!.click(point.binding, point.x, point.y);
     if (action.waitFor) return this.waitFor(context, page, action.waitFor);
     return { state: "not_requested" };
+  }
+  /** The frame under a viewport point, with the point in its own viewport. Chrome routes root-level input into an
+   * out-of-process frame by the hit-test data its painted frames carry; a background tab's frame may have painted
+   * nothing, so input there landed nowhere. That frame's own session takes input at its own coordinates. */
+  private async framePoint(context: CommandContext, page: EnginePageStamp, x: number, y: number): Promise<{ binding: NodeBinding; x: number; y: number }> {
+    let binding = this.directory.binding(page, 1);
+    for (let depth = 0; depth < 8; depth++) {
+      const route = this.directory.route(binding);
+      const children = this.directory.frames(page.pageId).filter(frame => { const parent = this.directory.parent(frame); return parent && parent.frameId === binding.frameId && this.directory.route(this.directory.binding(frame, 1)) !== route; });
+      if (!children.length) break;
+      const scroll = object(object((await context.read(() => this.send(binding, "Runtime.evaluate", { expression: "({x:scrollX,y:scrollY})", returnByValue: true, silent: true }))).result).value);
+      if (!finiteNumber(scroll.x) || !finiteNumber(scroll.y)) throw new EngineError("evidence_unavailable");
+      const documentPoint = { x: Math.round(x + scroll.x), y: Math.round(y + scroll.y) };
+      let hit: RecordValue;
+      try { hit = await context.read(() => this.send(binding, "DOM.getNodeForLocation", { ...documentPoint, includeUserAgentShadowDOM: false })); }
+      catch (error) { if (context.cancellation) throw error; break; }
+      let child: EnginePageStamp | undefined;
+      for (const frame of children) if ((await context.read(() => this.send(binding, "DOM.getFrameOwner", { frameId: frame.frameId }))).backendNodeId === hit.backendNodeId) { child = frame; break; }
+      if (!child) break;
+      // The frame's own viewport starts at its owner's content box.
+      const content = object((await context.read(() => this.send(binding, "DOM.getBoxModel", { backendNodeId: hit.backendNodeId }))).model).content;
+      if (!Array.isArray(content) || !finiteNumber(content[0]) || !finiteNumber(content[1])) throw new EngineError("evidence_unavailable");
+      binding = this.directory.binding(child, 1); x -= content[0]; y -= content[1];
+    }
+    return { binding, x, y };
   }
   private async selectAll(context: CommandContext, binding: NodeBinding): Promise<void> {
     context.checkpoint();
