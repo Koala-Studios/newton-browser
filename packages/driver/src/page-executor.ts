@@ -680,7 +680,7 @@ export class PageExecutor implements EngineExecutor {
         if(!current.pointerInView)throw new EngineError('target_not_editable');
       }
       // A frame element scrolls the document shown in it (an editor's preview), in that frame's own renderer.
-      for (const frame of this.directory.frames(page.pageId)) {
+      if (facts.tag === "iframe" || facts.tag === "frame") for (const frame of this.directory.frames(page.pageId)) {
         if (this.directory.parent(frame)?.frameId !== binding.frameId) continue;
         if ((await context.read(() => this.send(binding, "DOM.getFrameOwner", { frameId: frame.frameId }))).backendNodeId !== binding.backendNodeId) continue;
         const content = object((await context.read(() => this.send(binding, "DOM.getBoxModel", { backendNodeId: binding.backendNodeId }))).model).content;
