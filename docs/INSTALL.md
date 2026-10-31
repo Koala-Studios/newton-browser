@@ -65,11 +65,13 @@ For Codex 0.147.0 or newer, a non-dry-run install is transactional: before chang
 `config.toml`, Newton starts the exact candidate entrypoint with a fresh isolated Newton
 configuration, completes stateless `server/discover` and `tools/list`, requires the
 candidate's package version and all ten required `browser.*` tools, and confirms clean
-exit. It then enables Codex's `mcp_2026_07_28` feature and pins both
-`CODEX_MCP_PROTOCOL_VERSION=2026-07-28` and `NEWTON_BROWSER_EXPECTED_VERSION`. An
-incompatible candidate leaves the existing working entry untouched, and Newton refuses
-startup if an entrypoint and its configured version disagree. A higher version number
-alone is never treated as an upgrade.
+exit. It then enables Codex's `mcp_2026_07_28` feature and pins
+`CODEX_MCP_PROTOCOL_VERSION=2026-07-28`. An incompatible candidate leaves the existing
+working entry untouched. A higher version number alone is never treated as an upgrade.
+Registrations made by 0.7.23 or earlier also carry `NEWTON_BROWSER_EXPECTED_VERSION`; when
+it no longer matches the installed package the server starts anyway and notes
+`newton_browser_registration_stale` on stderr (earlier releases exited before the handshake,
+which clients report as a closed connection).
 
 ## Install from source
 
@@ -106,8 +108,9 @@ node "$entry" install claude-code
 node "$entry" install codex
 ```
 
-To upgrade, install the newer tarball the same way and rerun both client commands with
-`--force`.
+To upgrade, install the newer tarball the same way, then restart the clients. Rerunning
+both client commands with `--force` verifies the new package against each client and
+refreshes the registration.
 
 On Windows (`artifacts/newton-browser-0.7.23.tgz` from `pnpm pack:check`, or a release asset):
 

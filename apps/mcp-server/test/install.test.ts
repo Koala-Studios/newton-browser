@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,7 +57,7 @@ test("clientConfigTarget edits only Codex and renders generic configuration", ()
   assert.equal(generic.kind, "manual");
   assert.match(generic.command, new RegExp(escapeRegex(serializedString(INVOCATION.command))));
   assert.match(generic.command, new RegExp(escapeRegex(serializedString(INVOCATION.args[0]))));
-  assert.match(generic.command, /NEWTON_BROWSER_EXPECTED_VERSION/u);
+  assert.equal(generic.command.includes("NEWTON_BROWSER_EXPECTED_VERSION"), false);
   assert.throws(
     () => clientConfigTarget("retired-client" as never, ENV, "linux", INVOCATION),
     /unsupported_install_client/u,
@@ -71,7 +72,7 @@ test("Codex install appends, conflicts, and force-replaces one exact local table
   assert.match(created.nextContent ?? "", new RegExp(escapeRegex(serializedString(INVOCATION.command))));
   assert.equal((created.nextContent ?? "").includes("npx"), false);
   assert.equal((created.nextContent ?? "").includes("--package"), false);
-  assert.match(created.nextContent ?? "", /NEWTON_BROWSER_EXPECTED_VERSION = "9\.8\.7"/u);
+  assert.equal((created.nextContent ?? "").includes("NEWTON_BROWSER_EXPECTED_VERSION"), false);
   assert.match(created.nextContent ?? "", /CODEX_MCP_PROTOCOL_VERSION = "2026-07-28"/u);
   assert.match(created.nextContent ?? "", /\[features\]\nmcp_2026_07_28 = true/u);
 
@@ -217,8 +218,7 @@ test("Claude Code install registers one user-scope server through its own CLI af
   assert.equal(created.compatibilityVerified, true);
   const add = calls.find((call) => call[2] === "add-json")!;
   assert.deepEqual([add[0], add[3], add[5], add[6]], ["claude", "newton-browser", "--scope", "user"]);
-  assert.deepEqual(JSON.parse(add[4]!), { type: "stdio", command: INVOCATION.command, args: INVOCATION.args,
-    env: { NEWTON_BROWSER_EXPECTED_VERSION: INVOCATION.version } });
+  assert.deepEqual(JSON.parse(add[4]!), { type: "stdio", command: INVOCATION.command, args: INVOCATION.args });
 
   calls.length = 0;
   const conflict = runInstall({ client: "claude-code", env: ENV, invocation: INVOCATION, verifyCandidate: VERIFIED, runClient });
@@ -245,4 +245,40 @@ test("install output separates the server check from an agent's first use and na
   assert.match(claude, /new Claude Code session/u);
   assert.match(claude, /claude auth login/u);
   assert.match(firstUseLines("generic").join("\n"), /Checked: the client configuration only\./u);
+});
+
+test("a registration pinned to an older version still starts the upgraded server", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "newton-stale-pin-"));
+  try {
+    const child = spawn(process.execPath, [fileURLToPath(new URL("../src/index.ts", import.meta.url))], {
+      env: { ...process.env, NEWTON_BROWSER_CONFIG_DIR: directory, NEWTON_BROWSER_EXPECTED_VERSION: "0.0.1" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+    const listed = new Promise<void>((resolve, reject) => {
+      void exited.then((code) => reject(new Error(`server exited ${code}: ${stderr}`)));
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.split("\n").some((line) => line.includes('"id":2'))) resolve();
+      });
+    });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await listed;
+    const frames = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; result?: Record<string, unknown> });
+    const tools = (frames.find((frame) => frame.id === 2)?.result?.tools ?? []) as Array<{ name: string }>;
+    assert.equal(tools.length, ENGINE_TOOL_CATALOG.length);
+    assert.match(stderr, /newton_browser_registration_stale: registered with 0\.0\.1/u);
+    child.stdin.end();
+    assert.equal(await exited, 0);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Upgrading the installed package in place no longer leaves Codex and Claude Code with a closed
+  connection. Registrations pinned the package version (`NEWTON_BROWSER_EXPECTED_VERSION`) and the
+  server exited before the handshake when it differed; installs no longer write the pin, and a stale
+  pin from an older registration is noted on stderr (`newton_browser_registration_stale`) while the
+  server starts.
+
 ## [0.7.23] - 2026-10-26
 
 ### Fixed

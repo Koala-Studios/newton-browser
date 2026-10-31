@@ -76,7 +76,6 @@ export function verifyCodexCandidate(invocation: ServerInvocation): CodexCandida
       env: {
         ...process.env,
         NEWTON_BROWSER_CONFIG_DIR: probeDirectory.path,
-        NEWTON_BROWSER_EXPECTED_VERSION: invocation.version,
         CODEX_MCP_PROTOCOL_VERSION: CODEX_PROTOCOL_VERSION,
       },
     });
@@ -445,7 +444,7 @@ function mergeCodexToml(existing: string | undefined, invocation: ServerInvocati
     header,
     `command = ${JSON.stringify(invocation.command)}`,
     `args = [${invocation.args.map((value) => JSON.stringify(value)).join(", ")}]`,
-    `env = { NEWTON_BROWSER_EXPECTED_VERSION = ${JSON.stringify(invocation.version)}, CODEX_MCP_PROTOCOL_VERSION = ${JSON.stringify(CODEX_PROTOCOL_VERSION)} }`,
+    `env = { CODEX_MCP_PROTOCOL_VERSION = ${JSON.stringify(CODEX_PROTOCOL_VERSION)} }`,
   ].join("\n");
   const body = existing ?? "";
   const entryExists = body.split(/\r?\n/).some((line) => line.trim() === header);
@@ -491,7 +490,6 @@ function renderGenericConfig(invocation: ServerInvocation, pretty = true): strin
     type: "stdio",
     command: invocation.command,
     args: invocation.args,
-    env: { NEWTON_BROWSER_EXPECTED_VERSION: invocation.version },
   }, null, pretty ? 2 : undefined);
 }
 

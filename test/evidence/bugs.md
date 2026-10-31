@@ -3425,3 +3425,20 @@ Fix: the borrowed tab renders as shown while the session holds it (entry "An emb
 blank"). Residual: the real widget's internals are unknown; if it fails for another reason (a cross-origin
 upload target, a size rule), that is outside the browser and shows in network reads. Regression:
 engine-regressions/background-tab-rendering ("files set in a borrowed background tab ...").
+
+# An in-place upgrade left both MCP clients with a closed connection
+
+Observed 2026-10-28 and again 2026-10-30: after the package at the registered path was upgraded from
+0.7.22 to 0.7.23 (the documented release install overwrites one unversioned directory), every new
+client session reported the server as `CONNECTION_CLOSED` / "Connection closed". Repro: launch the
+registered command with its registration environment (`NEWTON_BROWSER_EXPECTED_VERSION=0.7.22`) against
+the 0.7.23 package and send `initialize` + `tools/list`: no frame, exit 1, stderr
+`newton_browser_version_mismatch`. The same command without that variable answers both. The client's
+own MCP log shows the same stderr line followed by the closed connection. Root cause: the installer pinned
+the package version in each registration and the server exited before the handshake when the pin
+disagreed. The pin dates from versioned install directories; with one overwritten path it only turned
+every upgrade that skipped `install --force` into a dead server, while the installer's own candidate probe
+already checks protocol, version and tools at registration. Fix: registrations no longer carry the pin;
+a stale pin from an older registration is noted on stderr (`newton_browser_registration_stale`) and the
+server starts. Regression: install tests "a registration pinned to an older version still starts the
+upgraded server" (failed before: exit 1 with no frames) and the client-config tests (no pin written).
