@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.24] - 2026-10-31
+
 ### Added
 
 - Embedding API `fillSignIn(sessionId, { commandId, site, fields: [{ target, value, secret }] })`, host-only (not a
