@@ -66,6 +66,35 @@ const DESCRIBE_COVER = `function(node){
   const label=(box.getAttribute&&(box.getAttribute('aria-label')||box.getAttribute('title'))||String(box.innerText||box.textContent||'')).replace(/\\s+/g,' ').trim().slice(0,80);
   return (tag+id+(role?'[role='+role+']':'')+(label?' "'+label+'"':'')).slice(0,160);
 }`;
+/** With `this` the target: whether the point (viewport x, y of the target's frame) hits it, through every shadow root it
+ * is in. Returns true, the description of what covers it, or false (the point is not on it). A design-system button is
+ * often an inner element whose label is slotted in from its outer host: the label text belongs to that host, so a hit
+ * test reports the host, an ancestor of the target that takes the click. That hit is the target. Any other ancestor on
+ * top (its own overlay or pseudo-element) still covers it. */
+const HIT_TARGET = `function(x,y){
+  const describe=${DESCRIBE_COVER};
+  const up=node=>node.assignedSlot||node.parentNode||node.host||null;
+  const within=(node,target)=>{for(let depth=0;node&&depth<256;depth++){if(node===target)return true;node=up(node);}return false;};
+  const ancestors=target=>{const found=new Set();for(let node=up(target),depth=0;node&&depth<256;depth++,node=up(node))found.add(node);return found;};
+  const at=node=>{const range=node.ownerDocument.createRange();range.selectNodeContents(node);for(const rect of range.getClientRects())if(x>=rect.left&&x<=rect.right&&y>=rect.top&&y<=rect.bottom)return true;return false;};
+  const slottedHere=(ancestor,target)=>[...ancestor.childNodes].some(child=>child.assignedSlot&&within(child,target)&&at(child));
+  let target=this;
+  for(let depth=0;depth<32;depth++){
+    const root=target.getRootNode(),own=ancestors(target);
+    const hits=root.elementsFromPoint(x,y);
+    if(!hits.length)return false;
+    let decided=false;
+    for(const hit of hits){
+      if(hit===target||within(hit,target)){decided=true;break;}
+      if(own.has(hit)&&slottedHere(hit,target))continue;
+      return describe(hit);
+    }
+    if(!decided)return false;
+    if(!root.host)return true;
+    target=root.host;
+  }
+  return false;
+}`;
 // CSS pixels around a click_at/move point that must look as captured.
 const CAPTURE_POINT_RADIUS = 24;
 // Frames must be still this long before a screenshot proves its masks.
@@ -1781,18 +1810,7 @@ export class PageExecutor implements EngineExecutor {
     if (!objectId) throw new EngineError("stale_target");
     try {
       const result = await context.read(() => this.send(binding, "Runtime.callFunctionOn", {
-        objectId, functionDeclaration: `function(x,y){
-          const describe=${DESCRIBE_COVER};
-          let target=this;
-          for(let depth=0;depth<32;depth++){
-            const root=target.getRootNode(),hit=root.elementFromPoint(x,y);
-            if(!hit)return false;
-            if(hit!==target&&!target.contains(hit))return describe(hit);
-            if(!root.host)return true;
-            target=root.host;
-          }
-          return false;
-        }`,
+        objectId, functionDeclaration: HIT_TARGET,
         arguments: [{ value: x }, { value: y }], returnByValue: true, silent: true,
       }));
       const value = object(result.result).value;
@@ -1825,17 +1843,24 @@ export class PageExecutor implements EngineExecutor {
     const documentPoint = {x:Math.round(x+offset.x),y:Math.round(y+offset.y)};
     // Quads and native input use viewport coordinates. This DOM hit-test method
     // takes document coordinates in the CDP route's root document instead.
-    const hit = await context.read(() => this.send(binding, "DOM.getNodeForLocation", { ...documentPoint, includeUserAgentShadowDOM: false }));
+    // On a scrolled page Chrome maps these document coordinates onto a fixed or sticky element's wrong spot (the page
+    // under it, or no node at all), so a miss here is settled by the page-side check at the viewport point.
+    let hit: RecordValue = {};
+    try { hit = await context.read(() => this.send(binding, "DOM.getNodeForLocation", { ...documentPoint, includeUserAgentShadowDOM: false })); }
+    catch (error) { if (context.cancellation) throw error; }
     if (hit.backendNodeId !== binding.backendNodeId) {
       const target = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: binding.backendNodeId }));
       const objectId = string(object(target.object).objectId);
-      if (!objectId || !Number.isSafeInteger(hit.backendNodeId)) throw new EngineError("target_moved");
+      if (!objectId) throw new EngineError("target_moved");
       let hitId: string | undefined;
       try {
-        const hitNode = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: hit.backendNodeId }));
-        hitId = string(object(hitNode.object).objectId);
-        if (!hitId) throw new EngineError("target_moved");
-        const contains = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: `function(node){if(!this.isConnected)return false;const hit=node;for(let depth=0;node&&depth<128;depth++){if(node===this)return true;node=node.parentNode||node.host;}const describe=${DESCRIBE_COVER};return hit&&hit.nodeType===1?describe(hit):hit&&hit.parentElement?describe(hit.parentElement):false;}`, arguments: [{ objectId: hitId }], returnByValue: true, silent: true }));
+        if (Number.isSafeInteger(hit.backendNodeId)) {
+          const hitNode = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: hit.backendNodeId })).catch(() => ({} as RecordValue));
+          hitId = string(object(hitNode.object).objectId);
+        }
+        // The browser's hit node is the target when it is inside it in the flat tree (shadow roots and slots included);
+        // otherwise the page-side check decides, as for verifyHit.
+        const contains = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: `function(node,x,y){if(!this.isConnected)return false;for(let item=node,depth=0;item&&depth<256;depth++){if(item===this)return true;item=item.assignedSlot||item.parentNode||item.host;}return (${HIT_TARGET}).call(this,x,y);}`, arguments: [hitId ? { objectId: hitId } : { value: null }, { value: x }, { value: y }], returnByValue: true, silent: true }));
         const value = object(contains.result).value;
         if (typeof value === "string" && value) throw new EngineError("target_covered", undefined, value);
         if (value !== true) throw new EngineError("target_moved");

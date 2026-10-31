@@ -3486,3 +3486,25 @@ exception for held borrowed tabs; detach ends it); the clear command is forwarde
 lands at (100,100), and the background tab's top-level click reaches the frame. Regression:
 `test/tab-input-capture-order.test.mjs` (all 7 fail before; "other commands are not held" is a control that
 fails before only through the attach-time call).
+
+# Clicks on design-system buttons were refused as covered by their own custom element
+
+Observed 2026-10-29 in an admin UI built from custom elements: semantic clicks were refused as `target_covered`
+by the same `s-button`/`s-internal-button` that holds the button, while a screenshot click or Enter worked.
+Fixture (`test/engine-regressions/web-component-targets.test.mjs`): `<x-button>Save draft</x-button>` whose shadow
+root wraps `<x-inner-button><slot>` and whose inner shadow holds `<button><slot>`. Before the fix "Save draft" is
+refused as covered by `x-button#save "Save draft"` (its own host) and `<x-button><span>Publish</span></x-button>`
+by its own slotted `span`; neither click lands. Root cause: the hit checks accepted only the target or its
+light-DOM `contains()`. Slotted label text belongs to the outer host, so a hit test at the label reports that
+host (an ancestor of the target, which still takes the click), and a slotted element is outside the target in the
+DOM tree although inside it in the flat tree. Fix: one page-side check for both hit tests. A hit is the target
+when it is a flat-tree descendant (assigned slots, shadow roots); when one of the target's own ancestors is on
+top, it counts only where that ancestor's slotted child under the point is inside the target, so an ancestor's
+own overlay is still a cover. The browser's own hit test (`DOM.getNodeForLocation`) defers to that check when
+it misses or finds no node: probed with raw CDP, on a page scrolled by (300,200) it maps a fixed element's
+point onto the page under it (or "No node found"), while absolute elements map correctly. Not reproduced:
+`target_moved` on the reported pagination and edge buttons (an icon pager in a shadow root, an invisible
+button over an edge arrow, a fixed button past the right edge, a `display: contents` host, and a fixed pager
+on a scrolled page all click on the old engine too). Clicks within ~15 px of the bottom edge after a scroll
+can hit Chrome's overlay scrollbar (reported as covered by `html`), which is the browser's real hit. A real
+overlay is still reported (`div#cover`).

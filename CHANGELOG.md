@@ -20,6 +20,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Clicks on custom-element buttons whose label is slotted through shadow roots (design-system buttons)
+  land instead of being refused as `target_covered` by the button's own element or its slotted label. A
+  real overlay, including an ancestor's own, is still reported.
 - Upgrading the installed package in place no longer leaves Codex and Claude Code with a closed
   connection. Registrations pinned the package version (`NEWTON_BROWSER_EXPECTED_VERSION`) and the
   server exited before the handshake when it differed; installs no longer write the pin, and a stale
