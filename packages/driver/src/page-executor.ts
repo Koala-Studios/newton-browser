@@ -75,7 +75,8 @@ const DESCRIBE_COVER = `function(node){
  * is in. Returns true, the description of what covers it, or false (the point is not on it). A design-system button is
  * often an inner element whose label is slotted in from its outer host: the label text belongs to that host, so a hit
  * test reports the host, an ancestor of the target that takes the click. That hit is the target. Any other ancestor on
- * top (its own overlay or pseudo-element) still covers it. */
+ * top (its own overlay or pseudo-element) still covers it. Only the top element counts: Chrome's elementsFromPoint in a
+ * shadow root can list the root's own host above the content it renders (text of a block inside an inline host). */
 const HIT_TARGET = `function(x,y){
   const describe=${DESCRIBE_COVER};
   const up=node=>node.assignedSlot||node.parentNode||node.host||null;
@@ -85,16 +86,9 @@ const HIT_TARGET = `function(x,y){
   const slottedHere=(ancestor,target)=>[...ancestor.childNodes].some(child=>child.assignedSlot&&within(child,target)&&at(child));
   let target=this;
   for(let depth=0;depth<32;depth++){
-    const root=target.getRootNode(),own=ancestors(target);
-    const hits=root.elementsFromPoint(x,y);
-    if(!hits.length)return false;
-    let decided=false;
-    for(const hit of hits){
-      if(hit===target||within(hit,target)){decided=true;break;}
-      if(own.has(hit)&&slottedHere(hit,target))continue;
-      return describe(hit);
-    }
-    if(!decided)return false;
+    const root=target.getRootNode(),hit=root.elementFromPoint(x,y);
+    if(!hit)return false;
+    if(hit!==target&&!within(hit,target)&&!(ancestors(target).has(hit)&&slottedHere(hit,target)))return describe(hit);
     if(!root.host)return true;
     target=root.host;
   }

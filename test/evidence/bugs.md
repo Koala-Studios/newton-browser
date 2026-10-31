@@ -3507,7 +3507,10 @@ point onto the page under it (or "No node found"), while absolute elements map c
 button over an edge arrow, a fixed button past the right edge, a `display: contents` host, and a fixed pager
 on a scrolled page all click on the old engine too). Clicks within ~15 px of the bottom edge after a scroll
 can hit Chrome's overlay scrollbar (reported as covered by `html`), which is the browser's real hit. A real
-overlay is still reported (`div#cover`).
+overlay is still reported (`div#cover`). Each shadow level checks only the top element (`elementFromPoint`):
+the full suite's live public-docs search click was refused as covered by its own `display: inline` host, because
+Chrome's shadow-root `elementsFromPoint` lists that host above the label text of a centred flex button it holds,
+while `elementFromPoint` returns the button (fixture `x-search`, refused with the list walk, clicks now).
 
 # Checkout screenshots were refused (work_limit) by the sensitive-field budget
 
