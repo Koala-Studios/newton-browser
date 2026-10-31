@@ -7,7 +7,7 @@ export const ENGINE_ERRORS = [
   "output_budget", "work_limit", "unknown_command", "unknown_page", "cursor_expired",
   "dialog_opened", "unsupported_structure", "invalid_file_path", "file_not_found", "symlink_not_allowed",
   "file_too_large", "file_total_too_large", "file_type_not_allowed", "file_changed", "operator_control",
-  "browser_launch_failed",
+  "browser_launch_failed", "frame_off_site", "not_password_field",
 ] as const;
 export type EngineErrorCode = typeof ENGINE_ERRORS[number];
 export class EngineError extends Error {
@@ -58,7 +58,14 @@ export type EngineWait = Readonly<{ kind: "wait_for"; waitFor: EngineWaitFor }>;
 export type EngineDialog = Readonly<{ kind: "dialog_accept" | "dialog_dismiss"; dialogId?: string; promptText?: string }>;
 export type EngineResize = Readonly<{kind:'resize';width:number;height:number}>;
 export type EngineSetFiles = Readonly<{kind:'set_files';target:EngineTarget;files:readonly string[]}>;
-export type EngineInputAction = EngineFill | EngineType | EngineClear | EngineEdit | EngineClick | EngineHover | EngineDrag | EngineClickAt | EngineSelect | EnginePress | EngineScroll | EngineNavigate | EngineHistory | EngineWait | EngineDialog | EngineResize | EngineSetFiles;
+/** Host-only, never parsed from a model command: fill a saved sign-in on a page of `site`. The values travel beside the
+ * command in an EngineHostFill, so they never enter the command, its hash, its receipt or its observation. */
+export type EngineSignInFill = Readonly<{ kind: "sign_in_fill"; site: string; fields: readonly Readonly<{ target: EngineTarget; secret: boolean }>[] }>;
+/** One sign-in field's outcome: filled (value verified), not_met (typed but the field holds something else), refused
+ * (with why), or not_started (another field was refused first, so nothing was typed). */
+export type EngineSignInFieldResult = Readonly<{ field: number; state: "filled" | "not_met" | "refused" | "not_started"; errorCode?: EngineErrorCode }>;
+export type EngineHostFill = { values: string[]; results: EngineSignInFieldResult[] };
+export type EngineInputAction = EngineFill | EngineType | EngineClear | EngineEdit | EngineClick | EngineHover | EngineDrag | EngineClickAt | EngineSelect | EnginePress | EngineScroll | EngineNavigate | EngineHistory | EngineWait | EngineDialog | EngineResize | EngineSetFiles | EngineSignInFill;
 export type EngineAction = EngineInputAction | Readonly<{ kind: "sequence"; steps: readonly EngineInputAction[] }>;
 export type EngineCommand = Readonly<{
     commandId: number; pageId?: string; action: EngineAction; timeoutMs: number;

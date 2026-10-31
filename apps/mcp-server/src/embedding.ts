@@ -39,6 +39,15 @@ export type BrowserEngine = Readonly<{
   /** Before publishing a sign-in: give a running session the same signed-in state and reload its page, so it need not restart. */
   adoptSignIn(signInSessionId: string, sessionId: string): Promise<void>;
   sessions(): readonly { sessionId: string; state: string }[];
+  /** Host-only, never a model tool: fill a saved sign-in into the session's selected page as typed input. Each field's
+   * frame must be on `site` or a subdomain of it (look-alike hosts and other frames are refused, `frame_off_site`); a
+   * password field takes only a `secret` value and a secret value goes only into a password field (`sensitive_target`,
+   * `not_password_field`). Every field is checked before any is typed. The values are never returned, logged, put in an
+   * error or kept in the command or its receipt; the result is the receipt plus `fields`: each field's
+   * `filled` / `not_met` / `refused` / `not_started` and error code. `commandId` is the session's next command ID, as
+   * for browser.act; repeating it joins the first request. */
+  fillSignIn(sessionId: string, input: Readonly<{ commandId: number; site: string; fields: readonly Readonly<{ target: unknown; value: string; secret: boolean }>[] }>,
+    signal?: AbortSignal): Promise<BrowserToolResult>;
   /** Where a completed download of this session was saved, for the host to copy out before the session stops. */
   downloadFile(sessionId: string, downloadId: string): { path: string; filename: string; bytes: number };
   /** Remove session copies left by crashed hosts; pass the PID namespaces of every host still running on this store. */
@@ -81,6 +90,23 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
     adoptSignIn: (signInSessionId, sessionId) => host.adoptSignIn(signInSessionId, sessionId),
     sessions: () => host.list(),
     downloadFile: (sessionId, downloadId) => host.downloadFile(sessionId, downloadId),
+    fillSignIn: async (sessionId, input, signal = new AbortController().signal) => {
+      try {
+        signal.throwIfAborted();
+        const session = host.session(sessionId);
+        const { receipt, results } = session.submitSignInFill(input);
+        const cancel = () => { try { session.command(input.commandId, true); } catch { /* already finished */ } };
+        signal.addEventListener("abort", cancel, { once: true });
+        try {
+          const { observation: _observation, ...finished } = await receipt;
+          // A finished receipt, refused or not, is a result as browser.act's are.
+          return { content: [{ type: "text", text: JSON.stringify({ ...finished, fields: results }) }] };
+        } finally { signal.removeEventListener("abort", cancel); }
+      } catch (error) {
+        const code = signal.aborted ? "cancelled" : error instanceof EngineError ? error.code : "evidence_unavailable";
+        return { content: [{ type: "text", text: JSON.stringify({ errorCode: code }) }], isError: true };
+      }
+    },
     collectOrphans: liveNamespaces => collectOrphanedSessionCopies(env, liveNamespaces),
     stop: sessionId => host.stop(sessionId),
     close: () => host.close(),

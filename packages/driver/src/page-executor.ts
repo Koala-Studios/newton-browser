@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ENGINE_ERRORS, EngineError, asObservationBudget, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
+import { ENGINE_ERRORS, EngineError, asObservationBudget, engineErrorCode, type EngineHostFill, type EngineSignInFill, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
 import { CommandContext } from "./command-context.ts";
 import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
@@ -322,7 +322,7 @@ export class PageExecutor implements EngineExecutor {
       return this.directory.inventory();
     }finally{context.dispose();}
   }
-  async act(context: CommandContext, page: EnginePageStamp, action: EngineInputAction): Promise<EnginePostcondition> {
+  async act(context: CommandContext, page: EnginePageStamp, action: EngineInputAction, host?: EngineHostFill): Promise<EnginePostcondition> {
     if(!this.actionPages.has(context))this.actionPages.set(context,new Set(this.directory.inventory().map(item=>item.pageId)));
     if (this.input) throw new EngineError("queue_full");
     this.localField = undefined;
@@ -337,7 +337,7 @@ export class PageExecutor implements EngineExecutor {
       },
     });
     this.input = input;
-    try { return await this.performAction(context, page, action); }
+    try { return await this.performAction(context, page, action, host); }
     catch (error) {
       if (error instanceof EngineError && error.code === "dialog_opened") return { state: "unknown", kind: action.kind==='set_files'?'files':action.kind==='resize'?'viewport':'visible' };
       throw error;
@@ -351,7 +351,7 @@ export class PageExecutor implements EngineExecutor {
       } finally { if (this.input === input) this.input = undefined; }
     }
   }
-  private async performAction(context: CommandContext, page: EnginePageStamp, action: EngineInputAction): Promise<EnginePostcondition> {
+  private async performAction(context: CommandContext, page: EnginePageStamp, action: EngineInputAction, host?: EngineHostFill): Promise<EnginePostcondition> {
     if (!this.dialogs.size) {
       for (const held of this.suspendedInputs) { await held.finish(); this.suspendedInputs.delete(held); }
     }
@@ -370,6 +370,7 @@ export class PageExecutor implements EngineExecutor {
     }
     if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId)) throw new EngineError("target_not_editable");
     if (action.kind === "press" && action.keys) this.input!.preflight(action.keys, action.text === undefined ? 1 : 2);
+    if (action.kind === "sign_in_fill") return this.signInFill(context, page, action, host);
     if (action.kind === "navigate") return this.navigate(context, page, action.url);
     if (action.kind === "click_at" || action.kind === "move") return this.clickAt(context, page, action);
     if (action.kind === "back" || action.kind === "forward" || action.kind === "reload") return this.history(context, page, action.kind);
@@ -1947,19 +1948,82 @@ export class PageExecutor implements EngineExecutor {
     }
     return { binding, x, y };
   }
-  private async selectAll(context: CommandContext, binding: NodeBinding): Promise<void> {
+  /** A saved sign-in, typed like `fill` into fields on `site` only. Every field is checked before any is typed: its frame
+   * (as the browser reports it, not the page) is on the site or a subdomain over https (http only on loopback), a secret
+   * value goes only into a password field and a password field only takes a secret value. Values are never returned,
+   * compared outside the field or put in an error. */
+  private async signInFill(context: CommandContext, page: EnginePageStamp, action: EngineSignInFill, host: EngineHostFill | undefined): Promise<EnginePostcondition> {
+    if (!host || host.values.length !== action.fields.length) throw new EngineError("invalid_arguments");
+    const results = host.results;
+    results.length = 0;
+    action.fields.forEach((_, field) => results.push({ field, state: "not_started" }));
+    const bindings: NodeBinding[] = [];
+    for (const [field, request] of action.fields.entries()) {
+      try {
+        const binding = await this.resolver.resolve(context, page, request.target);
+        if (!onSignInSite(await this.frameUrl(context, binding), action.site)) throw new EngineError("frame_off_site");
+        const facts = await this.resolver.inspect(context, binding, { editable: true, allowSensitive: request.secret });
+        if (request.secret && (facts.tag !== "input" || facts.type !== "password")) throw new EngineError("not_password_field");
+        bindings.push(binding);
+      } catch (error) {
+        const code = context.cancellation ?? engineErrorCode(error);
+        results[field] = { field, state: "refused", errorCode: code };
+        throw new EngineError(code, undefined, `sign-in field ${field}`);
+      }
+    }
+    let met = true;
+    for (const [field, binding] of bindings.entries()) {
+      const secret = action.fields[field]!.secret;
+      try {
+        const facts = await this.resolver.inspect(context, binding, { editable: true, allowSensitive: secret });
+        if (!facts.focused) await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
+        await this.selectAll(context, binding, secret);
+        await this.focusedFacts(context, binding, true, secret);
+        await context.input(() => this.send(binding, "Input.insertText", { text: host.values[field]! }));
+        const holds = await this.fieldHolds(context, binding, host.values[field]!);
+        results[field] = { field, state: holds ? "filled" : "not_met" };
+        met &&= holds;
+      } catch (error) {
+        results[field] = { field, state: "not_met", errorCode: context.cancellation ?? engineErrorCode(error) };
+        throw new EngineError(context.cancellation ?? engineErrorCode(error), undefined, `sign-in field ${field}`);
+      }
+    }
+    return { state: met ? "met" : "not_met", kind: "value" };
+  }
+  /** The URL the browser reports for the frame a node is in. */
+  private async frameUrl(context: CommandContext, binding: NodeBinding): Promise<string> {
+    const tree = await context.read(() => this.send(binding, "Page.getFrameTree", {}));
+    const find = (node: unknown): string | undefined => {
+      const entry = object(node), frame = object(entry.frame);
+      if (frame.id === binding.frameId) return string(frame.url);
+      for (const child of Array.isArray(entry.childFrames) ? entry.childFrames : []) { const url = find(child); if (url !== undefined) return url; }
+      return undefined;
+    };
+    return find(object(tree).frameTree) ?? "";
+  }
+  /** Whether the field now holds exactly the value, read inside the field's own frame; only a yes/no comes back. */
+  private async fieldHolds(context: CommandContext, binding: NodeBinding, value: string): Promise<boolean> {
+    const resolved = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: binding.backendNodeId }));
+    const objectId = string(object(resolved.object).objectId);
+    if (!objectId) throw new EngineError("stale_target");
+    try {
+      const result = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: "function(value){return this.value===value;}", arguments: [{ value }], returnByValue: true, silent: true }));
+      return !result.exceptionDetails && object(result.result).value === true;
+    } finally { void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
+  }
+  private async selectAll(context: CommandContext, binding: NodeBinding, allowSensitive = false): Promise<void> {
     context.checkpoint();
     if (process.platform === "darwin") {
       // A keyless editing command: macOS never routes Command shortcuts from
       // CDP into the renderer, and held Meta events can stall headless input.
-      await this.focusedFacts(context, binding, true);
+      await this.focusedFacts(context, binding, true, allowSensitive);
       await this.input!.selectRange(binding, ["selectAll"]);
       return;
     }
-    await this.input!.chord(binding, ["Control", "a"], async () => { await this.focusedFacts(context, binding, true); });
+    await this.input!.chord(binding, ["Control", "a"], async () => { await this.focusedFacts(context, binding, true, allowSensitive); });
   }
-  private async focusedFacts(context: CommandContext, binding: NodeBinding, editable: boolean) {
-    const facts = await this.resolver.inspect(context, binding, { editable });
+  private async focusedFacts(context: CommandContext, binding: NodeBinding, editable: boolean, allowSensitive = false) {
+    const facts = await this.resolver.inspect(context, binding, { editable, allowSensitive });
     if (!facts.focused) throw new EngineError("stale_target");
     return facts;
   }
@@ -2124,4 +2188,15 @@ const PAGE_EXTRAS_SCRIPT = `(() => {
 /** The rendered size equals the request, less at most a classic scrollbar. */
 function fitsViewport(actual:unknown,requested:number):boolean{
   return typeof actual==='number'&&actual<=requested&&actual>=requested-24;
+}
+/** A sign-in site's own pages: the site or a subdomain of it, over https (http only on a loopback host). */
+function onSignInSite(raw: string, site: string): boolean {
+  let url: URL;
+  try { url = new URL(raw); } catch { return false; }
+  const host = url.hostname.toLowerCase();
+  const loopback = host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return false;
+  // An address has no subdomains.
+  if (/^[0-9.]+$/u.test(host) || host.startsWith("[")) return host === site;
+  return host === site || host.endsWith(`.${site}`);
 }

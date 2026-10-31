@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Embedding API `fillSignIn(sessionId, { commandId, site, fields: [{ target, value, secret }] })`, host-only (not a
+  model tool): fills a saved sign-in into the selected page as typed input. Every field is checked before any is
+  typed: its frame, as the browser reports it, must be on `site` or a subdomain over https (http only on loopback;
+  an address must match exactly), so look-alike hosts and cross-site frames are refused (`frame_off_site`); a
+  password field takes only a secret value (`sensitive_target`) and a secret value goes only into a password field
+  (`not_password_field`). The values stay beside the command, never in it, its retained receipt, an observation or
+  an error, and are cleared once it ran; the result is the receipt plus each field's outcome. Model fills of
+  password fields are refused as before.
+
 ### Fixed
 
 - Upgrading the installed package in place no longer leaves Codex and Claude Code with a closed

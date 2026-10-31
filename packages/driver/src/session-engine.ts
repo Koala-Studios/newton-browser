@@ -1,5 +1,5 @@
 import { type EngineControlQuery, ENGINE_LIMITS, EngineError, boundedInteger, engineErrorCode, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
-  type EngineInputAction, type EngineObservation, type EngineObservationRecord, type EnginePageStamp, type EnginePostcondition, type EngineReceipt, type EngineStepReceipt, type EngineTarget } from "@newton-browser/core";
+  type EngineInputAction, type EngineHostFill, type EngineSignInFieldResult, parseEngineTarget, boundedString, type EngineObservation, type EngineObservationRecord, type EnginePageStamp, type EnginePostcondition, type EngineReceipt, type EngineStepReceipt, type EngineTarget } from "@newton-browser/core";
 import { CommandContext, engineClock, type EngineClock } from "./command-context.ts";
 import { CommandStore, type CommandRecord } from "./command-store.ts";
 import {encodeEngineResult,type EngineRecordShape,type EngineObservationDelta} from '@newton-browser/core';
@@ -7,12 +7,13 @@ import {encodeEngineResult,type EngineRecordShape,type EngineObservationDelta} f
 const postconditionKind=(action:EngineInputAction):Exclude<EnginePostcondition,{state:'not_requested'}>['kind']=>
   action.kind==='set_files'?'files':action.kind==='resize'?'viewport':
   ['navigate','back','forward','reload'].includes(action.kind)?'navigation':
-  ['fill','type','clear','edit','select','press'].includes(action.kind)?'value':
+  ['fill','type','clear','edit','select','press','sign_in_fill'].includes(action.kind)?'value':
   action.kind==='wait_for'||(('waitFor' in action)&&action.waitFor)?'condition':'visible';
 
 export interface EngineExecutor {
   bindPage(pageId?: string): EnginePageStamp;
-  act(context: CommandContext, page: EnginePageStamp, action: EngineInputAction): Promise<EnginePostcondition>;
+  /** `host` carries host-only values (a saved sign-in fill) beside the command; it is never part of the command. */
+  act(context: CommandContext, page: EnginePageStamp, action: EngineInputAction, host?: EngineHostFill): Promise<EnginePostcondition>;
   observe(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget, recordMode?: boolean, scope?: EngineTarget, query?: EngineControlQuery): Promise<EngineObservation>;
   observeAfterAction?(context: CommandContext, page: EnginePageStamp, budget: EngineObservationBudget): Promise<EngineObservation>;
   readyPage?(context: CommandContext, page: EnginePageStamp): Promise<{ page: EnginePageStamp } | { observation: EngineObservation }>;
@@ -26,7 +27,7 @@ export interface EngineExecutor {
   /** Must close the exact owned runtime, or revoke/detach a borrowed claim. Never await this queue. */
   close(): Promise<void>;
 }
-interface QueueItem { kind: "command"; command: EngineCommand; page: EnginePageStamp; record: CommandRecord; bytes: number; context: CommandContext; }
+interface QueueItem { kind: "command"; command: EngineCommand; page: EnginePageStamp; record: CommandRecord; bytes: number; context: CommandContext; host?: EngineHostFill; }
 interface ReadItem { kind: "read"; page: EnginePageStamp; maxBytes: number; bytes: number; context: CommandContext; mode?: "document" | "screenshot" | "records" | "focus"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; options?: unknown; beforeRead?: () => void; complete(value: EngineObservation): void; }
 
 export class SessionEngine {
@@ -41,6 +42,7 @@ export class SessionEngine {
   private admission: "open" | "closed" | "quarantined" = "open";
   private stopping: Promise<void> | undefined;
   private readonly reconciliationMs: number;
+  private readonly signInResults = new WeakMap<CommandRecord, EngineSignInFieldResult[]>();
   private readonly recordSnapshots = new Map<string, { page: EnginePageStamp; scope: string; records: readonly EngineObservationRecord[]; complete: boolean }>();
 
   constructor(sessionId: string, executor: EngineExecutor, options: { clock?: EngineClock; reconciliationMs?: number } = {}) {
@@ -59,7 +61,8 @@ export class SessionEngine {
         const index = this.queue.findIndex(item => item.kind === "command" && item.record.id === id);
         if (index !== -1) {
           const item = this.queue.splice(index, 1)[0]!; this.bytes -= item.bytes;
-          item.context.cancel(); item.context.dispose(); if (item.kind === "command") item.record.complete(this.cancelled(item));
+          item.context.cancel(); item.context.dispose();
+          if (item.kind === "command") { item.record.complete(this.cancelled(item)); if (item.host) item.host.values.length = 0; }
         }
       }
     }
@@ -67,9 +70,34 @@ export class SessionEngine {
     return this.store.get(id);
   }
   submit(raw: unknown): Promise<EngineReceipt> {
-    const command = parseEngineCommand(raw);
+    return this.admit(parseEngineCommand(raw)).result;
+  }
+  /** Host-only: fill a saved sign-in on the selected page. The command carries only targets, which are secret and the
+   * site; the values stay beside it and are cleared once it ran. `results` fills in per field as the command runs. */
+  submitSignInFill(input: { commandId: number; site: string; fields: readonly { target: unknown; value: string; secret: boolean }[] }): { receipt: Promise<EngineReceipt>; results: readonly EngineSignInFieldResult[] } {
+    const site = boundedString(input.site, 253).toLowerCase();
+    let host: string;
+    try { host = new URL(`https://${site}/`).hostname; } catch { throw new EngineError("invalid_arguments"); }
+    if (host !== site || !/^[a-z0-9.-]+$/u.test(site) || site.startsWith(".") || site.endsWith(".")) throw new EngineError("invalid_arguments");
+    if (!Array.isArray(input.fields) || !input.fields.length || input.fields.length > 4) throw new EngineError("invalid_arguments");
+    const fields = input.fields.map(field => {
+      if (!field || typeof field !== "object" || typeof field.secret !== "boolean" || typeof field.value !== "string" || !field.value || field.value.length > 4096) throw new EngineError("invalid_arguments");
+      return Object.freeze({ target: parseEngineTarget(field.target), secret: field.secret });
+    });
+    const command: EngineCommand = Object.freeze({ commandId: boundedInteger(input.commandId, 1, Number.MAX_SAFE_INTEGER),
+      action: Object.freeze({ kind: "sign_in_fill" as const, site, fields: Object.freeze(fields) }),
+      timeoutMs: ENGINE_LIMITS.defaultTimeoutMs, observe: "none" as const, maxBytes: ENGINE_LIMITS.defaultOutputBytes });
+    const results: EngineSignInFieldResult[] = [];
+    const record = this.admit(command, { values: input.fields.map(field => field.value), results });
+    // A repeated request joins the first one: its outcome, never a second fill.
+    const known = this.signInResults.get(record);
+    if (known) return { receipt: record.result, results: known };
+    this.signInResults.set(record, results);
+    return { receipt: record.result, results };
+  }
+  private admit(command: EngineCommand, host?: EngineHostFill): CommandRecord {
     const existing = this.store.lookup(command);
-    if (existing) return existing.result;
+    if (existing) return existing;
     // An operator has the page; model actions wait for resume. The ID is not consumed.
     if (this.operator !== undefined) throw new EngineError("operator_control");
     if (this.admission !== "open") throw new EngineError(this.admission === "closed" ? "session_closed" : "session_quarantined");
@@ -79,17 +107,18 @@ export class SessionEngine {
     const page = Object.freeze({ ...this.executor.bindPage(command.pageId) });
     const record = this.store.admit(command);
     const context = new CommandContext(command.timeoutMs, this.clock);
-    const item: QueueItem = { kind: "command", command, page, record, bytes, context };
+    const item: QueueItem = { kind: "command", command, page, record, bytes, context, ...(host ? { host } : {}) };
     this.queue.push(item); this.bytes += bytes;
     void context.aborted.then(() => {
       const index = this.queue.indexOf(item);
       if (index !== -1) {
         this.queue.splice(index, 1); this.bytes -= bytes; context.dispose();
         record.complete({ ...this.cancelled(item), reason: context.cancellation!, errorCode: context.cancellation! });
+        if (item.host) item.host.values.length = 0;
       }
     });
     this.pump();
-    return record.result;
+    return record;
   }
   observe(options: { pageId?: string; maxBytes?: number; timeoutMs?: number; mode?: "controls" | "document" | "records" | "focus"; recordShape?:EngineRecordShape; cursor?: string; previousSnapshotId?: string; scope?: EngineTarget; query?: EngineControlQuery; beforeRead?: () => void } = {}): Promise<EngineObservation> {
     if(options.recordShape!==undefined&&(options.mode!=='records'||!['controls','links','table','form'].includes(options.recordShape)))throw new EngineError('invalid_arguments');
@@ -165,7 +194,7 @@ export class SessionEngine {
           try {
             context.checkpoint();
             const stepPage = index === 0 ? item.page : this.executor.bindPage(item.page.pageId);
-            postcondition = await this.executor.act(context, stepPage, actions[index]!);
+            postcondition = await this.executor.act(context, stepPage, actions[index]!, item.host);
             context.checkpoint();
             steps.push({ index, dispatch: context.since(mark), postcondition });
           if (postcondition.state !== "met" && postcondition.state !== "not_requested") { stoppedAt = index; break; }
@@ -200,6 +229,7 @@ export class SessionEngine {
       steps: [...steps], ...(failure ? { errorCode: failure, stoppedAt: steps.length ? steps.length - 1 : 0 } : stoppedAt === undefined ? {} : { stoppedAt }), observation,
       ...(restarted ? { pageRestarted: restarted } : {}) });
     context.dispose();
+    if (item.host) item.host.values.length = 0;
     this.bytes -= item.bytes;
     this.active = undefined;
     this.pump();
@@ -316,7 +346,7 @@ export class SessionEngine {
   private cancelQueued(): void {
     for (const item of this.queue.splice(0)) {
       this.bytes -= item.bytes; item.context.cancel(); item.context.dispose();
-      if (item.kind === "command") item.record.complete(this.cancelled(item));
+      if (item.kind === "command") { item.record.complete(this.cancelled(item)); if (item.host) item.host.values.length = 0; }
       else item.complete({ state: "unavailable", errorCode: "cancelled" });
     }
   }

@@ -30,7 +30,8 @@ const fieldInspection = `function(pointer=false) {
   const type = (this.getAttribute('type') || 'text').toLowerCase();
   const autocomplete = (this.getAttribute('autocomplete') || '').toLowerCase();
   const sensitive = type === 'password' || /password|one-time-code|cc-|webauthn/.test(autocomplete);
-  const editable = tag === 'textarea' || tag === 'select' || this.isContentEditable || (tag === 'input' && ['text','search','email','url','tel','number'].includes(type));
+  const editable = tag === 'textarea' || tag === 'select' || this.isContentEditable || (tag === 'input' && ['text','search','email','url','tel','number','password'].includes(type));
+  // A password field is editable, but sensitive: only a host sign-in fill (allowSensitive) gets past the sensitivity check.
   const rect = (${DRAWN_BOX})(this);
   const visible = !!(rect.width && rect.height) && getComputedStyle(this).visibility !== 'hidden';
   let pointerInView;
