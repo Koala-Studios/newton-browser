@@ -26,7 +26,7 @@ function fixture({spatialReads = [spatial()], discoveryReads = [{regions: [], in
         if (method === 'DOM.resolveNode') return {object: {objectId: 'document-object'}};
         if (method === 'DOM.performSearch') {
           discovery=discoveryReads[Math.min(discoveryIndex++,discoveryReads.length-1)];
-          return {searchId:`search-${discoveryIndex}`,resultCount:discovery.incomplete?33:discovery.regions.length};
+          return {searchId:`search-${discoveryIndex}`,resultCount:discovery.incomplete?300:discovery.regions.length}; // past the page document's examination budget
         }
         if (method === 'DOM.getSearchResults') return {nodeIds:discovery.regions.map((_,index)=>index+1)};
         if (method === 'Runtime.callFunctionOn') return {result:{value:true}};
