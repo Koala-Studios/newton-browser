@@ -1786,7 +1786,8 @@ export class PageExecutor implements EngineExecutor {
       if (!facts.bbox) throw new EngineError("evidence_unavailable");
       regions.push({...facts.bbox,x:facts.bbox.x+spatial.pageX-spatial.offsetX,y:facts.bbox.y+spatial.pageY-spatial.offsetY});
     }
-    const discovered=await nativeSensitiveRegions(context,this.directory,this.readonlyWorlds,this.connection.wire,page);
+    // Only fields and frames inside what is captured count; the clip is in document coordinates.
+    const discovered=await nativeSensitiveRegions(context,this.directory,this.readonlyWorlds,this.connection.wire,page,{x:clip.x-spatial.pageX+spatial.offsetX,y:clip.y-spatial.pageY+spatial.offsetY,width:clip.width,height:clip.height});
       for(const region of discovered.regions){
         const mapped={x:region.x+spatial.pageX-spatial.offsetX,y:region.y+spatial.pageY-spatial.offsetY,width:region.width,height:region.height};
         if(!regions.some(existing=>existing.x===mapped.x&&existing.y===mapped.y&&existing.width===mapped.width&&existing.height===mapped.height))regions.push(mapped);

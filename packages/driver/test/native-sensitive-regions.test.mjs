@@ -73,33 +73,60 @@ function methods(state,method){
   return state.calls.filter(call=>call.method===method);
 }
 
-test('aggregate search limit rejects before getSearchResults and discards the search',async()=>{
-  const state=fixture({overrides:{'DOM.performSearch':{searchId:'overflow-search',resultCount:33}}});
+const perNode={
+  'DOM.resolveNode':({params})=>({object:{objectId:`object-${params.nodeId}`}}),
+};
+const results=(count,offset=1)=>({nodeIds:Array.from({length:count},(_,index)=>index+offset)});
+
+test('only visible fields count toward the limit; the page document past it refuses',async()=>{
+  // 40 candidates (hidden payment and code inputs among them), two of them shown.
+  const hidden=fixture({overrides:{...perNode,'DOM.performSearch':{searchId:'many',resultCount:40},'DOM.getSearchResults':results(40),
+    'Runtime.callFunctionOn':({params})=>({result:{value:['object-1','object-2'].includes(params.objectId)}})}});
+  try{assert.equal((await read(hidden)).regions.length,2);}finally{hidden.context.dispose();}
+  const shown=fixture({overrides:{...perNode,'DOM.performSearch':{searchId:'shown',resultCount:33},'DOM.getSearchResults':results(33)}});
   try{
-    await assert.rejects(read(state),error=>error?.code==='work_limit');
+    await assert.rejects(read(shown),error=>error?.code==='work_limit');
     await flushCleanup();
-    assert.equal(methods(state,'DOM.getSearchResults').length,0);
-    assert.deepEqual(methods(state,'DOM.discardSearchResults').map(call=>call.params),[{searchId:'overflow-search'}]);
-  }finally{state.context.dispose();}
+    assert.deepEqual(methods(shown,'DOM.discardSearchResults').map(call=>call.params),[{searchId:'shown'}]);
+  }finally{shown.context.dispose();}
+  // Past the examination budget the page document refuses before reading any node.
+  const flood=fixture({overrides:{'DOM.performSearch':{searchId:'flood',resultCount:300}}});
+  try{
+    await assert.rejects(read(flood),error=>error?.code==='work_limit');
+    await flushCleanup();
+    assert.equal(methods(flood,'DOM.getSearchResults').length,0);
+    assert.deepEqual(methods(flood,'DOM.discardSearchResults').map(call=>call.params),[{searchId:'flood'}]);
+  }finally{flood.context.dispose();}
 });
 
-test('aggregate search limit spans distinct CDP route roots and discards both searches',async()=>{
-  const state=fixture({withChild:true,childRoute:'child-route',childFrameId:'z-child',overrides:{
-    'DOM.performSearch':({sessionId})=>sessionId==='root-route'
-      ?{searchId:'root-search',resultCount:20}
-      :{searchId:'child-search',resultCount:13},
-    'DOM.getSearchResults':({sessionId})=>sessionId==='root-route'
-      ?{nodeIds:Array.from({length:20},(_,index)=>index+1)}
-      :{nodeIds:Array.from({length:13},(_,index)=>index+101)},
-  }});
+function childBudget({rootCount=20,childCount=13}={}){
+  return {...crossProcessOverrides(),...perNode,
+    'DOM.performSearch':({sessionId})=>sessionId==='root-route'?{searchId:'root-search',resultCount:rootCount}:{searchId:'child-search',resultCount:childCount},
+    'DOM.getSearchResults':({sessionId})=>sessionId==='root-route'?results(rootCount):results(childCount,101)};
+}
+
+test('a cross-site child frame past a budget is masked whole instead of refusing the capture',async()=>{
+  const owner={x:10,y:20,width:100,height:100};
+  for(const [label,options] of [['visible limit',{rootCount:20,childCount:13}],['examination budget',{rootCount:2,childCount:300}]]){
+    const state=fixture({withChild:true,childRoute:'child-route',childFrameId:'z-child',overrides:childBudget(options)});
+    try{
+      const {regions}=await read(state);
+      assert.equal(regions.length,options.rootCount+1,label);
+      assert.deepEqual(regions.at(-1),owner,`${label}: the frame's whole box`);
+      await flushCleanup();
+      assert.deepEqual(methods(state,'DOM.discardSearchResults').map(call=>call.params.searchId).sort(),['child-search','root-search'],label);
+      if(options.childCount>256)assert.deepEqual(methods(state,'DOM.getSearchResults').map(call=>call.sessionId),['root-route'],label);
+    }finally{state.context.dispose();}
+  }
+});
+
+test('fields and frames outside the clip do not count',async()=>{
+  // 33 shown fields at the page's top-left and a child frame with 13, all outside a clip further down.
+  const state=fixture({withChild:true,childRoute:'child-route',childFrameId:'z-child',overrides:childBudget({rootCount:33,childCount:13})});
   try{
-    await assert.rejects(read(state),error=>error?.code==='work_limit');
-    await flushCleanup();
-    assert.deepEqual(methods(state,'DOM.getSearchResults').map(call=>call.sessionId),['root-route']);
-    assert.deepEqual(methods(state,'DOM.discardSearchResults').map(call=>call.params),[
-      {searchId:'root-search'},
-      {searchId:'child-search'},
-    ]);
+    const {regions}=await nativeSensitiveRegions(state.context,state.directory,state.worlds,state.wire,state.page,{x:400,y:400,width:200,height:200});
+    assert.deepEqual(regions,[]);
+    assert.deepEqual(methods(state,'DOM.getSearchResults').map(call=>call.sessionId),['root-route'],'the child outside the clip is not read');
   }finally{state.context.dispose();}
 });
 

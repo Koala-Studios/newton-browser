@@ -21,11 +21,18 @@ const quad=(value:unknown):number[]=>{
   return value;
 };
 
+// Masked fields per capture, and candidate nodes examined per renderer root (hidden payment and code inputs included).
+const VISIBLE_LIMIT=32,EXAMINE_LIMIT=256,CHILD_ROOT_LIMIT=64;
+const intersects=(a:Region,b:Region)=>a.x<b.x+b.width&&b.x<a.x+a.width&&a.y<b.y+b.height&&b.y<a.y+a.height;
+
 /** Native search reaches closed shadow roots without exporting DOM attributes or
  * text. Each renderer root is searched once; child renderer quads are projected
  * into the root viewport. All resource allocations have late-result cleanup.
+ * With `clip` (root viewport coordinates) only fields and frames that intersect it count. Only visible fields count
+ * toward the limit. A child renderer (an embedded cross-site frame such as a payment field) past a budget is masked
+ * whole instead of refusing the capture; the page's own document past a budget still refuses it (work_limit).
  */
-export async function nativeSensitiveRegions(context:CommandContext,directory:PageDirectory,worlds:ReadonlyWorlds,wire:EngineWire,page:EnginePageStamp):Promise<{regions:Region[];frames:readonly EnginePageStamp[]}> {
+export async function nativeSensitiveRegions(context:CommandContext,directory:PageDirectory,worlds:ReadonlyWorlds,wire:EngineWire,page:EnginePageStamp,clip?:Region):Promise<{regions:Region[];frames:readonly EnginePageStamp[]}> {
   const frames=[...directory.frames(page.pageId)].sort((a,b)=>a.frameId.localeCompare(b.frameId));
   if(frames.length>256)throw new EngineError('work_limit');
   const roots=new Map<string,NodeBinding>();
@@ -36,8 +43,6 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
       roots.set(route,binding);
     }
   }
-  // Storefronts load many cross-site widget and tracking frames in their own renderers (33 on one product page).
-  if(roots.size>64)throw new EngineError('work_limit');
   const rootRoute=directory.route(directory.binding(page,1));
   const send=(binding:NodeBinding,method:string,params:RecordValue={})=>context.read(async()=>{
     const result=await wire.send(method,params,directory.route(binding));directory.route(binding);return result;
@@ -75,18 +80,44 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
     }
     return result;
   };
+  const box=(mapped:number[]):Region=>{
+    const xs=mapped.filter((_,index)=>index%2===0),ys=mapped.filter((_,index)=>index%2===1);
+    const x=Math.min(...xs),y=Math.min(...ys);return {x,y,width:Math.max(...xs)-x,height:Math.max(...ys)-y};
+  };
+  // A child renderer's whole visible surface in the root viewport (undefined when none of it shows).
+  const frameBox=async(binding:NodeBinding):Promise<Region|undefined>=>{
+    const mapped=await toRoot(binding,[0,0,1e7,0,1e7,1e7,0,1e7]);
+    const region=mapped&&box(mapped);
+    return region&&region.width>0&&region.height>0?region:undefined;
+  };
   const regions:Region[]=[];
-  let matches=0;
-  for(const [route,binding] of roots){
+  let children=0;
+  // The page's own document first: its budget refuses, a child's masks the child.
+  const ordered=[...roots].sort(([left],[right])=>Number(right===rootRoute)-Number(left===rootRoute));
+  for(const [route,binding] of ordered){
+    const child=route!==rootRoute;
+    let whole:Region|undefined;
+    const overBudget=()=>{
+      if(!whole)throw new EngineError('work_limit');
+      regions.push(whole);
+      if(regions.length>VISIBLE_LIMIT)throw new EngineError('work_limit');
+    };
     await send(binding,'DOM.getDocument',{depth:0});
     let searchAllocation:Promise<RecordValue>|undefined;
     try{
       const search=await context.read(()=>searchAllocation=wire.send('DOM.performSearch',{query:QUERY,includeUserAgentShadowDOM:true},directory.route(binding)));
       directory.route(binding);
       if(typeof search.searchId!=='string'||!search.searchId||!Number.isSafeInteger(search.resultCount)||Number(search.resultCount)<0)throw new EngineError('evidence_unavailable');
-      matches+=Number(search.resultCount);
-      if(matches>32)throw new EngineError('work_limit');
       if(search.resultCount===0)continue;
+      if(child){
+        // A frame with candidates counts only where it shows inside the clip.
+        whole=await frameBox(binding);
+        if(!whole||(clip&&!intersects(whole,clip)))continue;
+        // Storefronts load many cross-site widget and tracking frames in their own renderers (33 on one product page).
+        if(++children>CHILD_ROOT_LIMIT){overBudget();continue;}
+      }
+      if(Number(search.resultCount)>EXAMINE_LIMIT){overBudget();continue;}
+      const fieldRegions:Region[]=[];
       const found=await send(binding,'DOM.getSearchResults',{searchId:search.searchId,fromIndex:0,toIndex:search.resultCount});
       if(!Array.isArray(found.nodeIds)||found.nodeIds.length!==search.resultCount)throw new EngineError('evidence_unavailable');
       const executionContextId=await context.read(()=>worlds.context(binding));
@@ -104,14 +135,16 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
           const model=await send(binding,'DOM.getBoxModel',{nodeId});
           const mapped=await toRoot(binding,quad(object(model.model).border));
           if(!mapped)continue;
-          const xs=mapped.filter((_,index)=>index%2===0),ys=mapped.filter((_,index)=>index%2===1);
-          const x=Math.min(...xs),y=Math.min(...ys),width=Math.max(...xs)-x,height=Math.max(...ys)-y;
-          if(width<=0||height<=0)throw new EngineError('evidence_unavailable');
-          regions.push({x,y,width,height});
+          const region=box(mapped);
+          if(region.width<=0||region.height<=0)throw new EngineError('evidence_unavailable');
+          if(clip&&!intersects(region,clip))continue;
+          fieldRegions.push(region);
         }finally{
           void nodeAllocation?.then(result=>{const objectId=object(result.object).objectId;if(typeof objectId==='string'&&objectId)return wire.send('Runtime.releaseObject',{objectId},route);}).catch(()=>undefined);
         }
       }
+      if(regions.length+fieldRegions.length>VISIBLE_LIMIT)overBudget();
+      else regions.push(...fieldRegions);
     }finally{
       void searchAllocation?.then(result=>{if(typeof result.searchId==='string'&&result.searchId)return wire.send('DOM.discardSearchResults',{searchId:result.searchId},route);}).catch(()=>undefined);
     }

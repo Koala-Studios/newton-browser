@@ -3508,3 +3508,18 @@ button over an edge arrow, a fixed button past the right edge, a `display: conte
 on a scrolled page all click on the old engine too). Clicks within ~15 px of the bottom edge after a scroll
 can hit Chrome's overlay scrollbar (reported as covered by `html`), which is the browser's real hit. A real
 overlay is still reported (`div#cover`).
+
+# Checkout screenshots were refused (work_limit) by the sensitive-field budget
+
+Observed 2026-10 on hosted checkouts: every screenshot, even a small clip, returned `unavailable` `work_limit`
+while text reads worked. Root cause (`native-sensitive-regions.ts`): every candidate counted toward the
+32-match limit before the visibility check (checkouts carry dozens of hidden card and code inputs and card-field
+frames), the clip did not narrow the search, and any budget (matches, 64 renderer roots) refused the capture.
+Fixture (`test/engine-regressions/checkout-capture-budget.test.mjs`): 40 hidden card inputs, two shown password
+fields and a cross-site card frame with 40 shown card fields; the old engine refuses the capture. Fix: only
+visible fields that intersect the clip count; a child renderer counts only where its box shows in the clip;
+a child renderer past a budget (more than 256 candidates, the visible limit, the 64-root limit) is masked
+whole; the page's own document past a budget still refuses. After the fix the capture is available with the
+whole card frame masked (its own background included) and the page outside it shown. Unit tests in
+`packages/driver/test/native-sensitive-regions.test.mjs` cover hidden matches, the examination budget, both
+child budgets and the clip.

@@ -25,6 +25,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Screenshots of pages with many sensitive inputs (checkouts) are no longer refused with `work_limit`: only
+  visible fields inside the clip count toward the mask limit, frames outside the clip are not read, and an
+  embedded cross-site frame past a budget is masked whole instead of refusing the capture. The page's own
+  document past a budget still refuses; nothing shows that was masked before.
 - Clicks on custom-element buttons whose label is slotted through shadow roots (design-system buttons)
   land instead of being refused as `target_covered` by the button's own element or its slotted label. A
   real overlay, including an ancestor's own, is still reported.
