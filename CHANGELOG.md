@@ -14,6 +14,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   server exited before the handshake when it differed; installs no longer write the pin, and a stale
   pin from an older registration is noted on stderr (`newton_browser_registration_stale`) while the
   server starts.
+- Releasing a session's tab on a page with unsaved changes no longer leaves it open and claimed behind
+  "Leave site?". The tab adapter closes a tab opened for the session while still attached and accepts
+  that dialog (a tab that does not close in 4 s is released open); releasing a kept tab, or a client
+  disconnecting, dismisses a pending "Leave site?" the session raised and stays on the page. A claim
+  quarantined after a slow or failed detach now ends once the detach is proven instead of holding the
+  tab until the adapter restarts. Requires the updated tab adapter.
 
 ## [0.7.23] - 2026-10-26
 

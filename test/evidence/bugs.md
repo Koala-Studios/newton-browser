@@ -3442,3 +3442,26 @@ already checks protocol, version and tools at registration. Fix: registrations n
 a stale pin from an older registration is noted on stderr (`newton_browser_registration_stale`) and the
 server starts. Regression: install tests "a registration pinned to an older version still starts the
 upgraded server" (failed before: exit 1 with no frames) and the client-config tests (no pin written).
+
+# Releasing a session's tab on a page with unsaved changes left it open and claimed
+
+Observed 2026-10-27 in existing mode: a client that closed its connection on a page with unsaved changes
+left the tab open behind "Leave site?", still marked claimed, until the operator answered the dialog; six
+such tabs were left during one script's runs. Live repro (`scripts/qa/probe-claim-release.mjs`, disposable
+Chromium with the adapter, isolated HOME): on a created tab whose page has a beforeunload handler and a
+user activation, `release` with `close` did not answer for 15 s (the client's 10 s command limit closed
+the link), the tab stayed open and inventory kept it claimed. Root cause: release detached the debugger
+first and then called `tabs.remove`, which runs the page's unload handlers; the dialog had no debugger
+to answer it, `tabs.remove` never settled and the tab stayed in the closing set. The same probe showed a
+killed client and a command past the 10 s limit (with or without an open alert) do free their claims.
+Two related leaks found in the code: a claim quarantined after a slow or failed detach was never cleared,
+not even when the browser reported the tab detached or closed (it also kept counting toward the 32-claim
+limit), and releasing a kept tab left a "Leave site?" raised by the session's own navigation open.
+Fix: a tab opened for the session is closed while still attached; a "Leave site?" during that close is
+accepted, and a tab that does not close within 4 s is released open. Releasing a kept tab, or a client
+disconnecting, dismisses a pending "Leave site?" as stay (other dialogs are left as they were). A
+quarantine ends once detach is proven: the late detach completes, a retry succeeds or the browser reports
+the tab detached. After the fix the probe releases the dirty tab in 0.3 s with the tab closed and nothing
+claimed, and the kept tab answers on its own address with its unsaved state. Regression:
+`test/tab-release-leave-dialog.test.mjs` (7 of its 8 cases fail before; the eighth is the
+other-dialogs-stay-open control).

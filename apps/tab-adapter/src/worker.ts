@@ -80,7 +80,7 @@ native.onDisconnect.addListener(() => {
 });
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (!source.tabId) return;
-  const destination = authority.event(source.tabId, method, params); if (!destination) return;
+  const destination = authority.event(source.tabId, method, params, source.sessionId); if (!destination) return;
   const connectionId = ids.get(destination.owner); if (!connectionId) return;
   post({ connectionId, payload: { type: "event", token: destination.token,
     event: { method, params, sessionId: source.sessionId ?? `tab_${source.tabId}` } } });

@@ -165,7 +165,8 @@ test("stopping closes a tab opened for the session and only releases an operator
   await authority.release(owner, operatorTab, tabs);
   await authority.release(owner, created, tabs);
   assert.deepEqual(removes, [21]);
-  assert.deepEqual(debug.detached, [5, 21]);
+  // The created tab is closed while still attached; closing it ends its debugger session.
+  assert.deepEqual(debug.detached, [5]);
   assert.equal(authority.isClaimed(21), false);
   const kept = await authority.createTab(owner, { async create() { return { id: 22 }; }, async remove(tabId) { removes.push(tabId); } });
   await authority.release(owner, kept);
