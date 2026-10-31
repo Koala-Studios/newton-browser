@@ -27,6 +27,11 @@ import { SessionDownloads } from "./session-downloads.ts";
 import { SessionLive, type EngineFrame, type EngineFrameOptions, type EngineOperatorInput, type EngineSessionEvent, type EngineWebAuthnCredential } from "./session-live.ts";
 
 type RecordValue = Record<string, unknown>;
+type SignInOrigin = { origin: string; local: [string, string][]; session: [string, string][]; indexedDb: RecordValue };
+/** A person's sign-in read from one session for another; host-only and kept in memory. */
+export type SignInState = { cookies: RecordValue[]; origins: SignInOrigin[] };
+/** What adoptSignIn carried into the session: cookies set, storage items written, and whether IndexedDB came across. */
+export type SignInAdoption = { cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported" };
 const DOCUMENT_WORK_CHARS = 262_144;
 const DOCUMENT_WORK_NODES = 50_000;
 const DOCUMENT_CACHE_BYTES = 512 * 1024;
@@ -94,6 +99,68 @@ const HIT_TARGET = `function(x,y){
     target=root.host;
   }
   return false;
+}`;
+/** Every IndexedDB database of the frame's origin: stores with their keys and indexes, and records whose keys and values
+ * survive JSON (others are skipped and mark it partial), bounded. Runs in an isolated world. */
+const READ_INDEXED_DB = `async function(){
+  if(!indexedDB.databases)return {unsupported:true};
+  const plain=(value,depth=0)=>{if(depth>32)return false;if(value===null||typeof value==='string'||typeof value==='boolean')return true;
+    if(typeof value==='number')return Number.isFinite(value);if(Array.isArray(value))return value.every(item=>plain(item,depth+1));
+    if(typeof value==='object'){const proto=Object.getPrototypeOf(value);return (proto===Object.prototype||proto===null)&&Object.values(value).every(item=>plain(item,depth+1));}return false;};
+  const request=value=>new Promise((resolve,reject)=>{value.onsuccess=()=>resolve(value.result);value.onerror=()=>reject(value.error);});
+  let partial=false,records=0,bytes=0;const dbs=[];
+  for(const info of (await indexedDB.databases()).slice(0,32)){
+    if(!info.name)continue;
+    let db;
+    try{db=await new Promise((resolve,reject)=>{const open=indexedDB.open(info.name);open.onupgradeneeded=()=>open.transaction.abort();open.onsuccess=()=>resolve(open.result);open.onerror=()=>reject(open.error);});}
+    catch{partial=true;continue;}
+    try{
+      const stores=[];
+      for(const name of [...db.objectStoreNames]){
+        const store=db.transaction(name,'readonly').objectStore(name);
+        const indexes=[...store.indexNames].map(index=>{const item=store.index(index);return {name:index,keyPath:item.keyPath,unique:item.unique,multiEntry:item.multiEntry};});
+        const values=await request(store.getAll()),keys=store.keyPath===null?await request(store.getAllKeys()):[];
+        const kept=[];
+        values.forEach((value,index)=>{
+          const key=store.keyPath===null?keys[index]:undefined;
+          if(!plain(value)||(store.keyPath===null&&!plain(key))){partial=true;return;}
+          const size=JSON.stringify(value).length+(key===undefined?0:JSON.stringify(key).length);
+          if(records>=10000||bytes+size>4000000){partial=true;return;}
+          records++;bytes+=size;kept.push(key===undefined?{value}:{key,value});
+        });
+        stores.push({name,keyPath:store.keyPath,autoIncrement:store.autoIncrement,indexes,records:kept});
+      }
+      dbs.push({name:info.name,version:db.version,stores});
+    }catch{partial=true;}finally{db.close();}
+  }
+  return {dbs,partial};
+}`;
+/** Writes databases read by READ_INDEXED_DB into the frame's origin: missing stores and indexes are created, records
+ * put over what is there. Returns how many databases were written in full. */
+const WRITE_INDEXED_DB = `async function(data){
+  let partial=false,copied=0;
+  const done=tx=>new Promise((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});
+  const open=(name,version,source)=>new Promise((resolve,reject)=>{const request=version===undefined?indexedDB.open(name):indexedDB.open(name,version);
+    request.onupgradeneeded=()=>{const db=request.result;for(const store of source.stores){const target=db.objectStoreNames.contains(store.name)?request.transaction.objectStore(store.name)
+      :db.createObjectStore(store.name,{...(store.keyPath===null?{}:{keyPath:store.keyPath}),autoIncrement:store.autoIncrement});
+      for(const index of store.indexes)if(!target.indexNames.contains(index.name))target.createIndex(index.name,index.keyPath,{unique:index.unique,multiEntry:index.multiEntry});}};
+    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);request.onblocked=()=>reject(new Error('blocked'));});
+  for(const source of data.dbs){
+    let db;
+    try{db=await open(source.name,source.version,source);}
+    catch{try{db=await open(source.name,undefined,source);}catch{partial=true;continue;}}
+    try{
+      let whole=true;
+      for(const store of source.stores){
+        if(!db.objectStoreNames.contains(store.name)){whole=false;continue;}
+        const tx=db.transaction(store.name,'readwrite'),target=tx.objectStore(store.name);
+        for(const record of store.records)target.put(record.value,...(store.keyPath===null?[record.key]:[]));
+        await done(tx);
+      }
+      if(whole)copied++;else partial=true;
+    }catch{partial=true;}finally{db.close();}
+  }
+  return {partial,copied};
 }`;
 // CSS pixels around a click_at/move point that must look as captured.
 const CAPTURE_POINT_RADIUS = 24;
@@ -1062,17 +1129,35 @@ export class PageExecutor implements EngineExecutor {
     if ((input.type === "mouse" && input.action === "down") || (input.type === "key" && input.action === "down") || input.type === "text") await this.front(page);
     await this.live.operatorInput(this.directory.route(this.directory.binding(page, 1)), input);
   }
-  /** Host-only: this owned browser's cookies, to carry a person's sign-in into another session. Never model-facing. */
-  async signInCookies(): Promise<RecordValue[]> {
+  /** Host-only, never model-facing: a person's sign-in in this owned browser, to carry into another session. Cookies; for
+   * each origin its pages and frames hold, local storage and IndexedDB (schema and JSON-safe records, best effort); the
+   * selected page's session storage. */
+  async signInState(): Promise<SignInState> {
     if (this.closed) throw new EngineError("session_closed");
     if (!this.connection.ownsBrowser) throw new EngineError("unsupported_capability");
-    return array((await this.connection.wire.send("Storage.getCookies", {})).cookies);
+    const cookies = array((await this.connection.wire.send("Storage.getCookies", {})).cookies);
+    const selected = this.bindPage().pageId;
+    const origins: SignInOrigin[] = [];
+    const seen = new Set<string>();
+    for (const page of [selected, ...this.directory.inventory().map(item => item.pageId).filter(id => id !== selected)]) {
+      for (const [origin, frame] of await this.originFrames(page)) {
+        if (seen.has(origin) || origins.length >= 32) continue;
+        seen.add(origin);
+        const local = await this.storageItems(frame.route, origin, true);
+        const session = page === selected ? await this.storageItems(frame.route, origin, false) : [];
+        const indexedDb = await this.isolatedEvaluate(frame, `(${READ_INDEXED_DB})()`).catch(() => ({ unsupported: true }));
+        origins.push({ origin, local, session, indexedDb: object(indexedDb) });
+      }
+    }
+    return { cookies, origins };
   }
-  /** Host-only: take cookies from another session (a person's sign-in) and reload the selected page with them. */
-  async adoptSignInCookies(cookies: readonly RecordValue[]): Promise<void> {
+  /** Host-only: take a person's sign-in from another session into this one and reload the selected page with it. Storage
+   * reaches only origins this session's selected page or its frames hold (the browser writes storage through a frame of
+   * that origin); the counts say what was written. */
+  async adoptSignIn(state: SignInState): Promise<SignInAdoption> {
     if (this.closed) throw new EngineError("session_closed");
     if (!this.connection.ownsBrowser) throw new EngineError("unsupported_capability");
-    const params = cookies.slice(0, 4096).map(cookie => ({
+    const params = state.cookies.slice(0, 4096).map(cookie => ({
       name: string(cookie.name), value: string(cookie.value), domain: string(cookie.domain), path: string(cookie.path) || "/",
       secure: cookie.secure === true, httpOnly: cookie.httpOnly === true,
       ...(typeof cookie.sameSite === "string" ? { sameSite: cookie.sameSite } : {}),
@@ -1082,8 +1167,59 @@ export class PageExecutor implements EngineExecutor {
     })).filter(cookie => cookie.name && cookie.domain);
     if (params.length) await this.connection.wire.send("Storage.setCookies", { cookies: params });
     const page = this.bindPage();
+    const frames = await this.originFrames(page.pageId);
+    let localStorageItems = 0, sessionStorageItems = 0, databases = 0, copied = 0, partial = false, unsupported = 0;
+    for (const origin of state.origins) {
+      const indexedDb = object(origin.indexedDb), dbs = array(indexedDb.dbs);
+      if (indexedDb.unsupported === true) unsupported++;
+      if (indexedDb.partial === true) partial = true;
+      databases += dbs.length;
+      const frame = frames.get(origin.origin);
+      if (!frame) { if (dbs.length) partial = true; continue; }
+      for (const [isLocalStorage, items] of [[true, origin.local], [false, origin.session]] as const) {
+        for (const [key, value] of items) {
+          const written = await this.connection.wire.send("DOMStorage.setDOMStorageItem", { storageId: { securityOrigin: origin.origin, isLocalStorage }, key, value }, frame.route).then(() => true, () => false);
+          if (written && isLocalStorage) localStorageItems++; else if (written) sessionStorageItems++;
+        }
+      }
+      if (dbs.length) {
+        const written = object(await this.isolatedEvaluate(frame, `(${WRITE_INDEXED_DB})(${JSON.stringify({ dbs })})`).catch(() => ({ partial: true, copied: 0 })));
+        if (written.partial !== false) partial = true;
+        copied += typeof written.copied === "number" ? written.copied : 0;
+      }
+    }
     await this.front(page);
     await this.connection.wire.send("Page.reload", {}, this.directory.route(this.directory.binding(page, 1)));
+    const indexedDb: SignInAdoption["indexedDb"] = unsupported === state.origins.length && state.origins.length > 0 ? "unsupported"
+      : partial || unsupported || copied < databases ? "partial" : "copied";
+    return { cookies: params.length, localStorageItems, sessionStorageItems, indexedDb };
+  }
+  /** One frame per http(s) origin of a page (its own and its embedded frames'), as the browser reports them. */
+  private async originFrames(pageId: string): Promise<Map<string, { route: string; frameId: string }>> {
+    const found = new Map<string, { route: string; frameId: string }>();
+    const routes = new Set(this.directory.frames(pageId).map(frame => this.directory.route(this.directory.binding(frame, 1))));
+    for (const route of routes) {
+      const tree = await this.connection.wire.send("Page.getFrameTree", {}, route).catch(() => ({} as RecordValue));
+      const walk = (node: unknown) => {
+        const entry = object(node), frame = object(entry.frame), origin = string(frame.securityOrigin), id = string(frame.id);
+        if (id && /^https?:\/\//u.test(origin) && !found.has(origin)) found.set(origin, { route, frameId: id });
+        for (const child of array(entry.childFrames)) walk(child);
+      };
+      walk(object(tree).frameTree);
+    }
+    return found;
+  }
+  private async storageItems(route: string, origin: string, isLocalStorage: boolean): Promise<[string, string][]> {
+    const read = () => this.connection.wire.send("DOMStorage.getDOMStorageItems", { storageId: { securityOrigin: origin, isLocalStorage } }, route);
+    const result = await read().catch(async () => { await this.connection.wire.send("DOMStorage.enable", {}, route).catch(() => undefined); return read(); }).catch(() => ({} as RecordValue));
+    return (Array.isArray(result.entries) ? result.entries as unknown[] : []).filter((entry): entry is [string, string] => Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string").slice(0, 4096);
+  }
+  /** Runs a host script in an isolated world of the frame: it shares the origin's storage, not the page's scripts. */
+  private async isolatedEvaluate(frame: { route: string; frameId: string }, expression: string): Promise<unknown> {
+    const world = await this.connection.wire.send("Page.createIsolatedWorld", { frameId: frame.frameId, worldName: "newton-sign-in", grantUniveralAccess: false }, frame.route);
+    const result = await this.connection.wire.send("Runtime.evaluate", { expression, contextId: world.executionContextId, awaitPromise: true, returnByValue: true, silent: true }, frame.route);
+    if (result.exceptionDetails) throw new EngineError("evidence_unavailable");
+    return object(result.result).value;
   }
   /**
    * Chrome paints, screencasts and fully runs only the tab in front. A tab the site opens takes the front while the

@@ -17,6 +17,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (`not_password_field`). The values stay beside the command, never in it, its retained receipt, an observation or
   an error, and are cleared once it ran; the result is the receipt plus each field's outcome. Model fills of
   password fields are refused as before.
+- `adoptSignIn` carries a person's sign-in beyond cookies: for each origin the sign-in session's pages and
+  frames hold, its local storage, the selected page's session storage and IndexedDB (schema and JSON-safe
+  records, best effort), into the origins the running session's page holds, before the reload. It resolves to
+  `{ cookies, localStorageItems, sessionStorageItems, indexedDb: "copied" | "partial" | "unsupported" }`; a site that
+  keeps its sign-in in storage reloaded signed out.
 
 ### Fixed
 

@@ -18,6 +18,7 @@ export type BrowserEngineOptions = Readonly<{
   env?: NodeJS.ProcessEnv;
 }>;
 export type BrowserToolResult = Readonly<{ content: readonly ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]; isError?: boolean }>;
+export type BrowserSignInAdoption = Readonly<{ cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported" }>;
 export type BrowserSessionOptions = Readonly<{ authenticator?: readonly EngineWebAuthnCredential[]; onEvent?: (event: EngineSessionEvent) => void }>;
 
 export type BrowserEngine = Readonly<{
@@ -36,8 +37,13 @@ export type BrowserEngine = Readonly<{
   beginSignIn(sourceId: string, args: unknown, options?: Pick<BrowserSessionOptions, "onEvent">): Promise<BrowserToolResult>;
   /** Done (publish) or cancel. Publishing makes the signed-in state the source's next generation; running sessions keep their copies. */
   finishSignIn(sessionId: string, publish: boolean): Promise<{ generation: string } | undefined>;
-  /** Before publishing a sign-in: give a running session the same signed-in state and reload its page, so it need not restart. */
-  adoptSignIn(signInSessionId: string, sessionId: string): Promise<void>;
+  /** Before publishing a sign-in: give a running session the same signed-in state and reload its page, so it need not
+   * restart. Carries cookies, then for each origin the sign-in session's pages and frames hold its local storage, the
+   * selected page's session storage and IndexedDB (JSON-safe records, best effort), into the origins the session's
+   * selected page and its frames hold. Resolves to what was written: cookie and storage item counts and `indexedDb`
+   * `copied` (every database, or none to copy), `partial` (some databases, stores or records did not come across, or
+   * their origin is not open in the session) or `unsupported` (none could be read). */
+  adoptSignIn(signInSessionId: string, sessionId: string): Promise<BrowserSignInAdoption>;
   sessions(): readonly { sessionId: string; state: string }[];
   /** Host-only, never a model tool: fill a saved sign-in into the session's selected page as typed input. Each field's
    * frame must be on `site` or a subdomain of it (look-alike hosts and other frames are refused, `frame_off_site`); a

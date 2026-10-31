@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EngineError, boundedInteger, boundedString, exactObject, normalizeEngineUrl } from "@newton-browser/core";
 import { SessionEngine } from "@newton-browser/driver/session-engine";
-import { PageExecutor } from "@newton-browser/driver/page-executor";
+import { PageExecutor, type SignInAdoption } from "@newton-browser/driver/page-executor";
 import type { EngineConnection } from "@newton-browser/driver/connection";
 import type { EngineFrame, EngineFrameOptions, EngineOperatorInput, EngineSessionEvent, EngineWebAuthnCredential } from "@newton-browser/driver/session-live";
 import { launchOwnedBrowserRuntime, type LaunchOwnedBrowserRuntimeOptions, type OwnedBrowserRuntime } from "./owned-browser-runtime.ts";
@@ -131,7 +131,8 @@ export class EngineHost {
   frames(id: unknown, listener: (frame: EngineFrame) => void | Promise<void>, options: EngineFrameOptions & { pageId?: string } = {}) { return this.executor(id).subscribeFrames(listener, options); }
   /** Operator takeover: model actions fail with operator_control until resume; the page and sign-in state stay. */
   /** Carry a person's sign-in session's cookies into another running session and reload its page there. */
-  async adoptSignIn(fromId: unknown, toId: unknown): Promise<void> { await this.executor(toId).adoptSignInCookies(await this.executor(fromId).signInCookies()); }
+  /** Carries a person's sign-in (cookies, local and session storage, IndexedDB) from a sign-in session into a running one. */
+  async adoptSignIn(fromId: unknown, toId: unknown): Promise<SignInAdoption> { return this.executor(toId).adoptSignIn(await this.executor(fromId).signInState()); }
   async pause(id: unknown, reason: string): Promise<void> { await this.session(id).pause(reason); }
   resume(id: unknown): void { this.session(id).resume(); }
   async operatorInput(id: unknown, input: EngineOperatorInput, pageId?: string): Promise<void> {
