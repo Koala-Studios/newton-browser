@@ -68,7 +68,7 @@ test("releasing a kept tab dismisses a Leave site? the session raised, staying o
   await authority.release(owner, token);
   const answer = debug.sent.find(({ method }) => method === "Page.handleJavaScriptDialog");
   assert.deepEqual(answer?.params, { accept: false });
-  assert.deepEqual(debug.order, ["Page.handleJavaScriptDialog", "detach"], "answered before the debugger leaves");
+  assert.deepEqual(debug.order.filter((step) => step !== "Emulation.setFocusEmulationEnabled"), ["Page.handleJavaScriptDialog", "detach"], "answered before the debugger leaves");
 });
 
 test("releasing a kept tab leaves its other dialogs open", async () => {

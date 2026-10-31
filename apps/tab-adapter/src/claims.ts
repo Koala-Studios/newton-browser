@@ -12,7 +12,9 @@ type Claim = { owner: Owner; tabId: number; generation: number; state: "reserved
   /** The page shows a "Leave site?" (beforeunload) dialog. */
   leaveDialog?: boolean;
   /** The browser reported the debugger gone (tab closed, DevTools opened): detach is proven. */
-  browserDetached?: boolean };
+  browserDetached?: boolean;
+  /** Screenshots in flight, and the turn the next input waits for. */
+  captures: Set<Promise<unknown>>; inputTurn: Promise<void>; heldTurns: number };
 export type ClaimToken = Readonly<{ tabId: number; epoch: string; generation: number }>;
 const methods = new Set([
   "Page.enable", "Page.setLifecycleEventsEnabled", "Page.getFrameTree", "Page.navigate", "Page.captureScreenshot",
@@ -23,7 +25,7 @@ const methods = new Set([
   "DOM.getFrameOwner", "DOM.pushNodesByBackendIdsToFrontend", "DOM.setFileInputFiles",
   "DOM.getContentQuads", "DOM.getNodeForLocation", "DOM.scrollIntoViewIfNeeded",
   "DOM.performSearch", "DOM.getSearchResults", "DOM.discardSearchResults", "DOM.getBoxModel",
-  "Emulation.setDeviceMetricsOverride", "Emulation.setFocusEmulationEnabled", "Network.enable", "Network.getResponseBody", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Runtime.getProperties", "Runtime.releaseObjectGroup", "Runtime.enable", "Log.enable", "Runtime.runIfWaitingForDebugger", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Input.setInterceptDrags", "Input.dispatchDragEvent", "Target.setAutoAttach",
+  "Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride", "Emulation.setFocusEmulationEnabled", "Network.enable", "Network.getResponseBody", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Runtime.getProperties", "Runtime.releaseObjectGroup", "Runtime.enable", "Log.enable", "Runtime.runIfWaitingForDebugger", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Input.setInterceptDrags", "Input.dispatchDragEvent", "Target.setAutoAttach",
 ]);
 
 /** Browser-local authority. Owner capabilities are created by bound native connections. */
@@ -38,7 +40,10 @@ export class TabClaims {
   private readonly closingCreatedTabs=new Set<number>();
   private readonly creationJobs=new Map<Promise<ClaimToken>,Owner>();
   private readonly closeLimitMs: number;
-  constructor(api: DebuggerApi, epoch: string, options: { closeLimitMs?: number } = {}) { this.api = api; this.epoch = epoch; this.closeLimitMs = options.closeLimitMs ?? CLOSE_LIMIT_MS; }
+  private readonly inputHoldMs: number;
+  constructor(api: DebuggerApi, epoch: string, options: { closeLimitMs?: number; inputHoldMs?: number } = {}) {
+    this.api = api; this.epoch = epoch; this.closeLimitMs = options.closeLimitMs ?? CLOSE_LIMIT_MS; this.inputHoldMs = options.inputHoldMs ?? INPUT_HOLD_MS;
+  }
   bindPort(): Owner { const owner = Object.freeze({}); this.owners.add(owner); return owner; }
   isClaimed(tabId:number):boolean{return this.claims.has(tabId)||this.closingCreatedTabs.has(tabId);}
   createTab(owner:Owner,tabs:{create(properties:{url:string;active:false}):Promise<{id?:number}>;remove(tabId:number):Promise<void>}):Promise<ClaimToken>{
@@ -89,7 +94,7 @@ export class TabClaims {
     if (!Number.isSafeInteger(tabId) || tabId <= 0) throw new Error("invalid_tab");
     if (this.claims.has(tabId)||this.closingCreatedTabs.has(tabId)) throw new Error("tab_owned");
     if (this.claims.size+this.creating+this.closingCreatedTabs.size >= 32) throw new Error("claim_capacity");
-    const claim: Claim = { owner, tabId, generation: this.nextGeneration++, state: "reserved", attachment: Promise.resolve(), active: new Set(), cancellations:new Map(), routes: new Map(), heldInputs: new Map() };
+    const claim: Claim = { owner, tabId, generation: this.nextGeneration++, state: "reserved", attachment: Promise.resolve(), active: new Set(), cancellations:new Map(), routes: new Map(), heldInputs: new Map(), captures: new Set(), inputTurn: Promise.resolve(), heldTurns: 0 };
     this.claims.set(tabId, claim); // Reserve synchronously before attach can yield.
     claim.attachment = Promise.resolve().then(() => this.api.attach({ tabId }, "1.3"));
     try { await claim.attachment; }
@@ -98,6 +103,9 @@ export class TabClaims {
       throw new Error("attach_failed");
     }
     if (claim.state !== "reserved" || this.claims.get(tabId) !== claim) throw new Error("claim_revoked");
+    // A held tab renders as shown, whichever client holds it: a background tab runs no frames, so its embedded
+    // cross-site frames get no input routed into them and frame-driven pages stall. Detach ends it.
+    void Promise.resolve().then(() => this.api.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true })).catch(() => undefined);
     claim.state = "attached";
     return Object.freeze({ tabId, epoch: this.epoch, generation: claim.generation });
   }
@@ -120,12 +128,17 @@ export class TabClaims {
       claim.heldInputs.set(inputId!, { sessionId, method, params: { type: "mouseReleased", button, x: params.x, y: params.y, buttons: 0, clickCount: params.clickCount ?? 1 } });
     }
     let cancel!:(error:Error)=>void;
+    let ended=false;
     const operation=new Promise<unknown>((resolve,reject)=>{
-      cancel=reject;claim.cancellations.set(cancel,sessionId);
-      try{void this.api.sendCommand({tabId:claim.tabId,...(sessionId?{sessionId}:{})},method,params).then(resolve,reject);}
-      catch(error){reject(error);}
+      cancel=(error)=>{ended=true;reject(error);};claim.cancellations.set(cancel,sessionId);
+      const issue=()=>{
+        try{void this.api.sendCommand({tabId:claim.tabId,...(sessionId?{sessionId}:{})},method,params).then(resolve,reject);}
+        catch(error){reject(error);}
+      };
+      if(gatedInput.has(method))this.inputTurn(claim,()=>{if(!ended)issue();});else issue();
     });
     claim.active.add(operation);
+    if(method==='Page.captureScreenshot'){claim.captures.add(operation);void operation.catch(()=>undefined).finally(()=>claim.captures.delete(operation));}
     try {
       const result=await operation;
       if(claim.state!=='attached'||this.claims.get(claim.tabId)!==claim)throw new Error('connection_lost');
@@ -254,6 +267,19 @@ export class TabClaims {
       throw new Error("detach_failed");
     }
   }
+  /** Input waits for the tab's screenshots in flight, in arrival order. Chrome scales input that arrives during a
+   * capture by the display's device scale factor over an emulated one, so a click there lands elsewhere. The wait
+   * is bounded; a capture that never finishes does not hold input past it. */
+  private inputTurn(claim: Claim, issue: () => void): void {
+    if (!claim.captures.size && !claim.heldTurns) { issue(); return; }
+    claim.heldTurns++;
+    const turn = claim.inputTurn.then(async () => {
+      const end = performance.now() + this.inputHoldMs;
+      while (claim.captures.size && performance.now() < end) await within(Promise.allSettled([...claim.captures]), end - performance.now()).catch(() => undefined);
+      issue();
+    }).finally(() => { claim.heldTurns--; });
+    claim.inputTurn = turn.catch(() => undefined);
+  }
   private releaseHeldInputs(claim: Claim): void {
     const releases = [...claim.heldInputs.values()].reverse().map(input => {
       try { return this.api.sendCommand({ tabId: claim.tabId, ...(input.sessionId ? { sessionId: input.sessionId } : {}) }, input.method, input.params); }
@@ -269,6 +295,8 @@ export class TabClaims {
 }
 // Inside the client's 10 s command limit, with room for the release that follows a tab that will not close.
 const CLOSE_LIMIT_MS = 4000;
+const INPUT_HOLD_MS = 2000;
+const gatedInput = new Set(["Input.dispatchMouseEvent", "Input.dispatchKeyEvent", "Input.insertText", "Input.dispatchDragEvent"]);
 async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("close_timeout")), ms); })]); }

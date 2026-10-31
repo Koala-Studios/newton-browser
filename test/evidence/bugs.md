@@ -3447,7 +3447,7 @@ upgraded server" (failed before: exit 1 with no frames) and the client-config te
 
 Observed 2026-10-27 in existing mode: a client that closed its connection on a page with unsaved changes
 left the tab open behind "Leave site?", still marked claimed, until the operator answered the dialog; six
-such tabs were left during one script's runs. Live repro (`scripts/qa/probe-claim-release.mjs`, disposable
+such tabs were left during one script's runs. Live repro (`scripts/qa/probe-tab-adapter.mjs`, disposable
 Chromium with the adapter, isolated HOME): on a created tab whose page has a beforeunload handler and a
 user activation, `release` with `close` did not answer for 15 s (the client's 10 s command limit closed
 the link), the tab stayed open and inventory kept it claimed. Root cause: release detached the debugger
@@ -3465,3 +3465,24 @@ the tab detached. After the fix the probe releases the dirty tab in 0.3 s with t
 claimed, and the kept tab answers on its own address with its unsaved state. Regression:
 `test/tab-release-leave-dialog.test.mjs` (7 of its 8 cases fail before; the eighth is the
 other-dialogs-stay-open control).
+
+# Raw CDP input through the tab adapter landed in the wrong place during captures and missed background frames
+
+Observed 2026-10-27 by a script driving a background tab of the operator's Chrome with raw CDP through the
+adapter. Repro 1 (`scripts/qa/probe-capture-input.mjs`, owned headless Chrome with another tab in front):
+with `Emulation.setDeviceMetricsOverride` at a scale factor other than the display's, a click at (100,100)
+sent while a plain `Page.captureScreenshot` (no clip) was in flight landed at (200,200) under scale 0.5
+and at (50,50) under scale 2, for every timing tried and with or without rendering. Clipped captures, and
+input once the capture finished, landed correctly. The engine always clips and emulates with scale 0, so
+it never hit this; raw clients did. Repro 2 (same probe): in the hidden tab a top-level click over a
+cross-site frame landed in the top document; with focus emulation it reached the frame at frame-local
+coordinates (100,75). The engine turns focus emulation on for its own sessions (0.7.23); a raw client did
+not. Also reported: `Emulation.clearDeviceMetricsOverride` was refused, and a capture `clip` is in document
+coordinates (CDP semantics, now documented in TROUBLESHOOTING). Fix (tab adapter): input on a tab waits,
+in arrival order, for its screenshots in flight (bounded at 2 s; uncontended input is still dispatched at
+once); a claimed tab is set to render as shown at attach, whichever client holds it (the AGENTS.md
+exception for held borrowed tabs; detach ends it); the clear command is forwarded. After the fix,
+`scripts/qa/probe-tab-adapter.mjs` through the real adapter: input during a plain capture under scale 2
+lands at (100,100), and the background tab's top-level click reaches the frame. Regression:
+`test/tab-input-capture-order.test.mjs` (all 7 fail before; "other commands are not held" is a control that
+fails before only through the attach-time call).

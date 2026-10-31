@@ -20,6 +20,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   disconnecting, dismisses a pending "Leave site?" the session raised and stays on the page. A claim
   quarantined after a slow or failed detach now ends once the detach is proven instead of holding the
   tab until the adapter restarts. Requires the updated tab adapter.
+- Raw CDP clients of the tab adapter get input that lands where they sent it. Input sent while a
+  screenshot is in flight waits for it (Chrome scaled it by the display's scale factor over an emulated
+  one, so clicks under `Emulation.setDeviceMetricsOverride` landed elsewhere); a held tab renders as
+  shown from the moment it is claimed, so top-level input reaches cross-site frames of a background tab
+  (it landed in the top document); `Emulation.clearDeviceMetricsOverride` is forwarded.
 
 ## [0.7.23] - 2026-10-26
 

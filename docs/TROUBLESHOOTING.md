@@ -14,6 +14,7 @@
 - A popup or sign-in tab: it is a session page. `browser.pages.list` shows it and `browser.page.select` moves to it; never click browser chrome by coordinates.
 - A session is active but no window is visible: sessions are headless. Operator sign-in is `source login`, which opens a visible window.
 - A stuck saved sign-in (`maintenance.lock` or `publication.lock` in the login source): with no sign-in in progress, `source recover --id <name> --browser <family>` releases only a lock whose owner is gone. `source collect` removes retired generations no session is copying.
+- Driving a borrowed tab with raw CDP through the tab adapter (`connectExistingTab`/`createExistingTab` wire): the adapter renders a held tab as shown, so top-level input reaches cross-site frames as on a visible tab; input sent while a `Page.captureScreenshot` is in flight waits for it (up to 2 s), because Chrome scales input during a capture by the display's scale factor over an emulated one. `Page.captureScreenshot`'s `clip` is in document coordinates: add `cssVisualViewport.pageX`/`pageY` from `Page.getLayoutMetrics` on a scrolled page. `Emulation.clearDeviceMetricsOverride` undoes an override; detach also drops it.
 - Screenshot or body unavailable: screenshots never fall back to an unmasked image; network bodies are only bounded text from the page's own origin.
 
 For diagnosis run `doctor` for configuration or `doctor --live` for one disposable session.

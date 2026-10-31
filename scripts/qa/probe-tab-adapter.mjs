@@ -1,5 +1,7 @@
-// Live probe: does the tab adapter free claims when a client dies, when a command times out,
-// and can release close a created tab that asks "Leave site?". Disposable Chromium, isolated HOME.
+// Live probe of the tab adapter in a disposable Chromium (isolated HOME): does it free claims when a client dies or a
+// command times out, can release close a created tab that asks "Leave site?", where does input sent during a plain
+// screenshot land under an emulated device scale factor, and does a top-level click over a cross-site frame of a
+// background tab reach the frame.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -39,8 +41,12 @@ async function mirror(...profiles) {
     for (const name of await fs.readdir(chrome)) await fs.copyFile(path.join(chrome, name), path.join(target, name));
   }
 }
+const RECORD = `<script>window.hits=[];document.addEventListener('mousedown',e=>hits.push([e.clientX,e.clientY]));</script>`;
 const server = http.createServer((req, res) => {
   res.setHeader('content-type', 'text/html');
+  if (req.url === '/frame') return res.end(`<style>html,body{margin:0;height:100%}</style><button style="width:100%;height:100%">frame</button>${RECORD}`);
+  if (req.url === '/input') return res.end(`<style>body{margin:0}iframe{position:absolute;left:300px;top:200px;width:200px;height:150px;border:0}</style>
+<div style="height:2000px"></div><iframe src="http://localhost:${server.address().port}/frame"></iframe>${RECORD}`);
   res.end(`<title>Unsaved</title><button id=b onclick="window.dirty=true;this.textContent='dirty'">Edit</button>
 <script>addEventListener('beforeunload',e=>{if(window.dirty){e.preventDefault();e.returnValue='';}});</script>`);
 });
@@ -139,6 +145,36 @@ try {
     const page = await deadline(pageConnection(transport, target.targetId), 'kept_page_attach', 3000).catch(() => undefined);
     const responsive = !page ? 'kept_page_attach_deadline' : await deadline(page.send('Runtime.evaluate', { expression: 'location.href+"|"+window.dirty', returnByValue: true }), 'kept_page', 3000).then(r => r.result.value, error => error.message);
     results.releasePendingDialog = { outcome, afterMs: ms(start), navigate: await nav, keptPage: responsive, claimedAfter: await claimedTabs() };
+    client.close();
+  }
+  // E: input sent while a plain screenshot is in flight, with an emulated device scale factor twice the display's.
+  // F: a top-level click over a cross-site frame of a background tab.
+  {
+    const client = await connectNative(advertisement);
+    const frames = [];
+    client.onEvent(message => { const event = message.event; if (event?.method === 'Target.attachedToTarget' && event.params.targetInfo?.type === 'iframe') frames.push(event.params.sessionId); });
+    const token = await client.call('create_tab', {});
+    const send = (method, params = {}, sessionId) => client.call('command', { token, method, params, ...(sessionId ? { sessionId } : {}) }, method.startsWith('Runtime.') || method === 'Page.captureScreenshot');
+    const value = async (expression, sessionId) => (await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId)).result.value;
+    await send('Page.enable');
+    await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+    await send('Page.navigate', { url: url + 'input' });
+    await wait('frame', async () => frames.length > 0 && await value('document.readyState').catch(() => '') === 'complete');
+    const click = async (x, y) => { for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }); };
+    const visibility = await value('document.visibilityState');
+    const dpr = await value('devicePixelRatio');
+    await send('Emulation.setDeviceMetricsOverride', { width: 800, height: 600, deviceScaleFactor: dpr * 2, mobile: false });
+    await value('hits.length=0');
+    const capturing = send('Page.captureScreenshot', { format: 'png' });
+    await click(100, 100);
+    await capturing;
+    results.inputDuringCapture = { sentAt: [100, 100], landed: await value('hits.slice()') };
+    await send('Emulation.clearDeviceMetricsOverride');
+    await value('hits.length=0'); await value('hits.length=0', frames[0]);
+    await click(400, 275);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    results.backgroundFrameInput = { visibility, top: await value('hits.slice()'), frame: await value('hits.slice()', frames[0]) };
+    await client.call('release', { token, close: true });
     client.close();
   }
 } finally {

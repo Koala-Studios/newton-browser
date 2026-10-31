@@ -48,12 +48,13 @@ test('the adapter forwards every command a borrowed session sends', async () => 
   const authority=new TabClaims({attach:async()=>{},detach:async()=>{},sendCommand:async(_target,method)=>{sent.push(method);return {};}},'epoch');
   const owner=authority.bindPort(),token=await authority.claim(owner,1);
   for(const method of BORROWED_COMMANDS)await authority.command(owner,token,method,{});
-  assert.deepEqual(sent,BORROWED_COMMANDS);
+  // The first is the adapter's own: a held tab renders as shown.
+  assert.deepEqual(sent,['Emulation.setFocusEmulationEnabled',...BORROWED_COMMANDS]);
 });
 
 test('claims reserve before await; owner capability and epoch cannot be forged', async () => {
   const wait = held(); let inputs = 0;
-  const authority = new TabClaims({ attach: () => wait.promise, detach: async () => {}, sendCommand: async () => { inputs++; } }, 'epoch');
+  const authority = new TabClaims({ attach: () => wait.promise, detach: async () => {}, sendCommand: async (_target, method) => { if (method.startsWith('Input.')) inputs++; } }, 'epoch');
   const a = authority.bindPort(), b = authority.bindPort(); const pending = authority.claim(a, 1);
   await assert.rejects(authority.claim(b, 1), /tab_owned/); wait.resolve(); const token = await pending;
   await assert.rejects(authority.command(b, token, 'Input.insertText', { text: 'forged' }), /stale_claim/);
@@ -63,7 +64,7 @@ test('claims reserve before await; owner capability and epoch cannot be forged',
 });
 test('different tabs dispatch simultaneously; disconnect during attach cannot resurrect claim', async () => {
   const wait = held(); const events = [];
-  const authority = new TabClaims({ attach: async () => {}, detach: async () => {}, sendCommand: async target => { events.push(target.tabId); await wait.promise; } }, 'epoch');
+  const authority = new TabClaims({ attach: async () => {}, detach: async () => {}, sendCommand: async (target, method) => { if (method === 'Emulation.setFocusEmulationEnabled') return; events.push(target.tabId); await wait.promise; } }, 'epoch');
   const a = authority.bindPort(), b = authority.bindPort();
   const one = await authority.claim(a, 1), two = await authority.claim(b, 2);
   const calls = [authority.command(a, one, 'Input.insertText', {}), authority.command(b, two, 'Input.insertText', {})];
