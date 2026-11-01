@@ -25,7 +25,7 @@ import { INSTALL_CLIENTS, type InstallClient, runInstall } from "./install.ts";
 import { NEWTON_BROWSER_VERSION, PACKAGE_METADATA } from "./package-metadata.ts";
 import { MAX_MCP_IN_FLIGHT_REQUESTS, MAX_MCP_LINE_BYTES, MODERN_MCP_PROTOCOL_VERSION } from "./modern-mcp-stdio.ts";
 import { createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
-import { callBridge, startLoopbackBridge } from "./loopback-bridge.ts";
+import { callBridge, startSocketBridge } from "./socket-bridge.ts";
 
 export { NEWTON_BROWSER_VERSION };
 const MINIMUM_NODE_RANGE = PACKAGE_METADATA.nodeRange;
@@ -81,12 +81,10 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     return true;
   }
   if (args[0] === "bridge") {
-    const flags = parseUtilityFlags(args.slice(1), new Set(["--port"]));
-    const portText = flags.single("--port");
-    if (portText !== undefined && (!/^\d{1,5}$/u.test(portText) || Number(portText) > 65535)) throw utilityError("bridge_invalid_arguments");
+    if (args.length !== 1) throw utilityError("bridge_invalid_arguments");
     const directory = ensureConfigDirectory(configDirectory());
-    const bridge = await startLoopbackBridge({ host: createDefaultEngineHost(), directory, port: portText === undefined ? 0 : Number(portText) });
-    process.stdout.write(`${JSON.stringify({ state: "listening", url: bridge.url, tokenFile: bridge.tokenFile, version: NEWTON_BROWSER_VERSION })}\n`);
+    const bridge = await startSocketBridge({ host: createDefaultEngineHost(), directory });
+    process.stdout.write(`${JSON.stringify({ state: "listening", socket: bridge.socket, tokenFile: bridge.tokenFile, version: NEWTON_BROWSER_VERSION })}\n`);
     await new Promise<void>(resolve => { for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => resolve()); });
     await bridge.close();
     process.stdout.write(`${JSON.stringify({ state: "stopped" })}\n`);
@@ -236,8 +234,8 @@ function utilityHelp(): string {
     "MCP client setup:",
     "  newton-browser install <codex|claude-code|generic> [--dry-run] [--force]",
     "",
-    "Bridge, when an agent's MCP connection is down (loopback HTTP, bearer token):",
-    "  newton-browser bridge [--port N]",
+    "Bridge, when an agent's MCP connection dropped (Unix socket in the data directory, bearer token):",
+    "  newton-browser bridge",
     "  newton-browser call <tool> ['<json>' | -] [--out DIRECTORY]",
     "",
     "Diagnostics:",

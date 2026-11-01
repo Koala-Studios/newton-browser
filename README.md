@@ -120,23 +120,24 @@ opt-in because enabling it is visible to pages.
 
 ### When the MCP connection is down
 
-An agent whose MCP connection to Newton Browser has closed can still drive the engine
-through a loopback bridge. Start it in a terminal and leave it running:
+An agent whose MCP connection to Newton Browser dropped can keep driving its own sessions
+through the bridge (macOS and Linux). Start it in a terminal and leave it running:
 
 ```text
-node apps/mcp-server/dist/index.js bridge            (or: bridge --port 47800)
+node apps/mcp-server/dist/index.js bridge
 ```
 
-It serves the same tools as the MCP server, one JSON-RPC message per `POST` to
-`http://127.0.0.1:<port>/mcp`, from one engine, so sessions persist across requests. It
-listens on 127.0.0.1 only, refuses requests that carry a browser `Origin`, and requires
-`Authorization: Bearer <token>`. On start it writes the port and a new random token to
-`bridge.json` in the app data directory (macOS `~/Library/Application Support/NewtonBrowser`,
-Windows `%LOCALAPPDATA%\NewtonBrowser`, Linux `~/.config/newton-browser`), readable by the
-user only, and removes it on exit; it prints the address, never the token. Stopping it
-(Ctrl-C) stops its sessions.
+It serves the same tools as the MCP server, one JSON-RPC message per `POST /mcp`, from one
+engine, so sessions persist across requests. It opens no TCP port: it listens only on the
+Unix socket `bridge.sock` (0600) in the app data directory (0700; macOS
+`~/Library/Application Support/NewtonBrowser`, Linux `~/.config/newton-browser`, or
+`NEWTON_BROWSER_CONFIG_DIR`). Every request also needs `Authorization: Bearer <token>`, a new
+random token it writes to `bridge.json` (0600) beside the socket, and requests that carry a
+browser `Origin` are refused. One bridge runs per data directory; it prints the socket path,
+never the token, and removes both files and stops its sessions when stopped (Ctrl-C).
 
-Each call is then one command, which reads the token file and prints the tool's JSON result:
+Each call is then one command, which reads the token file, calls over the socket and prints
+the tool's JSON result:
 
 ```text
 node apps/mcp-server/dist/index.js call browser.session.start '{"url":"https://example.com/"}'
@@ -178,7 +179,7 @@ bypass that protection.
 - Page content is untrusted data; it cannot authorize effects or select local files.
 - Screenshots mask password and sensitive-autocomplete fields across frames and shadow roots, plus any explicit sensitive zones.
 - Network response bodies are available only as bounded text from the page's own origin; headers are never kept.
-- The optional `bridge` command listens on loopback only and needs the bearer token in its user-only file; nothing listens unless it runs.
+- The optional `bridge` command opens no TCP port: it listens on a user-only Unix socket in the app data directory and needs the bearer token in its user-only file; nothing listens unless it runs.
 
 See [Security](docs/SECURITY.md), [Privacy](docs/PRIVACY.md), and
 [MCP clients](docs/MCP_CLIENTS.md).

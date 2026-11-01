@@ -34,6 +34,6 @@ The operator signs in personally in the visible window and confirms in the termi
 | `configured_browser_unavailable` | Install Chrome or Edge, or set `NEWTON_BROWSER_BROWSER_EXECUTABLE`. |
 | `unsupported_capability` | The page or mode does not support that read or action. |
 
-When the MCP connection to Newton Browser is down, run `newton-browser bridge` in a terminal and make each call with `newton-browser call <tool> '<json>'`: the same tools from one engine over loopback HTTP with a bearer token, so sessions persist across calls; images are saved to files and their paths printed.
+When the MCP connection to Newton Browser dropped (macOS and Linux), run `newton-browser bridge` in a terminal and make each call with `newton-browser call <tool> '<json>'`: the same tools from one engine over a user-only Unix socket in the app data directory, with a bearer token and no TCP port, so sessions persist across calls; images are saved to files and their paths printed.
 
 A popup or sign-in tab is a session page: `browser.pages.list` shows it and `browser.page.select` moves to it. Never click browser chrome by coordinates.

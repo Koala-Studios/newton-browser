@@ -30,18 +30,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   in the observation's `detail`, and a command refused before it ran (a commandId gap or conflict, a full
   queue) says why in the tool error's `detail`.
 
+- The installation-lock crash test no longer passes or fails by timing: its lock-owner fixture exited
+  right after reporting the lock, and dropped the macOS lock handle, so the lock could be released before
+  the check.
+
 ### Added
 
 - A ref target accepts the `snapshotId` of the observation it came from (`{ kind: "ref", ref, snapshotId }`).
   A ref that is gone then fails with the new `stale_ref` and says why: the snapshot expired, the page
   navigated, the ref is on another page or was never issued. A live ref acts as before; without
   `snapshotId` a gone ref is still `stale_target`, now with the same detail.
-- `newton-browser bridge [--port N]` serves the MCP tools over loopback HTTP, for an agent whose MCP
-  connection is down: one JSON-RPC message per `POST /mcp`, one engine so sessions persist across
-  requests, 127.0.0.1 only, requests with a browser `Origin` refused, and a random bearer token written
-  to a user-only `bridge.json` in the app data directory and removed on exit.
-  `newton-browser call <tool> '<json>' [--out DIRECTORY]` reads that file, makes one call and prints the
-  result, with images written to files and listed by path.
+- `newton-browser bridge` serves the MCP tools for an agent whose MCP connection dropped (macOS and
+  Linux): HTTP on the Unix socket `bridge.sock` (0600) in the app data directory (0700), no TCP port,
+  one JSON-RPC message per `POST /mcp`, one engine so sessions persist across requests, one bridge per
+  data directory (a socket left by a killed bridge is cleared). Each request also needs a random bearer
+  token written to a user-only `bridge.json` beside the socket, and requests with a browser `Origin` are
+  refused; both files are removed on exit. `newton-browser call <tool> '<json>' [--out DIRECTORY]`
+  reads that file, makes one call over the socket and prints the result, with images written to files
+  and listed by path.
 
 ## [0.7.24] - 2026-10-31
 
