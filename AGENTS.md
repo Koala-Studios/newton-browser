@@ -8,6 +8,7 @@ Newton Browser is an independent, local-only Chromium browser-control product. T
 
 - Keep `apps/mcp-server` stdout restricted to MCP frames; diagnostics go to stderr.
 - Prefer inherited/private CDP pipes. A TCP CDP endpoint, local HTTP proxy, or MCP listener must not be added.
+  - Exception (2026-11-01): `newton-browser bridge` serves the MCP tools on a 0600 Unix socket in the app data dir, token-gated, so an agent whose MCP connection dropped can keep driving its own sessions. No TCP, no browser-reachable surface; any widening needs the owner.
 - Every session starts at one required normalized HTTP(S) URL and then uses ordinary Chromium networking: redirects, subresources, frames, workers, popups, and cross-origin navigation are not filtered by Newton.
 - Each session owns an isolated browser process and Newton identity by default. Browser startup is blank-first and private CDP control is ready before the initial navigation.
 - Never open one writable standalone profile in competing processes. The operator has authorized opaque copies from a closed Newton-owned shared login source into separate worker identities. Source generations are immutable during cloning; worker changes are never merged back. This authorization does not select the operator's personal profile as a source.
