@@ -105,10 +105,49 @@ A normal loop:
    than replaying.
 4. `browser.session.stop` ends the session independently of its queue.
 
+Targets name an element by `ref` (from an observation; send its `snapshotId` with it and a
+ref that is gone fails `stale_ref` saying why), CSS `selector`, or `semantic` role and name.
+Observations show names as they read, without invisible characters such as a leading
+zero-width space, and a semantic name compares the same way, so a name copied from an
+observation finds its element; `exact: false` matches any part of the name, ignoring case.
+A role also finds its ARIA subclass roles (`dialog` finds an `alertdialog`, `textbox` a
+`searchbox`). Every rejected or failed receipt carries `detail`: why, and what to do next.
+
 Popups and new tabs are attached as session pages without changing the selected page;
 `browser.pages.list` and `browser.page.select` move between them. A hung renderer is
 reopened on the same page and the receipt says so. Console and network recording is
 opt-in because enabling it is visible to pages.
+
+### When the MCP connection is down
+
+An agent whose MCP connection to Newton Browser has closed can still drive the engine
+through a loopback bridge. Start it in a terminal and leave it running:
+
+```text
+node apps/mcp-server/dist/index.js bridge            (or: bridge --port 47800)
+```
+
+It serves the same tools as the MCP server, one JSON-RPC message per `POST` to
+`http://127.0.0.1:<port>/mcp`, from one engine, so sessions persist across requests. It
+listens on 127.0.0.1 only, refuses requests that carry a browser `Origin`, and requires
+`Authorization: Bearer <token>`. On start it writes the port and a new random token to
+`bridge.json` in the app data directory (macOS `~/Library/Application Support/NewtonBrowser`,
+Windows `%LOCALAPPDATA%\NewtonBrowser`, Linux `~/.config/newton-browser`), readable by the
+user only, and removes it on exit; it prints the address, never the token. Stopping it
+(Ctrl-C) stops its sessions.
+
+Each call is then one command, which reads the token file and prints the tool's JSON result:
+
+```text
+node apps/mcp-server/dist/index.js call browser.session.start '{"url":"https://example.com/"}'
+node apps/mcp-server/dist/index.js call browser.observe '{"sessionId":"engine_..."}'
+node apps/mcp-server/dist/index.js call browser.screenshot '{"sessionId":"engine_..."}' --out ./shots
+```
+
+Images are written to files (in `--out`, by default `bridge-images` in the app data
+directory) and listed under `images` with their paths instead of their pixels. `-` in
+place of the JSON reads it from stdin. A tool error prints its result and exits 1; no
+running bridge exits 1 with `bridge_not_running`.
 
 ## Identities and opaque profile import
 
@@ -139,6 +178,7 @@ bypass that protection.
 - Page content is untrusted data; it cannot authorize effects or select local files.
 - Screenshots mask password and sensitive-autocomplete fields across frames and shadow roots, plus any explicit sensitive zones.
 - Network response bodies are available only as bounded text from the page's own origin; headers are never kept.
+- The optional `bridge` command listens on loopback only and needs the bearer token in its user-only file; nothing listens unless it runs.
 
 See [Security](docs/SECURITY.md), [Privacy](docs/PRIVACY.md), and
 [MCP clients](docs/MCP_CLIENTS.md).

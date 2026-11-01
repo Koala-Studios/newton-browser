@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ENGINE_ERRORS, EngineError, asObservationBudget, engineErrorCode, type EngineHostFill, type EngineSignInFill, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
+import { ENGINE_ERRORS, EngineError, asObservationBudget, engineErrorCode, nameMatches, rolesFor, type EngineHostFill, type EngineSignInFill, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
 import { CommandContext } from "./command-context.ts";
 import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
@@ -32,6 +32,7 @@ type SignInOrigin = { origin: string; local: [string, string][]; session: [strin
 export type SignInState = { cookies: RecordValue[]; origins: SignInOrigin[] };
 /** What adoptSignIn carried into the session: cookies set, storage items written, and whether IndexedDB came across. */
 export type SignInAdoption = { cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported" };
+const OUT_OF_VIEW = "The element stays outside the visible area after scrolling it into view (a clipped or off-screen container).";
 const DOCUMENT_WORK_CHARS = 262_144;
 const DOCUMENT_WORK_NODES = 50_000;
 const DOCUMENT_CACHE_BYTES = 512 * 1024;
@@ -227,7 +228,8 @@ export class PageExecutor implements EngineExecutor {
       directory: this.directory,
       send: (binding, method, params) => this.send(binding, method, params),
       pendingAttachments: () => this.pendingAttachments.size,
-      pendingFrames: () => this.pendingFrames.size,
+      // A frame that never committed stops counting after ten seconds, as it does for observe.
+      pendingFrames: () => { this.prunePendingFrames(); return this.pendingFrames.size; },
     });
     connection.signal.addEventListener("abort", () => { this.closed = true; this.unsubscribe?.(); }, { once: true });
   }
@@ -458,7 +460,7 @@ export class PageExecutor implements EngineExecutor {
       }
       return { state: this.dialogs.get(dialog.route)?.id === dialog.id ? "unknown" : "met", kind: "visible" };
     }
-    if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId)) throw new EngineError("target_not_editable");
+    if ([...this.dialogs.values()].some(dialog => dialog.pageId === page.pageId)) throw new EngineError("target_not_editable", undefined, "A page dialog (alert, confirm or prompt) is open; accept or dismiss it first.");
     if (action.kind === "press" && action.keys) this.input!.preflight(action.keys, action.text === undefined ? 1 : 2);
     if (action.kind === "sign_in_fill") return this.signInFill(context, page, action, host);
     if (action.kind === "navigate") return this.navigate(context, page, action.url);
@@ -614,16 +616,16 @@ export class PageExecutor implements EngineExecutor {
     if (facts.pointerInView === false) {
       await context.input(() => this.send(binding,"DOM.scrollIntoViewIfNeeded",{backendNodeId:binding.backendNodeId}));
       facts = await this.resolver.inspect(context,binding,{editable:false,pointer:true});
-      if (!facts.pointerInView) throw new EngineError("target_not_editable");
+      if (!facts.pointerInView) throw new EngineError("target_not_editable", undefined, OUT_OF_VIEW);
     }
     const box = facts.bbox;
-    if (!box || box.width <= 0 || box.height <= 0) throw new EngineError("target_not_editable");
+    if (!box || box.width <= 0 || box.height <= 0) throw new EngineError("target_not_editable", undefined, "The element has no size to point at.");
     // A drawn box's middle may be off screen; pointerPoint checks the part that shows is what gets hit.
     if (!facts.drawn) await this.verifyHit(context, binding, box.x + box.width / 2, box.y + box.height / 2);
     const { x, y } = await this.pointerPoint(context, binding);
     await context.input(() => this.send(binding, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", clickCount: 0 }));
     if (press) {
-      const verify = async () => { const current = await this.pointerPoint(context, binding); if (current.x !== x || current.y !== y) throw new EngineError("target_moved"); };
+      const verify = async () => { const current = await this.pointerPoint(context, binding); if (current.x !== x || current.y !== y) throw new EngineError("target_moved", undefined, "The element moved while the pointer went to it; retry once it settles."); };
       await verify();
       await this.input!.click(binding, x, y, press.button, press.count, verify);
     }
@@ -768,7 +770,7 @@ export class PageExecutor implements EngineExecutor {
       if(facts.pointerInView===false){
         await context.input(()=>this.send(binding,'DOM.scrollIntoViewIfNeeded',{backendNodeId:binding.backendNodeId}));
         const current=await this.resolver.inspect(context,binding,{editable:false,pointer:true});
-        if(!current.pointerInView)throw new EngineError('target_not_editable');
+        if(!current.pointerInView)throw new EngineError('target_not_editable',undefined,OUT_OF_VIEW);
       }
       // A frame element scrolls the document shown in it (an editor's preview), in that frame's own renderer.
       if (facts.tag === "iframe" || facts.tag === "frame") for (const frame of this.directory.frames(page.pageId)) {
@@ -980,7 +982,7 @@ export class PageExecutor implements EngineExecutor {
       if (waitFor.state === "value") return facts.value === waitFor.value;
       return waitFor.state !== "detached";
     } catch (error) {
-      if ((error as { code?: string }).code === "not_found" || (error as { code?: string }).code === "stale_target") return waitFor.state === "detached" || waitFor.state === "hidden";
+      if (["not_found", "stale_target", "stale_ref"].includes(String((error as { code?: string }).code))) return waitFor.state === "detached" || waitFor.state === "hidden";
       throw error;
     }
   }
@@ -1450,9 +1452,10 @@ export class PageExecutor implements EngineExecutor {
         : ["button", "checkbox", "radio", "switch", "slider", "tab"].includes(view.role) ? 1 : 2;
     };
     if (query) {
-      const needle = query.text?.toLocaleLowerCase();
-      const matches = (view: typeof candidates[number]["view"]) => (!query.role || view.role === query.role)
-        && (!needle || [view.name, view.description ?? "", ...(view.context ?? []).map(item => item.name)].some(value => value.toLocaleLowerCase().includes(needle)));
+      // Text compares as names read (invisible characters dropped, whitespace collapsed, case ignored); a role finds its ARIA subclass roles.
+      const roles = query.role ? rolesFor(query.role) : undefined;
+      const matches = (view: typeof candidates[number]["view"]) => (!roles || roles.includes(view.role))
+        && (query.text === undefined || [view.name, view.description ?? "", ...(view.context ?? []).map(item => item.name)].some(value => nameMatches(value, query.text!, false)));
       for (let index = candidates.length - 1; index >= 0; index--) if (!matches(candidates[index]!.view)) candidates.splice(index, 1);
     }
     candidates.sort((left, right) => priority(left.view, left.binding) - priority(right.view, right.binding) || Number(right.primary) - Number(left.primary));
@@ -1946,7 +1949,7 @@ export class PageExecutor implements EngineExecutor {
       }));
       const value = object(result.result).value;
       if (typeof value === "string" && value) throw new EngineError("target_covered", undefined, value);
-      if (value !== true) throw new EngineError("target_moved");
+      if (value !== true) throw new EngineError("target_moved", undefined, "The element is not under its own middle point (it is moving, or drawn outside its box); retry once it settles.");
     } finally { void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
   }
   private async pointerPoint(context: CommandContext, binding: NodeBinding): Promise<{ x: number; y: number }> {

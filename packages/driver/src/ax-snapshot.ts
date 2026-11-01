@@ -1,3 +1,4 @@
+import { nameMatches } from '@newton-browser/core';
 type Ax = Record<string, unknown>;
 type Send = (method: string, params: Ax) => Promise<Ax>;
 const object = (value: unknown): Ax => value && typeof value === 'object' && !Array.isArray(value) ? value as Ax : {};
@@ -32,9 +33,8 @@ export async function readAXSnapshot(send: Send, frameId: string, scopeBackendNo
   let incomplete = false;
   // A text query must reach a matching control past the per-role bound, so
   // matching names take the bounded slots first and the rest fill them in order.
-  const needle = queryText?.toLocaleLowerCase();
-  const named = (node: Ax) => !!needle && [object(node.name).value, object(node.description).value].some(value => typeof value === 'string' && value.toLocaleLowerCase().includes(needle));
-  const bound = (batch: Ax[], cap: number) => (needle ? [...batch.filter(named), ...batch.filter(node => !named(node))] : batch).slice(0, cap);
+  const named = (node: Ax) => !!queryText && [object(node.name).value, object(node.description).value].some(value => typeof value === 'string' && nameMatches(value, queryText, false));
+  const bound = (batch: Ax[], cap: number) => (queryText ? [...batch.filter(named), ...batch.filter(node => !named(node))] : batch).slice(0, cap);
   const primary = new Set<number>();
   const add = (batch: Ax[]) => {
     for (const node of batch) {

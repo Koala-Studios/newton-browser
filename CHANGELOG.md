@@ -5,7 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.25] - Unreleased
+
+### Fixed
+
+- A semantic target finds a control whose label carries invisible characters. A cookie banner's
+  "Reject all" button whose label starts with a zero-width space and a space was refused as `not_found`:
+  the name had to be sent byte for byte, and observe printed it raw, so a name copied from the observation
+  did not match. Observations now show names as they read (zero-width and other invisible format
+  characters dropped, whitespace collapsed), and a semantic name is compared the same way after an
+  exact try as written. `exact: false` matches any part of the name, ignoring case.
+- A dialog scope finds an `alertdialog`: a semantic role also finds its ARIA subclass roles (`dialog`:
+  `alertdialog`; `textbox`: `searchbox`; `menuitem`: `menuitemcheckbox`, `menuitemradio`), in targets and
+  in `observe.query.role`. `role: "dialog"` with part of a name that runs on into the description found
+  nothing (`not_found`, or `search_incomplete` while a frame was loading).
+- A read scope no longer fails as `search_incomplete` while a frame is still loading: it takes the
+  first match among the frames that are ready (an action still needs every frame, to rule out a second
+  match), and a frame that never committed stops counting after ten seconds, as it does for observe.
+- Every rejected or failed receipt carries `detail` (top level and on the failing step): why, and what
+  to do next. A semantic or selector miss lists what has the role and whether part of a name matches
+  (`exact: false`); an ambiguous target names its matches; `search_incomplete` says which frames were
+  loading or did not answer; `target_not_editable` says whether the element is disabled, hidden,
+  read-only or out of view; `target_covered` keeps `coveredBy`. A scope that finds nothing says the same
+  in the observation's `detail`, and a command refused before it ran (a commandId gap or conflict, a full
+  queue) says why in the tool error's `detail`.
+
+### Added
+
+- A ref target accepts the `snapshotId` of the observation it came from (`{ kind: "ref", ref, snapshotId }`).
+  A ref that is gone then fails with the new `stale_ref` and says why: the snapshot expired, the page
+  navigated, the ref is on another page or was never issued. A live ref acts as before; without
+  `snapshotId` a gone ref is still `stale_target`, now with the same detail.
+- `newton-browser bridge [--port N]` serves the MCP tools over loopback HTTP, for an agent whose MCP
+  connection is down: one JSON-RPC message per `POST /mcp`, one engine so sessions persist across
+  requests, 127.0.0.1 only, requests with a browser `Origin` refused, and a random bearer token written
+  to a user-only `bridge.json` in the app data directory and removed on exit.
+  `newton-browser call <tool> '<json>' [--out DIRECTORY]` reads that file, makes one call and prints the
+  result, with images written to files and listed by path.
 
 ## [0.7.24] - 2026-10-31
 

@@ -41,7 +41,7 @@ test('MCP scoped views preserve row identity, validation and scope-compatible ba
     const empty=await call('browser.observe',{sessionId,scope:{kind:'selector',selector:'#empty'}});
     assert.equal(empty.observation.state,'available');assert.deepEqual(empty.observation.nodes,[]);
     const missing=await call('browser.observe',{sessionId,scope:{kind:'selector',selector:'#missing'}});
-    assert.deepEqual(missing.observation,{state:'unavailable',errorCode:'not_found'});
+    assert.deepEqual(missing.observation,{state:'unavailable',errorCode:'not_found',detail:'No element matches selector "#missing".'});
     const edited=await call('browser.act',{sessionId,command:{commandId:1,maxBytes:2048,action:{kind:'fill',target:{kind:'selector',selector:'#email'},value:'draft'}}});
     assert.equal(edited.postcondition.state,'met');assert.equal(edited.observation.scope,'target');
     const field=edited.observation.nodes[0];assert.equal(field.value,'draft');assert.equal(field.invalid,true);

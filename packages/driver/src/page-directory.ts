@@ -115,10 +115,25 @@ export class PageDirectory {
     if (!frame || frame.documentGeneration !== binding.documentGeneration) throw new EngineError("stale_target");
     return frame.route;
   }
-  resolve(ref: string, pageId: string): NodeBinding {
+  /** With `snapshotId` (the observation the ref came from) a ref that is gone is `stale_ref`; without, `stale_target`. Both say why. */
+  resolve(ref: string, pageId: string, snapshotId?: string): NodeBinding {
     const binding = this.refs.get(ref);
-    if (!binding || binding.pageId !== pageId) throw new EngineError("stale_target");
-    this.route(binding); return binding;
+    if (binding && binding.pageId === pageId) {
+      try { this.route(binding); return binding; }
+      catch { /* its document or frame is gone */ }
+    }
+    throw new EngineError(snapshotId === undefined ? "stale_target" : "stale_ref", undefined, this.goneReason(ref, pageId, binding, snapshotId));
+  }
+  private goneReason(ref: string, pageId: string, binding: NodeBinding | undefined, snapshotId?: string): string {
+    const issued = /^s([1-9]\d{0,14})$/u.exec(snapshotId ?? "");
+    if (snapshotId !== undefined && (!issued || Number(issued[1]) >= this.nextSnapshot)) return `This session issued no snapshot ${snapshotId}; observe for current refs.`;
+    const number = /^e([1-9]\d{0,14})$/u.exec(ref);
+    if (!number || Number(number[1]) >= this.nextRef) return `This session issued no ref ${ref}; observe for current refs.`;
+    if (binding && binding.pageId !== pageId) return `Ref ${ref} is on another page (pageId ${binding.pageId}); act with that pageId or observe this page.`;
+    const snapshot = snapshotId === undefined ? undefined : this.snapshots.find(item => item.id === snapshotId);
+    if (snapshotId !== undefined && !snapshot) return `Snapshot ${snapshotId} expired: refs stay valid for the last ${PageDirectory.SNAPSHOTS} observations. Observe again.`;
+    if (snapshot && !snapshot.refs.includes(ref)) return `Ref ${ref} is not in snapshot ${snapshotId}; observe again.`;
+    return `The element ${ref} named is gone: its page navigated or its frame went away. Observe again.`;
   }
   /** Call only for nodes that survived output selection. Private verification never publishes. */
   publish(bindings: readonly NodeBinding[]): { snapshotId: string; refs: readonly string[]; expiredSnapshots: readonly string[] } {

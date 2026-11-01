@@ -1,4 +1,4 @@
-import { EngineError, type EnginePageStamp, type EngineTarget } from "@newton-browser/core";
+import { EngineError, nameMatches, readableName, rolesFor, type EnginePageStamp, type EngineTarget } from "@newton-browser/core";
 import type { CommandContext } from "./command-context.ts";
 import { type NodeBinding } from "./page-directory.ts";
 import { releaseRoleQueries } from "./ax-snapshot.ts";
@@ -76,7 +76,7 @@ const fieldInspection = `function(pointer=false) {
 
 interface TargetResolverContext {
   directory: {
-    resolve(ref: string, pageId: string): NodeBinding;
+    resolve(ref: string, pageId: string, snapshotId?: string): NodeBinding;
     binding(page: EnginePageStamp, backendNodeId: number): NodeBinding;
     frames(pageId: string): readonly EnginePageStamp[];
     parent(page: EnginePageStamp): EnginePageStamp | undefined;
@@ -93,6 +93,22 @@ const withheld = <T,>(reply: Promise<T>): Promise<T> => {
   void reply.catch(() => undefined);
   return Promise.race([reply, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new EngineError("search_incomplete")), AX_QUERY_MS); })]).finally(() => clearTimeout(timer));
 };
+type SemanticNode = { binding: NodeBinding; name: string };
+const REMOVED = "The element was removed from the page; observe again.";
+const quoted = (value: string): string => JSON.stringify(value.length > 80 ? `${value.slice(0, 79)}…` : value);
+/** Up to six names as they read, in page order, untrusted page content. */
+function listed(nodes: readonly SemanticNode[]): string {
+  const names = [...new Set(nodes.map(node => readableName(node.name)))];
+  const shown = names.slice(0, 6).map(name => name ? quoted(name) : "(no name)");
+  return `${shown.join(", ")}${names.length > shown.length ? `, and ${names.length - shown.length} more` : ""}`;
+}
+/** Why a semantic target found nothing: what has the role, and whether part of a name matches. */
+function missingDetail(nodes: readonly SemanticNode[], target: Extract<EngineTarget, { kind: "semantic" }>, roles: readonly string[]): string {
+  const wanted = `${roles.join(" or ")} ${target.exact ? "named" : "whose name contains"} ${quoted(readableName(target.name))}`;
+  if (!nodes.length) return `Nothing on the page has role ${roles.join(" or ")}, so no ${wanted}. Observe for the roles it has.`;
+  const partial = target.exact ? nodes.filter(node => nameMatches(node.name, target.name, false)) : [];
+  return `No ${wanted}. ${nodes.length} with that role: ${listed(nodes)}.${partial.length ? ` ${partial.length} contain it: pass exact false to match part of a name.` : ""}`;
+}
 export type TargetResolverFacts = Readonly<{
   sensitive: boolean;
   editable: boolean;
@@ -129,52 +145,94 @@ export class TargetResolver {
     this.pendingAttachmentsCount = context.pendingAttachments;
     this.pendingFrameCount = context.pendingFrames;
   }
-  /** `firstOfMany` (reads only): several matches resolve to the first in page order and the count is reported; actions stay exact. */
+  /** `firstOfMany` (reads only): several matches resolve to the first in page order and the count is reported; actions stay exact.
+   * A read takes the first match among the frames that are ready; an action needs every frame searched, to rule out a second match. */
   async resolve(context: CommandContext, page: EnginePageStamp, target: EngineTarget, firstOfMany?: { count: number }): Promise<NodeBinding> {
-    if (target.kind === "ref") return this.directory.resolve(target.ref, page.pageId);
+    if (target.kind === "ref") return this.directory.resolve(target.ref, page.pageId, target.snapshotId);
     this.directory.binding(page, 1);
-    if (this.pendingAttachmentsCount() || this.pendingFrameCount()) throw new EngineError("search_incomplete");
+    const pending = this.pendingAttachmentsCount() + this.pendingFrameCount();
+    const loading = pending ? `${pending} frame(s) were still loading.` : undefined;
+    if (loading && !firstOfMany) throw new EngineError("search_incomplete", undefined, `${loading} A second match could not be ruled out; retry once the page settles, or act on a ref from observe.`);
+    if (target.kind === "semantic") return this.semantic(context, page, target, firstOfMany, loading);
     const matches: NodeBinding[] = [];
-    let visited = 0;
+    let count = 0;
     for (const frame of this.directory.frames(page.pageId)) {
       const base = this.directory.binding(frame, 1);
-      if (target.kind === "semantic") {
-        // A child frame with no rendered box cannot hold an actionable target, and
-        // Chromium may never answer an AX query for it (a hidden 0x0 cart-sync frame).
-        if (!await this.rendered(context, frame)) continue;
-        const nodeId = await this.documentRoot(context, frame, base);
-        // Chromium filters inside the renderer; unrelated article text and its
-        // inline layout fragments never become a giant protocol response.
-        // Observe lists <summary> (Chromium's internal DisclosureTriangle) as a button.
-        const axRoles = target.role === "button" ? ["button", "DisclosureTriangle"] : [target.role];
-        const nodes: RecordValue[] = [];
-        const send = (method: string, params: RecordValue) => context.read(() => this.sendBinding(base, method, params));
-        const replies = axRoles.map(role => withheld(send("Accessibility.queryAXTree", { nodeId, role, ...(target.exact ? { accessibleName: target.name } : {}) })));
-        releaseRoleQueries(send, { nodeId });
-        for (const result of await Promise.all(replies)) nodes.push(...array(result.nodes));
-        visited += nodes.length;
-        if (visited > 20_000) throw new EngineError("search_incomplete");
-        for (const node of nodes) if (!node.ignored && axRoles.includes(String(object(node.role).value)) &&
-          (target.exact ? object(node.name).value === target.name : string(object(node.name).value).includes(target.name))) {
-          matches.push(this.directory.binding(frame, Number(node.backendDOMNodeId)));
-        }
-      } else {
-        const nodeId = await this.documentRoot(context, frame, base);
-        const result = await context.read(() => this.sendBinding(base, "DOM.querySelectorAll", { nodeId, selector: target.selector }));
-        const ids = Array.isArray(result.nodeIds) ? result.nodeIds : [];
-        if (ids.length > 1 && !firstOfMany) throw new EngineError("ambiguous");
-        if (firstOfMany) firstOfMany.count += Math.max(0, ids.length - 1);
-        if (ids.length) {
-          const described = await context.read(() => this.sendBinding(base, "DOM.describeNode", { nodeId: ids[0] }));
-          const backendNodeId = Number(object(described.node).backendNodeId);
-          if (Number.isSafeInteger(backendNodeId) && backendNodeId > 0) matches.push(this.directory.binding(frame, backendNodeId));
-        }
+      const nodeId = await this.documentRoot(context, frame, base);
+      const result = await context.read(() => this.sendBinding(base, "DOM.querySelectorAll", { nodeId, selector: target.selector }));
+      const ids = Array.isArray(result.nodeIds) ? result.nodeIds : [];
+      count += ids.length;
+      if (count > 1 && !firstOfMany) throw new EngineError("ambiguous", undefined, `Selector ${quoted(target.selector)} matches more than one element; make it match one, or act on a ref from observe.`);
+      if (ids.length) {
+        const described = await context.read(() => this.sendBinding(base, "DOM.describeNode", { nodeId: ids[0] }));
+        const backendNodeId = Number(object(described.node).backendNodeId);
+        if (Number.isSafeInteger(backendNodeId) && backendNodeId > 0) matches.push(this.directory.binding(frame, backendNodeId));
       }
-      if (matches.length > 1 && !firstOfMany) throw new EngineError("ambiguous");
     }
-    if (!matches.length) throw new EngineError("not_found");
-    if (firstOfMany) firstOfMany.count += matches.length;
+    if (!matches.length) throw new EngineError(loading ? "search_incomplete" : "not_found", undefined, `${loading ? `${loading} ` : ""}No element matches selector ${quoted(target.selector)}.`);
+    if (firstOfMany) firstOfMany.count += count;
     return matches[0]!;
+  }
+  /** As written first: Chromium compares the name in the renderer, so only matching nodes cross the connection. Then as
+   * names read (invisible characters dropped, whitespace collapsed; exact false: any part, ignoring case), comparing
+   * every node with the role, so a name copied from an observation finds its element. */
+  private async semantic(context: CommandContext, page: EnginePageStamp, target: Extract<EngineTarget, { kind: "semantic" }>, firstOfMany: { count: number } | undefined, loading: string | undefined): Promise<NodeBinding> {
+    // A role also finds its ARIA subclass roles; observe lists <summary> (Chromium's internal DisclosureTriangle) as a button.
+    const roles = rolesFor(target.role);
+    const axRoles = target.role === "button" ? [...roles, "DisclosureTriangle"] : roles;
+    if (target.exact) {
+      const written = await this.search(context, page, axRoles, target.name, firstOfMany !== undefined);
+      const found = written.nodes.filter(node => node.name === target.name);
+      if (found.length) return this.choose(found, target, firstOfMany);
+    }
+    const all = await this.search(context, page, axRoles, undefined, firstOfMany !== undefined);
+    const found = all.nodes.filter(node => nameMatches(node.name, target.name, target.exact));
+    if (found.length) return this.choose(found, target, firstOfMany);
+    const incomplete = [loading, all.incomplete].filter(Boolean).join(" ");
+    throw new EngineError(incomplete ? "search_incomplete" : "not_found", undefined, `${incomplete ? `${incomplete} ` : ""}${missingDetail(all.nodes, target, roles)}`);
+  }
+  private choose(found: readonly SemanticNode[], target: Extract<EngineTarget, { kind: "semantic" }>, firstOfMany: { count: number } | undefined): NodeBinding {
+    if (firstOfMany) { firstOfMany.count += found.length; return found[0]!.binding; }
+    if (found.length > 1) throw new EngineError("ambiguous", undefined,
+      `${found.length} elements with role ${target.role} match ${quoted(readableName(target.name))}: ${listed(found)}. Act on a ref from observe, or use a selector.`);
+    return found[0]!.binding;
+  }
+  private async search(context: CommandContext, page: EnginePageStamp, axRoles: readonly string[], accessibleName: string | undefined, read: boolean): Promise<{ nodes: SemanticNode[]; incomplete?: string }> {
+    const nodes: SemanticNode[] = [];
+    let visited = 0, incomplete: string | undefined;
+    for (const frame of this.directory.frames(page.pageId)) {
+      const base = this.directory.binding(frame, 1);
+      // A child frame with no rendered box cannot hold an actionable target, and
+      // Chromium may never answer an AX query for it (a hidden 0x0 cart-sync frame).
+      if (!await this.rendered(context, frame)) continue;
+      const nodeId = await this.documentRoot(context, frame, base);
+      // Chromium filters inside the renderer; unrelated article text and its
+      // inline layout fragments never become a giant protocol response.
+      const send = (method: string, params: RecordValue) => context.read(() => this.sendBinding(base, method, params));
+      const replies = axRoles.map(role => withheld(send("Accessibility.queryAXTree", { nodeId, role, ...(accessibleName === undefined ? {} : { accessibleName }) })));
+      releaseRoleQueries(send, { nodeId });
+      let results: RecordValue[];
+      try { results = await Promise.all(replies); }
+      catch (error) {
+        if (!(error instanceof EngineError) || error.code !== "search_incomplete" || error.detail) throw error;
+        const reason = `${this.directory.parent(frame) ? "An embedded frame" : "The page"} did not answer the accessibility search within ${AX_QUERY_MS / 1000} s.`;
+        if (!read) throw new EngineError("search_incomplete", undefined, `${reason} Retry, or act on a ref from observe.`);
+        incomplete ??= reason; continue;
+      }
+      for (const result of results) for (const node of array(result.nodes)) {
+        if (++visited > 20_000) {
+          const reason = `More than 20000 elements have role ${axRoles[0]}.`;
+          if (!read) throw new EngineError("search_incomplete", undefined, `${reason} Act on a ref from observe, or use a selector.`);
+          return { nodes, incomplete: incomplete ?? reason };
+        }
+        const backendNodeId = Number(node.backendDOMNodeId);
+        if (node.ignored || !axRoles.includes(String(object(node.role).value)) || !Number.isSafeInteger(backendNodeId) || backendNodeId <= 0) continue;
+        nodes.push({ binding: this.directory.binding(frame, backendNodeId), name: string(object(node.name).value) });
+      }
+      // Two nodes already named exactly as written: the action is ambiguous whatever the other frames hold.
+      if (!read && accessibleName !== undefined && nodes.filter(node => node.name === accessibleName).length > 1) break;
+    }
+    return { nodes, ...(incomplete ? { incomplete } : {}) };
   }
   private async rendered(context: CommandContext, frame: EnginePageStamp): Promise<boolean> {
     const parent = this.directory.parent(frame);
@@ -218,7 +276,7 @@ export class TargetResolver {
   async inspect(context: CommandContext, binding: NodeBinding, options: { editable?: boolean; actionable?: boolean; allowSensitive?: boolean; pointer?: boolean } = {}): Promise<TargetResolverFacts> {
     const resolved = await context.read(() => this.sendBinding(binding, "DOM.resolveNode", { backendNodeId: binding.backendNodeId }));
     const objectId = string(object(resolved.object).objectId);
-    if (!objectId) throw new EngineError("stale_target");
+    if (!objectId) throw new EngineError("stale_target", undefined, REMOVED);
     try {
       const result = await context.read(() => this.sendBinding(binding, "Runtime.callFunctionOn", {
         objectId, functionDeclaration: fieldInspection, arguments: [{value:options.pointer===true}], returnByValue: true, silent: true, throwOnSideEffect: true,
@@ -230,8 +288,13 @@ export class TargetResolver {
       }
       if (facts.sensitive && options.allowSensitive !== true) throw new EngineError("sensitive_target");
       if (options.pointer && typeof facts.pointerInView !== "boolean") throw new EngineError("evidence_unavailable");
-      if (!facts.connected) throw new EngineError("stale_target");
-      if (options.actionable !== false && (facts.disabled || !facts.visible || (options.editable !== false && (!facts.editable || facts.readonly)))) throw new EngineError("target_not_editable");
+      if (!facts.connected) throw new EngineError("stale_target", undefined, REMOVED);
+      if (options.actionable !== false) {
+        if (facts.disabled) throw new EngineError("target_not_editable", undefined, "The element is disabled.");
+        if (!facts.visible) throw new EngineError("target_not_editable", undefined, "The element is hidden or has no size.");
+        if (options.editable !== false && !facts.editable) throw new EngineError("target_not_editable", undefined, "The element does not take typed text; target its text field.");
+        if (options.editable !== false && facts.readonly) throw new EngineError("target_not_editable", undefined, "The field is read-only.");
+      }
       // Internal effect verification needs the exact non-sensitive value. Public
       // observations redact independently; these facts never form an output view.
       const verifiedValue = !facts.sensitive && typeof facts.value === "string" ? facts.value : undefined;

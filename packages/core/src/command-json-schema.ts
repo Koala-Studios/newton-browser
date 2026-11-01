@@ -1,5 +1,5 @@
 const target = { oneOf: [
-  { type: "object", properties: { kind: { const: "ref" }, ref: { type: "string", maxLength: 120, minLength: 1 } }, required: ["kind", "ref"], additionalProperties: false },
+  { type: "object", properties: { kind: { const: "ref" }, ref: { type: "string", maxLength: 120, minLength: 1 }, snapshotId: { type: "string", maxLength: 120, minLength: 1 } }, required: ["kind", "ref"], additionalProperties: false },
   { type: "object", properties: { kind: { const: "selector" }, selector: { type: "string", maxLength: 1024, minLength: 1 } }, required: ["kind", "selector"], additionalProperties: false },
   { type: "object", properties: { kind: { const: "semantic" }, role: { type: "string", maxLength: 80, minLength: 1 }, name: { type: "string", maxLength: 1024, minLength: 1 }, exact: { type: "boolean", default: true } }, required: ["kind", "role", "name"], additionalProperties: false },
 ] };

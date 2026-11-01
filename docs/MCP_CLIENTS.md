@@ -4,7 +4,8 @@ Newton Browser speaks stateless MCP `2026-07-28` over newline-delimited JSON on 
 client that opens with the classic `initialize` handshake (`2025-11-25`, `2025-06-18` or
 `2025-03-26`; Claude Code does, depending on its release and settings) gets the same tools on
 that connection without per-request metadata. There is no HTTP transport, `Content-Length`
-framing, socket or daemon.
+framing, socket or daemon, except the opt-in `newton-browser bridge` for an agent whose MCP
+connection is down: the same tools over loopback HTTP with a bearer token (see the README).
 
 On `2026-07-28`, every request carries:
 

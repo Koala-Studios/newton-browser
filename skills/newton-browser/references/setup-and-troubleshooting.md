@@ -28,10 +28,12 @@ The operator signs in personally in the visible window and confirms in the termi
 | --- | --- |
 | `protocol_version_required` / MCP `-32022` | Send stateless MCP `2026-07-28` metadata on every request. |
 | `invalid_arguments` | Fix the named `field`; resend with the same `nextCommandId`. |
-| `stale_target` / `target_moved` / `ambiguous` / `not_found` | Observe again and use a fresh narrower ref. |
+| `stale_target` / `stale_ref` / `target_moved` / `ambiguous` / `not_found` | Read `detail`, observe again and use a fresh narrower ref. |
 | `target_covered` | The step's `coveredBy` names what covers the target; dismiss it, then retry. |
 | `browser_launch_failed` | Retry once, then report its `phase`; run `doctor --live`. |
 | `configured_browser_unavailable` | Install Chrome or Edge, or set `NEWTON_BROWSER_BROWSER_EXECUTABLE`. |
 | `unsupported_capability` | The page or mode does not support that read or action. |
+
+When the MCP connection to Newton Browser is down, run `newton-browser bridge` in a terminal and make each call with `newton-browser call <tool> '<json>'`: the same tools from one engine over loopback HTTP with a bearer token, so sessions persist across calls; images are saved to files and their paths printed.
 
 A popup or sign-in tab is a session page: `browser.pages.list` shows it and `browser.page.select` moves to it. Never click browser chrome by coordinates.

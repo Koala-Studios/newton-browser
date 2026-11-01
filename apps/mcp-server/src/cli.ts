@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from 'node:url';
 import {prepareAdapterDirectory,readAdapterDirectory} from './adapter-directory.ts';
@@ -23,6 +24,8 @@ import {
 import { INSTALL_CLIENTS, type InstallClient, runInstall } from "./install.ts";
 import { NEWTON_BROWSER_VERSION, PACKAGE_METADATA } from "./package-metadata.ts";
 import { MAX_MCP_IN_FLIGHT_REQUESTS, MAX_MCP_LINE_BYTES, MODERN_MCP_PROTOCOL_VERSION } from "./modern-mcp-stdio.ts";
+import { createDefaultEngineHost } from "./browser-runtime/default-engine-host.ts";
+import { callBridge, startLoopbackBridge } from "./loopback-bridge.ts";
 
 export { NEWTON_BROWSER_VERSION };
 const MINIMUM_NODE_RANGE = PACKAGE_METADATA.nodeRange;
@@ -75,6 +78,33 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     if(operation==='setup')await installNativeLocal(path.join(configDirectory(),'tab-adapter-native'),installed.extensionId,{browser});
     process.stdout.write(JSON.stringify({state:operation==='setup'?'browser_install_required':'prepared',extensionId:installed.extensionId,directory:installed.directory,
       setupPage:`chrome-extension://${installed.extensionId}/setup.html`,...(operation==='setup'?{browser,instructions:`In ${browser}://extensions enable Developer mode, choose Load unpacked, and select the directory shown. This browser installation is needed once.`}:{})})+'\n');
+    return true;
+  }
+  if (args[0] === "bridge") {
+    const flags = parseUtilityFlags(args.slice(1), new Set(["--port"]));
+    const portText = flags.single("--port");
+    if (portText !== undefined && (!/^\d{1,5}$/u.test(portText) || Number(portText) > 65535)) throw utilityError("bridge_invalid_arguments");
+    const directory = ensureConfigDirectory(configDirectory());
+    const bridge = await startLoopbackBridge({ host: createDefaultEngineHost(), directory, port: portText === undefined ? 0 : Number(portText) });
+    process.stdout.write(`${JSON.stringify({ state: "listening", url: bridge.url, tokenFile: bridge.tokenFile, version: NEWTON_BROWSER_VERSION })}\n`);
+    await new Promise<void>(resolve => { for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => resolve()); });
+    await bridge.close();
+    process.stdout.write(`${JSON.stringify({ state: "stopped" })}\n`);
+    return true;
+  }
+  if (args[0] === "call") {
+    const tool = args[1];
+    if (!tool || !/^browser\.[a-z.]{1,64}$/u.test(tool)) throw utilityError("call_invalid_arguments");
+    const json = args[2] !== undefined && !args[2].startsWith("--") ? args[2] : undefined;
+    const flags = parseUtilityFlags(args.slice(json === undefined ? 2 : 3), new Set(["--out"]));
+    let toolArguments: unknown;
+    try { toolArguments = JSON.parse(json === "-" ? fs.readFileSync(0, "utf8") : json ?? "{}"); }
+    catch { throw utilityError("call_invalid_json"); }
+    const directory = ensureConfigDirectory(configDirectory());
+    const out = path.resolve(flags.single("--out") ?? path.join(directory, "bridge-images"));
+    const result = await callBridge({ directory, tool, args: toolArguments, out });
+    process.stdout.write(`${JSON.stringify(result.output)}\n`);
+    if (result.isError) process.exitCode = 1;
     return true;
   }
   if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
@@ -205,6 +235,10 @@ function utilityHelp(): string {
     "",
     "MCP client setup:",
     "  newton-browser install <codex|claude-code|generic> [--dry-run] [--force]",
+    "",
+    "Bridge, when an agent's MCP connection is down (loopback HTTP, bearer token):",
+    "  newton-browser bridge [--port N]",
+    "  newton-browser call <tool> ['<json>' | -] [--out DIRECTORY]",
     "",
     "Diagnostics:",
     "  newton-browser doctor [--live]",

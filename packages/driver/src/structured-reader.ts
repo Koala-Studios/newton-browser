@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { EngineError,type EngineControlQuery,type EngineObservation,type EngineObservationBudget,type EngineObservationRecord,type EnginePageStamp,type EngineRecordShape,type EngineTarget,type EngineTableRecord,type EngineFieldView } from '@newton-browser/core';
+import { EngineError,nameMatches,type EngineControlQuery,type EngineObservation,type EngineObservationBudget,type EngineObservationRecord,type EnginePageStamp,type EngineRecordShape,type EngineTarget,type EngineTableRecord,type EngineFieldView } from '@newton-browser/core';
 import type {CommandContext} from './command-context.ts';
 import type {PageDirectory,NodeBinding} from './page-directory.ts';
 import type {TargetResolver} from './target-resolver.ts';
@@ -86,9 +86,8 @@ export async function readStructuredRecords(context:CommandContext,page:EnginePa
       // A text query keeps the links that mention it, before the output budget is spent on the rest.
       if(query?.role!==undefined&&query.role!=='link')continue;
       if(query?.text!==undefined){
-        const needle=query.text.toLocaleLowerCase();
         const texts=[item.view.name,item.view.description,item.view.href,...(item.view.context??[]).map(entry=>entry.name)];
-        if(!texts.some(value=>typeof value==='string'&&value.toLocaleLowerCase().includes(needle)))continue;
+        if(!texts.some(value=>typeof value==='string'&&nameMatches(value,query.text!,false)))continue;
       }
       const binding=directory.binding(root,item.backendNodeId);
       const record={...item.view,kind:'link' as const,recordId:identity(binding),ref:previewRef};

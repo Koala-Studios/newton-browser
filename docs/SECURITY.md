@@ -1,6 +1,6 @@
 # Security
 
-Reconciled 2026-09-25. Newton Browser is local-only. The default shared engine owns isolated Chrome/Edge processes, private CDP pipes, command queues and exclusive Newton identity leases. An optional thin extension/native-messaging connection controls explicitly selected existing-browser tabs with per-worker ownership. There is no TCP debugging endpoint, HTTP control proxy, hosted relay, installed daemon, telemetry, database or model-provider runtime call.
+Reconciled 2026-09-25. Newton Browser is local-only. The default shared engine owns isolated Chrome/Edge processes, private CDP pipes, command queues and exclusive Newton identity leases. An optional thin extension/native-messaging connection controls explicitly selected existing-browser tabs with per-worker ownership. There is no TCP debugging endpoint, HTTP control proxy, hosted relay, installed daemon, telemetry, database or model-provider runtime call. The one exception is opt-in and runs only while a person keeps it running: `newton-browser bridge` serves the MCP tools on 127.0.0.1 for an agent whose MCP connection is down, refuses requests carrying a browser `Origin`, and requires a random bearer token it writes to a user-only file in the app data directory and removes on exit.
 
 ## Browser behavior and ownership
 

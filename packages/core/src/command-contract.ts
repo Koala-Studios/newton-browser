@@ -7,7 +7,7 @@ export const ENGINE_ERRORS = [
   "output_budget", "work_limit", "unknown_command", "unknown_page", "cursor_expired",
   "dialog_opened", "unsupported_structure", "invalid_file_path", "file_not_found", "symlink_not_allowed",
   "file_too_large", "file_total_too_large", "file_type_not_allowed", "file_changed", "operator_control",
-  "browser_launch_failed", "frame_off_site", "not_password_field",
+  "browser_launch_failed", "frame_off_site", "not_password_field", "stale_ref",
 ] as const;
 export type EngineErrorCode = typeof ENGINE_ERRORS[number];
 export class EngineError extends Error {
@@ -21,6 +21,53 @@ export class EngineError extends Error {
 export function engineErrorCode(error: unknown): EngineErrorCode {
   return error instanceof EngineError ? error.code : "evidence_unavailable";
 }
+/** What a code means and what to do next, for a failure whose site knew nothing more specific. */
+const ENGINE_ERROR_DETAILS: Readonly<Record<EngineErrorCode, string>> = Object.freeze({
+  invalid_arguments: "The command does not match the tool's schema.",
+  command_id_conflict: "This commandId was used for a different command; send the session's nextCommandId.",
+  command_expired: "This command's receipt is no longer kept.",
+  command_sequence_gap: "This commandId skips ahead; send the session's nextCommandId.",
+  queue_full: "Too many commands are queued for this session; wait for one to finish.",
+  session_closed: "The session has stopped; start a new one.",
+  session_quarantined: "The session could not confirm its cleanup and takes no more commands; start a new one.",
+  cancelled: "The command was cancelled.",
+  timed_out: "The command did not finish within its timeoutMs.",
+  not_found: "Nothing on the page matches the target; observe for current refs.",
+  ambiguous: "The target matches more than one element; use a ref from observe or a narrower selector.",
+  search_incomplete: "The page could not be searched completely: frames were still loading or did not answer. Retry once it settles.",
+  stale_target: "The element is gone: its document changed or it was removed. Observe again.",
+  stale_ref: "The ref no longer names an element; observe again for current refs.",
+  target_moved: "The element moved before the pointer reached it; retry.",
+  target_covered: "Another element covers the target; dismiss or close it first.",
+  target_not_editable: "The element is disabled, hidden, out of reach or does not take this input, or a page dialog is open.",
+  sensitive_target: "Password and payment fields are not filled or read through model commands.",
+  evidence_unavailable: "The browser did not return the facts needed to do this safely.",
+  input_failed: "The browser refused the input.",
+  read_failed: "The page could not be read.",
+  navigation_failed: "The browser could not load the address.",
+  connection_lost: "The connection to the browser was lost.",
+  cleanup_uncertain: "The session could not confirm its cleanup and has stopped.",
+  unsupported_capability: "This action is not supported on this page or connection.",
+  output_budget: "The result does not fit maxBytes; raise maxBytes or narrow the read.",
+  work_limit: "The page exceeds this action's or read's work limit.",
+  unknown_command: "This session has no command with that commandId.",
+  unknown_page: "This session has no page with that pageId; list its pages.",
+  cursor_expired: "The document cursor expired; read the document again.",
+  dialog_opened: "A page dialog (alert, confirm or prompt) opened; accept or dismiss it.",
+  unsupported_structure: "The element's structure is not supported for this action.",
+  invalid_file_path: "File paths must be absolute local paths.",
+  file_not_found: "A file does not exist.",
+  symlink_not_allowed: "A file path is a symbolic link.",
+  file_too_large: "A file is larger than the per-file limit.",
+  file_total_too_large: "The files together are larger than the total limit.",
+  file_type_not_allowed: "A file's content is not an allowed type.",
+  file_changed: "A file changed while it was being read.",
+  operator_control: "A person is controlling the page; wait until control is handed back.",
+  browser_launch_failed: "The browser could not start.",
+  frame_off_site: "The field's frame is not on the sign-in site.",
+  not_password_field: "A secret value goes only into a password field.",
+});
+export function engineErrorDetail(code: EngineErrorCode): string { return ENGINE_ERROR_DETAILS[code]; }
 export type EngineDispatch = "not_started" | "attempted" | "acknowledged";
 export type EngineFinish = "completed" | "rejected" | "failed" | "cancelled" | "timed_out";
 export type EnginePostcondition =
@@ -28,7 +75,8 @@ export type EnginePostcondition =
   /** `condition` is a wait; when met, `condition` names what held (a state such as hidden or enabled, or url, title or text). */
   | Readonly<{ state: "met" | "not_met" | "unknown"; kind: "value" | "navigation" | "visible" | "files" | "viewport" | "condition"; condition?: string }>;
 export type EngineTarget =
-  | Readonly<{ kind: "ref"; ref: string }>
+  /** `snapshotId`: the observation the ref came from, so a ref that is gone is reported as `stale_ref` with why. */
+  | Readonly<{ kind: "ref"; ref: string; snapshotId?: string }>
   | Readonly<{ kind: "selector"; selector: string }>
   | Readonly<{ kind: "semantic"; role: string; name: string; exact: boolean }>;
 /** An element is named with the same `target` as every action; `state` says what to wait for on it. */
@@ -134,7 +182,8 @@ export type EngineReceipt = Readonly<{
   sessionId: string; commandId: number; state: "finished"; reason: EngineFinish;
   dispatch: EngineDispatch; postcondition: EnginePostcondition; nextCommandId: number;
   page: EnginePageStamp; steps: readonly EngineStepReceipt[]; stoppedAt?: number;
-  errorCode?: EngineErrorCode; observation: EngineObservation;
+  /** With errorCode: why the command was rejected or failed and what to do next (may quote untrusted page content). */
+  errorCode?: EngineErrorCode; detail?: string; observation: EngineObservation;
   /** The page stopped responding; the session reopened its last address in a new page with the same sign-in. */
   pageRestarted?: { pageId: string; url?: string };
 }>;
@@ -167,10 +216,10 @@ export function boundedInteger(value: unknown, min: number, max: number): number
   return Number(value);
 }
 export function parseEngineTarget(raw: unknown): EngineTarget {
-  const value = exactObject(raw, ["kind", "ref", "selector", "role", "name", "exact"]);
+  const value = exactObject(raw, ["kind", "ref", "snapshotId", "selector", "role", "name", "exact"]);
   if (value.kind === "ref") {
-    exactObject(raw, ["kind", "ref"]);
-    return Object.freeze({ kind: "ref", ref: boundedString(value.ref, 120) });
+    const ref = exactObject(raw, ["kind", "ref", "snapshotId"]);
+    return Object.freeze({ kind: "ref", ref: boundedString(value.ref, 120), ...(ref.snapshotId === undefined ? {} : { snapshotId: boundedString(ref.snapshotId, 120) }) });
   }
   if (value.kind === "selector") {
     exactObject(raw, ["kind", "selector"]);

@@ -1,8 +1,11 @@
-import { type EngineControlQuery, ENGINE_LIMITS, EngineError, boundedInteger, engineErrorCode, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
+import { type EngineControlQuery, ENGINE_LIMITS, EngineError, boundedInteger, engineErrorCode, engineErrorDetail, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
   type EngineInputAction, type EngineHostFill, type EngineSignInFieldResult, parseEngineTarget, boundedString, type EngineObservation, type EngineObservationRecord, type EnginePageStamp, type EnginePostcondition, type EngineReceipt, type EngineStepReceipt, type EngineTarget } from "@newton-browser/core";
 import { CommandContext, engineClock, type EngineClock } from "./command-context.ts";
 import { CommandStore, type CommandRecord } from "./command-store.ts";
 import {encodeEngineResult,type EngineRecordShape,type EngineObservationDelta} from '@newton-browser/core';
+
+// The receipt budget reserves room for the longest detail a failure after the actions can add.
+const LONGEST_LATE_DETAIL=[engineErrorDetail("timed_out"),engineErrorDetail("cancelled"),engineErrorDetail("evidence_unavailable"),engineErrorDetail("cleanup_uncertain")].reduce((a,b)=>a.length>=b.length?a:b);
 
 const postconditionKind=(action:EngineInputAction):Exclude<EnginePostcondition,{state:'not_requested'}>['kind']=>
   action.kind==='set_files'?'files':action.kind==='resize'?'viewport':
@@ -184,6 +187,7 @@ export class SessionEngine {
     let observation: EngineObservation = { state: "none" };
     let postcondition: EnginePostcondition = { state: "unknown", kind: "value" };
     let failure: ReturnType<typeof engineErrorCode> | undefined;
+    let failureDetail: string | undefined;
     let stoppedAt: number | undefined;
     let actionPhaseFinished = false;
     const execution = (async () => {
@@ -200,8 +204,11 @@ export class SessionEngine {
           if (postcondition.state !== "met" && postcondition.state !== "not_requested") { stoppedAt = index; break; }
         } catch (error) {
           failure = context.cancellation ?? engineErrorCode(error);
-          const detail = error instanceof EngineError && error.detail && failure === error.code ? (failure === "target_covered" ? { coveredBy: error.detail } : { detail: error.detail }) : {};
-          steps.push({ index, dispatch: context.since(mark), postcondition: { state: "unknown", kind: postconditionKind(actions[index]!) }, errorCode: failure, ...detail });
+          // Every failed step says why: the failure site's own detail, or what the code means.
+          const own = error instanceof EngineError && error.detail && failure === error.code ? error.detail : undefined;
+          failureDetail = failure === "target_covered" && own ? `Covered by ${own}; dismiss or close it first.` : own ?? engineErrorDetail(failure);
+          steps.push({ index, dispatch: context.since(mark), postcondition: { state: "unknown", kind: postconditionKind(actions[index]!) }, errorCode: failure,
+            ...(failure === "target_covered" && own ? { coveredBy: own } : {}), detail: failureDetail });
           break;
         }
       }
@@ -211,7 +218,7 @@ export class SessionEngine {
           const page = this.executor.bindPage(item.page.pageId);
           // Bound the final receipt envelope, not an unrelated fixed node allowance.
           // Longest terminal variants reserve room if the optional read times out.
-          const budget = receiptObservationBudget(item.command.maxBytes,{sessionId:this.sessionId,commandId:item.command.commandId,state:"finished",reason:"timed_out",dispatch:"acknowledged",postcondition:{state:"unknown",kind:"navigation"},nextCommandId:Number.MAX_SAFE_INTEGER,page:item.page,steps,errorCode:"unsupported_capability",stoppedAt:steps.length});
+          const budget = receiptObservationBudget(item.command.maxBytes,{sessionId:this.sessionId,commandId:item.command.commandId,state:"finished",reason:"timed_out",dispatch:"acknowledged",postcondition:{state:"unknown",kind:"navigation"},nextCommandId:Number.MAX_SAFE_INTEGER,page:item.page,steps,errorCode:"unsupported_capability",detail:failureDetail??LONGEST_LATE_DETAIL,stoppedAt:steps.length});
           observation = this.executor.observeAfterAction ? await this.executor.observeAfterAction(context, page, budget) : await this.executor.observe(context, page, budget);
         }
         catch (error) { observation = { state: "unavailable", errorCode: engineErrorCode(error) }; }
@@ -223,10 +230,12 @@ export class SessionEngine {
     // Its own unavailable observation carries that timeout/cancellation.
     failure = actionPhaseFinished ? failure : context.cancellation ?? failure;
     if (failure === "cleanup_uncertain") { this.admission = "quarantined"; this.cancelQueued(); void this.stop().catch(() => undefined); }
+    // A failure that was not a step's (a cancellation or timeout after the actions) says what its code means.
+    if (failure && (!failureDetail || steps.at(-1)?.errorCode !== failure)) failureDetail = engineErrorDetail(failure);
     const reason = failure === "cancelled" || failure === "timed_out" ? failure : failure ? (context.dispatch === "not_started" ? "rejected" : "failed") : "completed";
     item.record.complete({ sessionId: this.sessionId, commandId: item.record.id, state: "finished", reason,
       dispatch: context.dispatch, postcondition, nextCommandId: this.store.nextId, page: item.page,
-      steps: [...steps], ...(failure ? { errorCode: failure, stoppedAt: steps.length ? steps.length - 1 : 0 } : stoppedAt === undefined ? {} : { stoppedAt }), observation,
+      steps: [...steps], ...(failure ? { errorCode: failure, detail: failureDetail!, stoppedAt: steps.length ? steps.length - 1 : 0 } : stoppedAt === undefined ? {} : { stoppedAt }), observation,
       ...(restarted ? { pageRestarted: restarted } : {}) });
     context.dispose();
     if (item.host) item.host.values.length = 0;

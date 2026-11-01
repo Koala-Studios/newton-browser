@@ -1,4 +1,4 @@
-import { type EngineFieldView } from '@newton-browser/core';
+import { readableName, type EngineFieldView } from '@newton-browser/core';
 
 type Ax = Record<string, unknown>;
 const object = (value: unknown): Ax => value && typeof value === 'object' && !Array.isArray(value) ? value as Ax : {};
@@ -46,8 +46,9 @@ export function readAXControls(raw: readonly Ax[], scopeBackendNodeId?: number):
       if(selected.has(child))continue;selected.add(child);queue.push(child);
     }
   }
+  // Names and descriptions as they read: a name copied from here is what a semantic target compares.
   const bounded=(value: unknown,limit=256):string=>{
-    const safe=text(value);if(safe.length>limit)incomplete=true;return safe.slice(0,limit);
+    const safe=readableName(text(value));if(safe.length>limit)incomplete=true;return safe.slice(0,limit);
   };
   const controls: {backendNodeId:number;view:Omit<EngineFieldView,'ref'>}[]=[];
   const relatedText=(root:Ax):string=>{
