@@ -292,3 +292,24 @@ test('stale parent or child during cross-process transform refuses evidence',asy
     finally{state.context.dispose();}
   }
 });
+
+test('a frame whose owner renders no box (a hidden payment or wallet frame) is passed over, not refused',async()=>{
+  const noBox=()=>{throw new Error('CDP command failed.: Could not compute box model.');};
+  // The owner check answers whether the owner's box is empty; field visibility checks answer true.
+  const owner=(rendered)=>({params})=>params.functionDeclaration.startsWith('function(){const rect')?{result:{value:!rendered}}:{result:{value:true}};
+  const base=crossProcessOverrides();
+  const boxModel=({params,...rest})=>params.backendNodeId!==undefined?noBox():base['DOM.getBoxModel']({params,...rest});
+  const hidden=fixture({withChild:true,childRoute:'child-route',overrides:{...base,'DOM.getBoxModel':boxModel,'Runtime.callFunctionOn':owner(false)}});
+  try{
+    assert.deepEqual((await read(hidden)).regions,[]);
+    await flushCleanup();
+    assert.equal(methods(hidden,'Runtime.releaseObject').length,methods(hidden,'DOM.resolveNode').length,'every resolved owner is released');
+    assert.equal(methods(hidden,'Runtime.evaluate').length,0,'a hidden frame needs no size read');
+  }finally{hidden.context.dispose();}
+  // An owner that has a box yet no box model is not proven hidden: the capture still refuses.
+  const unproven=fixture({withChild:true,childRoute:'child-route',overrides:{...base,'DOM.getBoxModel':boxModel,'Runtime.callFunctionOn':owner(true)}});
+  try{await assert.rejects(read(unproven),error=>/box model/.test(error?.message));}finally{unproven.context.dispose();}
+  // A zero-area owner (a 0x0 frame) shows nothing either.
+  const empty=fixture({withChild:true,childRoute:'child-route',overrides:crossProcessOverrides({ownerContent:{'root-route':[10,20,10,20,10,20,10,20]}})});
+  try{assert.deepEqual((await read(empty)).regions,[]);}finally{empty.context.dispose();}
+});

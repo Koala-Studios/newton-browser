@@ -1579,12 +1579,19 @@ export class PageExecutor implements EngineExecutor {
       let root: NodeBinding;
       let extracted: Awaited<ReturnType<PageExecutor['readBoundText']>>;
       // A read scope that matches several containers reads the first; the result says how many matched.
-      const scopeMatches={count:0};
+      const scopeMatches:{count:number;candidates:NodeBinding[]}={count:0,candidates:[]};
       for (;;) {
         context.checkpoint();
-        scopeMatches.count=0;
+        scopeMatches.count=0;scopeMatches.candidates=[];
         root = scope ? await this.resolver.resolve(context,page,scope,scopeMatches) : await this.resolver.document(context,page);
         extracted = await this.readBoundText(context,root,DOCUMENT_WORK_CHARS,DOCUMENT_WORK_NODES,scope!==undefined);
+        // A scope that matches several containers reads the first one that renders: a checkout keeps a hidden
+        // phone-layout copy of its order summary before the desktop one.
+        for(const candidate of scopeMatches.candidates.slice(1)){
+          if(!extracted.excluded||extracted.loading)break;
+          const next=await this.readBoundText(context,candidate,DOCUMENT_WORK_CHARS,DOCUMENT_WORK_NODES,true);
+          if(!next.excluded){root=candidate;extracted=next;}
+        }
         if (!extracted.loading) break;
         // A committed but still-parsing document is not a complete empty page.
         // Wake on its actual lifecycle/DOM transition; never cache that prefix.
@@ -1650,7 +1657,7 @@ export class PageExecutor implements EngineExecutor {
       this.directory.route(container);return value;
     }finally{for(const objectId of [rootId,childId])if(objectId)void this.send(container,'Runtime.releaseObject',{objectId}).catch(()=>undefined);}
   }
-  private async readBoundText(context:CommandContext,binding:NodeBinding,maxChars:number,maxNodes:number,useThis:boolean,preferMain=true,matchText?:string):Promise<{text:string;truncated:boolean;loading?:boolean;visited?:number;matched?:boolean;characters?:number}> {
+  private async readBoundText(context:CommandContext,binding:NodeBinding,maxChars:number,maxNodes:number,useThis:boolean,preferMain=true,matchText?:string):Promise<{text:string;truncated:boolean;loading?:boolean;visited?:number;matched?:boolean;characters?:number;excluded?:boolean}> {
     const resolved=await context.read(()=>this.send(binding,"DOM.resolveNode",{backendNodeId:binding.backendNodeId}));
     const objectId=string(object(resolved.object).objectId);
     if(!objectId)throw new EngineError("evidence_unavailable");
@@ -1665,7 +1672,7 @@ export class PageExecutor implements EngineExecutor {
       if(closed.incomplete&&read.truncated===false)read={...read,truncated:true};
       if(typeof read.text!=="string"||typeof read.truncated!=="boolean")throw new EngineError("evidence_unavailable");
       if(matchText!==undefined&&!read.loading&&typeof read.matched!=='boolean'&&!(read.text===''&&!read.truncated))throw new EngineError('evidence_unavailable');
-      return {text:read.text,truncated:read.truncated,...(typeof read.matched==='boolean'?{matched:read.matched}:{}),...(Number.isSafeInteger(read.characters)&&Number(read.characters)>=0?{characters:Number(read.characters)}:{}),...(Number.isSafeInteger(read.visited)&&Number(read.visited)>=0?{visited:Number(read.visited)}:{}),...(read.loading===true?{loading:true}:{})};
+      return {text:read.text,truncated:read.truncated,...(typeof read.matched==='boolean'?{matched:read.matched}:{}),...(Number.isSafeInteger(read.characters)&&Number(read.characters)>=0?{characters:Number(read.characters)}:{}),...(Number.isSafeInteger(read.visited)&&Number(read.visited)>=0?{visited:Number(read.visited)}:{}),...(read.loading===true?{loading:true}:{}),...(read.excluded===true?{excluded:true}:{})};
     } finally {for(const id of [objectId,...temporary])void this.send(binding,"Runtime.releaseObject",{objectId:id}).catch(()=>undefined);}
   }
   /** Maps host → closed shadow root for this binding's document, in the reading world.

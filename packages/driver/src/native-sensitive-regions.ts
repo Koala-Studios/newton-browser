@@ -13,6 +13,8 @@ export const SENSITIVE_NODE_VISIBLE_FUNCTION=String.raw`function(){
   const rect=this.getBoundingClientRect(),style=getComputedStyle(this);
   return rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility!=='hidden'&&style.visibility!=='collapse';
 }`;
+// An owner element with no box paints none of its frame. (getClientRects and isConnected count as side effects here.)
+const OWNER_UNRENDERED_FUNCTION='function(){const rect=this.getBoundingClientRect();return rect.width===0&&rect.height===0}';
 type Region={x:number;y:number;width:number;height:number};
 type RecordValue=Record<string,unknown>;
 const object=(value:unknown):RecordValue=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as RecordValue:{};
@@ -47,7 +49,32 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
   const send=(binding:NodeBinding,method:string,params:RecordValue={})=>context.read(async()=>{
     const result=await wire.send(method,params,directory.route(binding));directory.route(binding);return result;
   });
-  const transforms=new Map<string,{parent:NodeBinding;owner:number[];width:number;height:number}>();
+  // A frame whose owner element has no layout box (display:none, or zero area) paints nothing: `hidden`.
+  const transforms=new Map<string,{parent:NodeBinding;owner:number[];width:number;height:number}|'hidden'>();
+  // Proof that an owner element without a box model really renders nothing, read in the parent's read-only world.
+  // Anything else (a detached node, a failed read) keeps the original error.
+  const ownerUnrendered=async(parent:NodeBinding,backendNodeId:number):Promise<boolean>=>{
+    let allocation:Promise<RecordValue>|undefined;
+    const route=directory.route(parent);
+    try{
+      const executionContextId=await context.read(()=>worlds.context(parent));
+      const resolved=await context.read(()=>allocation=wire.send('DOM.resolveNode',{backendNodeId,executionContextId},directory.route(parent)));
+      directory.route(parent);
+      const objectId=object(resolved.object).objectId;
+      if(typeof objectId!=='string'||!objectId)return false;
+      const facts=await send(parent,'Runtime.callFunctionOn',{objectId,functionDeclaration:OWNER_UNRENDERED_FUNCTION,returnByValue:true,silent:true,throwOnSideEffect:true});
+      return !facts.exceptionDetails&&object(facts.result).value===true;
+    }catch(error){
+      if(error instanceof EngineError&&error.code!=='evidence_unavailable')throw error;
+      return false;
+    }finally{
+      void allocation?.then(result=>{const objectId=object(result.object).objectId;if(typeof objectId==='string'&&objectId)return wire.send('Runtime.releaseObject',{objectId},route);}).catch(()=>undefined);
+    }
+  };
+  const zeroArea=(value:number[])=>{
+    const xs=value.filter((_,index)=>index%2===0),ys=value.filter((_,index)=>index%2===1);
+    return Math.max(...xs)-Math.min(...xs)<=0||Math.max(...ys)-Math.min(...ys)<=0;
+  };
   const toRoot=async(binding:NodeBinding,source:number[]):Promise<number[]|undefined>=>{
     let current=binding,result=source;
     for(let depth=0;directory.route(current)!==rootRoute;depth++){
@@ -61,13 +88,22 @@ export async function nativeSensitiveRegions(context:CommandContext,directory:Pa
         if(!parentRoot)throw new EngineError('evidence_unavailable');
         const owner=await send(parent,'DOM.getFrameOwner',{frameId:current.frameId});
         if(!Number.isSafeInteger(owner.backendNodeId)||Number(owner.backendNodeId)<=0)throw new EngineError('evidence_unavailable');
-        const model=await send(parent,'DOM.getBoxModel',{backendNodeId:owner.backendNodeId});
+        let model:RecordValue;
+        try{model=await send(parent,'DOM.getBoxModel',{backendNodeId:owner.backendNodeId});}
+        catch(error){
+          // "Could not compute box model": a hidden payment or wallet frame. Its fields cannot show.
+          if(error instanceof EngineError||!await ownerUnrendered(parent,Number(owner.backendNodeId)))throw error;
+          transforms.set(route,'hidden');return undefined;
+        }
+        const ownerQuad=quad(object(model.model).content);
+        if(zeroArea(ownerQuad)){transforms.set(route,'hidden');return undefined;}
         const sizeResult=await send(current,'Runtime.evaluate',{expression:'({width:innerWidth,height:innerHeight})',contextId:await context.read(()=>worlds.context(current)),returnByValue:true,silent:true,throwOnSideEffect:true});
         const size=object(object(sizeResult.result).value);
         if(sizeResult.exceptionDetails||typeof size.width!=='number'||typeof size.height!=='number'||!Number.isFinite(size.width)||!Number.isFinite(size.height)||size.width<=0||size.height<=0)throw new EngineError('evidence_unavailable');
-        transform={parent:parentRoot,owner:quad(object(model.model).content),width:size.width,height:size.height};
+        transform={parent:parentRoot,owner:ownerQuad,width:size.width,height:size.height};
         transforms.set(route,transform);
       }
+      if(transform==='hidden')return undefined;
       // The child surface clips its contents. A conservative bounding rectangle
       // preserves that clipping before the projective map; offscreen child fields
       // must not mask unrelated parent content outside the iframe.

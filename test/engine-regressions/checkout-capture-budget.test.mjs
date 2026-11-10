@@ -69,3 +69,48 @@ test("a checkout capture masks an over-budget cross-site card frame whole instea
     temp.remove();
   }
 });
+
+// A checkout as stores lay it out: a hidden cross-site wallet frame holding card fields (no layout box at all), a shown
+// cross-site card frame, and the order summary twice: a hidden phone copy first, the desktop one beside the form.
+const WALLET_PAGE = (port) => `<!doctype html><title>checkout</title><style>body{margin:0;background:#0f0}#card{position:absolute;left:100px;top:100px;width:300px;height:100px;border:0}
+aside.desktop{position:absolute;left:600px;top:100px;width:300px}aside.phone{display:none}</style>
+<iframe id="wallet" style="display:none" src="http://localhost:${port}/card"></iframe>
+<iframe id="card" title="Card" src="http://localhost:${port}/card"></iframe>
+<aside class="phone"><h2>Order summary</h2><p>Total 42.00</p></aside>
+<aside class="desktop"><h2>Order summary</h2><p>Subtotal 40.00</p><p>Total 42.00</p></aside>`;
+const SMALL_CARD = `<!doctype html><style>body{margin:0;background:#00f}input{display:block;width:60px;height:20px}</style><input autocomplete="cc-number"><input autocomplete="cc-exp">`;
+
+test("a checkout with a hidden wallet frame captures, and its order summary reads past the hidden phone copy", async (t) => {
+  const temp = temporaryRoot("checkout-hidden-wallet");
+  const server = http.createServer((req, res) => { res.setHeader("content-type", "text/html; charset=utf-8"); res.end(req.url === "/card" ? SMALL_CARD : WALLET_PAGE(server.address().port)); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const engine = createBrowserEngine({ configDirectory: temp.root });
+  const text = (result) => JSON.parse(result.content.at(-1).text);
+  try {
+    const started = text(await engine.call("browser.session.start", { url: `http://127.0.0.1:${server.address().port}/` }));
+    if (started.errorCode) { t.skip(`browser unavailable: ${started.errorCode}`); return; }
+    let shot;
+    for (const deadline = Date.now() + 10_000; Date.now() < deadline;) {
+      shot = await engine.call("browser.screenshot", { sessionId: started.sessionId });
+      const observation = text(shot).observation;
+      if (observation.state === "available" && observation.provenance?.maskDisposition === "mask_applied") break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const observation = text(shot).observation;
+    assert.equal(observation.state, "available", JSON.stringify(observation));
+    assert.equal(observation.provenance.maskDisposition, "mask_applied", "the shown card fields are masked");
+    const image = shot.content.find((item) => item.type === "image");
+    assert.notDeepEqual(pixel(image.data, 110, 110), [255, 255, 255], "the card number field is masked");
+    assert.deepEqual(pixel(image.data, 50, 50), [0, 255, 0], "the page shows");
+    const clipped = text(await engine.call("browser.screenshot", { sessionId: started.sessionId, clip: { x: 600, y: 100, width: 300, height: 200 } })).observation;
+    assert.equal(clipped.state, "available", `a clip of the summary captures: ${JSON.stringify(clipped)}`);
+    const read = text(await engine.call("browser.document.read", { sessionId: started.sessionId, scope: { kind: "selector", selector: "aside" } })).observation;
+    assert.equal(read.state, "available", JSON.stringify(read));
+    assert.match(read.text, /Subtotal 40\.00/, "the shown summary is read, not the hidden phone copy");
+    assert.equal(read.scopeMatches, 2);
+  } finally {
+    await engine.close();
+    server.close();
+    temp.remove();
+  }
+});

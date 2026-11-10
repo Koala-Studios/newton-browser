@@ -133,6 +133,9 @@ export type TargetResolverFacts = Readonly<{
   value?: string;
 }>;
 
+/** Matches a read scope may try in turn when the first renders nothing. */
+export const READ_CANDIDATE_LIMIT = 8;
+
 /** Shared target resolution and fact collection for input primitives. */
 export class TargetResolver {
   private readonly directory: TargetResolverContext["directory"];
@@ -146,8 +149,10 @@ export class TargetResolver {
     this.pendingFrameCount = context.pendingFrames;
   }
   /** `firstOfMany` (reads only): several matches resolve to the first in page order and the count is reported; actions stay exact.
-   * A read takes the first match among the frames that are ready; an action needs every frame searched, to rule out a second match. */
-  async resolve(context: CommandContext, page: EnginePageStamp, target: EngineTarget, firstOfMany?: { count: number }): Promise<NodeBinding> {
+   * A read takes the first match among the frames that are ready; an action needs every frame searched, to rule out a second match.
+   * With `candidates`, the first matches in page order (at most READ_CANDIDATE_LIMIT) are listed too, so a read can pass over
+   * one that renders nothing (a hidden phone-layout copy of a desktop summary). */
+  async resolve(context: CommandContext, page: EnginePageStamp, target: EngineTarget, firstOfMany?: { count: number; candidates?: NodeBinding[] }): Promise<NodeBinding> {
     if (target.kind === "ref") return this.directory.resolve(target.ref, page.pageId, target.snapshotId);
     this.directory.binding(page, 1);
     const pending = this.pendingAttachmentsCount() + this.pendingFrameCount();
@@ -163,20 +168,22 @@ export class TargetResolver {
       const ids = Array.isArray(result.nodeIds) ? result.nodeIds : [];
       count += ids.length;
       if (count > 1 && !firstOfMany) throw new EngineError("ambiguous", undefined, `Selector ${quoted(target.selector)} matches more than one element; make it match one, or act on a ref from observe.`);
-      if (ids.length) {
-        const described = await context.read(() => this.sendBinding(base, "DOM.describeNode", { nodeId: ids[0] }));
+      const wanted = firstOfMany?.candidates ? READ_CANDIDATE_LIMIT : 1;
+      for (const id of ids) {
+        if (matches.length >= wanted) break;
+        const described = await context.read(() => this.sendBinding(base, "DOM.describeNode", { nodeId: id }));
         const backendNodeId = Number(object(described.node).backendNodeId);
         if (Number.isSafeInteger(backendNodeId) && backendNodeId > 0) matches.push(this.directory.binding(frame, backendNodeId));
       }
     }
     if (!matches.length) throw new EngineError(loading ? "search_incomplete" : "not_found", undefined, `${loading ? `${loading} ` : ""}No element matches selector ${quoted(target.selector)}.`);
-    if (firstOfMany) firstOfMany.count += count;
+    if (firstOfMany) { firstOfMany.count += count; firstOfMany.candidates?.push(...matches); }
     return matches[0]!;
   }
   /** As written first: Chromium compares the name in the renderer, so only matching nodes cross the connection. Then as
    * names read (invisible characters dropped, whitespace collapsed; exact false: any part, ignoring case), comparing
    * every node with the role, so a name copied from an observation finds its element. */
-  private async semantic(context: CommandContext, page: EnginePageStamp, target: Extract<EngineTarget, { kind: "semantic" }>, firstOfMany: { count: number } | undefined, loading: string | undefined): Promise<NodeBinding> {
+  private async semantic(context: CommandContext, page: EnginePageStamp, target: Extract<EngineTarget, { kind: "semantic" }>, firstOfMany: { count: number; candidates?: NodeBinding[] } | undefined, loading: string | undefined): Promise<NodeBinding> {
     // A role also finds its ARIA subclass roles; observe lists <summary> (Chromium's internal DisclosureTriangle) as a button.
     const roles = rolesFor(target.role);
     const axRoles = target.role === "button" ? [...roles, "DisclosureTriangle"] : roles;
@@ -191,8 +198,8 @@ export class TargetResolver {
     const incomplete = [loading, all.incomplete].filter(Boolean).join(" ");
     throw new EngineError(incomplete ? "search_incomplete" : "not_found", undefined, `${incomplete ? `${incomplete} ` : ""}${missingDetail(all.nodes, target, roles)}`);
   }
-  private choose(found: readonly SemanticNode[], target: Extract<EngineTarget, { kind: "semantic" }>, firstOfMany: { count: number } | undefined): NodeBinding {
-    if (firstOfMany) { firstOfMany.count += found.length; return found[0]!.binding; }
+  private choose(found: readonly SemanticNode[], target: Extract<EngineTarget, { kind: "semantic" }>, firstOfMany: { count: number; candidates?: NodeBinding[] } | undefined): NodeBinding {
+    if (firstOfMany) { firstOfMany.count += found.length; firstOfMany.candidates?.push(...found.slice(0, READ_CANDIDATE_LIMIT).map(node => node.binding)); return found[0]!.binding; }
     if (found.length > 1) throw new EngineError("ambiguous", undefined,
       `${found.length} elements with role ${target.role} match ${quoted(readableName(target.name))}: ${listed(found)}. Act on a ref from observe, or use a selector.`);
     return found[0]!.binding;

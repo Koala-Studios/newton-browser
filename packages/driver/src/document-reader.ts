@@ -58,12 +58,12 @@ export const DOCUMENT_READ_FUNCTION = String.raw`function(maxChars,maxNodes,useT
   while(ancestor){
     if(++ancestors>maxNodes)return {text:'',truncated:true,title:doc.title,url:location.href};
     if(unrendered(ancestor)){
-      if(useThis)return {text:'',truncated:false,excluded:true,title:doc.title,url:location.href};
+      if(useThis)return {text:'',truncated:false,excluded:true,visited:0,title:doc.title,url:location.href};
       root=doc.body;break;
     }
     const style=getComputedStyle(ancestor);
     if(excluded.test(ancestor.tagName)||ancestor.hidden||ancestor.getAttribute('aria-hidden')==='true'||/password|one-time-code|cc-|webauthn/i.test(ancestor.getAttribute('autocomplete')||'')||style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'){
-      if(useThis)return {text:'',truncated:false,excluded:true,title:doc.title,url:location.href};
+      if(useThis)return {text:'',truncated:false,excluded:true,visited:0,title:doc.title,url:location.href};
       root=doc.body;break;
     }
     ancestor=parent(ancestor);

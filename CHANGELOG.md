@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Screenshots of store checkouts are no longer refused as `evidence_unavailable`. A checkout keeps a hidden
+  (display: none) cross-site wallet frame with card fields; Chrome has no box model for its owner, and mask discovery
+  refused the whole capture. A frame whose owner element proves to have an empty box, or a zero-area content box,
+  paints nothing and is passed over; an owner with a box but no box model still refuses. Shown card frames are
+  masked as before.
+- A document read scoped to a container that matches several elements reads the first one that renders. A checkout
+  keeps a hidden phone copy of its order summary (`aside`) before the desktop one, so the scoped read returned
+  nothing and `work_limit`: the hidden scope reported no visited nodes, which counted as the node budget spent.
+
 ## [0.7.25] - 2026-11-01
 
 ### Fixed
