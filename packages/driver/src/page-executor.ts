@@ -203,7 +203,7 @@ export class PageExecutor implements EngineExecutor {
   private readonly domRevisions = new Map<string,number>();
   // Each committed frame's origin, for naming the frame a request came from.
   private readonly frameOrigins = new Map<string, string>();
-  private readonly documents = new Map<string, { page: EnginePageStamp; participants?:EnginePageStamp[]; ownerGeneration: number; text: string; bytes: number; complete: boolean; expiresAt: number; scopeMatches?: number }>();
+  private readonly documents = new Map<string, { page: EnginePageStamp; participants?:EnginePageStamp[]; ownerGeneration: number; text: string; bytes: number; complete: boolean; expiresAt: number; scopeMatches?: number; scopeHidden?: boolean }>();
   private readonly captures = new Map<string, CaptureRecord>();
   private readonly pointerDocuments = new Map<string, number>();
   private readonly viewportFrames = new Map<string, Promise<void>>();
@@ -1631,7 +1631,7 @@ export class PageExecutor implements EngineExecutor {
       const complete = !extracted.truncated && text.length === redacted.length;
       snapshotId = `d${this.nextDocumentSnapshot++}`;
       const bytes = Buffer.byteLength(text, "utf8");
-      this.documents.set(snapshotId, { page: {pageId:root.pageId,frameId:root.frameId,documentGeneration:root.documentGeneration},participants, ownerGeneration: page.documentGeneration, text, bytes, complete, expiresAt:performance.now()+DOCUMENT_TTL_MS, ...(scopeMatches.count>1?{scopeMatches:scopeMatches.count}:{}) });
+      this.documents.set(snapshotId, { page: {pageId:root.pageId,frameId:root.frameId,documentGeneration:root.documentGeneration},participants, ownerGeneration: page.documentGeneration, text, bytes, complete, expiresAt:performance.now()+DOCUMENT_TTL_MS, ...(scopeMatches.count>1?{scopeMatches:scopeMatches.count}:{}), ...(extracted.excluded?{scopeHidden:true}:{}) });
       this.documentBytes += bytes;
       while (this.documents.size > 8 || this.documentBytes > DOCUMENT_CACHE_BYTES) {
         const oldest = this.documents.keys().next().value!;
@@ -1639,7 +1639,7 @@ export class PageExecutor implements EngineExecutor {
       }
     }
     const snapshot = this.documents.get(snapshotId)!;
-    return documentChunk(snapshot.text, snapshot.page, snapshotId, offset, budget, snapshot.complete, snapshot.scopeMatches);
+    return documentChunk(snapshot.text, snapshot.page, snapshotId, offset, budget, snapshot.complete, snapshot.scopeMatches, snapshot.scopeHidden);
   }
   private async frameWithinScope(context:CommandContext,container:NodeBinding,frame:EnginePageStamp,useThis=true,preferMain=true):Promise<boolean>{
     const owner=await context.read(()=>this.send(container,'DOM.getFrameOwner',{frameId:frame.frameId}));

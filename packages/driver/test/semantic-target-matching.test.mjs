@@ -137,3 +137,45 @@ test('a rejected command says why on the receipt and on its step', async () => {
   assert.match(plain.detail, /disabled, hidden, out of reach/u, 'a failure site without its own detail gets what the code means');
   await engine.stop();
 });
+
+test('a 0x0 frame that keeps its 2 px border is not searched, so its stalled accessibility tree cannot block an action', async () => {
+  // A tracking sandbox frame styled width/height 0 and visibility hidden: border box 4x4, content box empty. Chromium
+  // never answers its accessibility query. A shown frame (content 100x50) is still searched.
+  const child = { pageId: 'p1', frameId: 'sandbox', documentGeneration: 1 }, shown = { pageId: 'p1', frameId: 'shown', documentGeneration: 1 };
+  const owners = { sandbox: 21, shown: 22 };
+  const models = { 21: { width: 4, height: 4, content: [2, 17, 2, 17, 2, 17, 2, 17] }, 22: { width: 104, height: 54, content: [2, 2, 102, 2, 102, 52, 2, 52] } };
+  const asked = [];
+  const directory = {
+    resolve: () => { throw new EngineError('stale_target'); },
+    binding: (frame, backendNodeId) => ({ ...frame, backendNodeId }),
+    frames: () => [page, child, shown], parent: frame => frame.frameId === 'f1' ? undefined : page,
+    route: binding => binding.frameId === 'f1' ? 'route' : `${binding.frameId}-route`,
+  };
+  const resolver = new TargetResolver({ directory, pendingAttachments: () => 0, pendingFrames: () => 0, async send(binding, method, params) {
+    if (method === 'DOM.getFrameOwner') return { backendNodeId: owners[params.frameId] };
+    if (method === 'DOM.getBoxModel') return { model: models[params.backendNodeId] };
+    if (method === 'DOM.getDocument') return { root: { nodeId: 1 } };
+    if (method === 'Accessibility.getPartialAXTree') return {};
+    asked.push(binding.frameId);
+    if (binding.frameId === 'sandbox') return new Promise(() => {});
+    return { nodes: binding.frameId === 'f1' && params.role === 'heading' ? [node(5, 'heading', 'Is there a guarantee?')] : [] };
+  } });
+  const started = Date.now();
+  assert.equal((await resolve(resolver, { kind: 'semantic', role: 'heading', name: 'Is there a guarantee?' })).backendNodeId, 5);
+  assert.ok(Date.now() - started < 2000, 'resolved without waiting out the accessibility search limit');
+  assert.ok(!asked.includes('sandbox'), 'the empty frame is never searched');
+  assert.ok(asked.includes('shown'), 'a shown frame is still searched, so a second match there is still ruled out');
+});
+
+test('a selector that is not CSS says so instead of evidence_unavailable', async () => {
+  const directory = { resolve: () => { throw new EngineError('stale_target'); }, binding: (frame, backendNodeId) => ({ ...frame, backendNodeId }),
+    frames: () => [page], parent: () => undefined, route: () => 'route' };
+  const resolver = new TargetResolver({ directory, pendingAttachments: () => 0, pendingFrames: () => 0, async send(_binding, method) {
+    if (method === 'DOM.getDocument') return { root: { nodeId: 1 } };
+    assert.equal(method, 'DOM.querySelectorAll');
+    throw new Error('CDP command failed.: DOM Error while querying');
+  } });
+  const refused = await failure(resolve(resolver, { kind: 'selector', selector: 'h3:has-text("Guarantee")' }));
+  assert.equal(refused.code, 'invalid_arguments');
+  assert.match(refused.detail, /is not valid CSS/u);
+});

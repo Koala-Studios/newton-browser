@@ -171,6 +171,8 @@ export type EngineObservation =
       loading?: true;
       /** A read scope matched this many elements; the first in page order was read. */
       scopeMatches?: number;
+      /** The read scope is not rendered (hidden or collapsed), so it has no text; show or expand it, then read again. */
+      scopeHidden?: true;
       /** A fixed layer covers the page (a promotion, consent or sign-up prompt without dialog semantics); its controls come first. */
       cover?: Readonly<{ text: string }>;
       /** observe mode focus: whether an element has focus and how it shows it. nodes[0] is that element. Untrusted page content. */

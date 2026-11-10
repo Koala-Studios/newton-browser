@@ -17,6 +17,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A document read scoped to a container that matches several elements reads the first one that renders. A checkout
   keeps a hidden phone copy of its order summary (`aside`) before the desktop one, so the scoped read returned
   nothing and `work_limit`: the hidden scope reported no visited nodes, which counted as the node budget spent.
+- A semantic click on a FAQ heading is no longer refused before dispatch as `search_incomplete` ("an embedded
+  frame did not answer the accessibility search"). Storefronts load tracking sandbox frames styled 0x0 and hidden;
+  they keep their default 2 px border, so the frame counted as rendered by its 4x4 border box, and Chromium never
+  answers an accessibility query for it. A frame now counts as rendered only when its owner's content box has area.
+  Shown frames are still searched, so an action still rules out a second match.
+- A selector that is not CSS (such as `h3:has-text("...")`) fails as `invalid_arguments` saying so, instead of
+  `evidence_unavailable`.
+
+### Added
+
+- A document read whose scope is hidden or collapsed (a closed accordion panel) returns `scopeHidden: true` with
+  its empty text, so it reads as "expand it first" rather than as a page with nothing in it.
 
 ## [0.7.25] - 2026-11-01
 

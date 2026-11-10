@@ -164,7 +164,12 @@ export class TargetResolver {
     for (const frame of this.directory.frames(page.pageId)) {
       const base = this.directory.binding(frame, 1);
       const nodeId = await this.documentRoot(context, frame, base);
-      const result = await context.read(() => this.sendBinding(base, "DOM.querySelectorAll", { nodeId, selector: target.selector }));
+      const result = await context.read(() => this.sendBinding(base, "DOM.querySelectorAll", { nodeId, selector: target.selector })).catch((error: unknown) => {
+        // Chromium refuses a selector that is not CSS ("DOM Error while querying"), such as Playwright's :has-text().
+        if (!(error instanceof EngineError) && /while querying/i.test(String((error as Error | undefined)?.message)))
+          throw new EngineError("invalid_arguments", undefined, `Selector ${quoted(target.selector)} is not valid CSS (extensions such as :has-text() are not CSS); use a CSS selector, or a semantic target with the text as its name.`);
+        throw error;
+      });
       const ids = Array.isArray(result.nodeIds) ? result.nodeIds : [];
       count += ids.length;
       if (count > 1 && !firstOfMany) throw new EngineError("ambiguous", undefined, `Selector ${quoted(target.selector)} matches more than one element; make it match one, or act on a ref from observe.`);
@@ -249,6 +254,13 @@ export class TargetResolver {
     if (!Number.isSafeInteger(owner.backendNodeId)) return true;
     try {
       const model = object((await context.read(() => this.sendBinding(base, "DOM.getBoxModel", { backendNodeId: owner.backendNodeId }))).model);
+      // The frame draws only inside its owner's content box. A tracking sandbox frame styled 0x0 keeps its default
+      // 2 px border, so its border box is 4x4 while its content box is empty, and its accessibility search never answers.
+      const content = Array.isArray(model.content) && model.content.length === 8 && model.content.every(value => typeof value === "number" && Number.isFinite(value)) ? model.content as number[] : undefined;
+      if (content) {
+        const xs = content.filter((_, index) => index % 2 === 0), ys = content.filter((_, index) => index % 2 === 1);
+        return Math.max(...xs) - Math.min(...xs) > 0 && Math.max(...ys) - Math.min(...ys) > 0;
+      }
       return Number(model.width) > 0 && Number(model.height) > 0;
     } catch (error) {
       // Chromium answers "Could not compute box model" for an owner that is not rendered.
