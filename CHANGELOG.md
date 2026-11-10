@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.26] - 2026-11-10
+
 ### Fixed
 
 - Screenshots of store checkouts are no longer refused as `evidence_unavailable`. A checkout keeps a hidden
