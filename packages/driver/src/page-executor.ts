@@ -30,9 +30,14 @@ import { SessionLive, type EngineFrame, type EngineFrameOptions, type EngineOper
 type RecordValue = Record<string, unknown>;
 type SignInOrigin = { origin: string; local: [string, string][]; session: [string, string][]; indexedDb: RecordValue };
 /** A person's sign-in read from one session for another; host-only and kept in memory. */
-export type SignInState = { cookies: RecordValue[]; origins: SignInOrigin[] };
+/** `url`: the page the person ended on (the sign-in session's selected page), opened in the session that adopts it. */
+export type SignInState = { cookies: RecordValue[]; origins: SignInOrigin[]; url?: string };
 /** What adoptSignIn carried into the session: cookies set, storage items written, and whether IndexedDB came across. */
-export type SignInAdoption = { cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported" };
+export type SignInAdoption = { cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported";
+  /** The address the session's page was sent to afterwards (where the person ended), or absent when it was reloaded. */
+  opened?: string;
+  /** Origins holding storage that could not be written: the session's page never held them, even after opening one. */
+  originsLeftOut: string[] };
 const OUT_OF_VIEW = "The element stays outside the visible area after scrolling it into view (a clipped or off-screen container).";
 const DOCUMENT_WORK_CHARS = 262_144;
 const DOCUMENT_WORK_NODES = 50_000;
@@ -1146,7 +1151,8 @@ export class PageExecutor implements EngineExecutor {
         origins.push({ origin, local, session, indexedDb: object(indexedDb) });
       }
     }
-    return { cookies, origins };
+    const url = this.directory.inventory().find(item => item.pageId === selected)?.url;
+    return { cookies, origins, ...(url && /^https?:\/\//u.test(url) ? { url } : {}) };
   }
   /** Host-only: take a person's sign-in from another session into this one and reload the selected page with it. Storage
    * reaches only origins this session's selected page or its frames hold (the browser writes storage through a frame of
@@ -1164,32 +1170,83 @@ export class PageExecutor implements EngineExecutor {
     })).filter(cookie => cookie.name && cookie.domain);
     if (params.length) await this.connection.wire.send("Storage.setCookies", { cookies: params });
     const page = this.bindPage();
-    const frames = await this.originFrames(page.pageId);
+    const rootRoute = () => this.directory.route(this.directory.binding(this.directory.stamp(page.pageId), 1));
+    let frames = await this.originFrames(page.pageId);
     let localStorageItems = 0, sessionStorageItems = 0, databases = 0, copied = 0, partial = false, unsupported = 0;
-    for (const origin of state.origins) {
-      const indexedDb = object(origin.indexedDb), dbs = array(indexedDb.dbs);
-      if (indexedDb.unsupported === true) unsupported++;
-      if (indexedDb.partial === true) partial = true;
-      databases += dbs.length;
-      const frame = frames.get(origin.origin);
-      if (!frame) { if (dbs.length) partial = true; continue; }
+    const originsLeftOut: string[] = [];
+    const holdsStorage = (origin: SignInOrigin) => origin.local.length > 0 || origin.session.length > 0 || array(object(origin.indexedDb).dbs).length > 0;
+    const writeStorage = async (origin: SignInOrigin, frame: { route: string; frameId: string }) => {
       for (const [isLocalStorage, items] of [[true, origin.local], [false, origin.session]] as const) {
         for (const [key, value] of items) {
           const written = await this.connection.wire.send("DOMStorage.setDOMStorageItem", { storageId: { securityOrigin: origin.origin, isLocalStorage }, key, value }, frame.route).then(() => true, () => false);
           if (written && isLocalStorage) localStorageItems++; else if (written) sessionStorageItems++;
         }
       }
-      if (dbs.length) {
-        const written = object(await this.isolatedEvaluate(frame, `(${WRITE_INDEXED_DB})(${JSON.stringify({ dbs })})`).catch(() => ({ partial: true, copied: 0 })));
-        if (written.partial !== false) partial = true;
-        copied += typeof written.copied === "number" ? written.copied : 0;
-      }
+    };
+    const writeDatabases = async (origin: SignInOrigin, frame: { route: string; frameId: string }) => {
+      const dbs = array(object(origin.indexedDb).dbs);
+      if (!dbs.length) return;
+      const written = object(await this.isolatedEvaluate(frame, `(${WRITE_INDEXED_DB})(${JSON.stringify({ dbs })})`).catch(() => ({ partial: true, copied: 0 })));
+      if (written.partial !== false) partial = true;
+      copied += typeof written.copied === "number" ? written.copied : 0;
+    };
+    const absent: SignInOrigin[] = [];
+    for (const origin of state.origins) {
+      const indexedDb = object(origin.indexedDb), dbs = array(indexedDb.dbs);
+      if (indexedDb.unsupported === true) unsupported++;
+      if (indexedDb.partial === true) partial = true;
+      databases += dbs.length;
+      const frame = frames.get(origin.origin);
+      if (!frame) { if (holdsStorage(origin)) absent.push(origin); continue; }
+      await writeStorage(origin, frame);
+      await writeDatabases(origin, frame);
     }
+    // Storage is written through a frame of its origin, and session storage belongs to this tab. A sign-in on a
+    // separate origin leaves the app's origin out of the session's page (it sits on the sign-in form), so open that
+    // origin in this tab first: the page the person ended on, or the origin's root, with page scripts off so a
+    // signed-out app cannot send the tab away before its storage is written. That document is replaced right after.
+    const sameOrigin = (url: string | undefined, origin: string) => { try { return !!url && new URL(url).origin === origin; } catch { return false; } };
+    const open = async (url: string) => {
+      const context = new CommandContext(15_000);
+      try {
+        const before = this.directory.stamp(page.pageId).documentGeneration;
+        const navigation = await this.connection.wire.send("Page.navigate", { url }, rootRoute());
+        if (navigation.errorText) return;
+        if (navigation.loaderId) await this.waitForDocument(context, string(navigation.loaderId), page.pageId, before, parseDeadline(context)).catch(() => false);
+        // Embedded cross-site frames attach as their own targets after the document parses.
+        if (this.pendingAttachments.size) await context.read(() => Promise.all([...this.pendingAttachments])).catch(() => undefined);
+        await this.frameQuiet(context).catch(() => undefined);
+      } finally { context.dispose(); }
+    };
+    // The page the person ended on first: it usually holds the app's origin and its embedded frames' origins at once.
+    absent.sort((a, b) => Number(sameOrigin(state.url, b.origin)) - Number(sameOrigin(state.url, a.origin)));
+    for (let opened = 0; absent.length && opened < 8; opened++) {
+      const next = absent[0]!, route = rootRoute();
+      await this.connection.wire.send("Emulation.setScriptExecutionDisabled", { value: true }, route);
+      const reached: [SignInOrigin, { route: string; frameId: string }][] = [];
+      try {
+        await open(sameOrigin(state.url, next.origin) ? state.url! : `${next.origin}/`);
+        frames = await this.originFrames(page.pageId);
+        for (const origin of [...absent]) {
+          const frame = frames.get(origin.origin);
+          if (!frame) continue;
+          absent.splice(absent.indexOf(origin), 1);
+          await writeStorage(origin, frame);
+          reached.push([origin, frame]);
+        }
+      } finally { await this.connection.wire.send("Emulation.setScriptExecutionDisabled", { value: false }, route).catch(() => undefined); }
+      for (const [origin, frame] of reached) await writeDatabases(origin, frame);
+      // Opening it sent the tab elsewhere (a server redirect): this origin cannot be reached from here.
+      if (absent[0] === next) { absent.shift(); originsLeftOut.push(next.origin); if (array(object(next.indexedDb).dbs).length) partial = true; }
+    }
+    for (const origin of absent) { originsLeftOut.push(origin.origin); if (array(object(origin.indexedDb).dbs).length) partial = true; }
     await this.front(page);
-    await this.connection.wire.send("Page.reload", {}, this.directory.route(this.directory.binding(page, 1)));
+    // Open where the person ended (an app's sign-in route shows its form even when signed in), else reload.
+    if (state.url) await this.connection.wire.send("Page.navigate", { url: state.url }, rootRoute());
+    else await this.connection.wire.send("Page.reload", {}, rootRoute());
     const indexedDb: SignInAdoption["indexedDb"] = unsupported === state.origins.length && state.origins.length > 0 ? "unsupported"
       : partial || unsupported || copied < databases ? "partial" : "copied";
-    return { cookies: params.length, localStorageItems, sessionStorageItems, indexedDb };
+    return { cookies: params.length, localStorageItems, sessionStorageItems, indexedDb, ...(state.url ? { opened: state.url } : {}), originsLeftOut };
   }
   /** One frame per http(s) origin of a page (its own and its embedded frames'), as the browser reports them. */
   private async originFrames(pageId: string): Promise<Map<string, { route: string; frameId: string }>> {

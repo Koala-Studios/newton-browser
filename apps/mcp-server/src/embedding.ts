@@ -18,7 +18,11 @@ export type BrowserEngineOptions = Readonly<{
   env?: NodeJS.ProcessEnv;
 }>;
 export type BrowserToolResult = Readonly<{ content: readonly ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]; isError?: boolean }>;
-export type BrowserSignInAdoption = Readonly<{ cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported" }>;
+export type BrowserSignInAdoption = Readonly<{ cookies: number; localStorageItems: number; sessionStorageItems: number; indexedDb: "copied" | "partial" | "unsupported";
+  /** Where the session's page was sent: the page the person ended on. Absent when it was reloaded instead. */
+  opened?: string;
+  /** Origins whose storage could not be written (their page never opened in this tab, for example a server redirect away). */
+  originsLeftOut: readonly string[] }>;
 export type BrowserSessionOptions = Readonly<{ authenticator?: readonly EngineWebAuthnCredential[]; onEvent?: (event: EngineSessionEvent) => void }>;
 
 export type BrowserEngine = Readonly<{
@@ -37,12 +41,15 @@ export type BrowserEngine = Readonly<{
   beginSignIn(sourceId: string, args: unknown, options?: Pick<BrowserSessionOptions, "onEvent">): Promise<BrowserToolResult>;
   /** Done (publish) or cancel. Publishing makes the signed-in state the source's next generation; running sessions keep their copies. */
   finishSignIn(sessionId: string, publish: boolean): Promise<{ generation: string } | undefined>;
-  /** Before publishing a sign-in: give a running session the same signed-in state and reload its page, so it need not
-   * restart. Carries cookies, then for each origin the sign-in session's pages and frames hold its local storage, the
-   * selected page's session storage and IndexedDB (JSON-safe records, best effort), into the origins the session's
-   * selected page and its frames hold. Resolves to what was written: cookie and storage item counts and `indexedDb`
-   * `copied` (every database, or none to copy), `partial` (some databases, stores or records did not come across, or
-   * their origin is not open in the session) or `unsupported` (none could be read). */
+  /** Before publishing a sign-in: give a running session the same signed-in state and open, on its selected page, the
+   * page the person ended on (`opened`), so it need not restart. Carries cookies, then for each origin the sign-in
+   * session's pages and frames hold its local storage, the selected page's session storage and IndexedDB (JSON-safe
+   * records, best effort). An origin the session's page does not hold (a sign-in on a separate origin) is opened in
+   * the session's tab first, with page scripts off until its storage is written; `originsLeftOut` lists any that
+   * still could not be written. Resolves to cookie and storage item counts and `indexedDb` `copied` (every database,
+   * or none to copy), `partial` (some databases, stores or records did not come across) or `unsupported` (none could
+   * be read). Session storage lives only in this tab: publishing never saves it for other sessions, so a site that
+   * keeps its sign-in there stays signed in only in the session that adopted it. */
   adoptSignIn(signInSessionId: string, sessionId: string): Promise<BrowserSignInAdoption>;
   sessions(): readonly { sessionId: string; state: string }[];
   /** Host-only, never a model tool: fill a saved sign-in into the session's selected page as typed input. Each field's

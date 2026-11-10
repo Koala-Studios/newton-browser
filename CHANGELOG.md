@@ -17,6 +17,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A document read scoped to a container that matches several elements reads the first one that renders. A checkout
   keeps a hidden phone copy of its order summary (`aside`) before the desktop one, so the scoped read returned
   nothing and `work_limit`: the hidden scope reported no visited nodes, which counted as the node budget spent.
+- `adoptSignIn` carries a sign-in made on a separate origin. Storage was written only to origins the running
+  session's page already held, so when that page sat on the sign-in form (another origin) none of the app's local or
+  session storage came across, the counts said nothing was skipped, and the page reloaded the sign-in form. Origins
+  the page does not hold are now opened in its tab first (the page the person ended on, or the origin's root), with
+  page scripts off until their storage is written so a signed-out app cannot send the tab away; that document is
+  then replaced. Afterwards the page opens where the person ended (`opened`) instead of reloading: an app's sign-in
+  route shows its form even when signed in. `originsLeftOut` lists origins whose storage still could not be written.
 - A semantic click on a FAQ heading is no longer refused before dispatch as `search_incomplete` ("an embedded
   frame did not answer the accessibility search"). Storefronts load tracking sandbox frames styled 0x0 and hidden;
   they keep their default 2 px border, so the frame counted as rendered by its 4x4 border box, and Chromium never

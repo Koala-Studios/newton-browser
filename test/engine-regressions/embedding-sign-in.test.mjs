@@ -11,7 +11,8 @@ test('embedding: operator sign-in publishes a login source that new sessions inh
   const temp = temporaryRoot('embedding-sign-in');
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html');
-    if (req.url === '/login') { res.setHeader('set-cookie', 'session=worker; Max-Age=3600; Path=/'); res.end('<title>signed in</title>'); return; }
+    // Signing in sets the cookie and sends the person back to the account page, where adoption opens the worker's page.
+    if (req.url === '/login') { res.statusCode = 302; res.setHeader('set-cookie', 'session=worker; Max-Age=3600; Path=/'); res.setHeader('location', '/'); res.end(); return; }
     res.end(`<title>${/session=worker/.test(req.headers.cookie ?? '') ? 'account' : 'anonymous'}</title><a href="/login">Sign in</a>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -35,8 +36,8 @@ test('embedding: operator sign-in publishes a login source that new sessions inh
     await engine.operatorInput(signIn.sessionId, { type: 'mouse', action: 'down', x: 20, y: 15 });
     await engine.operatorInput(signIn.sessionId, { type: 'mouse', action: 'up', x: 20, y: 15 });
     const deadline = Date.now() + 5000; let title = '';
-    while (Date.now() < deadline && title !== 'signed in') { title = text(await engine.call('browser.observe', { sessionId: signIn.sessionId, maxBytes: 2048 })).observation.title; if (title !== 'signed in') await new Promise(r => setTimeout(r, 100)); }
-    assert.equal(title, 'signed in');
+    while (Date.now() < deadline && title !== 'account') { title = text(await engine.call('browser.observe', { sessionId: signIn.sessionId, maxBytes: 2048 })).observation.title; if (title !== 'account') await new Promise(r => setTimeout(r, 100)); }
+    assert.equal(title, 'account');
     // Live frames arrive on their own schedule; a busy machine can deliver the first after the click lands.
     for (const framesBy = Date.now() + 5000; !frames.length && Date.now() < framesBy;) await new Promise(r => setTimeout(r, 50));
     assert.ok(frames.length > 0);
