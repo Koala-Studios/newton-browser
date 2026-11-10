@@ -157,6 +157,32 @@ export type EngineObservationDelta = Readonly<{
   added: readonly EngineObservationRecord[]; removed: readonly string[]; changed: readonly EngineObservationRecord[];
   refs?: readonly {recordId:string;ref:string}[]; order?: readonly string[];
 }>;
+/** One element a geometry read reports: its ref, a short label (tag, id, first class, start of its text; untrusted page
+ * content) and its box in document CSS pixels, plus the facts that made it reported. */
+export type EngineGeometryElement = Readonly<{ ref: string; label: string; box: Readonly<{ x: number; y: number; width: number; height: number }>;
+  left?: number; right?: number; scrollWidth?: number; clientWidth?: number; scrollHeight?: number; clientHeight?: number; overflow?: string; ellipsis?: true;
+  loading?: string; complete?: boolean }>;
+type EngineGeometryList = Readonly<{ count: number; items: readonly EngineGeometryElement[] }>;
+/** observe mode geometry: bounded layout facts for responsive checks. Lists keep at most 12 entries; counts are exact. */
+export type EngineGeometry = Readonly<{
+  /** Layout viewport (without a classic scrollbar) and scroll position, CSS pixels. */
+  viewport: Readonly<{ width: number; height: number }>; scroll: Readonly<{ x: number; y: number }>;
+  document: Readonly<{ scrollWidth: number; scrollHeight: number }>;
+  /** The page scrolls sideways: document scrollWidth is wider than the viewport. */
+  horizontalOverflow: boolean;
+  /** The scope element, when one was given, with its own scrollWidth and clientWidth. */
+  scope?: EngineGeometryElement;
+  /** Outermost shown elements extending past the viewport's left or right edge, not clipped by an ancestor (1 px helpers and off-canvas fixed drawers left out). */
+  wider: EngineGeometryList;
+  /** Shown elements whose own text runs past their box (scrollWidth or scrollHeight beyond client size); ellipsis when the page truncates it on purpose. */
+  clippedText: EngineGeometryList;
+  /** Shown images, and those not loaded (still loading, failed, or lazy and not yet requested). */
+  images: Readonly<{ count: number; notLoaded: EngineGeometryList }>;
+  /** Pairs of unrelated text boxes or form fields that intersect by more than 2 px each way; fixed and sticky layers are left out. */
+  overlaps: Readonly<{ count: number; items: readonly Readonly<{ a: EngineGeometryElement; b: EngineGeometryElement; width: number; height: number }>[]; truncated?: true }>;
+  /** Every element in scope was examined. */
+  complete: boolean;
+}>;
 export type EngineObservation =
   | Readonly<{ state: "none" }>
   | Readonly<{ state: "unavailable"; errorCode: EngineErrorCode; /** Which condition failed and whether a retry can help. */ detail?: string }>
@@ -177,6 +203,7 @@ export type EngineObservation =
       cover?: Readonly<{ text: string }>;
       /** observe mode focus: whether an element has focus and how it shows it. nodes[0] is that element. Untrusted page content. */
       focus?: Readonly<{ found: boolean; inFrame?: boolean; focusVisible?: boolean; outline?: Readonly<{ style: string; width: string; color: string; offset: string }>; boxShadow?: string }>;
+      geometry?: EngineGeometry;
       dialog?: Readonly<{ dialogId: string; type: "alert" | "confirm" | "prompt" | "beforeunload"; message: string }>;
       nodes: readonly EngineFieldView[]; records?: readonly EngineObservationRecord[]; delta?: EngineObservationDelta; text?: string; cursor?: string; complete?: boolean; imageData?: string; mimeType?: string;
       provenance?: Readonly<{ pageId: string; documentGeneration: number; captureId: string; viewport: Readonly<{ width: number; height: number }>; clip: Readonly<{ x: number; y: number; width: number; height: number }>; maskDisposition: "mask_applied" | "mask_not_configured" | "mask_not_applicable" }> }>;

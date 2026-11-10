@@ -24,6 +24,7 @@ const EXPECTED_FILES = [
   "control-reader.d.ts", "control-reader.js",
   "document-reader.d.ts", "document-reader.js",
   "frame-mask-geometry.d.ts", "frame-mask-geometry.js",
+  "geometry-reader.d.ts", "geometry-reader.js",
   "key-description.d.ts", "key-description.js",
   "native-edit-selection.d.ts", "native-edit-selection.js",
   "native-input.d.ts", "native-input.js",

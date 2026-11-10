@@ -27,6 +27,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `browser.observe` mode `geometry` (optional `scope`): a bounded, read-only layout read for responsive checks. It
+  returns the layout viewport, scroll position, document `scrollWidth`/`scrollHeight` and `horizontalOverflow`; the
+  outermost shown elements extending past the viewport edge and not clipped by an ancestor (`wider`; 1 px
+  screen-reader helpers and off-canvas fixed drawers left out); elements whose own text runs past their box
+  (`clippedText`, with `ellipsis` when the page truncates on purpose); shown images and those not loaded; and pairs
+  of unrelated text boxes or form fields that intersect (`overlaps`; fixed and sticky layers left out). Each entry
+  has a ref, a short label and its box in document CSS pixels; lists keep 12 entries, counts are exact, at most 6000
+  elements are examined (`work_limit` past that), and a tight `maxBytes` drops entries (`output_limit`). It reads
+  boxes and computed styles in the read-only world only; it never scrolls, focuses or loads anything.
 - A document read whose scope is hidden or collapsed (a closed accordion panel) returns `scopeHidden: true` with
   its empty text, so it reads as "expand it first" rather than as a page with nothing in it.
 

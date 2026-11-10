@@ -5,6 +5,7 @@ import type { EngineConnection } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
 import { DRAWN_BOX, TargetResolver } from "./target-resolver.ts";
 import { NativeInput } from "./native-input.ts";
+import { readGeometry } from './geometry-reader.ts';
 import { OPEN_SHADOW_CHILDREN_FUNCTION, DOCUMENT_READ_FUNCTION, FRAME_SCOPE_FUNCTION, documentChunk, boundDocumentUtf8 } from "./document-reader.ts";
 import { readAXControls } from "./control-reader.ts";
 import { readAXSnapshot } from "./ax-snapshot.ts";
@@ -1554,6 +1555,11 @@ export class PageExecutor implements EngineExecutor {
     const observation: EngineObservation = { state: "available", trust: "untrusted_page_content", scope: "target", page, snapshotId: published.snapshotId, expiredSnapshots: published.expiredSnapshots, nodes: [{ ...view, ref: published.refs[0]! }], focus };
     if (!budget.fits(observation)) throw new EngineError("output_budget");
     return observation;
+  }
+  async readGeometry(context: CommandContext, page: EnginePageStamp, budgetValue: number | EngineObservationBudget, scope?: EngineTarget): Promise<EngineObservation> {
+    await this.renderHidden(context, page);
+    const root = scope ? await this.resolver.resolve(context, page, scope) : await this.resolver.document(context, page);
+    return readGeometry(context, page, budgetValue, root, scope !== undefined, { directory: this.directory, send: (binding, method, params) => this.send(binding, method, params) });
   }
   async readRecords(context:CommandContext,page:EnginePageStamp,budget:EngineObservationBudget,shape:EngineRecordShape,scope?:EngineTarget,query?:EngineControlQuery):Promise<EngineObservation>{
     if(shape==='controls'||[...this.dialogs.values()].some(dialog=>dialog.pageId===page.pageId))return this.observe(context,page,budget,true,scope,query);
