@@ -22,6 +22,8 @@ for (const crossSite of [false, true]) test(`selectors and pointers preserve fra
     executor=new PageExecutor(connection);
     await executor.start(`http://${crossSite ? 'localhost' : '127.0.0.1'}:${server.address().port}/`);
     const page=executor.bindPage();
+    // A cross-site frame attaches as its own target after the load; under load that can trail start().
+    for(let i=0;i<40&&executor.directory.frames(page.pageId).length<2;i++) await new Promise(resolve=>setTimeout(resolve,125));
     assert.equal(executor.directory.frames(page.pageId).length,2);
     const outcomes=[];
     for(const selector of ['#parent','#child']) {
