@@ -39,6 +39,13 @@ test("fillSignIn fills a saved sign-in on its site only and never returns the va
     const title = async () => text(await engine.call("browser.observe", { sessionId, maxBytes: 4096 })).observation.title;
     const fill = async (site, fields) => { const reply = await engine.fillSignIn(sessionId, { commandId: next, site, fields }); const value = text(reply); next = value.nextCommandId ?? next; return { reply, value }; };
     const field = (id) => ({ kind: "selector", selector: `#${id}` });
+    // A selector is checked across every frame, so the embedded frame loads first (a frame still loading makes the
+    // search incomplete, which refuses the fill, under load).
+    for (let tries = 0; tries < 40; tries++) {
+      const shown = text(await engine.call("browser.observe", { sessionId, query: { text: "Frame password" } })).observation?.nodes ?? [];
+      if (shown.some((node) => node.name === "Frame password")) break;
+      await new Promise((resolve) => setTimeout(resolve, 125));
+    }
 
     // A secret value into a field that is not a password field: refused before anything is typed.
     const wrongField = await fill("app.localhost", [{ target: field("user"), value: USER, secret: false }, { target: field("note"), value: SECRET, secret: true }]);
