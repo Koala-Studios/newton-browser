@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { ENGINE_ERRORS, EngineError, asObservationBudget, engineErrorCode, nameMatches, rolesFor, type EngineHostFill, type EngineSignInFill, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
+import { ENGINE_ERRORS, EngineError, signInSiteName, asObservationBudget, engineErrorCode, nameMatches, rolesFor, type EngineHostFill, type EngineSignInFill, type EngineControlQuery, type EngineErrorCode, type EngineObservationBudget, type EngineClickAt, type EngineDrag, type EngineInputAction, type EngineObservation, type EnginePageStamp, type EnginePostcondition, type EngineTarget, type EngineWaitFor } from "@newton-browser/core";
 import { CommandContext } from "./command-context.ts";
-import type { EngineConnection } from "./connection.ts";
+import type { EngineConnection, EngineWire } from "./connection.ts";
 import { PageDirectory, type NodeBinding } from "./page-directory.ts";
 import { DRAWN_BOX, TargetResolver } from "./target-resolver.ts";
 import { NativeInput } from "./native-input.ts";
@@ -27,6 +27,70 @@ import { SessionDiagnostics, type ConsoleEntry, type DiagnosticKind } from "./se
 import { SessionDownloads } from "./session-downloads.ts";
 import { SessionLive, type EngineFrame, type EngineFrameOptions, type EngineOperatorInput, type EngineSessionEvent, type EngineWebAuthnCredential } from "./session-live.ts";
 
+
+/** In the code field's own frame: the field alone, or every box of the split code input it is one box of (inputs taking
+ * one character each, in document order, in the nearest ancestor holding at least `length` of them). Null for a
+ * password, payment or passkey field, or anything else that is not a text-like input. Never reads a value. */
+const CODE_BOXES = `function(length){
+  const kind=e=>{const type=(e.getAttribute('type')||'text').toLowerCase(),ac=(e.getAttribute('autocomplete')||'').toLowerCase();
+    return e.tagName==='INPUT'&&['text','tel','number','password'].includes(type)&&!/cc-|current-password|new-password|webauthn/.test(ac)&&!e.disabled&&!e.readOnly;};
+  if(!kind(this))return null;
+  if(this.maxLength!==1)return [this];
+  let scope=this.parentElement;
+  for(let depth=0;scope&&depth<6;depth++,scope=scope.parentElement){
+    const boxes=[...scope.querySelectorAll('input')].filter(e=>e.maxLength===1&&kind(e)&&e.getClientRects().length);
+    if(boxes.length>=length)return boxes.length===length&&boxes.includes(this)?boxes:null;
+  }
+  return null;
+}`;
+/** The code offered as a paste on the first box, for inputs that take a code only from a paste. */
+const CODE_PASTE = `function(code){
+  const data=new DataTransfer();data.setData('text/plain',code);
+  this.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true,composed:true}));
+  return true;
+}`;
+
+/** Host-only: forget one site's sign-in in an owned browser. Its cookies (the site and every subdomain) are expired, and
+ * every given origin on the site, and the https origin of each host it held cookies for, loses its stored data (local
+ * storage, IndexedDB, caches, service workers). Only counts come back, never a name or value. */
+export async function forgetSiteOnWire(wire: EngineWire, rawSite: unknown, rawOrigins: unknown = [], pageRoute?: string): Promise<{ cookies: number; origins: number }> {
+  const site = signInSiteName(rawSite);
+  const onSite = (host: string) => { const name = host.replace(/^\./u, "").toLowerCase(); return name === site || name.endsWith(`.${site}`); };
+  if (!Array.isArray(rawOrigins) || rawOrigins.length > 32) throw new EngineError("invalid_arguments");
+  const origins = new Set<string>();
+  for (const raw of rawOrigins) {
+    let url: URL;
+    try { url = new URL(typeof raw === "string" ? raw : ""); } catch { throw new EngineError("invalid_arguments"); }
+    if (!["http:", "https:"].includes(url.protocol) || !onSite(url.hostname)) throw new EngineError("invalid_arguments");
+    origins.add(url.origin);
+  }
+  const all = (await wire.send("Storage.getCookies", {})).cookies;
+  const cookies = (Array.isArray(all) ? all : []).map(object).filter(cookie => typeof cookie.domain === "string" && typeof cookie.name === "string" && onSite(cookie.domain));
+  // An expired cookie is a removed one: the browser-wide store has no delete by name.
+  if (cookies.length) await wire.send("Storage.setCookies", { cookies: cookies.map(cookie => ({ name: string(cookie.name), value: "", domain: string(cookie.domain), path: string(cookie.path) || "/",
+    secure: cookie.secure === true, httpOnly: cookie.httpOnly === true, expires: 1,
+    ...(typeof cookie.sameSite === "string" ? { sameSite: cookie.sameSite } : {}),
+    ...(cookie.partitionKey && typeof cookie.partitionKey === "object" ? { partitionKey: cookie.partitionKey } : {}) })) });
+  for (const cookie of cookies) { const host = string(cookie.domain).replace(/^\./u, ""); if (origins.size < 64) origins.add(`https://${host}`); }
+  // Chrome clears an origin's data only through a page's session; the browser's own answers "Internal error".
+  let route = pageRoute, attached: string | undefined, created: string | undefined;
+  if (!route) {
+    const targets = array((await wire.send("Target.getTargets", {})).targetInfos);
+    let targetId = string(targets.find(target => target.type === "page")?.targetId);
+    if (!targetId) targetId = created = string((await wire.send("Target.createTarget", { url: "about:blank" })).targetId);
+    route = attached = string((await wire.send("Target.attachToTarget", { targetId, flatten: true })).sessionId);
+  }
+  let cleared = 0;
+  try {
+    for (const origin of origins) if (await wire.send("Storage.clearDataForOrigin", { origin, storageTypes: "local_storage,indexeddb,cache_storage,service_workers,file_systems,websql" }, route).then(() => true, () => false)) cleared++;
+  } finally {
+    if (attached) await wire.send("Target.detachFromTarget", { sessionId: attached }).catch(() => undefined);
+    if (created) await wire.send("Target.closeTarget", { targetId: created }).catch(() => undefined);
+  }
+  const left = (await wire.send("Storage.getCookies", {})).cookies;
+  if ((Array.isArray(left) ? left : []).map(object).some(cookie => typeof cookie.domain === "string" && onSite(cookie.domain))) throw new EngineError("cleanup_uncertain");
+  return { cookies: cookies.length, origins: cleared };
+}
 type RecordValue = Record<string, unknown>;
 type SignInOrigin = { origin: string; local: [string, string][]; session: [string, string][]; indexedDb: RecordValue };
 /** A person's sign-in read from one session for another; host-only and kept in memory. */
@@ -1154,6 +1218,12 @@ export class PageExecutor implements EngineExecutor {
     const url = this.directory.inventory().find(item => item.pageId === selected)?.url;
     return { cookies, origins, ...(url && /^https?:\/\//u.test(url) ? { url } : {}) };
   }
+  /** Host-only: forget one site's sign-in in this owned browser (see forgetSiteOnWire). */
+  async forgetSite(site: unknown, origins?: unknown): Promise<{ cookies: number; origins: number }> {
+    if (this.closed) throw new EngineError("session_closed");
+    if (!this.connection.ownsBrowser) throw new EngineError("unsupported_capability");
+    return forgetSiteOnWire(this.connection.wire, site, origins, this.directory.route(this.directory.binding(this.directory.stamp(this.bindPage().pageId), 1)));
+  }
   /** Host-only: take a person's sign-in from another session into this one and reload the selected page with it. Storage
    * reaches only origins this session's selected page or its frames hold (the browser writes storage through a frame of
    * that origin); the counts say what was written. */
@@ -2191,8 +2261,9 @@ export class PageExecutor implements EngineExecutor {
       try {
         const binding = await this.resolver.resolve(context, page, request.target);
         if (!onSignInSite(await this.frameUrl(context, binding), action.site)) throw new EngineError("frame_off_site");
-        const facts = await this.resolver.inspect(context, binding, { editable: true, allowSensitive: request.secret });
+        const facts = await this.resolver.inspect(context, binding, { editable: true, allowSensitive: request.secret || request.code === true });
         if (request.secret && (facts.tag !== "input" || facts.type !== "password")) throw new EngineError("not_password_field");
+        if (request.code) await this.codeBoxes(context, binding, host.values[field]!.length, true);
         bindings.push(binding);
       } catch (error) {
         const code = context.cancellation ?? engineErrorCode(error);
@@ -2203,6 +2274,17 @@ export class PageExecutor implements EngineExecutor {
     let met = true;
     for (const [field, binding] of bindings.entries()) {
       const secret = action.fields[field]!.secret;
+      if (action.fields[field]!.code) {
+        try {
+          const holds = await this.codeFill(context, binding, host.values[field]!);
+          results[field] = { field, state: holds ? "filled" : "not_met" };
+          met &&= holds;
+        } catch (error) {
+          results[field] = { field, state: "not_met", errorCode: context.cancellation ?? engineErrorCode(error) };
+          throw new EngineError(context.cancellation ?? engineErrorCode(error), undefined, `sign-in field ${field}`);
+        }
+        continue;
+      }
       try {
         const facts = await this.resolver.inspect(context, binding, { editable: true, allowSensitive: secret });
         if (!facts.focused) await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
@@ -2218,6 +2300,74 @@ export class PageExecutor implements EngineExecutor {
       }
     }
     return { state: met ? "met" : "not_met", kind: "value" };
+  }
+  /** The boxes a sign-in code goes into: the field itself, or, when it is one box of a split code input (one character
+   * each), every box of that input in order. A password, payment or passkey field is never a code field. Only the
+   * boxes' node IDs come back, never a value. With `check`, the boxes are only counted. */
+  private async codeBoxes(context: CommandContext, binding: NodeBinding, length: number, check = false): Promise<NodeBinding[]> {
+    const resolved = await context.read(() => this.send(binding, "DOM.resolveNode", { backendNodeId: binding.backendNodeId }));
+    const objectId = string(object(resolved.object).objectId);
+    if (!objectId) throw new EngineError("stale_target");
+    let groupId = "";
+    try {
+      const found = await context.read(() => this.send(binding, "Runtime.callFunctionOn", { objectId, functionDeclaration: CODE_BOXES, arguments: [{ value: length }], returnByValue: false, silent: true }));
+      if (found.exceptionDetails || object(found.result).subtype !== "array") throw new EngineError("not_code_field");
+      groupId = string(object(found.result).objectId);
+      const properties = await context.read(() => this.send(binding, "Runtime.getProperties", { objectId: groupId, ownProperties: true }));
+      const boxes: NodeBinding[] = [];
+      for (const property of Array.isArray(properties.result) ? properties.result.map(object) : []) {
+        if (!/^\d+$/u.test(string(property.name))) continue;
+        const elementId = string(object(property.value).objectId);
+        if (!elementId) throw new EngineError("not_code_field");
+        const node = object((await context.read(() => this.send(binding, "DOM.describeNode", { objectId: elementId }))).node);
+        if (typeof node.backendNodeId !== "number") throw new EngineError("not_code_field");
+        boxes[Number(property.name)] = { ...binding, backendNodeId: node.backendNodeId };
+      }
+      if ((boxes.length !== 1 && boxes.length !== length) || boxes.some(box => !box)) throw new EngineError("not_code_field");
+      return check ? [] : boxes;
+    } finally {
+      void this.send(binding, "Runtime.releaseObject", { objectId }).catch(() => undefined);
+      if (groupId) void this.send(binding, "Runtime.releaseObject", { objectId: groupId }).catch(() => undefined);
+    }
+  }
+  /** A sign-in code typed into its field, or one character per box of a split code input, each box focused in turn. When
+   * the boxes do not hold it after typing (an input that reads a code only from a paste), the code is offered once as a
+   * paste event on the first box: the one page event this host-only fill dispatches, and no model command reaches it. */
+  private async codeFill(context: CommandContext, binding: NodeBinding, code: string): Promise<boolean> {
+    const boxes = await this.codeBoxes(context, binding, code.length);
+    const parts = boxes.length === 1 ? [code] : [...code];
+    for (const [index, box] of boxes.entries()) {
+      const facts = await this.resolver.inspect(context, box, { editable: true, allowSensitive: true });
+      if (!facts.focused) await context.input(() => this.send(box, "DOM.focus", { backendNodeId: box.backendNodeId }));
+      await this.selectAll(context, box, true);
+      await this.focusedFacts(context, box, true, true);
+      await context.input(() => this.send(box, "Input.insertText", { text: parts[index]! }));
+    }
+    if (await this.codeHolds(context, binding, code)) return true;
+    const first = boxes[0]!;
+    const resolved = await context.read(() => this.send(first, "DOM.resolveNode", { backendNodeId: first.backendNodeId }));
+    const objectId = string(object(resolved.object).objectId);
+    if (!objectId) throw new EngineError("stale_target");
+    try {
+      await context.input(() => this.send(first, "DOM.focus", { backendNodeId: first.backendNodeId }));
+      await context.input(() => this.send(first, "Runtime.callFunctionOn", { objectId, functionDeclaration: CODE_PASTE, arguments: [{ value: code }], returnByValue: true, silent: true }));
+    } finally { void this.send(first, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
+    // A paste handler may write the boxes on its next frame.
+    const until = Math.min(context.deadline, performance.now() + 1_000);
+    for (;;) {
+      if (await this.codeHolds(context, binding, code)) return true;
+      if (performance.now() >= until) return false;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      context.checkpoint();
+    }
+  }
+  /** Whether the code's field, or its boxes in order, now hold exactly the code; only a yes/no comes back. */
+  private async codeHolds(context: CommandContext, binding: NodeBinding, code: string): Promise<boolean> {
+    let boxes: NodeBinding[];
+    try { boxes = await this.codeBoxes(context, binding, code.length); } catch (error) { if (context.cancellation) throw error; return false; }
+    if (boxes.length === 1) return this.fieldHolds(context, boxes[0]!, code);
+    for (const [index, box] of boxes.entries()) if (!await this.fieldHolds(context, box, code[index]!)) return false;
+    return true;
   }
   /** The URL the browser reports for the frame a node is in. */
   private async frameUrl(context: CommandContext, binding: NodeBinding): Promise<string> {

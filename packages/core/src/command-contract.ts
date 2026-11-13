@@ -7,7 +7,7 @@ export const ENGINE_ERRORS = [
   "output_budget", "work_limit", "unknown_command", "unknown_page", "cursor_expired",
   "dialog_opened", "unsupported_structure", "invalid_file_path", "file_not_found", "symlink_not_allowed",
   "file_too_large", "file_total_too_large", "file_type_not_allowed", "file_changed", "operator_control",
-  "browser_launch_failed", "frame_off_site", "not_password_field", "stale_ref",
+  "browser_launch_failed", "frame_off_site", "not_password_field", "not_code_field", "stale_ref",
 ] as const;
 export type EngineErrorCode = typeof ENGINE_ERRORS[number];
 export class EngineError extends Error {
@@ -66,6 +66,7 @@ const ENGINE_ERROR_DETAILS: Readonly<Record<EngineErrorCode, string>> = Object.f
   browser_launch_failed: "The browser could not start.",
   frame_off_site: "The field's frame is not on the sign-in site.",
   not_password_field: "A secret value goes only into a password field.",
+  not_code_field: "A sign-in code goes only into a code field, or one box per character of it.",
 });
 export function engineErrorDetail(code: EngineErrorCode): string { return ENGINE_ERROR_DETAILS[code]; }
 export type EngineDispatch = "not_started" | "attempted" | "acknowledged";
@@ -108,7 +109,10 @@ export type EngineResize = Readonly<{kind:'resize';width:number;height:number}>;
 export type EngineSetFiles = Readonly<{kind:'set_files';target:EngineTarget;files:readonly string[]}>;
 /** Host-only, never parsed from a model command: fill a saved sign-in on a page of `site`. The values travel beside the
  * command in an EngineHostFill, so they never enter the command, its hash, its receipt or its observation. */
-export type EngineSignInFill = Readonly<{ kind: "sign_in_fill"; site: string; fields: readonly Readonly<{ target: EngineTarget; secret: boolean }>[] }>;
+/** A `code` field takes a one-time sign-in code (4 to 12 letters or digits): into one code field (a field marked
+ * `one-time-code` included, which model fills never reach) or, from its first box, one character per box of a split
+ * code input. */
+export type EngineSignInFill = Readonly<{ kind: "sign_in_fill"; site: string; fields: readonly Readonly<{ target: EngineTarget; secret: boolean; code?: true }>[] }>;
 /** One sign-in field's outcome: filled (value verified), not_met (typed but the field holds something else), refused
  * (with why), or not_started (another field was refused first, so nothing was typed). */
 export type EngineSignInFieldResult = Readonly<{ field: number; state: "filled" | "not_met" | "refused" | "not_started"; errorCode?: EngineErrorCode }>;
@@ -412,6 +416,14 @@ function defaultCommandTimeout(action: EngineAction): number {
   const steps = action.kind === "sequence" ? action.steps : [action];
   const waits = steps.reduce((total, step) => total + ((step.kind === "wait_for" ? step.waitFor.timeoutMs : "waitFor" in step ? step.waitFor?.timeoutMs : undefined) ?? 0), 0);
   return Math.min(ENGINE_LIMITS.defaultTimeoutMs + waits, ENGINE_LIMITS.maxTimeoutMs);
+}
+/** A sign-in site as a host gives it: a bare lower-case host name, no scheme, port, path or wildcard. */
+export function signInSiteName(raw: unknown): string {
+  const site = typeof raw === "string" ? raw.toLowerCase() : "";
+  let host: string;
+  try { host = new URL(`https://${site}/`).hostname; } catch { throw new EngineError("invalid_arguments"); }
+  if (!site || site.length > 253 || host !== site || !/^[a-z0-9.-]+$/u.test(site) || site.startsWith(".") || site.endsWith(".")) throw new EngineError("invalid_arguments");
+  return site;
 }
 export function normalizeEngineUrl(raw: unknown): string {
   const text = boundedString(raw, 8192);

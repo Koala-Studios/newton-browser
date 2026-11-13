@@ -7,6 +7,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.27] - 2026-11-13
+
+### Added
+
+- `fillSignIn` takes a one-time sign-in code: a field with `code: true` (4 to 12 letters or digits, never `secret`)
+  goes into one code field, a field marked `autocomplete="one-time-code"` included, which model fills still never
+  reach, or, given the first box, one character per box of a split code input, each box focused in turn while the page
+  moves focus on its own. When typing leaves the boxes short (an input that takes a code only from a paste), the code is
+  offered once as a paste event on the first box. A password, payment or passkey field, or a split input of another
+  length, is refused as `not_code_field`. Only outcomes come back, never the code.
+- `forgetSite`, host-only: forgets one site's sign-in (a sign-in consent taken back). Its cookies, on the site and every
+  subdomain, are removed and its stored data (local storage, IndexedDB, caches, service workers) cleared for the given
+  origins and each host it held cookies for, in a running session (`sessionId`) or in a login source's saved state
+  (`sourceId`, published as its next generation). Counts only; `cleanup_uncertain` when a cookie of the site is left.
+
 ## [0.7.26] - 2026-11-10
 
 ### Fixed

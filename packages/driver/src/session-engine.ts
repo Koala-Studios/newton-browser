@@ -1,4 +1,4 @@
-import { type EngineControlQuery, ENGINE_LIMITS, EngineError, boundedInteger, engineErrorCode, engineErrorDetail, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
+import { type EngineControlQuery, ENGINE_LIMITS, EngineError, signInSiteName, boundedInteger, engineErrorCode, engineErrorDetail, parseEngineCommand, readObservationBudget, receiptObservationBudget, type EngineObservationBudget, type EngineCommand, type EngineCommandState,
   type EngineInputAction, type EngineHostFill, type EngineSignInFieldResult, parseEngineTarget, boundedString, type EngineObservation, type EngineObservationRecord, type EnginePageStamp, type EnginePostcondition, type EngineReceipt, type EngineStepReceipt, type EngineTarget } from "@newton-browser/core";
 import { CommandContext, engineClock, type EngineClock } from "./command-context.ts";
 import { CommandStore, type CommandRecord } from "./command-store.ts";
@@ -79,15 +79,15 @@ export class SessionEngine {
   }
   /** Host-only: fill a saved sign-in on the selected page. The command carries only targets, which are secret and the
    * site; the values stay beside it and are cleared once it ran. `results` fills in per field as the command runs. */
-  submitSignInFill(input: { commandId: number; site: string; fields: readonly { target: unknown; value: string; secret: boolean }[] }): { receipt: Promise<EngineReceipt>; results: readonly EngineSignInFieldResult[] } {
-    const site = boundedString(input.site, 253).toLowerCase();
-    let host: string;
-    try { host = new URL(`https://${site}/`).hostname; } catch { throw new EngineError("invalid_arguments"); }
-    if (host !== site || !/^[a-z0-9.-]+$/u.test(site) || site.startsWith(".") || site.endsWith(".")) throw new EngineError("invalid_arguments");
+  submitSignInFill(input: { commandId: number; site: string; fields: readonly { target: unknown; value: string; secret: boolean; code?: boolean }[] }): { receipt: Promise<EngineReceipt>; results: readonly EngineSignInFieldResult[] } {
+    const site = signInSiteName(boundedString(input.site, 253));
     if (!Array.isArray(input.fields) || !input.fields.length || input.fields.length > 4) throw new EngineError("invalid_arguments");
     const fields = input.fields.map(field => {
       if (!field || typeof field !== "object" || typeof field.secret !== "boolean" || typeof field.value !== "string" || !field.value || field.value.length > 4096) throw new EngineError("invalid_arguments");
-      return Object.freeze({ target: parseEngineTarget(field.target), secret: field.secret });
+      if (field.code !== undefined && typeof field.code !== "boolean") throw new EngineError("invalid_arguments");
+      // A code is never the secret and is only ever a short run of letters or digits.
+      if (field.code === true && (field.secret || !/^[A-Za-z0-9]{4,12}$/u.test(field.value))) throw new EngineError("invalid_arguments");
+      return Object.freeze({ target: parseEngineTarget(field.target), secret: field.secret, ...(field.code === true ? { code: true as const } : {}) });
     });
     const command: EngineCommand = Object.freeze({ commandId: boundedInteger(input.commandId, 1, Number.MAX_SAFE_INTEGER),
       action: Object.freeze({ kind: "sign_in_fill" as const, site, fields: Object.freeze(fields) }),

@@ -51,15 +51,26 @@ export type BrowserEngine = Readonly<{
    * be read). Session storage lives only in this tab: publishing never saves it for other sessions, so a site that
    * keeps its sign-in there stays signed in only in the session that adopted it. */
   adoptSignIn(signInSessionId: string, sessionId: string): Promise<BrowserSignInAdoption>;
+  /** Host-only, never a model tool: forget one site's sign-in (a site whose sign-in consent was taken back). Its cookies,
+   * on the site and every subdomain, are removed, and its stored data (local storage, IndexedDB, caches, service
+   * workers) cleared for each given `origins` entry on the site and for each host it held cookies for. With
+   * `sessionId`, in that running session; with `sourceId`, in the login source's saved state, published as its next
+   * generation (sessions already running keep their copies: forget there too, or stop them). Resolves to counts only;
+   * `cleanup_uncertain` when a cookie of the site is still there afterwards. */
+  forgetSite(input: Readonly<{ site: string; origins?: readonly string[] } & ({ sessionId: string; sourceId?: never } | { sourceId: string; sessionId?: never })>): Promise<{ cookies: number; origins: number; generation?: string }>;
   sessions(): readonly { sessionId: string; state: string }[];
   /** Host-only, never a model tool: fill a saved sign-in into the session's selected page as typed input. Each field's
    * frame must be on `site` or a subdomain of it (look-alike hosts and other frames are refused, `frame_off_site`); a
    * password field takes only a `secret` value and a secret value goes only into a password field (`sensitive_target`,
-   * `not_password_field`). Every field is checked before any is typed. The values are never returned, logged, put in an
+   * `not_password_field`). A `code` field takes a one-time sign-in code (4 to 12 letters or digits, never `secret`): into
+   * one code field, one marked `one-time-code` included, or from the first box one character per box of a split code
+   * input; when typing leaves the boxes short, the code is offered once more as a paste on the first box, for inputs
+   * that take a code only that way (`not_code_field` for a password, payment or other non-code field). Every field is
+   * checked before any is typed. The values are never returned, logged, put in an
    * error or kept in the command or its receipt; the result is the receipt plus `fields`: each field's
    * `filled` / `not_met` / `refused` / `not_started` and error code. `commandId` is the session's next command ID, as
    * for browser.act; repeating it joins the first request. */
-  fillSignIn(sessionId: string, input: Readonly<{ commandId: number; site: string; fields: readonly Readonly<{ target: unknown; value: string; secret: boolean }>[] }>,
+  fillSignIn(sessionId: string, input: Readonly<{ commandId: number; site: string; fields: readonly Readonly<{ target: unknown; value: string; secret: boolean; code?: boolean }>[] }>,
     signal?: AbortSignal): Promise<BrowserToolResult>;
   /** Where a completed download of this session was saved, for the host to copy out before the session stops. */
   downloadFile(sessionId: string, downloadId: string): { path: string; filename: string; bytes: number };
@@ -101,6 +112,7 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
     beginSignIn: (sourceId, args, sessionOptions = {}) => started(() => host.start(args, { ...sessionOptions, maintenanceOf: sourceId })),
     finishSignIn: (sessionId, publish) => host.finishMaintenance(sessionId, publish),
     adoptSignIn: (signInSessionId, sessionId) => host.adoptSignIn(signInSessionId, sessionId),
+    forgetSite: input => host.forgetSite(input),
     sessions: () => host.list(),
     downloadFile: (sessionId, downloadId) => host.downloadFile(sessionId, downloadId),
     fillSignIn: async (sessionId, input, signal = new AbortController().signal) => {

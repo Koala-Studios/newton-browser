@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EngineError, boundedInteger, boundedString, exactObject, normalizeEngineUrl } from "@newton-browser/core";
 import { SessionEngine } from "@newton-browser/driver/session-engine";
-import { PageExecutor, type SignInAdoption } from "@newton-browser/driver/page-executor";
+import { PageExecutor, forgetSiteOnWire, type SignInAdoption } from "@newton-browser/driver/page-executor";
 import type { EngineConnection } from "@newton-browser/driver/connection";
 import type { EngineFrame, EngineFrameOptions, EngineOperatorInput, EngineSessionEvent, EngineWebAuthnCredential } from "@newton-browser/driver/session-live";
 import { launchOwnedBrowserRuntime, type LaunchOwnedBrowserRuntimeOptions, type OwnedBrowserRuntime } from "./owned-browser-runtime.ts";
@@ -133,6 +133,22 @@ export class EngineHost {
   /** Carry a person's sign-in session's cookies into another running session and reload its page there. */
   /** Carries a person's sign-in (cookies, local and session storage, IndexedDB) from a sign-in session into a running one. */
   async adoptSignIn(fromId: unknown, toId: unknown): Promise<SignInAdoption> { return this.executor(toId).adoptSignIn(await this.executor(fromId).signInState()); }
+  /** Host-only: forget one site's sign-in, in a running session (`sessionId`) or in a login source's saved state
+   * (`sourceId`: its current generation is opened as a sign-in maintenance session, the site forgotten there and the
+   * result published as the next generation; sessions already running keep their copies). Counts only. */
+  async forgetSite(raw: unknown): Promise<{ cookies: number; origins: number; generation?: string }> {
+    const args = exactObject(raw, ["site", "origins", "sourceId", "sessionId"]);
+    if ((args.sessionId === undefined) === (args.sourceId === undefined)) throw new EngineError("invalid_arguments");
+    if (args.sessionId !== undefined) return this.executor(args.sessionId).forgetSite(args.site, args.origins ?? []);
+    if (!this.maintenance) throw new EngineError("unsupported_capability");
+    const begun = await this.maintenance.begin(boundedString(args.sourceId, 120), DEFAULT_BROWSER_DISPLAY).catch(launchFailure);
+    let counts: { cookies: number; origins: number };
+    try { counts = await forgetSiteOnWire(begun.connection.wire, args.site, args.origins ?? []); }
+    catch (error) { await begun.connection.close().catch(() => undefined); await begun.finish(false).catch(() => undefined); throw error; }
+    await begun.connection.close();
+    const published = await begun.finish(true);
+    return { ...counts, ...(published ? { generation: published.generation } : {}) };
+  }
   async pause(id: unknown, reason: string): Promise<void> { await this.session(id).pause(reason); }
   resume(id: unknown): void { this.session(id).resume(); }
   async operatorInput(id: unknown, input: EngineOperatorInput, pageId?: string): Promise<void> {
