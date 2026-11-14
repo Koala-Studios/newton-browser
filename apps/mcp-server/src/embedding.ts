@@ -23,6 +23,10 @@ export type BrowserSignInAdoption = Readonly<{ cookies: number; localStorageItem
   opened?: string;
   /** Origins whose storage could not be written (their page never opened in this tab, for example a server redirect away). */
   originsLeftOut: readonly string[] }>;
+/** A session's sign-in as readSignIn gives it: host-only, as private as the profile it came from. */
+export type BrowserSignInState = Readonly<{ cookies: readonly Readonly<Record<string, unknown>>[];
+  origins: readonly Readonly<{ origin: string; local: readonly (readonly [string, string])[]; session: readonly (readonly [string, string])[]; indexedDb: Readonly<Record<string, unknown>> }>[];
+  url?: string }>;
 export type BrowserSessionOptions = Readonly<{ authenticator?: readonly EngineWebAuthnCredential[]; onEvent?: (event: EngineSessionEvent) => void }>;
 
 export type BrowserEngine = Readonly<{
@@ -51,6 +55,16 @@ export type BrowserEngine = Readonly<{
    * be read). Session storage lives only in this tab: publishing never saves it for other sessions, so a site that
    * keeps its sign-in there stays signed in only in the session that adopted it. */
   adoptSignIn(signInSessionId: string, sessionId: string): Promise<BrowserSignInAdoption>;
+  /** Host-only, never a model tool: a running session's whole sign-in, for the host to keep across browser restarts. A
+   * closed browser drops session cookies and session storage, and worker sessions' changes are never merged back into a
+   * login source, so a host that must survive its own restarts reads the sign-in here and writes it back with
+   * restoreSignIn. Cookies (session ones included), and for each origin the session's pages and frames hold its local
+   * storage, IndexedDB and the selected page's session storage. With `site`, only that site's and its subdomains'. The
+   * host keeps it as private as the profile itself: never logged, shown to a model or sent anywhere. */
+  readSignIn(sessionId: string, options?: Readonly<{ site?: string }>): Promise<BrowserSignInState>;
+  /** Host-only: write a sign-in kept from readSignIn back into a running session, exactly as adoptSignIn writes a
+   * person's (`url` is opened afterwards, else the page reloads). The state is checked first (`invalid_arguments`). */
+  restoreSignIn(sessionId: string, state: BrowserSignInState): Promise<BrowserSignInAdoption>;
   /** Host-only, never a model tool: forget one site's sign-in (a site whose sign-in consent was taken back). Its cookies,
    * on the site and every subdomain, are removed, and its stored data (local storage, IndexedDB, caches, service
    * workers) cleared for each given `origins` entry on the site and for each host it held cookies for. With
@@ -113,6 +127,8 @@ export function createBrowserEngine(options: BrowserEngineOptions): BrowserEngin
     finishSignIn: (sessionId, publish) => host.finishMaintenance(sessionId, publish),
     adoptSignIn: (signInSessionId, sessionId) => host.adoptSignIn(signInSessionId, sessionId),
     forgetSite: input => host.forgetSite(input),
+    readSignIn: (sessionId, readOptions) => host.readSignIn(sessionId, readOptions ?? {}) as Promise<BrowserSignInState>,
+    restoreSignIn: (sessionId, state) => host.restoreSignIn(sessionId, state),
     sessions: () => host.list(),
     downloadFile: (sessionId, downloadId) => host.downloadFile(sessionId, downloadId),
     fillSignIn: async (sessionId, input, signal = new AbortController().signal) => {

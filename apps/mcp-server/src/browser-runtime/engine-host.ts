@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { EngineError, boundedInteger, boundedString, exactObject, normalizeEngineUrl } from "@newton-browser/core";
+import { EngineError, boundedInteger, boundedString, exactObject, normalizeEngineUrl, signInSiteName } from "@newton-browser/core";
 import { SessionEngine } from "@newton-browser/driver/session-engine";
-import { PageExecutor, forgetSiteOnWire, type SignInAdoption } from "@newton-browser/driver/page-executor";
+import { PageExecutor, forgetSiteOnWire, type SignInAdoption, type SignInState } from "@newton-browser/driver/page-executor";
 import type { EngineConnection } from "@newton-browser/driver/connection";
 import type { EngineFrame, EngineFrameOptions, EngineOperatorInput, EngineSessionEvent, EngineWebAuthnCredential } from "@newton-browser/driver/session-live";
 import { launchOwnedBrowserRuntime, type LaunchOwnedBrowserRuntimeOptions, type OwnedBrowserRuntime } from "./owned-browser-runtime.ts";
@@ -133,6 +133,21 @@ export class EngineHost {
   /** Carry a person's sign-in session's cookies into another running session and reload its page there. */
   /** Carries a person's sign-in (cookies, local and session storage, IndexedDB) from a sign-in session into a running one. */
   async adoptSignIn(fromId: unknown, toId: unknown): Promise<SignInAdoption> { return this.executor(toId).adoptSignIn(await this.executor(fromId).signInState()); }
+  /** Host-only: a running session's sign-in for the host to keep across browser restarts, which drop session cookies
+   * and session storage. With `site`, only that site's (and its subdomains') cookies and origins. Never a model tool. */
+  async readSignIn(id: unknown, raw: unknown = {}): Promise<SignInState> {
+    const args = exactObject(raw ?? {}, ["site"]);
+    const state = await this.executor(id).signInState();
+    if (args.site === undefined) return state;
+    const site = signInSiteName(args.site);
+    const onSite = (host: string) => { const name = host.replace(/^\./u, "").toLowerCase(); return name === site || name.endsWith(`.${site}`); };
+    const hostOf = (url: string) => { try { return new URL(url).hostname; } catch { return ""; } };
+    return { cookies: state.cookies.filter(cookie => typeof cookie.domain === "string" && onSite(cookie.domain)),
+      origins: state.origins.filter(origin => onSite(hostOf(origin.origin))),
+      ...(state.url && onSite(hostOf(state.url)) ? { url: state.url } : {}) };
+  }
+  /** Host-only: write a sign-in the host kept (from readSignIn) back into a running session, as adoptSignIn does. */
+  async restoreSignIn(id: unknown, raw: unknown): Promise<SignInAdoption> { return this.executor(id).adoptSignIn(keptSignIn(raw)); }
   /** Host-only: forget one site's sign-in, in a running session (`sessionId`) or in a login source's saved state
    * (`sourceId`: its current generation is opened as a sign-in maintenance session, the site forgotten there and the
    * result published as the next generation; sessions already running keep their copies). Counts only. */
@@ -203,6 +218,26 @@ export class EngineHost {
     this.sessions.clear(); this.executors.clear();
   }
   close(): Promise<void> { return this.stopAll(); }
+}
+
+/** A kept sign-in's shape, checked before any of it is written: the host stored it, but it is still outside data. */
+function keptSignIn(raw: unknown): SignInState {
+  const args = exactObject(raw, ["cookies", "origins", "url"]);
+  const list = (value: unknown, max: number): unknown[] => { if (!Array.isArray(value) || value.length > max) throw new EngineError("invalid_arguments"); return value; };
+  const record = (value: unknown): Record<string, unknown> => { if (!value || typeof value !== "object" || Array.isArray(value)) throw new EngineError("invalid_arguments"); return value as Record<string, unknown>; };
+  const items = (value: unknown): [string, string][] => list(value, 10_000).map(item => {
+    if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== "string" || typeof item[1] !== "string") throw new EngineError("invalid_arguments");
+    return [item[0], item[1]];
+  });
+  const cookies = list(args.cookies, 4096).map(record);
+  const origins = list(args.origins ?? [], 32).map(value => {
+    const origin = exactObject(value, ["origin", "local", "session", "indexedDb"]);
+    let url: URL;
+    try { url = new URL(typeof origin.origin === "string" ? origin.origin : ""); } catch { throw new EngineError("invalid_arguments"); }
+    if (!["http:", "https:"].includes(url.protocol) || url.origin !== origin.origin) throw new EngineError("invalid_arguments");
+    return { origin: url.origin, local: items(origin.local ?? []), session: items(origin.session ?? []), indexedDb: origin.indexedDb === undefined ? {} : record(origin.indexedDb) };
+  });
+  return { cookies, origins, ...(args.url === undefined ? {} : { url: normalizeEngineUrl(args.url) }) };
 }
 
 function parseCollect(raw: unknown): ("console" | "network")[] {

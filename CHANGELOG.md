@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.28] - 2026-11-14
+
+### Added
+
+- `readSignIn` and `restoreSignIn`, host-only: a host that restarts its browsers keeps a running session's sign-in
+  itself. A closed browser drops session cookies and session storage, and a worker session's changes never reach its
+  login source, so a refreshed or session-only sign-in was lost on every restart. `readSignIn` gives the session's
+  cookies (session ones included), and for each origin its pages and frames hold, local storage, IndexedDB and the
+  selected page's session storage; with `site`, only that site's and its subdomains'. `restoreSignIn` checks a kept
+  state's shape and writes it into a running session as `adoptSignIn` does.
+
 ## [0.7.27] - 2026-11-13
 
 ### Added
