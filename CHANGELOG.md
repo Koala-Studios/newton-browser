@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.29] - 2026-11-16
+
+### Fixed
+
+- `press` and `type` reach a code editor's focused input. VS Code web (Cloudflare's Worker editor), Monaco and
+  CodeMirror take keys through a textarea they keep at zero size, so both were refused as `target_not_editable`
+  ("hidden or has no size") even on the focused textbox. An element holding the page's keyboard focus now takes keys
+  and text without a visible box, as a person's keyboard types into it; a hidden field without focus is still refused,
+  and pointer actions still need a box. A focused element with the textbox role (an EditContext editor) takes typed text.
+  Test: focused-hidden-editor.
+
 ## [0.7.28] - 2026-11-14
 
 ### Added

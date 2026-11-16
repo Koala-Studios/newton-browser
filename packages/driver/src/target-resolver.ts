@@ -30,7 +30,13 @@ const fieldInspection = `function(pointer=false) {
   const type = (this.getAttribute('type') || 'text').toLowerCase();
   const autocomplete = (this.getAttribute('autocomplete') || '').toLowerCase();
   const sensitive = type === 'password' || /password|one-time-code|cc-|webauthn/.test(autocomplete);
-  const editable = tag === 'textarea' || tag === 'select' || this.isContentEditable || (tag === 'input' && ['text','search','email','url','tel','number','password'].includes(type));
+  let focusRoot=this,focusDepth=0;
+  while(focusRoot.parentNode&&focusDepth++<256)focusRoot=focusRoot.parentNode;
+  const focused=!focusRoot.parentNode&&focusRoot.activeElement===this;
+  // A focused text box takes typed text even when it is not a native field: a code editor's EditContext element (VS Code
+  // web, Monaco) has the textbox role and receives inserted text itself.
+  const editable = tag === 'textarea' || tag === 'select' || this.isContentEditable || (tag === 'input' && ['text','search','email','url','tel','number','password'].includes(type))
+    || (focused && this.getAttribute('role') === 'textbox');
   // A password field is editable, but sensitive: only a host sign-in fill (allowSensitive) gets past the sensitivity check.
   const rect = (${DRAWN_BOX})(this);
   const visible = !!(rect.width && rect.height) && getComputedStyle(this).visibility !== 'hidden';
@@ -62,10 +68,8 @@ const fieldInspection = `function(pointer=false) {
   // closest() is not side-effect free for V8's check; walk ancestors with getAttribute.
   let ariaDisabled=false;
   for(let node=this,depth=0;node&&depth<64&&!ariaDisabled;node=node.parentElement,depth++)ariaDisabled=node.getAttribute('aria-disabled')==='true';
-  let focusRoot=this,focusDepth=0;
-  while(focusRoot.parentNode&&focusDepth++<256)focusRoot=focusRoot.parentNode;
   return { sensitive, editable, connected: this.isConnected, disabled: !!this.disabled, ariaDisabled,
-    readonly: !!this.readOnly, visible, focused: !focusRoot.parentNode && focusRoot.activeElement === this,
+    readonly: !!this.readOnly, visible, focused,
     tag, type, checked: !!this.checked, selected: !!this.selected, pointerInView, drawn: !!rect.drawn,
     multiple: tag === 'select' || (tag === 'input' && type === 'file') ? !!this.multiple : undefined,
     bbox: visible ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : undefined,
@@ -310,7 +314,9 @@ export class TargetResolver {
       if (!facts.connected) throw new EngineError("stale_target", undefined, REMOVED);
       if (options.actionable !== false) {
         if (facts.disabled) throw new EngineError("target_not_editable", undefined, "The element is disabled.");
-        if (!facts.visible) throw new EngineError("target_not_editable", undefined, "The element is hidden or has no size.");
+        // Keys and text go where the page's keyboard focus is, as a person's do: a code editor (VS Code web, Monaco,
+        // CodeMirror) types through a focused input it keeps invisible. A hidden field without focus is still refused.
+        if (!facts.visible && !(facts.focused && !options.pointer)) throw new EngineError("target_not_editable", undefined, "The element is hidden or has no size.");
         if (options.editable !== false && !facts.editable) throw new EngineError("target_not_editable", undefined, "The element does not take typed text; target its text field.");
         if (options.editable !== false && facts.readonly) throw new EngineError("target_not_editable", undefined, "The field is read-only.");
       }
