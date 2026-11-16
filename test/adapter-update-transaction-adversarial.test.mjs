@@ -250,3 +250,15 @@ test("recovery rejects unknown changed worker bytes", async (t) => {
   );
   assert.deepEqual(calls, []);
 });
+
+test("an update to the code already installed changes nothing and never touches the browser", async (t) => {
+  const fixture = await makeInstalled(t, "same-code");
+  const stage = await makeStage(fixture.directory, fixture.oldCode);
+  const calls = [];
+  const result = await updateInstalledAdapter(fixture.directory, stage, controlFactory(calls, (target) => ({ digest: target, epoch: "unused", protocolMajor: 1 })));
+  assert.deepEqual(result, { state: "no_update", digest: digest(fixture.oldCode) });
+  assert.deepEqual(calls, [], "no connection, quiesce or reload: a reload replaces the browser's connection and instance");
+  const journal = await openUpdateJournal(fixture.directory);
+  try { assert.equal(journal.read(), undefined); } finally { await journal.close(); }
+  assert.equal(await fs.readFile(path.join(fixture.directory, "worker.js"), "utf8"), fixture.oldCode.toString());
+});

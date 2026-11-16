@@ -3,7 +3,7 @@ import path from "node:path";
 import {fileURLToPath} from 'node:url';
 import {prepareAdapterDirectory,readAdapterDirectory} from './adapter-directory.ts';
 import {installNativeLocal} from './native-install.ts';
-import {discoverExistingDirectory,nativeAdvertisements,existingConnectionId} from './existing-connection.ts';
+import {discoverExistingBrowser,discoverExistingDirectory,nativeAdvertisements,existingConnectionId} from './existing-connection.ts';
 import {developmentUpdateControl} from './adapter-update-control.ts';
 import {updateInstalledAdapter,recoverInstalledAdapter} from './adapter-update-transaction.ts';
 import {openUpdateJournal} from './adapter-update-journal.ts';
@@ -39,12 +39,13 @@ export async function handleUtilityCommand(args: string[]): Promise<boolean> {
     if(operation==='update'||operation==='recover'){
       const flags=parseUtilityFlags(args.slice(2),new Set(operation==='update'?['--from','--connection','--instance','--tab']:['--connection','--instance','--tab']));
       const connectionId=flags.single('--connection'),instanceId=flags.single('--instance'),tab=flags.single('--tab');
-      if(!connectionId||!/^existing_[a-f0-9]{24}$/.test(connectionId)||!instanceId||instanceId.length>256||!tab||!/^\d+$/.test(tab)||!Number.isSafeInteger(Number(tab))||Number(tab)<=0)throw utilityError('adapter_invalid_arguments');
+      // recover may omit the connection: the reload that left it pending gave the browser a new connection and instance.
+      const named=operation==='update'||connectionId!==undefined||instanceId!==undefined;
+      if((named&&(!connectionId||!/^existing_[a-f0-9]{24}$/.test(connectionId)||!instanceId||instanceId.length>256))||!tab||!/^\d+$/.test(tab)||!Number.isSafeInteger(Number(tab))||Number(tab)<=0)throw utilityError('adapter_invalid_arguments');
       const nativeDirectory=path.join(configDirectory(),'tab-adapter-native','connections');
       const connect=async({ticket,signal,bindingRequired}:{ticket:string;signal:AbortSignal;bindingRequired:boolean})=>{
-        const advertisement=(await nativeAdvertisements(nativeDirectory)).find(file=>existingConnectionId(file)===connectionId);
-        if(!advertisement)throw utilityError('browser_connection_missing');
-        return developmentUpdateControl({directory:nativeDirectory,advertisement,instanceId,ticket,smokeTabId:Number(tab),signal,bindingRequired});
+        const current=await currentAdapterConnection(nativeDirectory,operation==='recover',connectionId,instanceId);
+        return developmentUpdateControl({directory:nativeDirectory,advertisement:current.advertisement,instanceId:current.instanceId,ticket,smokeTabId:Number(tab),signal,bindingRequired});
       };
       const result=operation==='update'?await updateInstalledAdapter(directory,flags.single('--from')??path.join(path.dirname(fileURLToPath(import.meta.url)),'tab-adapter'),connect):await recoverInstalledAdapter(directory,connect);
       process.stdout.write(JSON.stringify(result)+'\n');return true;
@@ -219,7 +220,7 @@ function utilityHelp(): string {
     "  newton-browser adapter setup [--browser chrome|edge]  (user-local native registration)",
     "  newton-browser adapter status",
     "  newton-browser adapter update [--from DIRECTORY] --connection ID --instance EPOCH --tab ID",
-    "  newton-browser adapter recover --connection ID --instance EPOCH --tab ID",
+    "  newton-browser adapter recover [--connection ID --instance EPOCH] --tab ID",
     "  newton-browser setup --browser <chrome|edge>",
     "  newton-browser source init --id <name> --browser <chrome|edge>",
     "  newton-browser source status --id <name> --browser <chrome|edge>",
@@ -271,6 +272,23 @@ function parseUtilityFlags(
     },
     many(name: string) { return Object.freeze([...(values.get(name) ?? [])]); },
   });
+}
+
+/**
+ * The browser connection an adapter update or recovery talks to. Recovery falls back to the browser's only current
+ * connection when the named one is gone (an extension reload replaces both IDs), reading its instance from the browser.
+ */
+export async function currentAdapterConnection(nativeDirectory:string,recovering:boolean,connectionId?:string,instanceId?:string,
+  discover:(advertisement:string)=>Promise<{instanceId?:string}>=discoverExistingBrowser):Promise<{advertisement:string;instanceId:string}>{
+  const files=await nativeAdvertisements(nativeDirectory);
+  const advertisement=connectionId?files.find(file=>existingConnectionId(file)===connectionId):undefined;
+  if(advertisement&&instanceId)return {advertisement,instanceId};
+  if(!recovering)throw utilityError('browser_connection_missing');
+  // More than one browser: `adapter status` lists their connection and instance IDs to pass.
+  if(files.length!==1)throw utilityError(files.length?'browser_connection_ambiguous':'browser_connection_missing');
+  const current=await discover(files[0]!);
+  if(!current.instanceId)throw utilityError('browser_connection_missing');
+  return {advertisement:files[0]!,instanceId:current.instanceId};
 }
 
 function utilityError(code: string): Error & { code: string } {

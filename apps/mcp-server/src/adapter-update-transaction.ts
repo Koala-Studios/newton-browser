@@ -1,6 +1,7 @@
 import {readAdapterDirectory,readAdapterUpdateDirectory,commitAdapterWorker} from './adapter-directory.ts';
 import {adapterCodeInstallation,readAdapterBuilds,type AdapterControl} from './adapter-installation.ts';
 import {openUpdateJournal,type UpdateJournal} from './adapter-update-journal.ts';
+import {createHash} from 'node:crypto';
 import {updateAdapter,verifyAdapterBootstrap,type AdapterInstallation} from './adapter-update.ts';
 
 type Control=AdapterControl&{finish():Promise<void>;close():void};
@@ -15,6 +16,10 @@ export async function updateInstalledAdapter(directory:string,staged:string,conn
     if(journal.read()&&journal.read()!.phase!=='committed')throw new Error('adapter_update_recovery_required');
     const installed=await readAdapterDirectory(directory);
     const builds=await readAdapterBuilds(directory,staged);
+    // The same code is already installed: nothing to publish, so the person's browser is not touched. A reload here
+    // gave the extension a new connection and instance and could leave it needing recovery for no change.
+    const installedDigest=createHash('sha256').update(builds.oldCode).digest('hex');
+    if(installedDigest===createHash('sha256').update(builds.newCode).digest('hex'))return {state:'no_update',digest:installedDigest};
     const prior=journal.read();
     if(prior){
       // Preserve the last ticket until cleanup succeeds. Otherwise a crash after

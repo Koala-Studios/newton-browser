@@ -7,7 +7,7 @@ TCP port.
 
 ## Install
 
-This checkout contains version 0.7.29. Clients should run an installed release package
+This checkout contains version 0.7.30. Clients should run an installed release package
 (see **Install a release** below), not a source checkout: a checkout changes under the
 client whenever it is edited or rebuilt. For source testing, build and run the exact
 compiled entrypoint:
@@ -211,7 +211,7 @@ Worker code updates retain the installed manifest, permissions and extension ID:
 
 ```powershell
 newton-browser adapter update --connection CONNECTION_ID --instance INSTANCE_EPOCH --tab TAB_ID
-newton-browser adapter recover --connection CONNECTION_ID --instance INSTANCE_EPOCH --tab TAB_ID
+newton-browser adapter recover [--connection CONNECTION_ID --instance INSTANCE_EPOCH] --tab TAB_ID
 ```
 
 Use IDs from `adapter status` for the explicitly selected browser and a normal HTTP(S)
@@ -219,6 +219,10 @@ tab available for a fresh debugger claim and read-only DOM smoke check. `update`
 the current package's adapter code; `--from DIRECTORY` selects a staged build with an
 otherwise identical manifest. The package manifest may omit the installation-specific
 key. This command updates `worker.js` only; it cannot change permissions or setup assets.
+When the installed `worker.js` already matches, `update` answers `no_update` and leaves
+the browser alone. An extension reload gives the browser a new connection and instance,
+so `recover` without them, or with IDs that are gone, uses the browser's only current
+connection (`browser_connection_ambiguous` when several browsers are connected).
 
 An installation-wide lock excludes concurrent updates across profiles. A durable journal
 retains the ticket and both code versions before publication. Metadata commits only after

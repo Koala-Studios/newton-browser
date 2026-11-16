@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { handleUtilityCommand } from "../apps/mcp-server/src/cli.ts";
+import { currentAdapterConnection, handleUtilityCommand } from "../apps/mcp-server/src/cli.ts";
+import { existingConnectionId } from "../apps/mcp-server/src/existing-connection.ts";
 import { acquireInstallationLock } from "../apps/mcp-server/src/installation-lock.ts";
 import { openUpdateJournal } from "../apps/mcp-server/src/adapter-update-journal.ts";
 
@@ -87,4 +88,28 @@ test("status reports not_installed without creating an installation directory", 
   const result = await invoke(["adapter", "status"], root);
   assert.deepEqual(result, { handled: true, output: { state: "not_installed" } });
   await assert.rejects(fs.lstat(path.join(root, "tab-adapter")), (error) => error.code === "ENOENT");
+});
+
+test("recovery finds the browser's current connection when a reload replaced the named one", async (t) => {
+  const root = await makeTempRoot(t, "current-connection");
+  const directory = path.join(root, "connections");
+  await fs.mkdir(directory);
+  const advertise = async () => {
+    const file = path.join(directory, `connection-${randomUUID()}.json`);
+    await fs.writeFile(file, JSON.stringify({ pid: process.pid }));
+    return file;
+  };
+  const discovered = [];
+  const discover = async (advertisement) => { discovered.push(advertisement); return { instanceId: "fresh-epoch" }; };
+  await assert.rejects(currentAdapterConnection(directory, true, connection, instance, discover), /browser_connection_missing/u);
+  const current = await advertise();
+  const named = existingConnectionId(current);
+  assert.deepEqual(await currentAdapterConnection(directory, false, named, instance, discover), { advertisement: current, instanceId: instance });
+  assert.deepEqual(discovered, [], "a named live connection is used as given");
+  await assert.rejects(currentAdapterConnection(directory, false, connection, instance, discover), /browser_connection_missing/u,
+    "an update still needs the connection it names");
+  assert.deepEqual(await currentAdapterConnection(directory, true, connection, instance, discover), { advertisement: current, instanceId: "fresh-epoch" });
+  assert.deepEqual(await currentAdapterConnection(directory, true, undefined, undefined, discover), { advertisement: current, instanceId: "fresh-epoch" });
+  await advertise();
+  await assert.rejects(currentAdapterConnection(directory, true, connection, instance, discover), /browser_connection_ambiguous/u);
 });

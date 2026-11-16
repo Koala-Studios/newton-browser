@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.30] - 2026-11-16
+
+### Fixed
+
+- `adapter update` with the `worker.js` already installed answers `no_update` without connecting to or reloading the
+  browser. The reload replaced the browser's connection and instance, and a failed smoke check then left the adapter
+  needing recovery for no change at all.
+- `adapter recover` finds the browser's current connection itself: with no `--connection`/`--instance`, or with IDs a
+  reload has replaced, it uses the only connected browser and reads its instance, instead of failing
+  `browser_connection_missing` and needing IDs rediscovered by hand. Several connected browsers answer
+  `browser_connection_ambiguous`; pass the IDs `adapter status` lists.
+  Tests: adapter-update-transaction-adversarial, adapter-cli-update.
+
 ## [0.7.29] - 2026-11-16
 
 ### Fixed
