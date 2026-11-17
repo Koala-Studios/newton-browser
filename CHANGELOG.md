@@ -17,7 +17,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `attach_failed` on every open tab could not be seen.
 - When Chrome ends the debugger session on a held tab, the add-on passes Chrome's detach reason
   (`target_closed`, `canceled_by_user`) with `Newton.pageClosed`, and the next command on that tab fails
-  `foreign_target` with that reason in its detail instead of a bare foreign target.
+  `connection_lost` with that reason in its detail.
 
 ## [0.7.30] - 2026-11-16
 

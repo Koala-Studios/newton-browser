@@ -1,3 +1,4 @@
+import {EngineError} from '@newton-browser/core';
 import type {NativeClient} from './native-client.ts';
 import type {EngineConnection,EngineWire} from '@newton-browser/driver/connection';
 
@@ -53,7 +54,8 @@ export function existingPageConnection(client:NativeClient,root:Token,initial:Va
     if(!owned){
       // Chrome ended the debugger session on this tab; say so instead of a bare foreign target.
       const reason=tabId===undefined?undefined:detachedReasons.get(tabId);
-      throw Object.assign(new Error('foreign_target'),reason?{detail:`Chrome detached the debugger from this tab (${reason}).`}:{});
+      if(reason)throw new EngineError('connection_lost',undefined,`Chrome detached the debugger from this tab (${reason}).`);
+      throw new Error('foreign_target');
     }
     return owned;
   };

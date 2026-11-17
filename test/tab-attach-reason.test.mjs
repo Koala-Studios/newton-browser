@@ -27,3 +27,15 @@ test("browser.session.start on an existing tab names Chrome's reason when the at
         && error.detail === "Another debugger is already attached to the tab with id: 7.");
   } finally { await host.close(); }
 });
+
+test("a command on a tab Chrome detached says so, with Chrome's reason", async () => {
+  const { existingPageConnection } = await import("../apps/mcp-server/src/existing-page-family.ts");
+  const listeners = [];
+  const client = { hello: { capabilities: [] }, signal: new AbortController().signal, close() {},
+    onEvent(listener) { listeners.push(listener); return () => {}; }, async call() { return {}; } };
+  const root = { tabId: 7, epoch: "epoch", generation: 1 };
+  const connection = existingPageConnection(client, root, []);
+  for (const listener of listeners) listener({ type: "event", token: root, event: { method: "Newton.pageClosed", params: { reason: "target_closed" }, sessionId: null } });
+  await assert.rejects(connection.wire.send("Page.getFrameTree", {}, "tab_7"),
+    error => error.code === "connection_lost" && error.detail === "Chrome detached the debugger from this tab (target_closed).");
+});
