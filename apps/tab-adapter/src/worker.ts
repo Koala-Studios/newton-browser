@@ -1,5 +1,5 @@
 import { NativeAssembly, nativePackets } from "@newton-browser/core";
-import { TabClaims, type ClaimToken, type DebuggerApi } from "./claims.ts";
+import { chromeReason, TabClaims, type ClaimToken, type DebuggerApi } from "./claims.ts";
 import { UpdateBinding,type UpdateTabs } from './update-binding.ts';
 
 interface NativePort {
@@ -12,7 +12,7 @@ declare const chrome: {
     onStartup: { addListener(fn: () => void): void }; onInstalled: { addListener(fn: () => void): void };
     onMessage: { addListener(fn: (message: unknown, sender: { id?: string; url?: string }, reply: (value: unknown) => void) => boolean): void }; id: string };
   debugger: DebuggerApi & { onEvent: { addListener(fn: (source: { tabId?: number; sessionId?: string }, method: string, params: Record<string, unknown>) => void): void };
-    onDetach: { addListener(fn: (source: { tabId?: number }) => void): void } };
+    onDetach: { addListener(fn: (source: { tabId?: number }, reason?: string) => void): void } };
   tabs: UpdateTabs & { query(query: Record<string, unknown>): Promise<{ id?: number; url?: string; title?: string }[]>;
     onActivated: { addListener(fn: () => void): void }; onUpdated: { addListener(fn: () => void): void } };
   webNavigation:{onCreatedNavigationTarget:{addListener(fn:(details:{tabId:number;sourceTabId:number})=>void):void}};
@@ -70,7 +70,8 @@ native.onMessage.addListener(raw => {
       if (request.method === "inventory") {const tabs=await chrome.tabs.query({});return { incomplete:tabs.length>128,tabs:tabs.slice(0,128).map(tab=>({tabId:tab.id,url:(tab.url??'').slice(0,4096),title:(tab.title??'').slice(0,512),claimed:authority.isClaimed(tab.id??0)})) };}
       throw new Error("unsupported_method");
     })().then(result => post({ connectionId, payload: { type: "response", id: request.id, result } }))
-      .catch(error => post({ connectionId, payload: { type: "response", id: request.id, error: boundedError(error) } }))
+      .catch(error => { const detail = chromeReason((error as { detail?: unknown })?.detail);
+        post({ connectionId, payload: { type: "response", id: request.id, error: boundedError(error), ...(detail ? { detail } : {}) } }); })
       .catch(() => authority.disconnect(owner).catch(() => undefined));
   } catch { void authority.quiesce().catch(() => undefined); }
 });
@@ -85,14 +86,16 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   post({ connectionId, payload: { type: "event", token: destination.token,
     event: { method, params, sessionId: source.sessionId ?? `tab_${source.tabId}` } } });
 });
-const pageClosed=(tabId:number)=>{
+// reason: Chrome's detach reason (target_closed, canceled_by_user); none when the tab itself closed.
+const pageClosed=(tabId:number,reason?:string)=>{
   const destination=authority.event(tabId,'Newton.pageClosed',{});
   const connectionId=destination&&ids.get(destination.owner);
-  if(destination&&connectionId)post({connectionId,payload:{type:'event',token:destination.token,event:{method:'Newton.pageClosed',params:{},sessionId:null}}});
+  const params=reason&&/^[a-z_]{1,40}$/.test(reason)?{reason}:{};
+  if(destination&&connectionId)post({connectionId,payload:{type:'event',token:destination.token,event:{method:'Newton.pageClosed',params,sessionId:null}}});
   authority.detached(tabId);
 };
-chrome.debugger.onDetach.addListener(source => { if (source.tabId) pageClosed(source.tabId); });
-chrome.tabs.onRemoved.addListener(pageClosed);
+chrome.debugger.onDetach.addListener((source, reason) => { if (source.tabId) pageClosed(source.tabId, reason ?? "unknown"); });
+chrome.tabs.onRemoved.addListener(tabId=>pageClosed(tabId));
 chrome.webNavigation.onCreatedNavigationTarget.addListener(details=>{
   void authority.claimPopup(details.tabId,details.sourceTabId).then(claim=>{
     if(!claim)return;const connectionId=ids.get(claim.owner);if(!connectionId)return;

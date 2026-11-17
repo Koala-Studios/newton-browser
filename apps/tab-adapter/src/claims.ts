@@ -98,9 +98,9 @@ export class TabClaims {
     this.claims.set(tabId, claim); // Reserve synchronously before attach can yield.
     claim.attachment = Promise.resolve().then(() => this.api.attach({ tabId }, "1.3"));
     try { await claim.attachment; }
-    catch {
+    catch (error) {
       if (this.claims.get(tabId) === claim && claim.state === "reserved") this.claims.delete(tabId);
-      throw new Error("attach_failed");
+      throw Object.assign(new Error("attach_failed"), { detail: chromeReason(error) });
     }
     if (claim.state !== "reserved" || this.claims.get(tabId) !== claim) throw new Error("claim_revoked");
     // A held tab renders as shown, whichever client holds it: a background tab runs no frames, so its embedded
@@ -306,4 +306,11 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("reconciliation_timeout")), 1000); })]); }
   finally { clearTimeout(timer); }
+}
+/** Chrome's own words for a refused attach or a detach, without any page path or query: they say why
+ * (another extension's frame in the page, another debugger, a page the extension may not reach). */
+export function chromeReason(value: unknown): string | undefined {
+  const text = value instanceof Error ? value.message : typeof value === "string" ? value : undefined;
+  if (!text) return undefined;
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/[^/\s"']*)[^\s"']*/giu, "$1").replace(/\s+/gu, " ").trim().slice(0, 200) || undefined;
 }

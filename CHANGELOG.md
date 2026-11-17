@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.31] - 2026-11-17
+
+### Fixed
+
+- A tab the tab add-on cannot attach to now says why. The `attach_failed` error of `browser.session.start` on an
+  existing tab carries Chrome's own reason in `detail` (for example another extension's frame in the page, or another
+  debugger already attached), with page paths and queries removed. It was swallowed, so the cause of a lasting
+  `attach_failed` on every open tab could not be seen.
+- When Chrome ends the debugger session on a held tab, the add-on passes Chrome's detach reason
+  (`target_closed`, `canceled_by_user`) with `Newton.pageClosed`, and the next command on that tab fails
+  `foreign_target` with that reason in its detail instead of a bare foreign target.
+
 ## [0.7.30] - 2026-11-16
 
 ### Fixed

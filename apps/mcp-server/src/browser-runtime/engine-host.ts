@@ -254,6 +254,11 @@ function launchFailure(error: unknown): never {
     const phase = typeof failure.launchPhase === "string" ? failure.launchPhase : typeof failure.phase === "string" ? failure.phase : undefined;
     throw new EngineError("browser_launch_failed", phase);
   }
-  if (error instanceof Error && /^[a-z_]{1,80}$/u.test(error.message)) throw new EngineError("browser_launch_failed", error.message);
+  if (error instanceof Error && /^[a-z_]{1,80}$/u.test(error.message)) {
+    // Chrome's own reason for a refused tab attach, as the tab add-on reported it.
+    const reported = (error as Error & { detail?: unknown }).detail;
+    const detail = typeof reported === "string" ? reported : undefined;
+    throw new EngineError("browser_launch_failed", error.message, detail);
+  }
   throw error;
 }

@@ -53,7 +53,12 @@ export async function connectNative(advertisement:string,expectedInstanceId?:str
     const record=pending.get(Number(message.id));if(!record)return;
     trace(Number(message.id),record.method,hasError?'error':'response');
     pending.delete(Number(message.id));clearTimeout(record.timer);
-    if(hasError)record.reject(new Error(typeof message.error==='string'&&/^[a-z_]{1,80}$/.test(message.error)?message.error:'connection_failed'));
+    if(hasError){
+      const code=typeof message.error==='string'&&/^[a-z_]{1,80}$/.test(message.error)?message.error:'connection_failed';
+      // Chrome's reason for a refused attach (the adapter strips page paths), so the cause is visible.
+      const detail=code==='attach_failed'&&typeof message.detail==='string'?message.detail.replace(/[^\x20-\x7e]/gu,'').slice(0,200):'';
+      record.reject(Object.assign(new Error(code),detail?{detail}:{}));
+    }
     else record.resolve(message.result as Value);
   },()=>close());
   const timer=setTimeout(()=>close(new Error('native_handshake_timeout')),5000);

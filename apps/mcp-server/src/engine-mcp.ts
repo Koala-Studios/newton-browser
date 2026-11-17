@@ -191,7 +191,8 @@ export async function handleEngineMcp(host: EngineHost, message: ModernMcpReques
     }
     const phase = error instanceof EngineError ? error.phase : undefined;
     // A command refused before it ran (a commandId gap or conflict, a full queue) says why, as a receipt would.
-    const detail = toolName === "browser.act" && !issue ? (error instanceof EngineError && error.detail) || engineErrorDetail(errorCode) : undefined;
+    const detail = toolName === "browser.act" && !issue ? (error instanceof EngineError && error.detail) || engineErrorDetail(errorCode)
+      : toolName === "browser.session.start" && error instanceof EngineError ? error.detail : undefined;
     return response({ ...wrap({ errorCode, ...(phase ? { phase } : {}), ...(issue ? { field: issue.field, expected: issue.expected } : {}), ...(detail ? { detail } : {}), ...(nextCommandId === undefined ? {} : { nextCommandId }) }), isError: true });
   }
 }

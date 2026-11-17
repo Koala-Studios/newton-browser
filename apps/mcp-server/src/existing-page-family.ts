@@ -12,7 +12,7 @@ function token(value:unknown,epoch:string):Token|undefined{
 /** One native owner, multiple explicitly owned debugger claims. Only the trusted
  * adapter's opener-attributed events can add a page; arbitrary target IDs cannot. */
 export function existingPageConnection(client:NativeClient,root:Token,initial:Value[]=[]):EngineConnection{
-  const claims=new Map<number,Token>([[root.tabId,root]]),routes=new Map<string,number>();
+  const claims=new Map<number,Token>([[root.tabId,root]]),routes=new Map<string,number>(),detachedReasons=new Map<number,string>();
   const listeners=new Set<(event:Event)=>void|Promise<void>>(),queued:Event[]=[];
   let closed=false;
   const emit=(event:Event)=>{
@@ -32,6 +32,8 @@ export function existingPageConnection(client:NativeClient,root:Token,initial:Va
       emit({method:'Target.targetCreated',params:{targetInfo:{type:'page',targetId:`tab_${child.tabId}`,openerId:`tab_${owned.tabId}`}},sessionId:null});return;
     }
     if(event.method==='Newton.pageClosed'){
+      const reason=typeof event.params.reason==='string'&&/^[a-z_]{1,40}$/.test(event.params.reason)?event.params.reason:undefined;
+      if(reason)detachedReasons.set(owned.tabId,reason);
       claims.delete(owned.tabId);for(const [route,id] of routes)if(id===owned.tabId)routes.delete(route);
       emit({method:'Target.targetDestroyed',params:{targetId:`tab_${owned.tabId}`},sessionId:null});return;
     }
@@ -47,7 +49,13 @@ export function existingPageConnection(client:NativeClient,root:Token,initial:Va
   const resolve=(sessionId?:string|null):Token=>{
     const match=/^tab_([1-9][0-9]*)$/.exec(sessionId??`tab_${root.tabId}`);
     const tabId=match?Number(match[1]):routes.get(sessionId!);
-    const owned=tabId===undefined?undefined:claims.get(tabId);if(!owned)throw new Error('foreign_target');return owned;
+    const owned=tabId===undefined?undefined:claims.get(tabId);
+    if(!owned){
+      // Chrome ended the debugger session on this tab; say so instead of a bare foreign target.
+      const reason=tabId===undefined?undefined:detachedReasons.get(tabId);
+      throw Object.assign(new Error('foreign_target'),reason?{detail:`Chrome detached the debugger from this tab (${reason}).`}:{});
+    }
+    return owned;
   };
   return {rootTargetId:`tab_${root.tabId}`,epoch:root.epoch,claimGeneration:root.generation,signal:client.signal,borrowedTab:true,
     tracksOwnedPages:client.hello.capabilities.includes('owned_popups'),resumesTargets:client.hello.capabilities.includes('resume_targets'),

@@ -213,6 +213,22 @@ test("read-only timeout rejects without closing the connection, while mutation t
   }
 });
 
+test("only a refused attach carries Chrome's reason, as bounded printable text", async (t) => {
+  const root = await temporaryRoot(t, "attach-detail");
+  const peer = await createFakePeer(t, root, {
+    onRequest: async (raw, channel) => channel.send({ type: "response", id: raw.id,
+      error: raw.method === "claim" ? "attach_failed" : "tab_owned", detail: "Cannot access a chrome-extension:// URL of different extension\u0007" }),
+  });
+  const client = await connect(peer);
+  try {
+    await assert.rejects(client.call("claim", { tabId: 7 }), (error) => error.message === "attach_failed"
+      && error.detail === "Cannot access a chrome-extension:// URL of different extension");
+    await assert.rejects(client.call("inventory", {}), (error) => error.message === "tab_owned" && error.detail === undefined);
+  } finally {
+    client.close();
+  }
+});
+
 test("malformed response errors are normalized and never leak peer text", async (t) => {
   const root = await temporaryRoot(t, "response-error");
   const peer = await createFakePeer(t, root, {
