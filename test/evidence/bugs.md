@@ -3584,3 +3584,19 @@ chips, a button and one filter input is refused on 0.7.33 ("The element does not
 type, fill and clear, a combobox that does not take text itself resolves to the one visible, enabled text field
 inside it; several fields are refused naming that, none keeps the original refusal. `set_files` resolution for
 upload buttons now shares the same page-side lookup (`ownElement`).
+
+# Upload buttons that open a file chooser could not take files — fixed in 0.7.35
+
+Observed 2026-11-25 in an email platform's media library (operator's own browser): its Upload button opens the
+browser's native file chooser, and `set_files` had no input to fill, so email images could not be uploaded.
+Repro (`test/engine-regressions/file-chooser-upload.test.mjs`): a button whose click handler creates a detached
+`<input type=file>` and calls `click()`. On 0.7.34 `set_files` on the button is refused (`target_not_editable`,
+not started): `ownFileInput` finds no input inside the button or its ancestors, because the input exists only
+after the click and is never attached. Fix: when an upload button or label (the trigger `ownFileInput` already
+recognises) holds no file input, the action enables `Page.setInterceptFileChooserDialog` for that one action,
+clicks the button through the normal pointer path, waits up to 2 s for `Page.fileChooserOpened` on the button's
+route, and sets the files on the chooser's `backendNodeId`; interception is turned off again in every case. No
+dialog is shown and nothing else about the page changes. The fixture passes here: one file through a single
+chooser and two through a multiple one reach the page's change handler, two files on a single chooser and a
+button that opens nothing are refused with details, and a plain element is still refused before any click.
+The tab add-on's method allow-list gains `Page.setInterceptFileChooserDialog`.

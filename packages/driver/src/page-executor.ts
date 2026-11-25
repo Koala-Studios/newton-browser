@@ -14,7 +14,7 @@ import {ReadonlyWorlds} from './readonly-world.ts';
 import {prepareUploadFiles} from './upload-files.ts';
 // The file input a button or label stands for: a label's control, else for a button-like trigger the only
 // enabled file input in the nearest enclosing element (crossing open shadow roots) that has any. Returns a reason string otherwise.
-const OWN_FILE_INPUT_FUNCTION="function(){const isFile=n=>n&&n.localName==='input'&&n.type==='file';const label=this.localName==='label'?this:this.closest&&this.closest('label');if(label&&isFile(label.control))return label.control.disabled?'not_found':label.control;const trigger=this.closest&&this.closest('button,label,a,[role=button],input[type=button],input[type=image],input[type=submit]');if(!trigger)return 'not_found';for(let n=trigger,depth=0;n&&depth<16;depth++){const all=n.querySelectorAll?[...n.querySelectorAll('input[type=file]')].filter(i=>!i.disabled):[];if(all.length===1)return all[0];if(all.length>1)return 'ambiguous';n=n.parentElement||(n.parentNode&&n.parentNode.host)||null;}return 'not_found';}";
+const OWN_FILE_INPUT_FUNCTION="function(){const isFile=n=>n&&n.localName==='input'&&n.type==='file';const label=this.localName==='label'?this:this.closest&&this.closest('label');if(label&&isFile(label.control))return label.control.disabled?'not_found':label.control;const trigger=this.closest&&this.closest('button,label,a,[role=button],input[type=button],input[type=image],input[type=submit]');if(!trigger)return 'not_found';for(let n=trigger,depth=0;n&&depth<16;depth++){const all=n.querySelectorAll?[...n.querySelectorAll('input[type=file]')].filter(i=>!i.disabled):[];if(all.length===1)return all[0];if(all.length>1)return 'ambiguous';n=n.parentElement||(n.parentNode&&n.parentNode.host)||null;}return 'chooser';}";
 // A combobox built as a wrapper (chips, a toggle and a filter input inside role=combobox) takes typed text in the one
 // text field it holds, as a person's typing goes there after they click it.
 const OWN_TEXT_FIELD_FUNCTION="function(){if(this.getAttribute&&this.getAttribute('role')!=='combobox')return 'not_found';const text=n=>(n.localName==='input'&&['text','search','email','url','tel','number',''].includes((n.getAttribute('type')||'').toLowerCase())||n.localName==='textarea'||n.isContentEditable&&!(n.parentElement&&n.parentElement.isContentEditable))&&!n.disabled&&n.getClientRects().length>0;const found=[...this.querySelectorAll('input,textarea,[contenteditable]')].filter(text);return found.length===1?found[0]:found.length?'ambiguous':'not_found';}";
@@ -232,6 +232,7 @@ const WRITE_INDEXED_DB = `async function(data){
 }`;
 // CSS pixels around a click_at/move point that must look as captured.
 const CAPTURE_POINT_RADIUS = 24;
+const FILE_CHOOSER_MS = 2000;
 // The private pipe and the tab add-on's messages carry at most 4 MiB, and a lossless capture of a photo-heavy
 // viewport is larger. Its click_at tiles are then read in bands that fit, and the image goes out as a JPEG.
 const PNG_BAND_BYTES = 3 * 1024 * 1024;
@@ -632,14 +633,21 @@ export class PageExecutor implements EngineExecutor {
     const prepared=checkFile(()=>prepareUploadFiles(paths));
     try{
       let facts=await this.resolver.inspect(context,binding,{editable:false,actionable:false});
+      let chooser=false;
       // A styled upload button or label stands for its own file input: its label control, or the
       // only file input in the nearest enclosing element that has any. Sites with one hidden input
       // per picker make a page-wide selector ambiguous, while the visible button is unique.
-      if(facts.tag!=='input'||facts.type!=='file'){binding=await this.ownFileInput(context,binding);facts=await this.resolver.inspect(context,binding,{editable:false,actionable:false});}
+      if(facts.tag!=='input'||facts.type!=='file'){
+        const own=await this.ownFileInput(context,binding).catch((error:unknown)=>{if(error instanceof EngineError&&error.phase==='chooser')return undefined;throw error;});
+        if(own){binding=own;facts=await this.resolver.inspect(context,binding,{editable:false,actionable:false});}
+        // A button that makes its file input only when clicked (a media library's Upload) opens the browser's file
+        // chooser: it is clicked as a person would, and the files go to the input that chooser is for.
+        else{binding=await this.chooserInput(context,binding,paths.length);chooser=true;}
+      }
       // Styled upload buttons commonly use a hidden native file input. The
       // explicit unique target and input type are sufficient; no focus/click is
       // fabricated and the site's file-change handling runs normally.
-      if(facts.tag!=='input'||facts.type!=='file'||facts.disabled||(!facts.multiple&&paths.length>1))throw new EngineError('target_not_editable');
+      if(!chooser&&(facts.tag!=='input'||facts.type!=='file'||facts.disabled||(!facts.multiple&&paths.length>1)))throw new EngineError('target_not_editable');
       checkFile(()=>prepared.assertUnchanged());
       await context.input(()=>this.send(binding,'DOM.setFileInputFiles',{backendNodeId:binding.backendNodeId,files:prepared.paths}));
       checkFile(()=>prepared.assertUnchanged());
@@ -647,7 +655,7 @@ export class PageExecutor implements EngineExecutor {
       const objectId=string(object(resolved.object).objectId);if(!objectId)throw new EngineError('stale_target');
       let names:string[];
       try{
-        const result=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration:"function(){if(this.localName!=='input'||this.type!=='file'||!this.isConnected)return null;const count=this.files.length;return {count,names:count>8?[]:Array.from(this.files).map(file=>file.name.slice(0,1024))};}",returnByValue:true,silent:true}));
+        const result=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration:"function(chooser){if(this.localName!=='input'||this.type!=='file'||!this.isConnected&&!chooser)return null;const count=this.files.length;return {count,names:count>8?[]:Array.from(this.files).map(file=>file.name.slice(0,1024))};}",arguments:[{value:chooser}],returnByValue:true,silent:true}));
         if(result.exceptionDetails)throw new EngineError('evidence_unavailable');
         const accepted=object(object(result.result).value);
         if(!Array.isArray(accepted.names)||!accepted.names.every(name=>typeof name==='string')||accepted.count!==accepted.names.length)throw new EngineError('evidence_unavailable');
@@ -656,6 +664,30 @@ export class PageExecutor implements EngineExecutor {
       this.localField=binding;this.localFileNames=[...names];
       return {state:JSON.stringify(names)===JSON.stringify(prepared.names)?'met':'not_met',kind:'files'};
     }finally{prepared.close();}
+  }
+  /** Click the target with the browser's file chooser held, and return the file input the chooser opened for. */
+  private async chooserInput(context:CommandContext,binding:NodeBinding,count:number):Promise<NodeBinding>{
+    const facts=await this.resolver.inspect(context,binding,{editable:false,pointer:true});
+    const route=this.directory.route(binding);
+    let opened:Record<string,unknown>|undefined,wake:(()=>void)|undefined;
+    const unsubscribe=this.connection.wire.onEvent(event=>{
+      if(event.method==='Page.fileChooserOpened'&&(event.sessionId??'')===route){opened=object(event.params);wake?.();}
+    });
+    try{
+      await context.read(()=>this.send(binding,'Page.setInterceptFileChooserDialog',{enabled:true}));
+      await this.preparePointerDocument(context,binding);
+      await this.click(context,binding,facts,undefined,{button:'left',count:1});
+      // The page opens the chooser from the click's own handler; one bounded wait covers a handler that awaits first.
+      if(!opened)await context.read(()=>new Promise<void>(resolve=>{wake=resolve;setTimeout(resolve,FILE_CHOOSER_MS);}));
+    }finally{
+      unsubscribe();
+      void this.send(binding,'Page.setInterceptFileChooserDialog',{enabled:false}).catch(()=>undefined);
+    }
+    if(!opened)throw new EngineError('target_not_editable',undefined,'The target is not a file input, has none of its own, and clicking it opened no file chooser.');
+    if(opened.mode!=='selectMultiple'&&count>1)throw new EngineError('target_not_editable',undefined,'The file chooser it opened takes one file.');
+    const frame=this.directory.frames(binding.pageId).find(item=>item.frameId===opened!.frameId);
+    if(!frame||!Number.isSafeInteger(opened.backendNodeId)||Number(opened.backendNodeId)<=0)throw new EngineError('evidence_unavailable');
+    return this.directory.binding(frame,Number(opened.backendNodeId));
   }
   private ownFileInput(context:CommandContext,binding:NodeBinding):Promise<NodeBinding>{return this.ownElement(context,binding,OWN_FILE_INPUT_FUNCTION);}
   /** The element a page-side function picks for the target: ambiguous or target_not_editable when it names none. */
@@ -667,7 +699,8 @@ export class PageExecutor implements EngineExecutor {
       const result=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration,returnByValue:false,silent:true}));
       if(result.exceptionDetails)throw new EngineError('evidence_unavailable');
       const found=object(result.result);
-      if(found.type==='string')throw new EngineError(found.value==='ambiguous'?'ambiguous':'target_not_editable');
+      // 'chooser': an upload button with no file input of its own yet; it makes one when clicked.
+      if(found.type==='string')throw new EngineError(found.value==='ambiguous'?'ambiguous':'target_not_editable',found.value==='chooser'?'chooser':undefined);
       inputId=string(found.objectId);if(!inputId)throw new EngineError('target_not_editable');
       const node=object(object(await context.read(()=>this.send(binding,'DOM.describeNode',{objectId:inputId}))).node);
       if(!Number.isSafeInteger(node.backendNodeId)||Number(node.backendNodeId)<=0)throw new EngineError('evidence_unavailable');

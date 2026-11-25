@@ -22,7 +22,7 @@ const methods = new Set([
   "Page.handleJavaScriptDialog", "Page.createIsolatedWorld", "Page.startScreencast", "Page.stopScreencast", "Overlay.enable",
   "Accessibility.getPartialAXTree", "Accessibility.enable", "Accessibility.getChildAXNodes", "Accessibility.queryAXTree", "Accessibility.getAXNodeAndAncestors",
   "Accessibility.getFullAXTree", "DOM.enable", "DOM.getDocument", "DOM.querySelector", "DOM.querySelectorAll", "DOM.describeNode", "DOM.resolveNode", "DOM.focus",
-  "DOM.getFrameOwner", "DOM.pushNodesByBackendIdsToFrontend", "DOM.setFileInputFiles",
+  "DOM.getFrameOwner", "DOM.pushNodesByBackendIdsToFrontend", "DOM.setFileInputFiles", "Page.setInterceptFileChooserDialog",
   "DOM.getContentQuads", "DOM.getNodeForLocation", "DOM.scrollIntoViewIfNeeded",
   "DOM.performSearch", "DOM.getSearchResults", "DOM.discardSearchResults", "DOM.getBoxModel",
   "Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride", "Emulation.setFocusEmulationEnabled", "Network.enable", "Network.getResponseBody", "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObject", "Runtime.getProperties", "Runtime.releaseObjectGroup", "Runtime.enable", "Log.enable", "Runtime.runIfWaitingForDebugger", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Input.insertText", "Input.setInterceptDrags", "Input.dispatchDragEvent", "Target.setAutoAttach",

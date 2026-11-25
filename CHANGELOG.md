@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.35] - 2026-11-25
+
+### Fixed
+
+- `set_files` uploads through a button that opens the browser's file chooser. A media library's Upload button makes
+  its file input only when clicked, so there was no input to fill and images could not be uploaded at all. When the
+  target is an upload button or label with no file input of its own, it is clicked as a person would, with the file
+  chooser held for that one action, and the files go to the input the chooser opened for; the page's own change
+  handling runs. A chooser that takes one file refuses several, and a button that opens no chooser is refused saying
+  so. Any other element is still refused without a click. The tab add-on allows the chooser hold, so existing mode
+  needs its worker updated. Test: file-chooser-upload.
+
 ## [0.7.34] - 2026-11-25
 
 ### Fixed
