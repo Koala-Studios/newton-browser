@@ -3550,3 +3550,13 @@ the fold `ambiguous`. Unit test in `semantic-target-matching.test.mjs` covers th
 ignored node, the leaf bound, ambiguity). Still open: a frame that withholds the query costs one 2.5 s bound per
 search before its tree is read; a click on a ref (from observe) inside a hidden or unreachable (-10000 px) cross-site
 frame is still delivered, as before.
+
+# Frames that withhold role queries added up past the command deadline — fixed in 0.7.33
+
+Observed 2026-11-25 right after deploying 0.7.32 to Work: on MDN's iframe reference page (several cross-site live
+example frames below the fold) a semantic click on a top-document button timed out at the default 10 s; with a 60 s
+timeout it completed. Root cause: `search` visited frames one after another, so every frame that withheld its role
+query added its own 2.5 s bound before its tree was read. 0.7.31 failed the same click as `search_incomplete` after
+the first bound. Fixture: `offscreen-frame-targets` now holds four more cross-site frames below the fold and runs
+the action with the default 10 s deadline, asserting under 6 s; 0.7.32 times out, 0.7.33 passes. Fix: all frames are
+searched at once (the per-frame steps are read-only), results are taken in page order.

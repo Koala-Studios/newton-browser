@@ -233,38 +233,16 @@ export class TargetResolver {
     return found[0]!.binding;
   }
   private async search(context: CommandContext, page: EnginePageStamp, axRoles: readonly string[], accessibleName: string | undefined, read: boolean): Promise<{ nodes: SemanticNode[]; incomplete?: string }> {
+    // Every frame is searched at once, so frames that each withhold their reply cost one bound, not one each.
+    const frames = await Promise.all(this.directory.frames(page.pageId).map(async frame => ({ frame, ...await this.searchFrame(context, frame, axRoles, accessibleName) })));
     const nodes: SemanticNode[] = [];
     let visited = 0, incomplete: string | undefined;
-    for (const frame of this.directory.frames(page.pageId)) {
-      const base = this.directory.binding(frame, 1);
-      // A child frame with no rendered box cannot hold an actionable target, and
-      // Chromium may never answer an AX query for it (a hidden 0x0 cart-sync frame).
-      if (!await this.rendered(context, frame)) continue;
-      const nodeId = await this.documentRoot(context, frame, base);
-      // Chromium filters inside the renderer; unrelated article text and its
-      // inline layout fragments never become a giant protocol response.
-      const send = (method: string, params: RecordValue) => context.read(() => this.sendBinding(base, method, params));
-      const replies = axRoles.map(role => withheld(send("Accessibility.queryAXTree", { nodeId, role, ...(accessibleName === undefined ? {} : { accessibleName }) })));
-      releaseRoleQueries(send, { nodeId });
-      let results: RecordValue[];
-      try { results = await Promise.all(replies); }
-      catch (error) {
-        if (!(error instanceof EngineError) || error.code !== "search_incomplete" || error.detail) throw error;
-        // A cross-site frame tests hits in its own document only, so it would take a click on content its hidden owner
-        // keeps from view; such a frame holds no actionable target.
-        if (!await this.shown(context, frame)) continue;
-        const tree = await walkAXTree(send, frame.frameId).catch((walkError: unknown) => {
-          if (walkError instanceof EngineError && walkError.code === "search_incomplete" && !walkError.detail) return undefined;
-          throw walkError;
-        });
-        if (!tree) {
-          const reason = `${this.directory.parent(frame) ? "An embedded frame" : "The page"} did not answer the accessibility search within ${AX_QUERY_MS / 1000} s.`;
-          if (!read) throw new EngineError("search_incomplete", undefined, `${reason} Retry, or act on a ref from observe.`);
-          incomplete ??= reason; continue;
-        }
-        results = [{ nodes: tree.filter(node => axRoles.includes(string(object(node.role).value))) }];
+    for (const { frame, results, unanswered } of frames) {
+      if (unanswered) {
+        if (!read) throw new EngineError("search_incomplete", undefined, `${unanswered} Retry, or act on a ref from observe.`);
+        incomplete ??= unanswered; continue;
       }
-      for (const result of results) for (const node of array(result.nodes)) {
+      for (const result of results ?? []) for (const node of array(result.nodes)) {
         if (++visited > 20_000) {
           const reason = `More than 20000 elements have role ${axRoles[0]}.`;
           if (!read) throw new EngineError("search_incomplete", undefined, `${reason} Act on a ref from observe, or use a selector.`);
@@ -274,10 +252,34 @@ export class TargetResolver {
         if (node.ignored || !axRoles.includes(String(object(node.role).value)) || !Number.isSafeInteger(backendNodeId) || backendNodeId <= 0) continue;
         nodes.push({ binding: this.directory.binding(frame, backendNodeId), name: string(object(node.name).value) });
       }
-      // Two nodes already named exactly as written: the action is ambiguous whatever the other frames hold.
-      if (!read && accessibleName !== undefined && nodes.filter(node => node.name === accessibleName).length > 1) break;
     }
     return { nodes, ...(incomplete ? { incomplete } : {}) };
+  }
+  /** One frame's nodes with these roles; none for a frame that cannot hold a target; why, when it could not be searched. */
+  private async searchFrame(context: CommandContext, frame: EnginePageStamp, axRoles: readonly string[], accessibleName: string | undefined): Promise<{ results?: RecordValue[]; unanswered?: string }> {
+    const base = this.directory.binding(frame, 1);
+    // A child frame with no rendered box cannot hold an actionable target, and
+    // Chromium may never answer an AX query for it (a hidden 0x0 cart-sync frame).
+    if (!await this.rendered(context, frame)) return {};
+    const nodeId = await this.documentRoot(context, frame, base);
+    // Chromium filters inside the renderer; unrelated article text and its
+    // inline layout fragments never become a giant protocol response.
+    const send = (method: string, params: RecordValue) => context.read(() => this.sendBinding(base, method, params));
+    const replies = axRoles.map(role => withheld(send("Accessibility.queryAXTree", { nodeId, role, ...(accessibleName === undefined ? {} : { accessibleName }) })));
+    releaseRoleQueries(send, { nodeId });
+    try { return { results: await Promise.all(replies) }; }
+    catch (error) {
+      if (!(error instanceof EngineError) || error.code !== "search_incomplete" || error.detail) throw error;
+    }
+    // A cross-site frame tests hits in its own document only, so it would take a click on content its hidden owner
+    // keeps from view; such a frame holds no actionable target.
+    if (!await this.shown(context, frame)) return {};
+    const tree = await walkAXTree(send, frame.frameId).catch((error: unknown) => {
+      if (error instanceof EngineError && error.code === "search_incomplete" && !error.detail) return undefined;
+      throw error;
+    });
+    if (!tree) return { unanswered: `${this.directory.parent(frame) ? "An embedded frame" : "The page"} did not answer the accessibility search within ${AX_QUERY_MS / 1000} s.` };
+    return { results: [{ nodes: tree.filter(node => axRoles.includes(string(object(node.role).value))) }] };
   }
   /** Whether the frame's owner shows (checkVisibility: no hidden visibility, display or content-visibility on its path). */
   private async shown(context: CommandContext, frame: EnginePageStamp): Promise<boolean> {

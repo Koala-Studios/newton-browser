@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.33] - 2026-11-25
+
+### Fixed
+
+- A role target on a page with several cross-site frames out of view no longer runs out of time. 0.7.32 searched
+  frames one after another, so each frame that withheld its role query added its own 2.5 s bound: on a docs page with
+  four embedded examples below the fold a click took more than the default 10 s and timed out. Every frame is now
+  searched at once and the bound is paid once. Test: offscreen-frame-targets (seven frames, five below the fold).
+
 ## [0.7.32] - 2026-11-25
 
 ### Fixed
