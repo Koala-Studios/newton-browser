@@ -97,6 +97,25 @@ const withheld = <T,>(reply: Promise<T>): Promise<T> => {
   void reply.catch(() => undefined);
   return Promise.race([reply, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new EngineError("search_incomplete")), AX_QUERY_MS); })]).finally(() => clearTimeout(timer));
 };
+// Chromium answers a role query only after the frame runs a rendering update, and it throttles a cross-site frame
+// scrolled out of view or hidden, so the query waits for good. The frame's accessibility tree still reads at once.
+const AX_WALK_NODES = 20_000;
+const AX_LEAVES = new Set(["StaticText", "InlineTextBox"]);
+/** Every node of one frame's accessibility tree, read in bounded batches; undefined when the tree exceeds the bound or
+ * a branch did not come back whole. */
+async function walkAXTree(send: (method: string, params: RecordValue) => Promise<RecordValue>, frameId: string): Promise<RecordValue[] | undefined> {
+  const found = new Map<string, RecordValue>(), frontier: RecordValue[] = [];
+  const add = (nodes: RecordValue[]) => { for (const node of nodes) if (typeof node.nodeId === "string" && !found.has(node.nodeId)) { found.set(node.nodeId, node); frontier.push(node); } };
+  const missing = (node: RecordValue) => !AX_LEAVES.has(string(object(node.role).value)) && Array.isArray(node.childIds) && node.childIds.some(id => typeof id === "string" && !found.has(id));
+  add(array((await withheld(send("Accessibility.getFullAXTree", { frameId, depth: 4 }))).nodes));
+  while (frontier.length) {
+    if (found.size > AX_WALK_NODES) return undefined;
+    const batch: RecordValue[] = [];
+    while (frontier.length && batch.length < 8) { const node = frontier.shift()!; if (missing(node)) batch.push(node); }
+    for (const reply of await Promise.all(batch.map(node => withheld(send("Accessibility.getChildAXNodes", { id: node.nodeId, frameId }))))) add(array(reply.nodes));
+  }
+  return [...found.values()].some(missing) ? undefined : [...found.values()];
+}
 type SemanticNode = { binding: NodeBinding; name: string };
 const REMOVED = "The element was removed from the page; observe again.";
 const quoted = (value: string): string => JSON.stringify(value.length > 80 ? `${value.slice(0, 79)}…` : value);
@@ -231,9 +250,19 @@ export class TargetResolver {
       try { results = await Promise.all(replies); }
       catch (error) {
         if (!(error instanceof EngineError) || error.code !== "search_incomplete" || error.detail) throw error;
-        const reason = `${this.directory.parent(frame) ? "An embedded frame" : "The page"} did not answer the accessibility search within ${AX_QUERY_MS / 1000} s.`;
-        if (!read) throw new EngineError("search_incomplete", undefined, `${reason} Retry, or act on a ref from observe.`);
-        incomplete ??= reason; continue;
+        // A cross-site frame tests hits in its own document only, so it would take a click on content its hidden owner
+        // keeps from view; such a frame holds no actionable target.
+        if (!await this.shown(context, frame)) continue;
+        const tree = await walkAXTree(send, frame.frameId).catch((walkError: unknown) => {
+          if (walkError instanceof EngineError && walkError.code === "search_incomplete" && !walkError.detail) return undefined;
+          throw walkError;
+        });
+        if (!tree) {
+          const reason = `${this.directory.parent(frame) ? "An embedded frame" : "The page"} did not answer the accessibility search within ${AX_QUERY_MS / 1000} s.`;
+          if (!read) throw new EngineError("search_incomplete", undefined, `${reason} Retry, or act on a ref from observe.`);
+          incomplete ??= reason; continue;
+        }
+        results = [{ nodes: tree.filter(node => axRoles.includes(string(object(node.role).value))) }];
       }
       for (const result of results) for (const node of array(result.nodes)) {
         if (++visited > 20_000) {
@@ -249,6 +278,22 @@ export class TargetResolver {
       if (!read && accessibleName !== undefined && nodes.filter(node => node.name === accessibleName).length > 1) break;
     }
     return { nodes, ...(incomplete ? { incomplete } : {}) };
+  }
+  /** Whether the frame's owner shows (checkVisibility: no hidden visibility, display or content-visibility on its path). */
+  private async shown(context: CommandContext, frame: EnginePageStamp): Promise<boolean> {
+    const parent = this.directory.parent(frame);
+    if (!parent) return true;
+    const base = this.directory.binding(parent, 1);
+    const owner = await context.read(() => this.sendBinding(base, "DOM.getFrameOwner", { frameId: frame.frameId }));
+    if (!Number.isSafeInteger(owner.backendNodeId)) return true;
+    const resolved = await context.read(() => this.sendBinding(base, "DOM.resolveNode", { backendNodeId: owner.backendNodeId }));
+    const objectId = string(object(resolved.object).objectId);
+    if (!objectId) return true;
+    try {
+      const result = await context.read(() => this.sendBinding(base, "Runtime.callFunctionOn", { objectId, returnByValue: true, silent: true,
+        functionDeclaration: "function(){return this.checkVisibility({visibilityProperty:true,contentVisibilityAuto:true});}" }));
+      return object(result.result).value !== false;
+    } finally { void this.sendBinding(base, "Runtime.releaseObject", { objectId }).catch(() => undefined); }
   }
   private async rendered(context: CommandContext, frame: EnginePageStamp): Promise<boolean> {
     const parent = this.directory.parent(frame);

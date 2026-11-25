@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-11-25
+
+### Fixed
+
+- Role targets work on pages that embed cross-site frames out of view. Chromium answers a role query only after the
+  frame renders, and it throttles a cross-site frame scrolled out of view or hidden, so every action by role on such a
+  page (an email builder with its assistant panel and previews) was refused as `search_incomplete` ("An embedded frame
+  did not answer the accessibility search within 2.5 s"). A frame that withholds the query is now searched through its
+  accessibility tree, which Chromium still answers: the action finds its target, a second match in that frame is still
+  `ambiguous`, and a frame whose owner is hidden holds no target, since a click would reach content nobody can see.
+  Test: offscreen-frame-targets.
+
 ## [0.7.31] - 2026-11-17
 
 ### Fixed

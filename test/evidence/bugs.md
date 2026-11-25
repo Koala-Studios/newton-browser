@@ -3526,3 +3526,27 @@ whole; the page's own document past a budget still refuses. After the fix the ca
 whole card frame masked (its own background included) and the page outside it shown. Unit tests in
 `packages/driver/test/native-sensitive-regions.test.mjs` cover hidden matches, the examination budget, both
 child budgets and the clip.
+
+# Role targets refused on pages with cross-site frames out of view — fixed in 0.7.32
+
+Observed 2026-11-25 building campaigns in an email platform in an operator's own browser (existing mode):
+about half of all role-target actions failed `search_incomplete` ("An embedded frame did not answer the
+accessibility search within 2.5 s"); every click needed an observe first for a ref. Repro on Linux Chromium
+(fixture `test/engine-regressions/offscreen-frame-targets.test.mjs`, and a raw CDP probe): a page with a top
+button and one cross-site frame. With the frame below the fold, at left -10000 px or `visibility: hidden`,
+`Accessibility.queryAXTree` into the frame never answers (3 s probe bound, every run) and a click on the
+top button is refused; with the frame shown or at opacity 0 it answers in ~1 ms. Root cause: Chromium answers a
+role query only after the frame's next rendering update, and it throttles a cross-site frame that is out of view
+or hidden, so the update never comes. The `getPartialAXTree` release used for background tabs does not help;
+evaluating layout in the frame does not help. `Accessibility.getFullAXTree` and `getChildAXNodes` on the same
+frame answer at once. Fix: a frame that withholds the role query is read through its accessibility tree in
+bounded batches (20000 nodes; text leaves not expanded) and filtered by role locally, so the action still sees
+every frame and a second match there is still `ambiguous`. A frame whose owner fails `checkVisibility` (hidden
+visibility, display or content-visibility) is passed over: a cross-site frame tests hits in its own document only,
+and the probe showed a click on a button inside a `visibility: hidden` cross-site frame was delivered. The fixture
+fails on 0.7.31 (the top button is refused) and passes here: top button clicked, button in the frame below the fold
+clicked (the page receives its message), button in the hidden frame `not_found`, a second Save in the frame below
+the fold `ambiguous`. Unit test in `semantic-target-matching.test.mjs` covers the tree walk (a later child read, an
+ignored node, the leaf bound, ambiguity). Still open: a frame that withholds the query costs one 2.5 s bound per
+search before its tree is read; a click on a ref (from observe) inside a hidden or unreachable (-10000 px) cross-site
+frame is still delivered, as before.

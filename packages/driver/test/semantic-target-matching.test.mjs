@@ -9,7 +9,7 @@ import { SessionEngine } from '../src/session-engine.ts';
 const page = { pageId: 'p1', frameId: 'f1', documentGeneration: 1 };
 // One frame whose accessibility tree holds these nodes. queryAXTree filters by role and, like Chromium, compares
 // accessibleName to the name byte for byte.
-function resolverOver(nodes, { pending = 0, withhold = false } = {}) {
+function resolverOver(nodes, { pending = 0, withhold = false, tree } = {}) {
   const queries = [];
   const directory = {
     resolve: () => { throw new EngineError('stale_target'); },
@@ -19,6 +19,9 @@ function resolverOver(nodes, { pending = 0, withhold = false } = {}) {
   const resolver = new TargetResolver({ directory, pendingAttachments: () => 0, pendingFrames: () => pending, async send(_binding, method, params) {
     if (method === 'DOM.getDocument') return { root: { nodeId: 1 } };
     if (method === 'Accessibility.getPartialAXTree') return {};
+    // The tree read Chromium still answers for a frame it throttles: the root with its children, then one node's children.
+    if (method === 'Accessibility.getFullAXTree') return tree ? { nodes: [tree[0]] } : new Promise(() => {});
+    if (method === 'Accessibility.getChildAXNodes') { const parent = tree.find(item => item.nodeId === params.id); return { nodes: tree.filter(item => parent.childIds.includes(item.nodeId)) }; }
     assert.equal(method, 'Accessibility.queryAXTree');
     queries.push({ role: params.role, ...(params.accessibleName === undefined ? {} : { accessibleName: params.accessibleName }) });
     if (withhold) return new Promise(() => {});
@@ -97,6 +100,26 @@ test('a page that does not answer the accessibility search is named in the detai
   const read = await failure(resolve(resolver, { kind: 'semantic', role: 'button', name: 'Save', exact: false }, true));
   assert.equal(read.code, 'search_incomplete');
   assert.match(read.detail, /^The page did not answer the accessibility search within 2\.5 s\. Nothing on the page has role button/u);
+});
+
+test('a frame that withholds its role search is searched through its accessibility tree', async () => {
+  // The root holds a group whose children come in a later read, and a text leaf whose inline boxes are never read.
+  const tree = [
+    { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: '' }, childIds: ['2', '3'] },
+    { ...node(7, 'button', 'Save'), nodeId: '2', childIds: ['6'] },
+    { nodeId: '3', role: { value: 'group' }, name: { value: '' }, childIds: ['4', '5'] },
+    { ...node(8, 'button', 'Cancel'), nodeId: '4' },
+    { ...node(9, 'button', 'Save'), nodeId: '5', ignored: true },
+    { nodeId: '6', role: { value: 'StaticText' }, name: { value: 'Save' }, childIds: ['10'] },
+  ];
+  const { resolver } = resolverOver([], { withhold: true, tree });
+  assert.equal((await resolve(resolver, { kind: 'semantic', role: 'button', name: 'Save' })).backendNodeId, 7);
+  assert.equal((await resolve(resolver, { kind: 'semantic', role: 'button', name: 'Cancel' })).backendNodeId, 8, 'a node read with its parent\'s children');
+  const missing = await failure(resolve(resolver, { kind: 'semantic', role: 'button', name: 'Delete' }));
+  assert.deepEqual(missing, { code: 'not_found', detail: 'No button named "Delete". 2 with that role: "Save", "Cancel".' });
+  const twice = tree.map(item => item.nodeId === '5' ? { ...item, ignored: false } : item);
+  const ambiguous = await failure(resolve(resolverOver([], { withhold: true, tree: twice }).resolver, { kind: 'semantic', role: 'button', name: 'Save' }));
+  assert.equal(ambiguous.code, 'ambiguous', 'a second match in the walked tree is still found');
 });
 
 test('a ref given with its snapshotId says why it is gone as stale_ref', () => {

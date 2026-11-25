@@ -7,7 +7,7 @@ TCP port.
 
 ## Install
 
-This checkout contains version 0.7.30. Clients should run an installed release package
+This checkout contains version 0.7.32. Clients should run an installed release package
 (see **Install a release** below), not a source checkout: a checkout changes under the
 client whenever it is edited or rebuilt. For source testing, build and run the exact
 compiled entrypoint:
