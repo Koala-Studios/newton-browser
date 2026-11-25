@@ -88,6 +88,17 @@ export function pngTileDigests(base64: string, tile = 32): TileDigests {
   return { width: parsed.width, height: parsed.height, tile, columns, digests };
 }
 
+/** One image's digests from those of its horizontal bands, top first; every band but the last a whole number of tiles high. */
+export function stackTileDigests(bands: readonly TileDigests[]): TileDigests {
+  const first = bands[0];
+  if (!first || bands.some((band, index) => band.width !== first.width || band.tile !== first.tile || band.columns !== first.columns
+    || (index < bands.length - 1 && band.height % band.tile !== 0))) throw new Error("invalid_raster_tile_bands");
+  const digests = new Uint32Array(bands.reduce((sum, band) => sum + band.digests.length, 0));
+  let offset = 0;
+  for (const band of bands) { digests.set(band.digests, offset); offset += band.digests.length; }
+  return { width: first.width, height: bands.reduce((sum, band) => sum + band.height, 0), tile: first.tile, columns: first.columns, digests };
+}
+
 /** Whether every tile within radius image pixels of (x, y) is identical in both digests. */
 export function sameTilesNear(before: TileDigests, after: TileDigests, x: number, y: number, radius: number): boolean {
   if (before.width !== after.width || before.height !== after.height || before.tile !== after.tile) return false;

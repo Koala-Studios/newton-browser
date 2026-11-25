@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.34] - 2026-11-25
+
+### Fixed
+
+- Screenshots of photo-heavy pages. A lossless capture of a 1728x878 email builder full of product photos is larger
+  than the 4 MiB a reply may carry, or than the default `maxBytes` once masked, so every screenshot was refused
+  (`output_budget`, or `evidence_unavailable` when the reply itself was too large). When the PNG does not fit and nothing
+  in the capture needs a mask, the screenshot is now a JPEG (`mimeType` says which), and `click_at` still checks its
+  points against what was captured, read in bands when one capture is too large. A capture with a password or payment
+  field in view stays a masked PNG or is refused, saying why. Test: photo-capture-budget.
+- `type`, `fill` and `clear` on a combobox built as a wrapper (chips, a toggle and a filter input inside
+  `role=combobox`) reach the one text field it holds, as a person's typing does; they were refused as
+  `target_not_editable`. A combobox with several text fields, or none, is still refused. Test: combobox-typing.
+
 ## [0.7.33] - 2026-11-25
 
 ### Fixed

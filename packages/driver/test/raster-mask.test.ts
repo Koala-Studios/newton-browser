@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { deflateSync, inflateSync } from "node:zlib";
 import test from "node:test";
 
-import { maskCapturedPng } from "../src/raster-mask.ts";
+import { maskCapturedPng, pngTileDigests, stackTileDigests } from "../src/raster-mask.ts";
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -33,6 +33,15 @@ test('zero discovered regions preserve pixels while still stripping ancillary me
   const output=Buffer.from(masked.base64,'base64');
   assert.equal(output.includes(Buffer.from('not-for-output')),false);
   assert.deepEqual([...decodeRgba(output,1,1)],[10,20,30,255]);
+});
+
+test("tile digests of bands read top to bottom stack into the whole image's digests", () => {
+  const whole = pngTileDigests(rgbaPng(64, 80, [9, 99, 199, 255]).toString("base64"));
+  const stacked = stackTileDigests([pngTileDigests(rgbaPng(64, 64, [9, 99, 199, 255]).toString("base64")), pngTileDigests(rgbaPng(64, 16, [9, 99, 199, 255]).toString("base64"))]);
+  assert.deepEqual({ ...stacked, digests: [...stacked.digests] }, { ...whole, digests: [...whole.digests] });
+  // A band that ends inside a tile row would shift every row below it.
+  assert.throws(() => stackTileDigests([pngTileDigests(rgbaPng(64, 40, [0, 0, 0, 255]).toString("base64")), pngTileDigests(rgbaPng(64, 40, [0, 0, 0, 255]).toString("base64"))]), /invalid_raster_tile_bands/u);
+  assert.throws(() => stackTileDigests([pngTileDigests(rgbaPng(64, 32, [0, 0, 0, 255]).toString("base64")), pngTileDigests(rgbaPng(32, 32, [0, 0, 0, 255]).toString("base64"))]), /invalid_raster_tile_bands/u);
 });
 
 function rgbaPng(width: number, height: number, color: readonly number[]): Buffer {

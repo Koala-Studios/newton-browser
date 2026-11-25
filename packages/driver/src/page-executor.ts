@@ -15,12 +15,15 @@ import {prepareUploadFiles} from './upload-files.ts';
 // The file input a button or label stands for: a label's control, else for a button-like trigger the only
 // enabled file input in the nearest enclosing element (crossing open shadow roots) that has any. Returns a reason string otherwise.
 const OWN_FILE_INPUT_FUNCTION="function(){const isFile=n=>n&&n.localName==='input'&&n.type==='file';const label=this.localName==='label'?this:this.closest&&this.closest('label');if(label&&isFile(label.control))return label.control.disabled?'not_found':label.control;const trigger=this.closest&&this.closest('button,label,a,[role=button],input[type=button],input[type=image],input[type=submit]');if(!trigger)return 'not_found';for(let n=trigger,depth=0;n&&depth<16;depth++){const all=n.querySelectorAll?[...n.querySelectorAll('input[type=file]')].filter(i=>!i.disabled):[];if(all.length===1)return all[0];if(all.length>1)return 'ambiguous';n=n.parentElement||(n.parentNode&&n.parentNode.host)||null;}return 'not_found';}";
+// A combobox built as a wrapper (chips, a toggle and a filter input inside role=combobox) takes typed text in the one
+// text field it holds, as a person's typing goes there after they click it.
+const OWN_TEXT_FIELD_FUNCTION="function(){if(this.getAttribute&&this.getAttribute('role')!=='combobox')return 'not_found';const text=n=>(n.localName==='input'&&['text','search','email','url','tel','number',''].includes((n.getAttribute('type')||'').toLowerCase())||n.localName==='textarea'||n.isContentEditable&&!(n.parentElement&&n.parentElement.isContentEditable))&&!n.disabled&&n.getClientRects().length>0;const found=[...this.querySelectorAll('input,textarea,[contenteditable]')].filter(text);return found.length===1?found[0]:found.length?'ambiguous':'not_found';}";
 import {resolveTextEditRange} from './text-edit-range.ts';
 import {nativeSelectionCommands,EDIT_SELECTION_READ} from './native-edit-selection.ts';
 import type {EngineEdit} from '@newton-browser/core';
 import type {TargetResolverFacts} from './target-resolver.ts';
 import type {EngineRecordShape,EngineFieldView} from '@newton-browser/core';
-import { maskCapturedPng, MAX_RASTER_PIXELS, pngTileDigests, sameTilesNear, type TileDigests } from "./raster-mask.ts";
+import { maskCapturedPng, MAX_RASTER_PIXELS, pngTileDigests, sameTilesNear, stackTileDigests, type TileDigests } from "./raster-mask.ts";
 import {nativeSensitiveRegions} from './native-sensitive-regions.ts';
 import type { EngineExecutor } from "./session-engine.ts";
 import { SessionDiagnostics, type ConsoleEntry, type DiagnosticKind } from "./session-diagnostics.ts";
@@ -229,6 +232,14 @@ const WRITE_INDEXED_DB = `async function(data){
 }`;
 // CSS pixels around a click_at/move point that must look as captured.
 const CAPTURE_POINT_RADIUS = 24;
+// The private pipe and the tab add-on's messages carry at most 4 MiB, and a lossless capture of a photo-heavy
+// viewport is larger. Its click_at tiles are then read in bands that fit, and the image goes out as a JPEG.
+const PNG_BAND_BYTES = 3 * 1024 * 1024;
+const JPEG_QUALITIES = [80, 60, 40] as const;
+const replyTooLarge = (error: unknown): boolean => {
+  const code = (error as { code?: unknown } | undefined)?.code ?? (error as Error | undefined)?.message;
+  return code === "cdp_message_too_large" || code === "native_message_limit";
+};
 // Frames must be still this long before a screenshot proves its masks.
 const FRAME_QUIET_MS = 300;
 // How long a read waits for a hidden borrowed tab to render a frame before reading what is there.
@@ -544,12 +555,21 @@ export class PageExecutor implements EngineExecutor {
     if (action.kind === "press" && !action.target) return this.pressGlobal(context, page, action.keys, action.text);
     if (!("target" in action)) throw new EngineError("unsupported_capability");
     if (action.kind === "drag") return this.drag(context, page, action);
-    const binding = await this.resolver.resolve(context, page, action.target);
+    let binding = await this.resolver.resolve(context, page, action.target);
     if (action.kind === 'set_files') return this.setFiles(context,binding,action.files);
     if (action.kind === "click" || action.kind === "hover") await this.preparePointerDocument(context, binding);
     const requiresEditable = action.kind === "fill" || action.kind === "type" || action.kind === "clear" || action.kind === "select" || action.kind === 'edit';
     if (requiresEditable) this.localField = binding;
-    const initial = await this.resolver.inspect(context, binding, { editable: requiresEditable, pointer: action.kind === "click" || action.kind === "hover" });
+    const initial = await this.resolver.inspect(context, binding, { editable: requiresEditable, pointer: action.kind === "click" || action.kind === "hover" }).catch(async (error: unknown) => {
+      if (!(error instanceof EngineError) || error.code !== "target_not_editable" || (action.kind !== "fill" && action.kind !== "type" && action.kind !== "clear")) throw error;
+      const field = await this.ownElement(context, binding, OWN_TEXT_FIELD_FUNCTION).catch((fieldError: unknown) => {
+        if (fieldError instanceof EngineError && fieldError.code === "ambiguous") throw new EngineError("target_not_editable", undefined, "The combobox holds more than one text field; target the one to type in.");
+        if (fieldError instanceof EngineError && fieldError.code === "target_not_editable") throw error;
+        throw fieldError;
+      });
+      binding = field; this.localField = field;
+      return this.resolver.inspect(context, field, { editable: true });
+    });
     if(action.kind==='edit')return this.edit(context,binding,initial,action);
     if (!initial.focused && requiresEditable && action.kind !== "select") {
       await context.input(() => this.send(binding, "DOM.focus", { backendNodeId: binding.backendNodeId }));
@@ -637,12 +657,14 @@ export class PageExecutor implements EngineExecutor {
       return {state:JSON.stringify(names)===JSON.stringify(prepared.names)?'met':'not_met',kind:'files'};
     }finally{prepared.close();}
   }
-  private async ownFileInput(context:CommandContext,binding:NodeBinding):Promise<NodeBinding>{
+  private ownFileInput(context:CommandContext,binding:NodeBinding):Promise<NodeBinding>{return this.ownElement(context,binding,OWN_FILE_INPUT_FUNCTION);}
+  /** The element a page-side function picks for the target: ambiguous or target_not_editable when it names none. */
+  private async ownElement(context:CommandContext,binding:NodeBinding,functionDeclaration:string):Promise<NodeBinding>{
     const resolved=await context.read(()=>this.send(binding,'DOM.resolveNode',{backendNodeId:binding.backendNodeId}));
     const objectId=string(object(resolved.object).objectId);if(!objectId)throw new EngineError('stale_target');
     let inputId='';
     try{
-      const result=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration:OWN_FILE_INPUT_FUNCTION,returnByValue:false,silent:true}));
+      const result=await context.read(()=>this.send(binding,'Runtime.callFunctionOn',{objectId,functionDeclaration,returnByValue:false,silent:true}));
       if(result.exceptionDetails)throw new EngineError('evidence_unavailable');
       const found=object(result.result);
       if(found.type==='string')throw new EngineError(found.value==='ambiguous'?'ambiguous':'target_not_editable');
@@ -1933,13 +1955,38 @@ export class PageExecutor implements EngineExecutor {
     return {regions,frames:discovered.frames};
     };
     const collected=await collectRegions(),regions=collected.regions;
-    const result = await context.read(() => this.send(root, "Page.captureScreenshot", {
-      format: "png", fromSurface: true, captureBeyondViewport: beyondViewport,
+    const shoot=(format:'png'|'jpeg',quality?:number)=>context.read(()=>this.send(root,"Page.captureScreenshot",{
+      format, ...(quality===undefined?{}:{quality}), fromSurface: true, captureBeyondViewport: beyondViewport,
       // One image pixel per CSS pixel, so positions in the image are the ones click_at takes.
       clip: { ...clip, scale: 1 / spatial.deviceScaleFactor },
     }));
-    const data = string(result.data);
-    if (!data) throw new EngineError("evidence_unavailable");
+    const result = await shoot("png").catch((error: unknown) => { if (replyTooLarge(error)) return undefined; throw error; });
+    const data = result ? string(result.data) : "";
+    if (result && !data) throw new EngineError("evidence_unavailable");
+    let masked: ReturnType<typeof maskCapturedPng> | undefined;
+    if (data) { try { masked = maskCapturedPng(data, clip, regions); } catch { throw new EngineError("evidence_unavailable"); } }
+    // The ID is published only once the capture's checks below pass; a recapture takes it instead.
+    const captureId = `c${this.nextCapture}`;
+    const provenance = (disposition: "mask_applied" | "mask_not_applicable") => ({ pageId: page.pageId, documentGeneration: page.documentGeneration, captureId, viewport, clip, maskDisposition: disposition });
+    let observation: EngineObservation | undefined;
+    if (masked && Buffer.byteLength(masked.base64, "utf8") <= maxBytes) {
+      observation = { state: "available", trust: "untrusted_page_content", scope: "page", nodes: [], imageData: masked.base64, mimeType: "image/png",
+        provenance: provenance(masked.appliedRegions > 0 ? "mask_applied" : "mask_not_applicable") };
+      if (!budget.fits(observation)) observation = undefined;
+    }
+    // A JPEG cannot be masked here, so a capture with a sensitive field in it stays a PNG or is refused.
+    if (!observation && (masked ? masked.appliedRegions > 0 : regions.length > 0)) throw new EngineError("output_budget", undefined, "A password or payment field is in view, so the capture must stay a lossless masked PNG, which does not fit; capture a smaller clip.");
+    const tiles = masked ? pngTileDigests(masked.base64) : await this.bandedTiles(context, root, clip, spatial, beyondViewport, regions);
+    if (!observation) {
+      for (const quality of JPEG_QUALITIES) {
+        const jpeg = string((await shoot("jpeg", quality)).data);
+        if (!jpeg) throw new EngineError("evidence_unavailable");
+        if (Buffer.byteLength(jpeg, "utf8") > maxBytes) continue;
+        const candidate: EngineObservation = { state: "available", trust: "untrusted_page_content", scope: "page", nodes: [], imageData: jpeg, mimeType: "image/jpeg", provenance: provenance("mask_not_applicable") };
+        if (budget.fits(candidate)) { observation = candidate; break; }
+      }
+      if (!observation) throw new EngineError("output_budget");
+    }
     this.directory.route(root);
     if(!sameCaptureSpatial(spatial,await this.captureSpatialState(context,root))){
       // Native full-page capture can change scrollbar geometry. Discard its pixels
@@ -1951,13 +1998,7 @@ export class PageExecutor implements EngineExecutor {
       throw new EngineError('stale_target','geometry');
     }
     if(this.pendingAttachments.size||this.pendingFrames.size||JSON.stringify(collected)!==JSON.stringify(await collectRegions()))throw new EngineError('stale_target','frame_churn');
-    let masked: ReturnType<typeof maskCapturedPng>;
-    try { masked = maskCapturedPng(data, clip, regions); } catch { throw new EngineError("evidence_unavailable"); }
-    if (Buffer.byteLength(masked.base64, "utf8") > maxBytes) throw new EngineError("output_budget");
-    const captureId = `c${this.nextCapture++}`;
-    const observation:EngineObservation={ state: "available", trust: "untrusted_page_content", scope: "page", nodes: [], imageData: masked.base64, mimeType: "image/png",
-      provenance: { pageId: page.pageId, documentGeneration: page.documentGeneration, captureId, viewport, clip, maskDisposition: masked.appliedRegions>0?"mask_applied":"mask_not_applicable" } };
-    if(!budget.fits(observation))throw new EngineError("output_budget");
+    this.nextCapture++;
     this.captures.set(captureId, {
       captureBeyondViewport:beyondViewport,
       ...(observed?{observedSurface:true}:{}),
@@ -1966,7 +2007,7 @@ export class PageExecutor implements EngineExecutor {
       clip,
       spatial,
       regions,
-      tiles: pngTileDigests(masked.base64),
+      tiles,
     });
     while (this.captures.size > 32) this.captures.delete(this.captures.keys().next().value!);
     return observation;
@@ -2193,6 +2234,19 @@ export class PageExecutor implements EngineExecutor {
     if (action.waitFor) return this.waitFor(context, page, action.waitFor);
     return { state: "not_requested" };
   }
+  /** The click_at tiles of a capture too large for one reply, read in bands of whole tiles that each fit. */
+  private async bandedTiles(context: CommandContext, root: NodeBinding, clip: CaptureRecord["clip"], spatial: CaptureSpatialState, beyondViewport: boolean, regions: CaptureRecord["regions"]): Promise<TileDigests> {
+    const rows = Math.max(32, Math.floor(PNG_BAND_BYTES / (Math.ceil(clip.width) * 4) / 32) * 32);
+    const bands: TileDigests[] = [];
+    for (let top = 0; top < clip.height; top += rows) {
+      const band = { x: clip.x, y: clip.y + top, width: clip.width, height: Math.min(rows, clip.height - top) };
+      const shot = await context.read(() => this.send(root, "Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: beyondViewport, clip: { ...band, scale: 1 / spatial.deviceScaleFactor } }));
+      const data = string(shot.data);
+      if (!data) throw new EngineError("evidence_unavailable");
+      try { bands.push(pngTileDigests(maskCapturedPng(data, band, regions).base64)); } catch { throw new EngineError("evidence_unavailable"); }
+    }
+    try { return stackTileDigests(bands); } catch { throw new EngineError("evidence_unavailable"); }
+  }
   /** A screenshot point as a viewport point, once what was captured around it is still there. */
   private async capturePoint(context: CommandContext, page: EnginePageStamp, action: { captureId: string; x: number; y: number }): Promise<{ x: number; y: number }> {
     const capture = this.captures.get(action.captureId);
@@ -2202,20 +2256,22 @@ export class PageExecutor implements EngineExecutor {
     const root = this.directory.binding(page, 1);
     const currentSpatial = await this.captureSpatialState(context, root);
     if (!sameCaptureSpatial(capture.spatial, currentSpatial)) throw new EngineError("stale_target", undefined, "the page scrolled, zoomed or resized since this screenshot; take a new one");
-    const recapture = () => context.read(() => this.send(root, "Page.captureScreenshot", {
-      format: "png", fromSurface: true, captureBeyondViewport: capture.captureBeyondViewport===true,
-      clip: { ...capture.clip, scale: 1 / capture.spatial.deviceScaleFactor },
-    }));
+    const recapture = async (): Promise<TileDigests> => {
+      const shot = await context.read(() => this.send(root, "Page.captureScreenshot", {
+        format: "png", fromSurface: true, captureBeyondViewport: capture.captureBeyondViewport===true,
+        clip: { ...capture.clip, scale: 1 / capture.spatial.deviceScaleFactor },
+      })).catch((error: unknown) => { if (replyTooLarge(error)) return undefined; throw error; });
+      if (!shot) return this.bandedTiles(context, root, capture.clip, capture.spatial, capture.captureBeyondViewport===true, capture.regions);
+      const data = string(shot.data);
+      if (!data) throw new EngineError("evidence_unavailable");
+      try { return pngTileDigests(maskCapturedPng(data, capture.clip, capture.regions).base64); } catch { throw new EngineError("evidence_unavailable"); }
+    };
     // A hidden tab's unobserved surface is stale, so it never matches a capture taken while observed.
-    const currentShot = capture.observedSurface ? await this.withPaintedSurface(context, page, recapture) : await recapture();
-    const currentData = string(currentShot.data);
-    if (!currentData) throw new EngineError("evidence_unavailable");
-    let currentMasked: ReturnType<typeof maskCapturedPng>;
-    try { currentMasked = maskCapturedPng(currentData, capture.clip, capture.regions); } catch { throw new EngineError("evidence_unavailable"); }
+    const currentTiles = capture.observedSurface ? await this.withPaintedSurface(context, page, recapture) : await recapture();
     // Animation elsewhere on the page does not invalidate a point: what was captured
     // around it must still be there, pixel for pixel.
     const scale = capture.tiles.width / capture.clip.width;
-    if (!sameTilesNear(capture.tiles, pngTileDigests(currentMasked.base64), action.x * scale, action.y * scale, CAPTURE_POINT_RADIUS * scale)) throw new EngineError("stale_target", undefined, "the page around this point changed since the screenshot; take a new one");
+    if (!sameTilesNear(capture.tiles, currentTiles, action.x * scale, action.y * scale, CAPTURE_POINT_RADIUS * scale)) throw new EngineError("stale_target", undefined, "the page around this point changed since the screenshot; take a new one");
     const x = capture.clip.x + action.x-currentSpatial.pageX+currentSpatial.offsetX;
     const y = capture.clip.y + action.y-currentSpatial.pageY+currentSpatial.offsetY;
     if(x<0||y<0||x>=currentSpatial.width||y>=currentSpatial.height)throw new EngineError('target_moved');

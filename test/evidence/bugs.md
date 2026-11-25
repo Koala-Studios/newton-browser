@@ -3560,3 +3560,27 @@ query added its own 2.5 s bound before its tree was read. 0.7.31 failed the same
 the first bound. Fixture: `offscreen-frame-targets` now holds four more cross-site frames below the fold and runs
 the action with the default 10 s deadline, asserting under 6 s; 0.7.32 times out, 0.7.33 passes. Fix: all frames are
 searched at once (the per-frame steps are read-only), results are taken in page order.
+
+# Photo-heavy screenshots refused; wrapper comboboxes refused typing — fixed in 0.7.34
+
+Observed 2026-11-25 in an email builder in an operator's own browser: `browser.screenshot` at the default
+`maxBytes` returned `output_budget` on a 1728x878 page of campaign photos, and `type` into the audience combobox
+failed `target_not_editable` while `press` with text after a click worked.
+Screenshots, repro (`test/engine-regressions/photo-capture-budget.test.mjs`, seeded noise standing in for photos at
+1728x878): with light noise the masked, re-encoded PNG exceeds the 4 MiB default `maxBytes` (`output_budget`); with
+heavier noise Chromium's PNG reply exceeds the 4 MiB message bound of the private pipe (`cdp_message_too_large`,
+surfaced as `evidence_unavailable`; the tab add-on's bound is also 4 MiB, `native_message_limit`). A smaller
+`maxBytes` cannot help, so the report that 1.5 MB worked most likely caught a lighter page. Root cause: a lossless
+capture of photographic content at 1 px per CSS px has no smaller form. Fix: when the PNG does not fit and no mask
+region falls in the capture, the image is captured again as a JPEG at quality 80, 60, then 40 until it fits. click_at
+needs the capture's tile digests: they come from the PNG when it was read, otherwise from PNG bands of whole tile rows
+that each fit the bound (`stackTileDigests`), and a click_at recheck that is too large reads bands too. A capture with
+a mask region keeps the masked PNG or is refused with a detail naming why. The fixture fails on 0.7.33 (`output_budget`)
+and passes here: PNG for a plain page, JPEG for both noise levels, click_at lands at the captured point and is refused
+`stale_target` after the page repaints around it, and the password case is refused with its detail. Unit test in
+`raster-mask.test.ts` covers stacking and its refusals.
+Combobox, repro (`test/engine-regressions/combobox-typing.test.mjs`): `type` on a `role=combobox` wrapper holding
+chips, a button and one filter input is refused on 0.7.33 ("The element does not take typed text"). Fix: for
+type, fill and clear, a combobox that does not take text itself resolves to the one visible, enabled text field
+inside it; several fields are refused naming that, none keeps the original refusal. `set_files` resolution for
+upload buttons now shares the same page-side lookup (`ownElement`).
